@@ -35,6 +35,10 @@ from app.api.v1.dashboard import router as dashboard_router
 from app.api.v1.fuel import project_fuel_router, fuel_router
 from app.api.v1.attachments import router as attachments_router
 
+import os
+import subprocess
+import sys
+
 app = FastAPI(
     title="HMH Group API",
     description="Construction Management System — V1",
@@ -101,3 +105,27 @@ app.include_router(dashboard_router,         prefix="/api/v1")
 app.include_router(project_fuel_router,      prefix="/api/v1")
 app.include_router(fuel_router,              prefix="/api/v1")
 app.include_router(attachments_router,       prefix="/api/v1")
+
+@app.on_event("startup")
+def run_demo_seed_once():
+    should_seed = os.getenv("RUN_STARTUP_SEED", "false").lower() == "true"
+    if not should_seed:
+        return
+
+    try:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        scripts_dir = os.path.join(base_dir, "scripts")
+
+        seed_stages = os.path.join(scripts_dir, "seed_stages.py")
+        seed_owner = os.path.join(scripts_dir, "seed_owner.py")
+
+        if os.path.exists(seed_stages):
+            subprocess.run([sys.executable, seed_stages], check=True)
+
+        if os.path.exists(seed_owner):
+            subprocess.run([sys.executable, seed_owner], check=True)
+
+        print("Startup seed completed successfully.")
+
+    except Exception as e:
+        print(f"Startup seed failed: {e}")
