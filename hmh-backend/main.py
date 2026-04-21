@@ -52,14 +52,15 @@ app = FastAPI(
 )
 
 # ── CORS ─────────────────────────────────────────────────────────────────────
-# Hardcode for now so Vercel definitely works.
-# Once everything is stable, you can move this back to env-driven parsing.
+# CORS_ORIGINS env var: comma-separated list of allowed origins.
+# Always includes localhost for local dev.
+_cors_origins = settings.cors_origins_list
+if "http://localhost:5173" not in _cors_origins:
+    _cors_origins.append("http://localhost:5173")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://hmh-newfrontend.vercel.app",
-        "http://localhost:5173",
-    ],
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

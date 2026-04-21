@@ -24,7 +24,15 @@ class Settings(BaseSettings):
     SECRET_KEY: str = "dev_secret_change_before_production_minimum_64_chars_long!!"
 
     # Database
+    # Render provides postgres:// but SQLAlchemy 1.4+ requires postgresql://
     DATABASE_URL: str = "postgresql://postgres:password@localhost:5432/hmh_system"
+
+    @field_validator("DATABASE_URL", mode="before")
+    @classmethod
+    def fix_postgres_scheme(cls, v: str) -> str:
+        if isinstance(v, str) and v.startswith("postgres://"):
+            return v.replace("postgres://", "postgresql://", 1)
+        return v
 
     # JWT
     JWT_ALGORITHM: str = "HS256"
