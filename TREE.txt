@@ -1,0 +1,58 @@
+HMH-System/
+├── hmh-backend/                        ← Python/FastAPI backend (active)
+│   ├── .env.example
+│   ├── README.md
+│   ├── alembic.ini
+│   ├── main.py                         ← Uvicorn entry point
+│   ├── requirements.txt
+│   ├── alembic/
+│   │   ├── env.py                      ← Reads DATABASE_URL from settings
+│   │   ├── script.py.mako              ← Migration file template
+│   │   └── versions/                   ← Generated migration files (empty at init)
+│   ├── app/
+│   │   ├── __init__.py
+│   │   ├── dependencies.py             ← FastAPI Depends() — auth, role guards
+│   │   ├── api/
+│   │   │   ├── __init__.py
+│   │   │   └── health.py               ← GET /health
+│   │   ├── core/
+│   │   │   ├── __init__.py
+│   │   │   ├── config.py               ← Pydantic-settings (reads .env)
+│   │   │   ├── exceptions.py           ← Domain exceptions → HTTP status codes
+│   │   │   └── security.py             ← JWT create/decode, bcrypt, temp password
+│   │   ├── db/
+│   │   │   ├── __init__.py
+│   │   │   ├── base.py                 ← DeclarativeBase
+│   │   │   └── session.py              ← Engine, SessionLocal, get_db(), db_session()
+│   │   ├── models/
+│   │   │   ├── __init__.py             ← Re-exports all models (Alembic target)
+│   │   │   ├── base.py                 ← TimestampMixin
+│   │   │   ├── enums.py                ← All Python enums mirroring DB enums
+│   │   │   ├── access.py               ← UserProjectAccess, UserSiteAccess
+│   │   │   ├── lot.py                  ← Lot
+│   │   │   ├── project.py              ← Project
+│   │   │   ├── site.py                 ← Site
+│   │   │   ├── stage.py                ← StageMaster, ProjectStageStatus
+│   │   │   └── user.py                 ← User
+│   │   ├── schemas/
+│   │   │   ├── __init__.py
+│   │   │   ├── common.py               ← ApiSuccess, ApiError, PaginatedResult
+│   │   │   ├── lot.py
+│   │   │   ├── project.py
+│   │   │   ├── site.py
+│   │   │   ├── stage.py
+│   │   │   └── user.py                 ← UserRead, UserCreate, LoginRequest, TokenResponse
+│   │   ├── services/
+│   │   │   └── __init__.py             ← (services added per module)
+│   │   └── utils/
+│   │       └── __init__.py             ← (utilities added as needed)
+│   └── scripts/
+│       └── seed_stages.py              ← Seeds 11 V1 stages into stage_master
+│
+├── hmh-docs/
+│   └── hmh_v1_schema.sql               ← SINGLE SOURCE OF TRUTH for the DB schema
+│
+└── hmh-backend-archive-node/           ← Archived Node/Express/TypeScript backend
+    ├── package.json
+    ├── tsconfig.json
+    └── src/                            ← All original TS source files
