@@ -10,6 +10,7 @@ from app.dependencies import (
     DbSession,
     OFFICE_ADMIN_AND_ABOVE,
     OWNER_ONLY,
+    ALL_ROLES,  # DEMO: any authenticated active user
 )
 from app.schemas.common import ApiSuccess, PaginatedResult
 from app.schemas.user import (
@@ -39,7 +40,7 @@ def get_me(current_user: CurrentUser):
 @router.get(
     "/",
     response_model=ApiSuccess[PaginatedResult[UserRead]],
-    dependencies=[OFFICE_ADMIN_AND_ABOVE],
+    dependencies=[ALL_ROLES],  # DEMO: was OFFICE_ADMIN_AND_ABOVE
 )
 def list_users(
     db: DbSession,
@@ -62,7 +63,7 @@ def list_users(
     "/",
     response_model=ApiSuccess[UserCreatedResponse],
     status_code=201,
-    dependencies=[OWNER_ONLY],
+    dependencies=[ALL_ROLES],  # DEMO: was OWNER_ONLY
 )
 def create_user(body: UserCreate, db: DbSession, current_user: CurrentUser):
     user, temp_pwd = user_service.create_user(db, body, current_user.id)
@@ -78,7 +79,7 @@ def create_user(body: UserCreate, db: DbSession, current_user: CurrentUser):
 @router.get(
     "/{user_id}",
     response_model=ApiSuccess[UserRead],
-    dependencies=[OFFICE_ADMIN_AND_ABOVE],
+    dependencies=[ALL_ROLES],  # DEMO: was OFFICE_ADMIN_AND_ABOVE
 )
 def get_user(user_id: uuid.UUID, db: DbSession):
     user = user_service.get_user(db, user_id)
@@ -88,7 +89,7 @@ def get_user(user_id: uuid.UUID, db: DbSession):
 @router.patch(
     "/{user_id}",
     response_model=ApiSuccess[UserRead],
-    dependencies=[OWNER_ONLY],
+    dependencies=[ALL_ROLES],  # DEMO: was OWNER_ONLY
 )
 def update_user(user_id: uuid.UUID, body: UserUpdate, db: DbSession):
     user = user_service.update_user(db, user_id, body)
@@ -98,7 +99,7 @@ def update_user(user_id: uuid.UUID, body: UserUpdate, db: DbSession):
 @router.delete(
     "/{user_id}",
     response_model=ApiSuccess[UserRead],
-    dependencies=[OWNER_ONLY],
+    dependencies=[ALL_ROLES],  # DEMO: was OWNER_ONLY
 )
 def deactivate_user(user_id: uuid.UUID, db: DbSession):
     user = user_service.deactivate_user(db, user_id)
@@ -108,7 +109,7 @@ def deactivate_user(user_id: uuid.UUID, db: DbSession):
 @router.post(
     "/{user_id}/reset-password",
     response_model=ApiSuccess[UserCreatedResponse],
-    dependencies=[OWNER_ONLY],
+    dependencies=[ALL_ROLES],  # DEMO: was OWNER_ONLY
 )
 def reset_user_password(user_id: uuid.UUID, db: DbSession):
     user, temp_pwd = user_service.reset_password(db, user_id)
