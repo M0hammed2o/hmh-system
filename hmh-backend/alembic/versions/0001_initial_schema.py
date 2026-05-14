@@ -17,33 +17,46 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
+def create_enum_if_not_exists(enum_name: str, values: list[str]) -> None:
+    values_sql = ", ".join(f"'{value}'" for value in values)
+    op.execute(f"""
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = '{enum_name}') THEN
+        CREATE TYPE {enum_name} AS ENUM ({values_sql});
+    END IF;
+END
+$$;
+""")
+
+
 def upgrade() -> None:
     # ── Enums ──────────────────────────────────────────────────────────────────
-    op.execute("CREATE TYPE user_role_enum AS ENUM ('OWNER','OFFICE_ADMIN','OFFICE_USER','SITE_MANAGER','SITE_STAFF')")
-    op.execute("CREATE TYPE project_status_enum AS ENUM ('PLANNED','ACTIVE','PAUSED','COMPLETED')")
-    op.execute("CREATE TYPE record_status_enum AS ENUM ('DRAFT','SUBMITTED','APPROVED','REJECTED','SENT','RECEIVED','MATCHED','PAID','CANCELLED')")
-    op.execute("CREATE TYPE stage_status_enum AS ENUM ('NOT_STARTED','IN_PROGRESS','COMPLETED','AWAITING_INSPECTION','CERTIFIED')")
-    op.execute("CREATE TYPE lot_status_enum AS ENUM ('AVAILABLE','IN_PROGRESS','COMPLETED','ON_HOLD')")
-    op.execute("CREATE TYPE item_type_enum AS ENUM ('MATERIAL','LABOUR','PLANT','SERVICE','PACKAGE')")
-    op.execute("CREATE TYPE movement_type_enum AS ENUM ('OPENING_BALANCE','DELIVERY_RECEIVED','USAGE','ADJUSTMENT_ADD','ADJUSTMENT_SUBTRACT','RETURN_TO_STORE','TRANSFER_IN','TRANSFER_OUT')")
-    op.execute("CREATE TYPE invoice_match_status_enum AS ENUM ('MATCHED','PARTIALLY_MATCHED','MISMATCH','UNLINKED')")
-    op.execute("CREATE TYPE alert_status_enum AS ENUM ('OPEN','ACKNOWLEDGED','RESOLVED')")
-    op.execute("CREATE TYPE alert_severity_enum AS ENUM ('LOW','MEDIUM','HIGH','CRITICAL')")
-    op.execute("CREATE TYPE alert_type_enum AS ENUM ('MATERIAL_OVERUSE','BOQ_VARIANCE_OVERUSE','DELIVERY_WITHOUT_PO','INVOICE_MISMATCH','INVOICE_MISSING_DELIVERY_NOTE','NEGATIVE_STOCK','LOW_STOCK','MISSING_REMAINING_STOCK_PHOTO','OVERDUE_PAYMENT','REQUEST_PENDING_TOO_LONG','DELIVERY_DISCREPANCY','DELIVERY_SIGNATURE_MISSING','VEHICLE_REPAIR_LOGGED','SITE_DELAY','PROJECT_OVER_BUDGET')")
-    op.execute("CREATE TYPE payment_type_enum AS ENUM ('SUPPLIER','LABOUR','OTHER')")
-    op.execute("CREATE TYPE payment_status_enum AS ENUM ('PENDING','APPROVED','PAID','FAILED','CANCELLED')")
-    op.execute("CREATE TYPE boq_status_enum AS ENUM ('DRAFT','UNDER_REVIEW','ACTIVE','SUPERSEDED','ARCHIVED')")
-    op.execute("CREATE TYPE attachment_entity_enum AS ENUM ('BOQ_HEADER','PURCHASE_ORDER','DELIVERY','INVOICE','USAGE_LOG','CERTIFICATION')")
-    op.execute("CREATE TYPE attachment_type_enum AS ENUM ('PHOTO','PDF','DELIVERY_NOTE','INVOICE_COPY','PROOF','CERTIFICATE')")
-    op.execute("CREATE TYPE email_status_enum AS ENUM ('queued','sent','failed','bounced')")
-    op.execute("CREATE TYPE vat_mode_enum AS ENUM ('INCLUSIVE','EXCLUSIVE')")
-    op.execute("CREATE TYPE fuel_type_enum AS ENUM ('DIESEL','PETROL','PARAFFIN','OTHER')")
-    op.execute("CREATE TYPE fuel_usage_type_enum AS ENUM ('EQUIPMENT','DELIVERY_VEHICLE','TRANSPORT','GENERATOR','OTHER')")
-    op.execute("CREATE TYPE opening_financial_status_enum AS ENUM ('OUTSTANDING','PARTIALLY_PAID','PAID','DISPUTED')")
-    op.execute("CREATE TYPE opening_reference_type_enum AS ENUM ('INVOICE','PO','PAYMENT','OTHER')")
-    op.execute("CREATE TYPE vehicle_type_enum AS ENUM ('BAKKIE','TRUCK','TLB','EXCAVATOR','CRANE','VAN','OTHER')")
-    op.execute("CREATE TYPE vehicle_status_enum AS ENUM ('ACTIVE','MAINTENANCE','RETIRED')")
-    op.execute("CREATE TYPE vehicle_cost_type_enum AS ENUM ('FUEL','TYRE','REPAIR','SERVICE','LICENCE','INSURANCE','OTHER')")
+    create_enum_if_not_exists("user_role_enum", ["OWNER", "OFFICE_ADMIN", "OFFICE_USER", "SITE_MANAGER", "SITE_STAFF"])
+    create_enum_if_not_exists("project_status_enum", ["PLANNED", "ACTIVE", "PAUSED", "COMPLETED"])
+    create_enum_if_not_exists("record_status_enum", ["DRAFT", "SUBMITTED", "APPROVED", "REJECTED", "SENT", "RECEIVED", "MATCHED", "PAID", "CANCELLED"])
+    create_enum_if_not_exists("stage_status_enum", ["NOT_STARTED", "IN_PROGRESS", "COMPLETED", "AWAITING_INSPECTION", "CERTIFIED"])
+    create_enum_if_not_exists("lot_status_enum", ["AVAILABLE", "IN_PROGRESS", "COMPLETED", "ON_HOLD"])
+    create_enum_if_not_exists("item_type_enum", ["MATERIAL", "LABOUR", "PLANT", "SERVICE", "PACKAGE"])
+    create_enum_if_not_exists("movement_type_enum", ["OPENING_BALANCE", "DELIVERY_RECEIVED", "USAGE", "ADJUSTMENT_ADD", "ADJUSTMENT_SUBTRACT", "RETURN_TO_STORE", "TRANSFER_IN", "TRANSFER_OUT"])
+    create_enum_if_not_exists("invoice_match_status_enum", ["MATCHED", "PARTIALLY_MATCHED", "MISMATCH", "UNLINKED"])
+    create_enum_if_not_exists("alert_status_enum", ["OPEN", "ACKNOWLEDGED", "RESOLVED"])
+    create_enum_if_not_exists("alert_severity_enum", ["LOW", "MEDIUM", "HIGH", "CRITICAL"])
+    create_enum_if_not_exists("alert_type_enum", ["MATERIAL_OVERUSE", "BOQ_VARIANCE_OVERUSE", "DELIVERY_WITHOUT_PO", "INVOICE_MISMATCH", "INVOICE_MISSING_DELIVERY_NOTE", "NEGATIVE_STOCK", "LOW_STOCK", "MISSING_REMAINING_STOCK_PHOTO", "OVERDUE_PAYMENT", "REQUEST_PENDING_TOO_LONG", "DELIVERY_DISCREPANCY", "DELIVERY_SIGNATURE_MISSING", "VEHICLE_REPAIR_LOGGED", "SITE_DELAY", "PROJECT_OVER_BUDGET"])
+    create_enum_if_not_exists("payment_type_enum", ["SUPPLIER", "LABOUR", "OTHER"])
+    create_enum_if_not_exists("payment_status_enum", ["PENDING", "APPROVED", "PAID", "FAILED", "CANCELLED"])
+    create_enum_if_not_exists("boq_status_enum", ["DRAFT", "UNDER_REVIEW", "ACTIVE", "SUPERSEDED", "ARCHIVED"])
+    create_enum_if_not_exists("attachment_entity_enum", ["BOQ_HEADER", "PURCHASE_ORDER", "DELIVERY", "INVOICE", "USAGE_LOG", "CERTIFICATION"])
+    create_enum_if_not_exists("attachment_type_enum", ["PHOTO", "PDF", "DELIVERY_NOTE", "INVOICE_COPY", "PROOF", "CERTIFICATE"])
+    create_enum_if_not_exists("email_status_enum", ["queued", "sent", "failed", "bounced"])
+    create_enum_if_not_exists("vat_mode_enum", ["INCLUSIVE", "EXCLUSIVE"])
+    create_enum_if_not_exists("fuel_type_enum", ["DIESEL", "PETROL", "PARAFFIN", "OTHER"])
+    create_enum_if_not_exists("fuel_usage_type_enum", ["EQUIPMENT", "DELIVERY_VEHICLE", "TRANSPORT", "GENERATOR", "OTHER"])
+    create_enum_if_not_exists("opening_financial_status_enum", ["OUTSTANDING", "PARTIALLY_PAID", "PAID", "DISPUTED"])
+    create_enum_if_not_exists("opening_reference_type_enum", ["INVOICE", "PO", "PAYMENT", "OTHER"])
+    create_enum_if_not_exists("vehicle_type_enum", ["BAKKIE", "TRUCK", "TLB", "EXCAVATOR", "CRANE", "VAN", "OTHER"])
+    create_enum_if_not_exists("vehicle_status_enum", ["ACTIVE", "MAINTENANCE", "RETIRED"])
+    create_enum_if_not_exists("vehicle_cost_type_enum", ["FUEL", "TYRE", "REPAIR", "SERVICE", "LICENCE", "INSURANCE", "OTHER"])
 
     # ── users ──────────────────────────────────────────────────────────────────
     op.create_table(
