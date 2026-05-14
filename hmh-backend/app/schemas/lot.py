@@ -19,6 +19,7 @@ class LotRead(BaseModel):
     unit_type: Optional[str] = None
     block_number: Optional[str] = None
     status: LotStatus
+    boq_template_id: Optional[uuid.UUID] = None
     created_at: datetime
     updated_at: datetime
 

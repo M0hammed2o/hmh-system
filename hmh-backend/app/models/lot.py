@@ -1,9 +1,10 @@
 """Lot model."""
 
 import uuid
+from datetime import date
 from typing import Optional
 
-from sqlalchemy import Enum, ForeignKey, String, UniqueConstraint
+from sqlalchemy import Date, Enum, ForeignKey, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -41,6 +42,24 @@ class Lot(TimestampMixin, Base):
         nullable=False,
         default=LotStatus.AVAILABLE,
     )
+
+    # Extended fields
+    buyer_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    manager_user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    boq_template_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("boq_headers.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    start_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    expected_completion_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    actual_completion_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    budgeted_cost: Mapped[Optional[float]] = mapped_column(Numeric(14, 2), nullable=True)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     # Relationships
     project: Mapped["Project"] = relationship("Project", back_populates="lots")  # type: ignore[name-defined]

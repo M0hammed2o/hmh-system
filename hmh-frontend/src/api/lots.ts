@@ -10,6 +10,7 @@ export interface Lot {
   unit_type: string | null;
   block_number: string | null;
   status: LotStatus;
+  boq_template_id: string | null;
   created_at: string;
   updated_at: string;
 }

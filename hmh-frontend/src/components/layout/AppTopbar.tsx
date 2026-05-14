@@ -5,7 +5,7 @@ import {
   LayoutDashboard, Users, FolderKanban, FileSpreadsheet,
   ShoppingCart, Truck, Package, CreditCard, Bell, Settings,
 } from "lucide-react";
-import { TOKEN_KEY, REFRESH_TOKEN_KEY } from "@/lib/constants";
+import { TOKEN_KEY, REFRESH_TOKEN_KEY, ROLE_KEY } from "@/lib/constants";
 import { cn } from "@/lib/utils";
 
 const pageTitles: Record<string, string> = {
@@ -53,6 +53,7 @@ export function AppTopbar() {
   const handleLogout = () => {
     localStorage.removeItem(TOKEN_KEY);
     localStorage.removeItem(REFRESH_TOKEN_KEY);
+    localStorage.removeItem(ROLE_KEY);
     window.location.href = "/login";
   };
 

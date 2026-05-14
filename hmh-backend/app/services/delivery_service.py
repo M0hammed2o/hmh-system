@@ -1,17 +1,48 @@
-"""Delivery service."""
+"""
+Delivery service — partial/full receive + stock routing.
 
+When a delivery is confirmed:
+- Adds stock into the destination (warehouse / site store / lot).
+- For lot destination: runs BOQ allocation check.
+- Updates PO item quantity_received.
+- Creates audit trail.
+"""
+
+import base64
+import os
 import uuid
 from datetime import datetime, timezone
+from typing import Optional
 
+from sqlalchemy import text
 from sqlalchemy.orm import Session, joinedload
 
-from app.core.exceptions import ConflictError, NotFoundError
+from app.core.config import settings
+from app.core.exceptions import NotFoundError, ValidationError
 from app.models.delivery import Delivery, DeliveryItem
-from app.models.enums import MovementType, RecordStatus
-from app.models.project import Project
-from app.models.site import Site
+from app.models.enums import (
+    AlertSeverity, AlertStatus, AlertType,
+    AuditAction, DeliveryDestination, MovementType, RecordStatus,
+)
+from app.models.purchase_order import PurchaseOrder, PurchaseOrderItem
 from app.models.stock import StockLedger
-from app.schemas.delivery import DeliveryCreate, DeliveryUpdate
+from app.services import allocation_service, audit_service
+
+
+def _save_base64_to_file(b64_data: str, subfolder: str) -> Optional[str]:
+    """Decode a Base64 data URL and write as PNG. Returns URL path or None on failure."""
+    if not b64_data:
+        return None
+    try:
+        raw = b64_data.split(",", 1)[1] if "," in b64_data else b64_data
+        folder = os.path.join(settings.UPLOAD_DIR, subfolder)
+        os.makedirs(folder, exist_ok=True)
+        filename = f"{uuid.uuid4().hex}.png"
+        with open(os.path.join(folder, filename), "wb") as f:
+            f.write(base64.b64decode(raw))
+        return f"/uploads/{subfolder}/{filename}"
+    except Exception:
+        return None
 
 
 def _get_delivery_or_404(db: Session, delivery_id: uuid.UUID) -> Delivery:
@@ -26,12 +57,12 @@ def _get_delivery_or_404(db: Session, delivery_id: uuid.UUID) -> Delivery:
     return d
 
 
+# ── CRUD ──────────────────────────────────────────────────────────────────────
+
 def list_deliveries(db: Session, project_id: uuid.UUID) -> list[Delivery]:
-    project = db.get(Project, project_id)
-    if not project:
-        raise NotFoundError(f"Project {project_id} not found.")
     return (
         db.query(Delivery)
+        .options(joinedload(Delivery.items))
         .filter(Delivery.project_id == project_id)
         .order_by(Delivery.delivery_date.desc())
         .all()
@@ -42,114 +73,313 @@ def get_delivery(db: Session, delivery_id: uuid.UUID) -> Delivery:
     return _get_delivery_or_404(db, delivery_id)
 
 
+def update_delivery(db: Session, delivery_id: uuid.UUID, data) -> Delivery:
+    d = _get_delivery_or_404(db, delivery_id)
+    for field, value in data.model_dump(exclude_unset=True).items():
+        setattr(d, field, value)
+    db.commit()
+    return _get_delivery_or_404(db, delivery_id)
+
+
 def create_delivery(
     db: Session,
     project_id: uuid.UUID,
-    data: DeliveryCreate,
-    received_by_id: uuid.UUID,
+    data,
+    current_user_id: uuid.UUID,
 ) -> Delivery:
-    project = db.get(Project, project_id)
-    if not project:
-        raise NotFoundError(f"Project {project_id} not found.")
+    """
+    Record a delivery note.
 
-    site = db.get(Site, data.site_id)
-    if not site or site.project_id != project_id:
-        raise NotFoundError(f"Site {data.site_id} not found in this project.")
-
-    # Check delivery_number uniqueness per project if provided
-    if data.delivery_number:
-        exists = (
-            db.query(Delivery)
-            .filter(
-                Delivery.project_id == project_id,
-                Delivery.delivery_number == data.delivery_number,
-            )
-            .first()
-        )
-        if exists:
-            raise ConflictError(
-                f"Delivery number '{data.delivery_number}' already exists in this project."
-            )
-
+    - Creates Delivery + DeliveryItem rows.
+    - Updates PurchaseOrderItem.quantity_received cumulatively.
+    - Flags PARTIALLY_RECEIVED and raises a DELIVERY_DISCREPANCY alert
+      when any item has quantity_received < quantity_expected.
+    """
     now = datetime.now(timezone.utc)
+
+    # Save receiver signature as PNG file — never store raw Base64 in VARCHAR(500)
+    receiver_sig_url: Optional[str] = None
+    sig_data = getattr(data, "signature_data", None)
+    if sig_data:
+        if sig_data.startswith("data:") or len(sig_data) > 500:
+            receiver_sig_url = _save_base64_to_file(sig_data, "delivery_signatures")
+        else:
+            receiver_sig_url = sig_data  # already a file path
+
+    # Save driver signature as PNG file
+    driver_sig_url: Optional[str] = None
+    driver_sig_data = getattr(data, "driver_signature_data", None)
+    if driver_sig_data:
+        if driver_sig_data.startswith("data:") or len(driver_sig_data) > 500:
+            driver_sig_url = _save_base64_to_file(driver_sig_data, "delivery_signatures")
+        else:
+            driver_sig_url = driver_sig_data
+
+    # Lightweight metadata only — no raw Base64 in the JSON column
+    sig_meta: Optional[dict] = None
+    if getattr(data, "driver_name", None) or driver_sig_url:
+        sig_meta = {
+            "driver_name":           getattr(data, "driver_name", None),
+            "driver_signature_path": driver_sig_url,
+            "receiver_name":         getattr(data, "receiver_name", None),
+            "signed_at":             now.isoformat(),
+        }
+
     delivery = Delivery(
-        delivery_number=data.delivery_number,
+        delivery_number=(
+            data.delivery_number or f"DN-{uuid.uuid4().hex[:8].upper()}"
+        ),
         purchase_order_id=data.purchase_order_id,
         supplier_id=data.supplier_id,
         project_id=project_id,
         site_id=data.site_id,
-        received_by_user_id=received_by_id,
+        received_by_user_id=current_user_id,
         delivery_date=data.delivery_date or now,
         supplier_delivery_note_number=data.supplier_delivery_note_number,
         delivery_status=RecordStatus.RECEIVED,
         comments=data.comments,
+        receiver_name=getattr(data, "receiver_name", None),
+        signature_image_url=receiver_sig_url,
+        ocr_raw_data=sig_meta,
     )
     db.add(delivery)
-    db.flush()  # get delivery.id
+    db.flush()
+
+    # Pre-load PO items for quantity tracking
+    po_items: dict[uuid.UUID, PurchaseOrderItem] = {}
+    if data.purchase_order_id:
+        po = db.get(PurchaseOrder, data.purchase_order_id)
+        if po:
+            for poi in po.order_items:
+                po_items[poi.id] = poi
+
+    is_partial = False
 
     for item_data in data.items:
-        di = DeliveryItem(
+        received = float(item_data.quantity_received)
+        expected = float(item_data.quantity_expected) if item_data.quantity_expected else None
+
+        if expected is not None and received < expected:
+            is_partial = True
+
+        d_item = DeliveryItem(
             delivery_id=delivery.id,
             purchase_order_item_id=item_data.purchase_order_item_id,
             item_id=item_data.item_id,
-            boq_item_id=item_data.boq_item_id,
+            boq_item_id=getattr(item_data, "boq_item_id", None),
             description=item_data.description,
-            quantity_expected=item_data.quantity_expected,
-            quantity_received=item_data.quantity_received,
+            quantity_expected=expected,
+            quantity_received=received,
             unit=item_data.unit,
             discrepancy_reason=item_data.discrepancy_reason,
             created_at=now,
         )
-        db.add(di)
-        db.flush()
+        db.add(d_item)
 
-        # Post stock ledger entry for each received item
-        if item_data.item_id:
-            ledger = StockLedger(
-                project_id=project_id,
-                site_id=data.site_id,
-                item_id=item_data.item_id,
-                boq_item_id=item_data.boq_item_id,
-                movement_type=MovementType.DELIVERY_RECEIVED,
-                reference_type="delivery",
-                reference_id=delivery.id,
-                quantity_in=item_data.quantity_received,
-                quantity_out=0,
-                unit=item_data.unit,
-                movement_date=delivery.delivery_date,
-                entered_by=received_by_id,
-                created_at=now,
-            )
-            db.add(ledger)
+        # Update PO item received quantity
+        if item_data.purchase_order_item_id and item_data.purchase_order_item_id in po_items:
+            poi = po_items[item_data.purchase_order_item_id]
+            poi.quantity_received = float(poi.quantity_received or 0) + received
+        elif po_items and len(po_items) == 1:
+            poi = next(iter(po_items.values()))
+            poi.quantity_received = float(poi.quantity_received or 0) + received
+
+    delivery.delivery_status = (
+        RecordStatus.PARTIALLY_RECEIVED if is_partial else RecordStatus.RECEIVED
+    )
+
+    # Update PO status
+    if data.purchase_order_id and po_items:
+        all_done = all(
+            float(poi.quantity_received or 0) >= float(poi.quantity_ordered)
+            for poi in po_items.values()
+        )
+        po = db.get(PurchaseOrder, data.purchase_order_id)
+        if po:
+            po.status = RecordStatus.RECEIVED if all_done else RecordStatus.PARTIALLY_RECEIVED
+
+    # Alert on partial delivery
+    if is_partial:
+        from app.models.alert import SystemAlert
+        db.add(SystemAlert(
+            project_id=project_id,
+            site_id=data.site_id,
+            reference_type="delivery",
+            reference_id=delivery.id,
+            alert_type=AlertType.DELIVERY_DISCREPANCY,
+            severity=AlertSeverity.MEDIUM,
+            title=f"Partial delivery: {delivery.delivery_number}",
+            message=(
+                f"Delivery {delivery.delivery_number} received fewer items than expected. "
+                "Outstanding balance remains against the purchase order."
+            ),
+            status=AlertStatus.OPEN,
+            notification_channel="in_app",
+            created_at=now,
+        ))
 
     db.commit()
+    return _get_delivery_or_404(db, delivery.id)
 
-    # Refresh stock_balances materialized view
-    try:
-        db.execute(
-            "REFRESH MATERIALIZED VIEW CONCURRENTLY stock_balances"  # type: ignore[arg-type]
+
+def receive_stock(
+    db: Session,
+    delivery_id: uuid.UUID,
+    destination: DeliveryDestination,
+    actor_id: uuid.UUID,
+    lot_id: Optional[uuid.UUID] = None,
+    overrun_reason: Optional[str] = None,
+    items_received: Optional[list[dict]] = None,
+) -> Delivery:
+    """
+    Confirm a delivery and route stock to the correct location.
+
+    items_received: list of {delivery_item_id, quantity_received}
+    If None, all items received at full expected quantity.
+    """
+    delivery = _get_delivery_or_404(db, delivery_id)
+    now = datetime.now(timezone.utc)
+
+    qty_map: dict[uuid.UUID, float] = {}
+    if items_received:
+        for ir in items_received:
+            qty_map[uuid.UUID(str(ir["delivery_item_id"]))] = float(ir["quantity_received"])
+
+    is_partial = False
+
+    for d_item in delivery.items:
+        recv_qty = qty_map.get(d_item.id, float(d_item.quantity_expected or d_item.quantity_received))
+        if recv_qty <= 0:
+            continue
+
+        expected = float(d_item.quantity_expected or recv_qty)
+        if recv_qty < expected:
+            is_partial = True
+
+        if destination == DeliveryDestination.LOT and lot_id and d_item.item_id:
+            warning = allocation_service.check_before_issue(db, lot_id, d_item.item_id, recv_qty)
+            if warning and not overrun_reason:
+                raise ValidationError(
+                    "Lot allocation exceeded. Provide overrun_reason to proceed.",
+                    detail={
+                        "overrun": True,
+                        "lot_number": warning.lot_number,
+                        "item_name": warning.item_name,
+                        "item_unit": warning.item_unit,
+                        "allocated_quantity": warning.allocated_quantity,
+                        "already_used": warning.already_used,
+                        "new_issue_quantity": recv_qty,
+                        "new_total": warning.new_total,
+                        "over_amount": warning.over_amount,
+                    },
+                )
+            if warning and overrun_reason:
+                allocation_service.create_overrun_alert(
+                    db, warning, delivery.project_id, delivery.site_id,
+                    overrun_reason, actor_id=actor_id,
+                )
+
+        ledger_entry = StockLedger(
+            project_id=delivery.project_id,
+            site_id=delivery.site_id,
+            lot_id=lot_id if destination == DeliveryDestination.LOT else None,
+            item_id=d_item.item_id,
+            boq_item_id=d_item.boq_item_id,
+            movement_type=MovementType.DELIVERY_RECEIVED,
+            reference_type="delivery",
+            reference_id=delivery.id,
+            quantity_in=recv_qty,
+            quantity_out=0,
+            movement_date=now,
+            entered_by=actor_id,
+            notes=f"Received: {delivery.delivery_number or str(delivery.id)[:8]}",
+            created_at=now,
         )
+        db.add(ledger_entry)
+        d_item.quantity_received = recv_qty
+
+        # Update PO item quantity_received
+        if d_item.purchase_order_item_id:
+            poi = db.get(PurchaseOrderItem, d_item.purchase_order_item_id)
+            if poi:
+                current = float(poi.quantity_received or 0)
+                poi.quantity_received = current + recv_qty
+
+    delivery.delivery_status = RecordStatus.PARTIALLY_RECEIVED if is_partial else RecordStatus.RECEIVED
+
+    if delivery.purchase_order_id:
+        po = db.get(PurchaseOrder, delivery.purchase_order_id)
+        if po:
+            po.status = RecordStatus.PARTIALLY_RECEIVED if is_partial else RecordStatus.RECEIVED
+
+    if is_partial:
+        from app.models.alert import SystemAlert
+        db.add(SystemAlert(
+            project_id=delivery.project_id,
+            site_id=delivery.site_id,
+            reference_type="delivery",
+            reference_id=delivery.id,
+            alert_type=AlertType.DELIVERY_DISCREPANCY,
+            severity=AlertSeverity.MEDIUM,
+            title=f"Partial delivery: {delivery.delivery_number or str(delivery.id)[:8]}",
+            message="Items received at less than ordered quantity. Outstanding balance remains.",
+            status=AlertStatus.OPEN,
+            notification_channel="in_app",
+            created_at=now,
+        ))
+
+    audit_service.write_event(
+        db, AuditAction.UPDATE, "delivery", actor_id, delivery_id,
+        after_value={
+            "destination": destination.value,
+            "is_partial": is_partial,
+            "lot_id": str(lot_id) if lot_id else None,
+        },
+    )
+
+    delivery_id_saved = delivery.id
+    db.commit()
+
+    try:
+        db.execute(text("REFRESH MATERIALIZED VIEW CONCURRENTLY stock_balances"))
         db.commit()
     except Exception:
-        pass  # view refresh is best-effort; don't fail the delivery
+        pass  # view may not exist — never rollback here
 
-    db.refresh(delivery)
-    return delivery
+    reloaded = db.get(Delivery, delivery_id_saved)
+    return reloaded if reloaded is not None else delivery
 
 
-def update_delivery(
-    db: Session, delivery_id: uuid.UUID, data: DeliveryUpdate
-) -> Delivery:
-    delivery = _get_delivery_or_404(db, delivery_id)
-    fields = data.model_fields_set
+def get_po_outstanding(db: Session, po_id: uuid.UUID) -> dict:
+    po = (
+        db.query(PurchaseOrder)
+        .options(joinedload(PurchaseOrder.order_items))
+        .filter(PurchaseOrder.id == po_id)
+        .first()
+    )
+    if not po:
+        raise NotFoundError(f"PO {po_id} not found.")
 
-    if "delivery_status" in fields and data.delivery_status is not None:
-        delivery.delivery_status = data.delivery_status
-    if "comments" in fields:
-        delivery.comments = data.comments
-    if "supplier_delivery_note_number" in fields:
-        delivery.supplier_delivery_note_number = data.supplier_delivery_note_number
+    items_out = []
+    for item in po.order_items:
+        qty_ordered = float(item.quantity_ordered)
+        qty_received = float(item.quantity_received or 0)
+        outstanding = max(0.0, qty_ordered - qty_received)
+        items_out.append({
+            "po_item_id": str(item.id),
+            "description": item.description,
+            "unit": item.unit,
+            "quantity_ordered": qty_ordered,
+            "quantity_received": qty_received,
+            "quantity_outstanding": outstanding,
+            "is_fully_received": outstanding == 0,
+        })
 
-    db.commit()
-    db.refresh(delivery)
-    return delivery
+    return {
+        "po_id": str(po_id),
+        "po_number": po.po_number,
+        "status": po.status.value,
+        "items": items_out,
+        "total_outstanding_lines": sum(1 for i in items_out if i["quantity_outstanding"] > 0),
+        "is_fully_received": all(i["is_fully_received"] for i in items_out),
+    }

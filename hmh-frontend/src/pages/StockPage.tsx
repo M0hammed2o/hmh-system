@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Package, Layers, Activity, Plus, RefreshCw } from "lucide-react";
+import { Package, Layers, Activity, Plus, RefreshCw, ArrowRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Modal } from "@/components/shared/Modal";
@@ -10,6 +10,7 @@ import { projectsApi, type Project } from "@/api/projects";
 import { sitesApi, type Site } from "@/api/sites";
 import { stockApi, type StockBalance, type StockLedgerEntry, type UsageLogCreate } from "@/api/stock";
 import { formatDateTime } from "@/lib/format";
+import { IssueToLotPanel } from "@/components/IssueToLotPanel";
 
 const MOVEMENT_LABEL: Record<string, string> = {
   OPENING_BALANCE: "Opening",
@@ -24,6 +25,7 @@ const MOVEMENT_LABEL: Record<string, string> = {
 
 const PAGE_TABS = [
   { key: "balances", label: "Stock Balances" },
+  { key: "issue", label: "Issue to Lot" },
   { key: "ledger", label: "Ledger" },
 ];
 
@@ -369,6 +371,13 @@ export default function StockPage() {
             </table>
           )}
         </div>
+      ) : tab === "issue" ? (
+        <IssueToLotPanel
+          projectId={selectedProjectId}
+          sites={sites}
+          balances={balances}
+          onIssued={handleRefresh}
+        />
       ) : (
         <div className="bg-card border border-border rounded-xl overflow-hidden">
           {ledger.length === 0 ? (

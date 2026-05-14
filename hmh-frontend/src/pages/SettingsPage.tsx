@@ -1,10 +1,11 @@
-// TEMPORARY MOCK UNTIL BACKEND ROUTE EXISTS
-import { Bell, Shield, Database, Info } from "lucide-react";
+import { useState } from "react";
+import { Bell, Shield, Database, Info, Layers, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { PageHeader } from "@/components/shared/PageHeader";
+import client from "@/api/client";
 
 function Section({ title, icon: Icon, children }: { title: string; icon: React.ElementType; children: React.ReactNode }) {
   return (
@@ -19,6 +20,22 @@ function Section({ title, icon: Icon, children }: { title: string; icon: React.E
 }
 
 export default function SettingsPage() {
+  const [seedingStages, setSeedingStages] = useState(false);
+  const [stagesDone, setStagesDone] = useState(false);
+  const [stagesError, setStagesError] = useState("");
+
+  const handleSeedStages = async () => {
+    setSeedingStages(true);
+    setStagesError("");
+    try {
+      const res = await client.post<{ data: unknown[]; message: string }>("/stages/seed");
+      setStagesDone(true);
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Failed to seed stages.";
+      setStagesError(msg);
+    } finally { setSeedingStages(false); }
+  };
+
   return (
     <div className="space-y-5 animate-fade-in">
       <PageHeader
@@ -27,6 +44,27 @@ export default function SettingsPage() {
       />
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+        {/* Stages */}
+        <Section title="Construction Stages" icon={Layers}>
+          <div className="space-y-3">
+            <p className="text-sm text-muted-foreground">
+              Seed the 10 default construction stages (Foundation → Handover) if the stage list is empty.
+              This runs automatically on startup, but you can re-run it here.
+            </p>
+            <div className="flex items-center gap-3">
+              <Button size="sm" variant="outline" onClick={handleSeedStages} disabled={seedingStages}>
+                {seedingStages ? "Seeding…" : "Seed Default Stages"}
+              </Button>
+              {stagesDone && (
+                <span className="text-sm text-green-600 dark:text-green-400 flex items-center gap-1">
+                  <Check className="w-3.5 h-3.5" />Stages seeded
+                </span>
+              )}
+            </div>
+            {stagesError && <p className="text-sm text-destructive">{stagesError}</p>}
+          </div>
+        </Section>
+
         {/* Alert Thresholds */}
         <Section title="Alert Thresholds" icon={Bell}>
           <div className="space-y-4">

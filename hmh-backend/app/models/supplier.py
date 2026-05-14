@@ -23,6 +23,8 @@ class Supplier(TimestampMixin, Base):
     phone: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     address: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     contact_person: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    whatsapp_number: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    vat_number: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     payment_terms: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)

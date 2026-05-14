@@ -14,6 +14,7 @@ from app.models.project import Project
 from app.models.site import Site
 from app.models.stock import StockLedger, UsageLog
 from app.schemas.stock import StockBalanceRead, UsageLogCreate
+from app.services import allocation_service
 
 
 def list_ledger(
@@ -70,6 +71,7 @@ def record_usage(
     project_id: uuid.UUID,
     data: UsageLogCreate,
     recorded_by_id: uuid.UUID,
+    overrun_reason: Optional[str] = None,
 ) -> UsageLog:
     project = db.get(Project, project_id)
     if not project:
@@ -85,6 +87,25 @@ def record_usage(
 
     now = datetime.now(timezone.utc)
     usage_date = data.usage_date or now
+
+    # Allocation enforcement — if lot_id is set, check BOQ allocation
+    if data.lot_id:
+        warning = allocation_service.check_before_issue(db, data.lot_id, data.item_id, data.quantity_used)
+        if warning and not overrun_reason:
+            raise ValidationError(
+                "Lot allocation exceeded. Provide overrun_reason to proceed.",
+                detail={
+                    "overrun": True,
+                    "lot_number": warning.lot_number,
+                    "item_name": warning.item_name,
+                    "item_unit": warning.item_unit,
+                    "allocated_quantity": warning.allocated_quantity,
+                    "already_used": warning.already_used,
+                    "new_issue_quantity": warning.new_issue_quantity,
+                    "new_total": warning.new_total,
+                    "over_amount": warning.over_amount,
+                },
+            )
 
     usage = UsageLog(
         project_id=project_id,
@@ -122,14 +143,26 @@ def record_usage(
         created_at=now,
     )
     db.add(ledger)
+
+    # Create overrun alert if applicable
+    if data.lot_id and overrun_reason:
+        warning = allocation_service.check_before_issue(
+            db, data.lot_id, data.item_id, data.quantity_used
+        )
+        if warning:
+            allocation_service.create_overrun_alert(
+                db, warning, project_id, data.site_id, overrun_reason, actor_id=recorded_by_id
+            )
+
+    usage_id = usage.id
     db.commit()
 
-    # Refresh materialized view
+    # Refresh materialized view — never rollback on failure
     try:
         db.execute(text("REFRESH MATERIALIZED VIEW CONCURRENTLY stock_balances"))
         db.commit()
     except Exception:
-        pass
+        pass  # view may not exist in test environments
 
-    db.refresh(usage)
-    return usage
+    reloaded = db.get(UsageLog, usage_id)
+    return reloaded if reloaded is not None else usage

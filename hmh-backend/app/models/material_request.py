@@ -4,13 +4,13 @@ import uuid
 from datetime import date, datetime
 from typing import Optional
 
-from sqlalchemy import Date, DateTime, Enum, ForeignKey, Numeric, String, Text
+from sqlalchemy import Boolean, Date, DateTime, Enum, ForeignKey, Numeric, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
 from app.models.base import TimestampMixin
-from app.models.enums import RecordStatus
+from app.models.enums import DeliveryDestination, MRPriority, RecordStatus
 
 
 class MaterialRequest(TimestampMixin, Base):
@@ -73,6 +73,29 @@ class MaterialRequest(TimestampMixin, Base):
     rejection_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
+    # Extended procurement fields
+    priority: Mapped[MRPriority] = mapped_column(
+        Enum(MRPriority, name="mr_priority_enum", create_type=True),
+        nullable=False,
+        default=MRPriority.NORMAL,
+        server_default="NORMAL",
+    )
+    delivery_destination: Mapped[DeliveryDestination] = mapped_column(
+        Enum(DeliveryDestination, name="delivery_destination_enum", create_type=True),
+        nullable=False,
+        default=DeliveryDestination.SITE_STORE,
+        server_default="SITE_STORE",
+    )
+    over_boq: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    over_boq_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    approved_by: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    approved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    converted_to_po_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
     items: Mapped[list["MaterialRequestItem"]] = relationship(
         "MaterialRequestItem", back_populates="request", cascade="all, delete-orphan"
     )
@@ -93,18 +116,21 @@ class MaterialRequestItem(Base):
         nullable=False,
         index=True,
     )
-    item_id: Mapped[uuid.UUID] = mapped_column(
+    item_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("items.id"),
-        nullable=False,
+        ForeignKey("items.id", ondelete="SET NULL"),
+        nullable=True,
     )
     boq_item_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("boq_items.id", ondelete="SET NULL"),
         nullable=True,
     )
+    description: Mapped[str] = mapped_column(String(500), nullable=False, default="")
     requested_quantity: Mapped[float] = mapped_column(Numeric(14, 3), nullable=False)
+    approved_quantity: Mapped[Optional[float]] = mapped_column(Numeric(14, 3), nullable=True)
     unit: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    over_boq_quantity: Mapped[Optional[float]] = mapped_column(Numeric(14, 3), nullable=True)
     remarks: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     request: Mapped["MaterialRequest"] = relationship("MaterialRequest", back_populates="items")

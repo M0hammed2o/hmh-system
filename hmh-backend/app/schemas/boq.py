@@ -21,6 +21,8 @@ class BOQHeaderRead(BaseModel):
     source_type: str
     status: BoqStatus
     is_active_version: bool
+    is_template: bool = False
+    template_name: Optional[str] = None
     uploaded_by: Optional[uuid.UUID] = None
     uploaded_at: datetime
     notes: Optional[str] = None
@@ -30,6 +32,8 @@ class BOQHeaderCreate(BaseModel):
     version_name: str
     source_type: str = "manual"
     notes: Optional[str] = None
+    is_template: bool = False
+    template_name: Optional[str] = None
 
     @field_validator("version_name")
     @classmethod
@@ -43,6 +47,8 @@ class BOQHeaderUpdate(BaseModel):
     version_name: Optional[str] = None
     status: Optional[BoqStatus] = None
     is_active_version: Optional[bool] = None
+    is_template: Optional[bool] = None
+    template_name: Optional[str] = None
     notes: Optional[str] = None
 
 

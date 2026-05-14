@@ -3,6 +3,7 @@
 import uuid
 
 from fastapi import APIRouter, Form, HTTPException, UploadFile
+from pydantic import BaseModel
 
 from app.dependencies import ALL_ROLES, CurrentUser, DbSession, OFFICE_AND_ABOVE
 from app.schemas.boq import (
@@ -154,3 +155,283 @@ def create_boq_item(section_id: uuid.UUID, body: BOQItemCreate, db: DbSession):
 def update_boq_item(item_id: uuid.UUID, body: BOQItemUpdate, db: DbSession):
     item = boq_service.update_item(db, item_id, body)
     return ApiSuccess(data=BOQItemRead.model_validate(item), message="BOQ item updated.")
+
+
+@boq_item_router.delete(
+    "/{item_id}",
+    response_model=ApiSuccess[None],
+    dependencies=[OFFICE_AND_ABOVE],
+)
+def delete_boq_item(item_id: uuid.UUID, db: DbSession):
+    boq_service.delete_item(db, item_id)
+    return ApiSuccess(data=None, message="BOQ item deleted.")
+
+
+# ── Section delete ────────────────────────────────────────────────────────────
+
+@boq_sections_router.patch(
+    "/{section_id}",
+    response_model=ApiSuccess[BOQSectionRead],
+    dependencies=[OFFICE_AND_ABOVE],
+)
+def update_section(header_id: uuid.UUID, section_id: uuid.UUID, body: BOQSectionUpdate, db: DbSession):
+    section = boq_service.update_section(db, section_id, body)
+    return ApiSuccess(data=BOQSectionRead.model_validate(section), message="Section updated.")
+
+
+@boq_sections_router.delete(
+    "/{section_id}",
+    response_model=ApiSuccess[None],
+    dependencies=[OFFICE_AND_ABOVE],
+)
+def delete_section(header_id: uuid.UUID, section_id: uuid.UUID, db: DbSession):
+    boq_service.delete_section(db, section_id)
+    return ApiSuccess(data=None, message="Section deleted.")
+
+
+# ── Full BOQ (nested) ─────────────────────────────────────────────────────────
+
+@project_boq_router.get(
+    "/{header_id}/full",
+    response_model=ApiSuccess[dict],
+    dependencies=[ALL_ROLES],
+)
+def get_full_boq(project_id: uuid.UUID, header_id: uuid.UUID, db: DbSession):
+    """Return full nested BOQ with section totals and grand total."""
+    full = boq_service.get_full_boq(db, header_id)
+    return ApiSuccess(data={
+        "header": BOQHeaderRead.model_validate(full["header"]).model_dump(),
+        "sections": [
+            {
+                "section": BOQSectionRead.model_validate(s["section"]).model_dump(),
+                "items": [BOQItemRead.model_validate(i).model_dump() for i in s["items"]],
+                "section_total": s["section_total"],
+            }
+            for s in full["sections"]
+        ],
+        "grand_total": full["grand_total"],
+    })
+
+
+# ── Mark as template ──────────────────────────────────────────────────────────
+
+class _MarkTemplateBody(BaseModel):
+    template_name: str
+
+
+@project_boq_router.post(
+    "/{header_id}/mark-template",
+    response_model=ApiSuccess[BOQHeaderRead],
+    dependencies=[OFFICE_AND_ABOVE],
+)
+def mark_as_template(project_id: uuid.UUID, header_id: uuid.UUID, db: DbSession, body: _MarkTemplateBody):
+    header = boq_service.mark_as_template(db, header_id, body.template_name)
+    return ApiSuccess(data=BOQHeaderRead.model_validate(header), message="BOQ marked as template.")
+
+
+# ── Seed standard template ────────────────────────────────────────────────────
+
+@project_boq_router.post(
+    "/seed-standard-template",
+    response_model=ApiSuccess[BOQHeaderRead],
+    status_code=201,
+    dependencies=[OFFICE_AND_ABOVE],
+)
+def seed_standard_template(project_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
+    """Create the Standard Residential Unit BOQ template for this project."""
+    header = boq_service.seed_standard_residential_template(db, project_id, current_user.id)
+    return ApiSuccess(data=BOQHeaderRead.model_validate(header), message="Standard template created.")
+
+
+# ── Copy BOQ ──────────────────────────────────────────────────────────────────
+
+class _CopyBoqBody(BaseModel):
+    new_version_name:  str
+    target_project_id: uuid.UUID
+    target_site_id:    uuid.UUID | None = None
+
+
+@boq_item_router.post("/headers/{header_id}/copy", status_code=201, dependencies=[OFFICE_AND_ABOVE])
+def copy_boq(header_id: uuid.UUID, body: _CopyBoqBody, db: DbSession, current_user: CurrentUser):
+    """Copy a BOQ header (all sections + items) to a new header, optionally on a different site."""
+    header = boq_service.copy_boq(
+        db, header_id, body.target_project_id,
+        body.new_version_name, body.target_site_id, current_user.id,
+    )
+    return ApiSuccess(data=BOQHeaderRead.model_validate(header), message="BOQ copied.")
+
+
+# ── Generate lot BOQs ─────────────────────────────────────────────────────────
+
+class _GenerateLotBoqsBody(BaseModel):
+    lot_ids: list[uuid.UUID]
+
+
+@boq_item_router.post("/headers/{header_id}/generate-lot-boqs", dependencies=[OFFICE_AND_ABOVE])
+def generate_lot_boqs(header_id: uuid.UUID, body: _GenerateLotBoqsBody, db: DbSession):
+    """Copy all site-level BOQ items to lot-specific copies for each lot in lot_ids."""
+    count = boq_service.generate_lot_boqs(db, header_id, body.lot_ids)
+    return ApiSuccess(data={"created": count}, message=f"{count} BOQ item(s) created for lots.")
+
+
+# ── Lot BOQ summary ───────────────────────────────────────────────────────────
+
+@boq_item_router.get("/lot/{lot_id}/summary", dependencies=[ALL_ROLES])
+def lot_boq_summary(lot_id: uuid.UUID, db: DbSession):
+    """Return allocated / used / remaining per material item for a lot."""
+    rows = boq_service.get_lot_boq_summary(db, lot_id)
+    return ApiSuccess(data=rows)
+
+
+# ── BOQ adjustments ───────────────────────────────────────────────────────────
+
+class _AdjustmentBody(BaseModel):
+    adjustment_type:   str             # CREDIT | NON_SUPPLY | RETURN
+    reason:            str
+    project_id:        uuid.UUID | None = None
+    site_id:           uuid.UUID | None = None
+    lot_id:            uuid.UUID | None = None
+    boq_item_id:       uuid.UUID | None = None
+    item_id:           uuid.UUID | None = None
+    purchase_order_id: uuid.UUID | None = None
+    invoice_id:        uuid.UUID | None = None
+    delivery_id:       uuid.UUID | None = None
+    supplier_id:       uuid.UUID | None = None
+    quantity:          float | None = None
+    amount:            float | None = None
+    notes:             str   | None = None
+
+
+@boq_item_router.post("/adjustments", status_code=201, dependencies=[OFFICE_AND_ABOVE])
+def create_adjustment(body: _AdjustmentBody, db: DbSession, current_user: CurrentUser):
+    """Record a BOQ credit, non-supply, or return."""
+    adj = boq_service.create_adjustment(
+        db,
+        adjustment_type=body.adjustment_type,
+        reason=body.reason,
+        created_by_id=current_user.id,
+        project_id=body.project_id,
+        site_id=body.site_id,
+        lot_id=body.lot_id,
+        boq_item_id=body.boq_item_id,
+        item_id=body.item_id,
+        purchase_order_id=body.purchase_order_id,
+        invoice_id=body.invoice_id,
+        delivery_id=body.delivery_id,
+        supplier_id=body.supplier_id,
+        quantity=body.quantity,
+        amount=body.amount,
+        notes=body.notes,
+    )
+    return ApiSuccess(
+        data={"id": str(adj.id), "type": adj.adjustment_type},
+        message="Adjustment recorded.",
+    )
+
+
+@boq_item_router.get("/adjustments", dependencies=[OFFICE_AND_ABOVE])
+def list_adjustments(
+    db: DbSession,
+    project_id:      uuid.UUID | None = None,
+    site_id:         uuid.UUID | None = None,
+    lot_id:          uuid.UUID | None = None,
+    adjustment_type: str       | None = None,
+    limit:           int             = 100,
+):
+    """List BOQ adjustments with optional filters."""
+    rows = boq_service.list_adjustments(
+        db, project_id=project_id, site_id=site_id,
+        lot_id=lot_id, adjustment_type=adjustment_type, limit=limit,
+    )
+    return ApiSuccess(data=[
+        {
+            "id":              str(r.id),
+            "adjustment_type": r.adjustment_type,
+            "quantity":        float(r.quantity) if r.quantity else None,
+            "amount":          float(r.amount) if r.amount else None,
+            "reason":          r.reason,
+            "notes":           r.notes,
+            "created_at":      r.created_at.isoformat(),
+        }
+        for r in rows
+    ])
+
+
+# ── Site / Project hierarchy endpoints ────────────────────────────────────────
+
+@boq_item_router.get("/projects/{project_id}/master-summary", dependencies=[ALL_ROLES])
+def project_master_summary(project_id: uuid.UUID, db: DbSession):
+    """Roll-up of all site BOQs for a project — used for the Master Summary view."""
+    data = boq_service.get_project_master_summary(db, project_id)
+    return ApiSuccess(data=data)
+
+
+@boq_item_router.get("/sites/{site_id}/boq-summary", dependencies=[ALL_ROLES])
+def site_boq_summary(site_id: uuid.UUID, db: DbSession):
+    """Site-level BOQ: sections + items where lot_id IS NULL."""
+    data = boq_service.get_site_boq_summary(db, site_id)
+    if not data:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Site not found.")
+    return ApiSuccess(data=data)
+
+
+@boq_item_router.get("/sites/{site_id}/lot-boqs", dependencies=[ALL_ROLES])
+def site_lot_boqs(site_id: uuid.UUID, db: DbSession):
+    """Per-lot BOQ totals for all lots attached to a site."""
+    data = boq_service.get_site_lot_boqs(db, site_id)
+    return ApiSuccess(data=data)
+
+
+@boq_item_router.post("/sites/{site_id}/generate-lot-boqs", dependencies=[OFFICE_AND_ABOVE])
+def generate_site_lot_boqs(site_id: uuid.UUID, db: DbSession):
+    """
+    Find the site's BOQ header and generate lot-specific BOQ items
+    for every lot attached to this site.
+    """
+    from fastapi import HTTPException
+    from app.models.site import Site
+    from app.models.lot import Lot
+    from app.models.boq import BOQItem as _BI, BOQSection as _BS
+
+    site = db.get(Site, site_id)
+    if not site:
+        raise HTTPException(404, "Site not found.")
+
+    section_ids = [
+        row[0] for row in (
+            db.query(_BI.boq_section_id)
+            .filter(_BI.site_id == site_id, _BI.lot_id.is_(None), _BI.is_active == True)
+            .distinct()
+            .all()
+        )
+    ]
+    if not section_ids:
+        raise HTTPException(400, "No site-level BOQ found. Create a site BOQ first.")
+
+    header_row = db.query(_BS.boq_header_id).filter(_BS.id.in_(section_ids)).first()
+    if not header_row:
+        raise HTTPException(400, "Could not resolve a BOQ header for this site.")
+
+    lot_ids = [
+        row[0] for row in (
+            db.query(Lot.id)
+            .filter(Lot.site_id == site_id, Lot.project_id == site.project_id)
+            .all()
+        )
+    ]
+    count = boq_service.generate_lot_boqs(db, header_row[0], lot_ids)
+    return ApiSuccess(
+        data={"created": count, "lot_count": len(lot_ids)},
+        message=f"{count} BOQ item(s) generated across {len(lot_ids)} lot(s).",
+    )
+
+
+@boq_item_router.post("/lots/{lot_id}/reset-to-site-boq", dependencies=[OFFICE_AND_ABOVE])
+def reset_lot_to_site_boq(lot_id: uuid.UUID, db: DbSession):
+    """Delete lot-specific BOQ items and regenerate from the site BOQ."""
+    count = boq_service.reset_lot_to_site_boq(db, lot_id)
+    return ApiSuccess(
+        data={"created": count},
+        message=f"Lot BOQ reset. {count} item(s) restored from site BOQ.",
+    )

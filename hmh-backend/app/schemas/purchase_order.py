@@ -21,6 +21,7 @@ class POItemRead(BaseModel):
     stage_id: Optional[uuid.UUID] = None
     description: str
     quantity_ordered: float
+    quantity_received: float = 0.0
     unit: Optional[str] = None
     rate: Optional[float] = None
     vat_mode: VatMode = VatMode.INCLUSIVE

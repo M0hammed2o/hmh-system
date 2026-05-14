@@ -24,13 +24,31 @@ class ProjectStatus(str, enum.Enum):
 class RecordStatus(str, enum.Enum):
     DRAFT = "DRAFT"
     SUBMITTED = "SUBMITTED"
+    PENDING_APPROVAL = "PENDING_APPROVAL"
     APPROVED = "APPROVED"
     REJECTED = "REJECTED"
     SENT = "SENT"
+    CONVERTED_TO_PO = "CONVERTED_TO_PO"
+    ORDERED = "ORDERED"
+    PARTIALLY_RECEIVED = "PARTIALLY_RECEIVED"
     RECEIVED = "RECEIVED"
     MATCHED = "MATCHED"
     PAID = "PAID"
     CANCELLED = "CANCELLED"
+    CLOSED = "CLOSED"
+
+
+class DeliveryDestination(str, enum.Enum):
+    MAIN_WAREHOUSE = "MAIN_WAREHOUSE"
+    SITE_STORE = "SITE_STORE"
+    LOT = "LOT"
+
+
+class MRPriority(str, enum.Enum):
+    URGENT = "URGENT"
+    HIGH = "HIGH"
+    NORMAL = "NORMAL"
+    LOW = "LOW"
 
 
 class StageStatus(str, enum.Enum):
@@ -50,6 +68,8 @@ class LotStatus(str, enum.Enum):
 
 class ItemType(str, enum.Enum):
     MATERIAL = "MATERIAL"
+    LABOUR = "LABOUR"
+    PLANT = "PLANT"
     SERVICE = "SERVICE"
     PACKAGE = "PACKAGE"
 
@@ -69,6 +89,13 @@ class InvoiceMatchStatus(str, enum.Enum):
     MATCHED = "MATCHED"
     PARTIALLY_MATCHED = "PARTIALLY_MATCHED"
     MISMATCH = "MISMATCH"
+    QUANTITY_MISMATCH = "QUANTITY_MISMATCH"
+    PRICE_MISMATCH = "PRICE_MISMATCH"
+    MISSING_DELIVERY_NOTE = "MISSING_DELIVERY_NOTE"
+    MISSING_SIGNATURE = "MISSING_SIGNATURE"
+    MISSING_INVOICE = "MISSING_INVOICE"
+    AWAITING_APPROVAL = "AWAITING_APPROVAL"
+    APPROVED_FOR_PAYMENT = "APPROVED_FOR_PAYMENT"
     UNLINKED = "UNLINKED"
 
 
@@ -86,15 +113,46 @@ class AlertSeverity(str, enum.Enum):
 
 
 class AlertType(str, enum.Enum):
+    MATERIAL_OVERUSE = "MATERIAL_OVERUSE"
     BOQ_VARIANCE_OVERUSE = "BOQ_VARIANCE_OVERUSE"
+    BOQ_ALLOCATION_EXCEEDED = "BOQ_ALLOCATION_EXCEEDED"
     DELIVERY_WITHOUT_PO = "DELIVERY_WITHOUT_PO"
+    DELIVERY_MISMATCH = "DELIVERY_MISMATCH"
+    DELIVERY_NOTE_MISSING = "DELIVERY_NOTE_MISSING"
+    SIGNATURE_MISSING = "SIGNATURE_MISSING"
     INVOICE_MISMATCH = "INVOICE_MISMATCH"
+    INVOICE_UNMATCHED = "INVOICE_UNMATCHED"
+    INVOICE_MISSING_DELIVERY_NOTE = "INVOICE_MISSING_DELIVERY_NOTE"
     NEGATIVE_STOCK = "NEGATIVE_STOCK"
     LOW_STOCK = "LOW_STOCK"
     MISSING_REMAINING_STOCK_PHOTO = "MISSING_REMAINING_STOCK_PHOTO"
     OVERDUE_PAYMENT = "OVERDUE_PAYMENT"
     REQUEST_PENDING_TOO_LONG = "REQUEST_PENDING_TOO_LONG"
     DELIVERY_DISCREPANCY = "DELIVERY_DISCREPANCY"
+    DELIVERY_SIGNATURE_MISSING = "DELIVERY_SIGNATURE_MISSING"
+    VEHICLE_REPAIR_LOGGED = "VEHICLE_REPAIR_LOGGED"
+    FUEL_USAGE_HIGH = "FUEL_USAGE_HIGH"
+    SITE_DELAY = "SITE_DELAY"
+    LOT_DELAYED = "LOT_DELAYED"
+    STAGE_DELAYED = "STAGE_DELAYED"
+    PROJECT_OVER_BUDGET = "PROJECT_OVER_BUDGET"
+    DAILY_SUMMARY = "DAILY_SUMMARY"
+    WEEKLY_SUMMARY = "WEEKLY_SUMMARY"
+
+
+class NotificationChannel(str, enum.Enum):
+    WHATSAPP = "WHATSAPP"
+    EMAIL = "EMAIL"
+    IN_APP = "IN_APP"
+
+
+class NotificationStatus(str, enum.Enum):
+    PENDING = "PENDING"
+    SENT = "SENT"
+    FAILED = "FAILED"
+    MOCK_SENT = "MOCK_SENT"
+    ACKNOWLEDGED = "ACKNOWLEDGED"
+    CANCELLED = "CANCELLED"
 
 
 class PaymentType(str, enum.Enum):
@@ -176,3 +234,112 @@ class OpeningReferenceType(str, enum.Enum):
     PO = "PO"
     PAYMENT = "PAYMENT"
     OTHER = "OTHER"
+
+
+class JobCardStatus(str, enum.Enum):
+    DRAFT = "DRAFT"
+    SUBMITTED = "SUBMITTED"
+    SITE_APPROVED = "SITE_APPROVED"
+    OFFICE_APPROVED = "OFFICE_APPROVED"
+    OWNER_APPROVED = "OWNER_APPROVED"
+    PAYMENT_APPROVED = "PAYMENT_APPROVED"
+    PAID = "PAID"
+    REJECTED = "REJECTED"
+
+
+class JobCardWorkType(str, enum.Enum):
+    DAILY_LABOUR = "DAILY_LABOUR"
+    CONTRACT = "CONTRACT"
+    SUBCONTRACTOR = "SUBCONTRACTOR"
+    OVERTIME = "OVERTIME"
+
+
+class VehicleStatus(str, enum.Enum):
+    ACTIVE = "ACTIVE"
+    MAINTENANCE = "MAINTENANCE"
+    RETIRED = "RETIRED"
+
+
+class VehicleType(str, enum.Enum):
+    BAKKIE = "BAKKIE"
+    TRUCK = "TRUCK"
+    TLB = "TLB"
+    EXCAVATOR = "EXCAVATOR"
+    CRANE = "CRANE"
+    VAN = "VAN"
+    OTHER = "OTHER"
+
+
+class VehicleCostType(str, enum.Enum):
+    FUEL = "FUEL"
+    TYRE = "TYRE"
+    REPAIR = "REPAIR"
+    SERVICE = "SERVICE"
+    LICENCE = "LICENCE"
+    INSURANCE = "INSURANCE"
+    OTHER = "OTHER"
+
+
+class AuditAction(str, enum.Enum):
+    CREATE = "CREATE"
+    UPDATE = "UPDATE"
+    DELETE = "DELETE"
+    LOGIN = "LOGIN"
+    LOGOUT = "LOGOUT"
+    APPROVE = "APPROVE"
+    REJECT = "REJECT"
+    TRANSFER = "TRANSFER"
+    ISSUE = "ISSUE"
+    OVERRUN_ACCEPTED = "OVERRUN_ACCEPTED"
+    UPLOAD = "UPLOAD"
+    SIGN = "SIGN"
+    SEND = "SEND"
+
+
+# ── Document AI / Site Capture enums ─────────────────────────────────────────
+
+class ExtractionStatus(str, enum.Enum):
+    EXTRACTED          = "EXTRACTED"
+    OCR_REQUIRED       = "OCR_REQUIRED"
+    OCR_NOT_AVAILABLE  = "OCR_NOT_AVAILABLE"
+    FAILED             = "FAILED"
+    NEEDS_REVIEW       = "NEEDS_REVIEW"
+
+
+class DocumentSourceType(str, enum.Enum):
+    INVOICE          = "INVOICE"
+    DELIVERY_NOTE    = "DELIVERY_NOTE"
+    QUOTE            = "QUOTE"
+    GMAIL_ATTACHMENT = "GMAIL_ATTACHMENT"
+    SITE_UPLOAD      = "SITE_UPLOAD"
+    EXPENSE          = "EXPENSE"
+
+
+class VerificationStatus(str, enum.Enum):
+    DRAFT    = "DRAFT"
+    VERIFIED = "VERIFIED"
+    MISMATCH = "MISMATCH"
+    REJECTED = "REJECTED"
+
+
+class ExpenseCategory(str, enum.Enum):
+    VEHICLE_REPAIR = "VEHICLE_REPAIR"
+    FUEL           = "FUEL"
+    TOOL_REPAIR    = "TOOL_REPAIR"
+    SITE_EXPENSE   = "SITE_EXPENSE"
+    OTHER          = "OTHER"
+
+
+class ExpenseStatus(str, enum.Enum):
+    UPLOADED     = "UPLOADED"
+    NEEDS_REVIEW = "NEEDS_REVIEW"
+    APPROVED     = "APPROVED"
+    REJECTED     = "REJECTED"
+    PAID         = "PAID"
+
+
+class DocMatchStatus(str, enum.Enum):
+    MATCHED      = "MATCHED"
+    MISMATCH     = "MISMATCH"
+    UNMATCHED    = "UNMATCHED"
+    NEEDS_REVIEW = "NEEDS_REVIEW"

@@ -21,7 +21,10 @@ _LOCKOUT_MINUTES = 30
 
 
 def login(db: Session, email: str, password: str) -> tuple[User, str, str]:
+    # Accept phone number OR email as the login identifier
     user = db.query(User).filter(User.email == email).first()
+    if not user:
+        user = db.query(User).filter(User.phone == email).first()
     if not user:
         raise AuthenticationError("Invalid email or password.")
 

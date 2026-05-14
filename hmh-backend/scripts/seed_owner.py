@@ -21,8 +21,8 @@ from app.models.enums import UserRole
 from app.models.user import User
 from app.core.security import hash_password
 
-_EMAIL = "admin@gmail.com"
-_FULL_NAME = "HMH Owner"
+_EMAIL = "admin@hmhgroup.com"
+_FULL_NAME = "Mohammed Moosa"
 _PASSWORD = "Mohammed@1"
 
 

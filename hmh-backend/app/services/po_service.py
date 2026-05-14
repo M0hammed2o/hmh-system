@@ -133,6 +133,37 @@ def update_po(db: Session, po_id: uuid.UUID, data: PurchaseOrderUpdate) -> Purch
     return po
 
 
+def approve_po(db: Session, po_id: uuid.UUID, approver_id: uuid.UUID) -> PurchaseOrder:
+    from app.services import audit_service
+    from app.models.enums import AuditAction
+    po = _get_po_or_404(db, po_id)
+    if po.status not in (RecordStatus.DRAFT, RecordStatus.SUBMITTED):
+        raise ValidationError("Only DRAFT or SUBMITTED POs can be approved.")
+    po.status = RecordStatus.APPROVED
+    po.approved_by = approver_id
+    audit_service.write_event(db, AuditAction.APPROVE, "purchase_order", approver_id, po_id)
+    db.commit()
+    db.refresh(po)
+    return po
+
+
+def send_po_email(
+    db: Session, po_id: uuid.UUID, sent_by_id: uuid.UUID
+):
+    from app.services.email_service import send_po_email as _send
+    from app.services import audit_service
+    from app.models.enums import AuditAction
+    po = _get_po_or_404(db, po_id)
+    log = _send(db, po, sent_by_id=sent_by_id, mr_id=po.material_request_id)
+    po.sent_at = datetime.now(timezone.utc)
+    po.status = RecordStatus.SENT
+    audit_service.write_event(db, AuditAction.SEND, "purchase_order", sent_by_id, po_id,
+                              after_value={"email_status": log.status.value})
+    db.commit()
+    db.refresh(po)
+    return po, log
+
+
 def add_po_item(db: Session, po_id: uuid.UUID, data: POItemCreate) -> PurchaseOrderItem:
     po = db.get(PurchaseOrder, po_id)
     if not po:

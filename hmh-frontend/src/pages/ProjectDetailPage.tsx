@@ -1,8 +1,12 @@
 import { useEffect, useState } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, Link } from "react-router-dom";
 import {
-  ArrowLeft, Plus, MapPin, Calendar, Building2, Pencil,
+  ArrowLeft, Plus, MapPin, Calendar, Building2, Pencil, Layers, Wand2,
+  FileSpreadsheet, ChevronRight, Copy,
 } from "lucide-react";
+import { SitesBulkCreateModal } from "@/components/SitesBulkCreateModal";
+import { LotsGeneratorModal } from "@/components/LotsGeneratorModal";
+import { ApplyBOQTemplateModal } from "@/components/ApplyBOQTemplateModal";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -546,12 +550,22 @@ export default function ProjectDetailPage() {
   const [sitesLoading, setSitesLoading] = useState(false);
   const [includeInactive, setIncludeInactive] = useState(false);
   const [showAddSite, setShowAddSite] = useState(false);
+  const [showBulkSites, setShowBulkSites] = useState(false);
   const [editingSite, setEditingSite] = useState<Site | null>(null);
 
   // Lots state — real
   const [lots, setLots] = useState<Lot[]>([]);
   const [lotsLoading, setLotsLoading] = useState(false);
   const [showAddLot, setShowAddLot] = useState(false);
+  const [showGenerateLots, setShowGenerateLots] = useState(false);
+  const [showApplyBOQ, setShowApplyBOQ] = useState(false);
+
+  // Stage update state
+  const [updatingStage, setUpdatingStage] = useState<string | null>(null); // stage master id
+  const [stageUpdateStatus, setStageUpdateStatus] = useState<string>("");
+  const [stageUpdateNotes, setStageUpdateNotes] = useState("");
+  const [stageUpdateDelay, setStageUpdateDelay] = useState("");
+  const [stageUpdateSaving, setStageUpdateSaving] = useState(false);
 
   // Stages state — real
   const [stageMasters, setStageMasters] = useState<StageMaster[]>([]);
@@ -775,6 +789,10 @@ export default function ProjectDetailPage() {
               />
               Show inactive sites
             </label>
+            <Button size="sm" variant="outline" onClick={() => setShowBulkSites(true)}>
+              <Layers className="w-4 h-4" />
+              Bulk Create
+            </Button>
             <Button size="sm" onClick={() => setShowAddSite(true)}>
               <Plus className="w-4 h-4" />
               Add Site
@@ -853,10 +871,20 @@ export default function ProjectDetailPage() {
             <p className="text-sm text-muted-foreground">
               {lots.length} lot{lots.length !== 1 ? "s" : ""} in this project
             </p>
-            <Button size="sm" onClick={() => setShowAddLot(true)}>
-              <Plus className="w-4 h-4" />
-              Add Lot
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              <Button size="sm" variant="outline" onClick={() => setShowApplyBOQ(true)}>
+                <FileSpreadsheet className="w-4 h-4" />
+                Apply BOQ Template
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => setShowGenerateLots(true)}>
+                <Wand2 className="w-4 h-4" />
+                Generate Lots
+              </Button>
+              <Button size="sm" onClick={() => setShowAddLot(true)}>
+                <Plus className="w-4 h-4" />
+                Add Lot
+              </Button>
+            </div>
           </div>
 
           <div className="bg-card border border-border rounded-xl overflow-hidden">
@@ -880,22 +908,25 @@ export default function ProjectDetailPage() {
                 <thead>
                   <tr className="border-b border-border bg-muted/50">
                     <th className="text-left px-4 py-3 font-medium text-muted-foreground">Lot #</th>
-                    <th className="text-left px-4 py-3 font-medium text-muted-foreground">Block</th>
-                    <th className="text-left px-4 py-3 font-medium text-muted-foreground">Unit Type</th>
-                    <th className="text-left px-4 py-3 font-medium text-muted-foreground">Site</th>
+                    <th className="text-left px-4 py-3 font-medium text-muted-foreground hidden sm:table-cell">Unit Type</th>
+                    <th className="text-left px-4 py-3 font-medium text-muted-foreground hidden md:table-cell">Site</th>
                     <th className="text-left px-4 py-3 font-medium text-muted-foreground">Status</th>
+                    <th className="px-4 py-3 text-center font-medium text-muted-foreground">BOQ</th>
+                    <th className="w-8" />
                   </tr>
                 </thead>
                 <tbody>
                   {lots.map((lot) => (
                     <tr
                       key={lot.id}
-                      className="border-b border-border last:border-0 hover:bg-muted/30 transition-colors"
+                      onClick={() => navigate(`/lots/${lot.id}`)}
+                      className="border-b border-border last:border-0 hover:bg-muted/30 transition-colors cursor-pointer"
                     >
                       <td className="px-4 py-3 font-medium font-mono">{lot.lot_number}</td>
-                      <td className="px-4 py-3 text-muted-foreground">{lot.block_number ?? "—"}</td>
-                      <td className="px-4 py-3 text-muted-foreground">{lot.unit_type ?? "—"}</td>
-                      <td className="px-4 py-3 text-muted-foreground text-xs">
+                      <td className="px-4 py-3 text-muted-foreground hidden sm:table-cell">
+                        {lot.unit_type ?? "—"}
+                      </td>
+                      <td className="px-4 py-3 text-muted-foreground text-xs hidden md:table-cell">
                         {lot.site_id
                           ? sites.find((s) => s.id === lot.site_id)?.name ?? lot.site_id.slice(0, 8)
                           : "—"}
@@ -904,6 +935,16 @@ export default function ProjectDetailPage() {
                         <Badge variant={lotStatusVariant[lot.status]}>
                           {lotStatusLabel[lot.status]}
                         </Badge>
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        {lot.boq_template_id ? (
+                          <FileSpreadsheet className="w-4 h-4 text-green-500 mx-auto" title="BOQ applied" />
+                        ) : (
+                          <span className="text-xs text-muted-foreground">—</span>
+                        )}
+                      </td>
+                      <td className="px-2 py-3">
+                        <ChevronRight className="w-4 h-4 text-muted-foreground" />
                       </td>
                     </tr>
                   ))}
@@ -936,41 +977,123 @@ export default function ProjectDetailPage() {
                     <th className="text-left px-4 py-3 font-medium text-muted-foreground w-8">#</th>
                     <th className="text-left px-4 py-3 font-medium text-muted-foreground">Stage</th>
                     <th className="text-left px-4 py-3 font-medium text-muted-foreground">Status</th>
-                    <th className="text-left px-4 py-3 font-medium text-muted-foreground">Inspection</th>
-                    <th className="text-left px-4 py-3 font-medium text-muted-foreground">Certification</th>
                     <th className="text-left px-4 py-3 font-medium text-muted-foreground">Notes</th>
+                    <th className="px-4 py-3 w-20" />
                   </tr>
                 </thead>
                 <tbody>
                   {stageMasters.map((master) => {
                     const status = stageStatuses.find((s) => s.stage_id === master.id);
                     const currentStatus = (status?.status ?? "NOT_STARTED") as StageStatus;
+                    const isUpdating = updatingStage === master.id;
                     return (
-                      <tr
-                        key={master.id}
-                        className="border-b border-border last:border-0 hover:bg-muted/30 transition-colors"
-                      >
-                        <td className="px-4 py-3 text-muted-foreground text-xs">{master.sequence_order}</td>
-                        <td className="px-4 py-3 font-medium">{master.name}</td>
-                        <td className="px-4 py-3">
-                          <span className={cn("text-xs px-2 py-0.5 rounded-full font-medium", stageStatusColor[currentStatus])}>
-                            {stageStatusLabel[currentStatus]}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3 text-muted-foreground text-xs">
-                          {status?.inspection_required ? (
-                            <span className="text-warning font-medium">Required</span>
-                          ) : "—"}
-                        </td>
-                        <td className="px-4 py-3 text-muted-foreground text-xs">
-                          {status?.certification_required ? (
-                            <span className="text-primary font-medium">Required</span>
-                          ) : "—"}
-                        </td>
-                        <td className="px-4 py-3 text-muted-foreground text-xs max-w-[200px] truncate">
-                          {status?.notes ?? "—"}
-                        </td>
-                      </tr>
+                      <>
+                        <tr
+                          key={master.id}
+                          className="border-b border-border last:border-0 hover:bg-muted/30 transition-colors"
+                        >
+                          <td className="px-4 py-3 text-muted-foreground text-xs">{master.sequence_order}</td>
+                          <td className="px-4 py-3 font-medium">{master.name}</td>
+                          <td className="px-4 py-3">
+                            <span className={cn("text-xs px-2 py-0.5 rounded-full font-medium", stageStatusColor[currentStatus])}>
+                              {stageStatusLabel[currentStatus]}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 text-muted-foreground text-xs max-w-[160px] truncate">
+                            {status?.notes ?? "—"}
+                          </td>
+                          <td className="px-4 py-3">
+                            <button
+                              onClick={() => {
+                                if (isUpdating) { setUpdatingStage(null); return; }
+                                setUpdatingStage(master.id);
+                                setStageUpdateStatus(currentStatus);
+                                setStageUpdateNotes(status?.notes ?? "");
+                                setStageUpdateDelay("");
+                              }}
+                              className="text-xs text-primary hover:underline"
+                            >
+                              {isUpdating ? "Cancel" : "Update"}
+                            </button>
+                          </td>
+                        </tr>
+                        {isUpdating && (
+                          <tr key={`${master.id}-update`} className="border-b border-border bg-primary/5">
+                            <td colSpan={5} className="px-4 py-3">
+                              <div className="space-y-3">
+                                <div className="grid grid-cols-2 gap-3">
+                                  <div className="space-y-1">
+                                    <label className="text-xs text-muted-foreground font-medium">Status</label>
+                                    <select
+                                      value={stageUpdateStatus}
+                                      onChange={(e) => setStageUpdateStatus(e.target.value)}
+                                      className="h-8 w-full rounded-md border border-input bg-background px-2 text-xs"
+                                    >
+                                      {(["NOT_STARTED","IN_PROGRESS","COMPLETED","AWAITING_INSPECTION","CERTIFIED"] as StageStatus[]).map((s) => (
+                                        <option key={s} value={s}>{stageStatusLabel[s]}</option>
+                                      ))}
+                                    </select>
+                                  </div>
+                                  <div className="space-y-1">
+                                    <label className="text-xs text-muted-foreground font-medium">Notes</label>
+                                    <input
+                                      value={stageUpdateNotes}
+                                      onChange={(e) => setStageUpdateNotes(e.target.value)}
+                                      placeholder="Progress note"
+                                      className="h-8 w-full rounded-md border border-input bg-background px-2 text-xs"
+                                    />
+                                  </div>
+                                </div>
+                                {stageUpdateStatus === "IN_PROGRESS" && (
+                                  <div className="space-y-1">
+                                    <label className="text-xs text-muted-foreground font-medium">Delay reason (if delayed)</label>
+                                    <input
+                                      value={stageUpdateDelay}
+                                      onChange={(e) => setStageUpdateDelay(e.target.value)}
+                                      placeholder="Leave blank if on schedule"
+                                      className="h-8 w-full rounded-md border border-input bg-background px-2 text-xs"
+                                    />
+                                  </div>
+                                )}
+                                <div className="flex gap-2">
+                                  <button
+                                    disabled={stageUpdateSaving}
+                                    onClick={async () => {
+                                      if (!project) return;
+                                      setStageUpdateSaving(true);
+                                      try {
+                                        await stagesApi.upsert(project.id, {
+                                          stage_id: master.id,
+                                          status: stageUpdateStatus as StageStatus,
+                                          notes: stageUpdateNotes || undefined,
+                                          delay_reason: stageUpdateDelay || undefined,
+                                        });
+                                        const [ms2, ss2] = await Promise.all([
+                                          stagesApi.listMasters(),
+                                          stagesApi.listProjectStatuses(project.id),
+                                        ]);
+                                        setStageMasters(ms2);
+                                        setStageStatuses(ss2);
+                                        setUpdatingStage(null);
+                                      } catch { /* ignore */ }
+                                      finally { setStageUpdateSaving(false); }
+                                    }}
+                                    className="px-3 py-1.5 rounded-lg text-xs font-medium bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+                                  >
+                                    {stageUpdateSaving ? "Saving…" : "Save"}
+                                  </button>
+                                  <button
+                                    onClick={() => setUpdatingStage(null)}
+                                    className="px-3 py-1.5 rounded-lg text-xs font-medium border border-border hover:bg-muted"
+                                  >
+                                    Cancel
+                                  </button>
+                                </div>
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </>
                     );
                   })}
                 </tbody>
@@ -1035,6 +1158,46 @@ export default function ProjectDetailPage() {
               [...prev, lot].sort((a, b) => a.lot_number.localeCompare(b.lot_number))
             );
             setShowAddLot(false);
+          }}
+        />
+      )}
+      {showBulkSites && (
+        <SitesBulkCreateModal
+          projectId={project.id}
+          onClose={() => setShowBulkSites(false)}
+          onCreated={() => {
+            // Reload sites
+            setSitesLoading(true);
+            sitesApi.list(project.id, includeInactive)
+              .then(setSites)
+              .catch(() => {})
+              .finally(() => setSitesLoading(false));
+          }}
+        />
+      )}
+      {showGenerateLots && (
+        <LotsGeneratorModal
+          projectId={project.id}
+          onClose={() => setShowGenerateLots(false)}
+          onGenerated={() => {
+            setLotsLoading(true);
+            lotsApi.list(project.id)
+              .then(setLots)
+              .catch(() => {})
+              .finally(() => setLotsLoading(false));
+          }}
+        />
+      )}
+      {showApplyBOQ && (
+        <ApplyBOQTemplateModal
+          projectId={project.id}
+          onClose={() => setShowApplyBOQ(false)}
+          onApplied={() => {
+            setLotsLoading(true);
+            lotsApi.list(project.id)
+              .then(setLots)
+              .catch(() => {})
+              .finally(() => setLotsLoading(false));
           }}
         />
       )}

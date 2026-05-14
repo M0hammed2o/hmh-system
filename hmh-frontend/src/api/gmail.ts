@@ -1,0 +1,156 @@
+import client from "./client";
+
+export type DetectedType = "INVOICE" | "DELIVERY_NOTE" | "QUOTE" | "OTHER";
+export type ProcessedStatus = "UNPROCESSED" | "PROCESSED" | "IGNORED";
+
+export interface IncomingEmailAttachment {
+  id: string;
+  filename: string;
+  file_path: string;
+  content_type: string | null;
+  detected_type: DetectedType;
+  created_at: string;
+}
+
+export interface IncomingEmail {
+  id: string;
+  from_email: string;
+  subject: string | null;
+  received_at: string | null;
+  has_attachments: boolean;
+  processed_status: ProcessedStatus;
+  matched_po_number: string | null;
+  body_snippet?: string;
+  attachments?: IncomingEmailAttachment[];
+}
+
+export interface GmailListResponse {
+  total: number;
+  items: IncomingEmail[];
+}
+
+export interface FetchResult {
+  fetched: number;
+  saved: number;
+  skipped: number;
+  mock: boolean;
+  error?: string;
+}
+
+export type MatchStatus = "MATCHED" | "MISMATCH" | "NOT_FOUND" | "NO_REFERENCE";
+
+export interface MRMatch {
+  status:          MatchStatus;
+  mr_number:       string | null;
+  mr_id:           string | null;
+  mr_status:       string | null;
+  mismatch_detail: string | null;
+}
+
+export interface ProcessedAttachment {
+  attachment_id:     string;
+  filename:          string;
+  detected_type:     DetectedType;
+  extraction_status: string;
+  fields: {
+    po_number:            string | null;
+    invoice_number:       string | null;
+    delivery_note_number: string | null;
+    supplier_name:        string | null;
+    supplier_email:       string | null;
+    date:                 string | null;
+    total_amount:         number | null;
+  };
+  items: Array<{
+    description: string;
+    unit:        string | null;
+    quantity:    number | null;
+    unit_price:  number | null;
+    line_total:  number | null;
+  }>;
+  mr_match: MRMatch;
+  warnings: string[];
+}
+
+export interface ProcessEmailResult {
+  email_id:         string;
+  processed_status: string;
+  results:          ProcessedAttachment[];
+}
+
+export const gmailApi = {
+  fetch: async (limit = 20): Promise<FetchResult> => {
+    const r = await client.post(`/gmail/fetch?limit=${limit}`);
+    return r.data.data;
+  },
+
+  listIncoming: async (params?: {
+    status?: ProcessedStatus;
+    limit?: number;
+    offset?: number;
+  }): Promise<GmailListResponse> => {
+    const r = await client.get("/gmail/incoming", { params });
+    return r.data.data;
+  },
+
+  getIncoming: async (id: string): Promise<IncomingEmail> => {
+    const r = await client.get(`/gmail/incoming/${id}`);
+    return r.data.data;
+  },
+
+  getAttachment: async (id: string): Promise<IncomingEmailAttachment> => {
+    const r = await client.get(`/gmail/attachments/${id}`);
+    return r.data.data;
+  },
+
+  processEmail: async (emailId: string): Promise<ProcessEmailResult> => {
+    const r = await client.post<{ data: ProcessEmailResult }>(`/gmail/incoming/${emailId}/process`);
+    return r.data.data;
+  },
+
+  /**
+   * Fetch an attachment file as a Blob (includes auth headers automatically).
+   * inline=true  → browser can render PDF/image inline
+   * inline=false → triggers download
+   */
+  getAttachmentBlob: async (attId: string, inline = false): Promise<{ blob: Blob; filename: string }> => {
+    const r = await client.get(`/gmail/attachments/${attId}/download`, {
+      params:       { inline },
+      responseType: "blob",
+    });
+    // Extract filename from Content-Disposition if present
+    const cd       = r.headers["content-disposition"] ?? "";
+    const match    = cd.match(/filename="?([^";]+)"?/i);
+    const filename = match?.[1] ?? "attachment";
+    return { blob: r.data as Blob, filename };
+  },
+};
+
+export interface ProofPackSummary {
+  invoice_id: string;
+  invoice_number: string | null;
+  invoice_date: string | null;
+  total_amount: number;
+  status: string | null;
+  supplier_name: string | null;
+  po_number: string | null;
+  match_status: string;
+  is_matched: boolean;
+}
+
+export interface ProofPackListResponse {
+  total: number;
+  items: ProofPackSummary[];
+}
+
+export const proofPacksApi = {
+  list: async (limit = 50, offset = 0): Promise<ProofPackListResponse> => {
+    const r = await client.get("/proof-packs/", { params: { limit, offset } });
+    return r.data.data;
+  },
+
+  get: async (invoiceId: string): Promise<Record<string, unknown>> => {
+    const r = await client.get(`/proof-packs/${invoiceId}`);
+    return r.data.data;
+  },
+};

@@ -14,8 +14,41 @@ from app.models.stage import ProjectStageStatus, StageMaster
 from app.schemas.stage import ProjectStageStatusRead, StageStatusUpsert
 
 
+_DEFAULT_STAGES = [
+    (1,  "Foundation",   "Excavation, footings and strip foundations"),
+    (2,  "Slab",         "Ground floor concrete slab and blinding"),
+    (3,  "Brickwork",    "External and internal brickwork"),
+    (4,  "Roofing",      "Roof structure, sheeting and gutters"),
+    (5,  "Plumbing",     "Water supply and drainage installation"),
+    (6,  "Electrical",   "Wiring, DB board and fitting out"),
+    (7,  "Plastering",   "Internal and external plaster"),
+    (8,  "Painting",     "Interior and exterior painting"),
+    (9,  "Finishing",    "Tiling, doors, windows, skirting and fixtures"),
+    (10, "Handover",     "Final inspection, snag list and handover"),
+]
+
+
 def list_stage_masters(db: Session) -> list[StageMaster]:
     return db.query(StageMaster).order_by(StageMaster.sequence_order).all()
+
+
+def seed_default_stages(db: Session) -> list[StageMaster]:
+    """Create default stages if they don't exist. Returns full stage list."""
+    now = datetime.now(timezone.utc)
+    existing_orders = {s.sequence_order for s in db.query(StageMaster.sequence_order).all()}
+
+    for seq, name, desc in _DEFAULT_STAGES:
+        if seq not in existing_orders:
+            db.add(StageMaster(
+                id=uuid.uuid4(),
+                name=name,
+                sequence_order=seq,
+                description=desc,
+                created_at=now,
+            ))
+
+    db.commit()
+    return list_stage_masters(db)
 
 
 def list_project_stage_statuses(
@@ -102,6 +135,25 @@ def upsert_stage_status(
         pss.ready_for_labour_payment = data.ready_for_labour_payment
     if "notes" in fields:
         pss.notes = data.notes
+
+    # Append delay reason to notes if provided
+    if "delay_reason" in fields and data.delay_reason:
+        existing = pss.notes or ""
+        pss.notes = f"{existing}\nDELAY: {data.delay_reason}".strip()
+        # Create a site delay alert
+        from app.models.alert import SystemAlert
+        from app.models.enums import AlertSeverity, AlertStatus, AlertType
+        from datetime import datetime, timezone
+        db.add(SystemAlert(
+            project_id=project_id,
+            alert_type=AlertType.SITE_DELAY,
+            severity=AlertSeverity.MEDIUM,
+            title=f"Stage delayed: {stage.name}",
+            message=f"Stage '{stage.name}' has been marked as delayed. Reason: {data.delay_reason}",
+            status=AlertStatus.OPEN,
+            notification_channel="in_app",
+            created_at=datetime.now(timezone.utc),
+        ))
 
     pss.updated_by = updated_by_id
 

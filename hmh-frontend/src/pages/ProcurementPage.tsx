@@ -1,539 +1,564 @@
-import { useEffect, useState } from "react";
-import { Plus, ShoppingCart, FileText, CheckCircle2, ChevronDown, ChevronRight, Send } from "lucide-react";
+/**
+ * Procurement Page — MR → Approve → PO → Email workflow.
+ */
+import { useEffect, useState, useCallback } from "react";
+import {
+  Plus, Check, X, ChevronRight, AlertTriangle, Mail,
+  MailCheck, RefreshCw, FileText, ShoppingCart,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Modal } from "@/components/shared/Modal";
-import { PageHeader } from "@/components/shared/PageHeader";
-import { Tabs } from "@/components/shared/Tabs";
-import { StatCard } from "@/components/shared/StatCard";
 import { projectsApi, type Project } from "@/api/projects";
-import { suppliersApi, type Supplier } from "@/api/suppliers";
 import {
-  purchaseOrdersApi,
-  type PurchaseOrder,
-  type RecordStatus,
-  type VatMode,
-  type POItemCreate,
-} from "@/api/purchaseOrders";
-import { materialRequestsApi, type MaterialRequest, type MRStatus } from "@/api/materialRequests";
-import { formatCurrency, formatDate } from "@/lib/format";
+  procurementApi,
+  type MaterialRequest, type MRCreate, type MRItemCreate,
+  type MRQuote, type PurchaseOrder, type MRPriority, type DeliveryDestination,
+} from "@/api/procurement";
+import { cn } from "@/lib/utils";
+import client from "@/api/client";
 
-type POStatus = Extract<RecordStatus, "DRAFT" | "SUBMITTED" | "APPROVED" | "SENT" | "RECEIVED" | "CANCELLED">;
+function timeAgo(iso: string) {
+  const m = Math.floor((Date.now() - new Date(iso).getTime()) / 60000);
+  if (m < 1) return "just now";
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  return `${Math.floor(h / 24)}d ago`;
+}
 
-const poStatusVariant: Record<POStatus, "outline" | "secondary" | "success" | "default" | "destructive" | "warning"> = {
-  DRAFT: "outline",
-  SUBMITTED: "secondary",
-  APPROVED: "success",
-  SENT: "default",
-  RECEIVED: "success",
-  CANCELLED: "destructive",
+const STATUS_BADGE: Record<string, "default" | "secondary" | "outline" | "destructive" | "success"> = {
+  DRAFT: "outline", SUBMITTED: "secondary", PENDING_APPROVAL: "secondary",
+  APPROVED: "success", REJECTED: "destructive", CONVERTED_TO_PO: "default",
+  ORDERED: "default", PARTIALLY_RECEIVED: "secondary", RECEIVED: "success", CLOSED: "outline",
 };
 
-const mrStatusVariant: Record<MRStatus, "outline" | "secondary" | "success" | "destructive"> = {
-  DRAFT: "outline",
-  SUBMITTED: "secondary",
-  APPROVED: "success",
-  REJECTED: "destructive",
+const PRIORITY_COLOR: Record<MRPriority, string> = {
+  URGENT: "text-red-500 bg-red-500/10",
+  HIGH: "text-amber-500 bg-amber-500/10",
+  NORMAL: "text-blue-500 bg-blue-500/10",
+  LOW: "text-muted-foreground bg-muted",
 };
 
-const PAGE_TABS = [
-  { key: "po", label: "Purchase Orders" },
-  { key: "mr", label: "Material Requests" },
-];
+interface Site { id: string; name: string; }
+interface Supplier { id: string; name: string; email: string | null; }
 
-// Status workflow: which action is available in each state
-const STATUS_ACTIONS: Partial<Record<POStatus, { label: string; next: RecordStatus; variant: "default" | "outline" | "secondary" }>> = {
-  DRAFT:      { label: "Submit for Approval", next: "SUBMITTED", variant: "outline" },
-  SUBMITTED:  { label: "Approve",             next: "APPROVED",  variant: "default" },
-  APPROVED:   { label: "Mark as Sent",        next: "SENT",      variant: "secondary" },
-};
+// ── Create MR Modal ───────────────────────────────────────────────────────────
 
-// ─── Add Item Form ─────────────────────────────────────────────────────────────
-function AddItemForm({ poId, onAdded }: { poId: string; onAdded: (poId: string) => void }) {
-  const [desc, setDesc] = useState("");
-  const [qty, setQty] = useState("1");
-  const [unit, setUnit] = useState("");
-  const [rate, setRate] = useState("");
-  const [vatMode, setVatMode] = useState<VatMode>("INCLUSIVE");
-  const [saving, setSaving] = useState(false);
+function CreateMRModal({ projectId, sites, onClose, onCreated }: {
+  projectId: string; sites: Site[]; onClose: () => void; onCreated: () => void;
+}) {
+  const [siteId, setSiteId] = useState(sites[0]?.id || "");
+  const [priority, setPriority] = useState<MRPriority>("NORMAL");
+  const [destination, setDestination] = useState<DeliveryDestination>("SITE_STORE");
+  const [notes, setNotes] = useState("");
+  const [neededBy, setNeededBy] = useState("");
+  const [items, setItems] = useState<MRItemCreate[]>([{ description: "", requested_quantity: 1, unit: "" }]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
 
-  const handleAdd = async () => {
-    if (!desc.trim() || !qty) return;
-    setSaving(true);
+  const addItem = () => setItems([...items, { description: "", requested_quantity: 1, unit: "" }]);
+  const removeItem = (i: number) => setItems(items.filter((_, idx) => idx !== i));
+  const updateItem = (i: number, field: keyof MRItemCreate, value: string | number) =>
+    setItems(items.map((it, idx) => idx === i ? { ...it, [field]: value } : it));
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!siteId) return;
+    setLoading(true); setError("");
     try {
-      const body: POItemCreate = {
-        description: desc.trim(),
-        quantity_ordered: parseFloat(qty),
-        unit: unit.trim() || null,
-        rate: rate ? parseFloat(rate) : null,
-        vat_mode: vatMode,
-        vat_rate: 15,
-      };
-      await purchaseOrdersApi.addItem(poId, body);
-      setDesc(""); setQty("1"); setUnit(""); setRate("");
-      onAdded(poId);
-    } finally {
-      setSaving(false);
-    }
+      await procurementApi.createMR(projectId, {
+        site_id: siteId, priority, delivery_destination: destination,
+        notes: notes || undefined, needed_by_date: neededBy || undefined,
+        items: items.filter((i) => i.description.trim()),
+      } as MRCreate);
+      onCreated(); onClose();
+    } catch (err: unknown) {
+      setError((err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Failed.");
+    } finally { setLoading(false); }
   };
 
   return (
-    <div className="mt-3 pt-3 border-t border-border/50">
-      <p className="text-xs font-medium text-muted-foreground mb-2">Add Line Item</p>
-      <div className="flex flex-wrap gap-2 items-end">
-        <div className="flex-1 min-w-[160px]">
-          <input
-            type="text"
-            value={desc}
-            onChange={(e) => setDesc(e.target.value)}
-            placeholder="Description *"
-            className="w-full h-8 rounded border border-input bg-background px-2 text-xs"
-          />
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-foreground/40">
+      <div className="bg-card border border-border rounded-t-2xl sm:rounded-2xl w-full sm:max-w-xl max-h-[90vh] flex flex-col">
+        <div className="flex items-center justify-between px-5 pt-5 pb-4 border-b border-border shrink-0">
+          <h2 className="text-base font-semibold">New Material Request</h2>
+          <button onClick={onClose}><X className="w-4 h-4 text-muted-foreground" /></button>
         </div>
-        <div className="w-16">
-          <input
-            type="number"
-            min="0.01"
-            step="any"
-            value={qty}
-            onChange={(e) => setQty(e.target.value)}
-            placeholder="Qty"
-            className="w-full h-8 rounded border border-input bg-background px-2 text-xs"
-          />
+        <form onSubmit={submit} className="flex-1 overflow-y-auto p-5 space-y-4">
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label>Site *</Label>
+              <select value={siteId} onChange={(e) => setSiteId(e.target.value)} className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm" required>
+                {sites.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+              </select>
+            </div>
+            <div className="space-y-1.5">
+              <Label>Priority</Label>
+              <select value={priority} onChange={(e) => setPriority(e.target.value as MRPriority)} className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm">
+                {(["URGENT", "HIGH", "NORMAL", "LOW"] as MRPriority[]).map((p) => <option key={p} value={p}>{p}</option>)}
+              </select>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label>Delivery Destination</Label>
+              <select value={destination} onChange={(e) => setDestination(e.target.value as DeliveryDestination)} className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm">
+                <option value="SITE_STORE">Site Store</option>
+                <option value="MAIN_WAREHOUSE">Main Warehouse</option>
+                <option value="LOT">Lot</option>
+              </select>
+            </div>
+            <div className="space-y-1.5">
+              <Label>Needed By</Label>
+              <Input type="date" value={neededBy} onChange={(e) => setNeededBy(e.target.value)} />
+            </div>
+          </div>
+          <div className="space-y-1.5">
+            <Label>Notes</Label>
+            <Input value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Reason or additional info" />
+          </div>
+          <div className="space-y-2">
+            <Label>Items *</Label>
+            {items.map((item, i) => (
+              <div key={i} className="grid grid-cols-[1fr_80px_60px_20px] gap-2 items-center">
+                <Input value={item.description} onChange={(e) => updateItem(i, "description", e.target.value)} placeholder="Description *" className="h-8 text-sm" />
+                <Input type="number" min="0.01" step="any" value={item.requested_quantity} onChange={(e) => updateItem(i, "requested_quantity", parseFloat(e.target.value) || 1)} className="h-8 text-sm" />
+                <Input value={item.unit || ""} onChange={(e) => updateItem(i, "unit", e.target.value)} placeholder="Unit" className="h-8 text-sm" />
+                {items.length > 1 && <button type="button" onClick={() => removeItem(i)} className="text-muted-foreground hover:text-destructive"><X className="w-3.5 h-3.5" /></button>}
+              </div>
+            ))}
+            <button type="button" onClick={addItem} className="text-xs text-primary hover:underline flex items-center gap-1"><Plus className="w-3 h-3" />Add item</button>
+          </div>
+          {error && <p className="text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-lg px-3 py-2">{error}</p>}
+        </form>
+        <div className="px-5 pb-5 pt-3 border-t border-border shrink-0 flex gap-2">
+          <Button disabled={loading} onClick={submit} className="flex-1">{loading ? "Creating…" : "Create Request"}</Button>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
         </div>
-        <div className="w-16">
-          <input
-            type="text"
-            value={unit}
-            onChange={(e) => setUnit(e.target.value)}
-            placeholder="Unit"
-            className="w-full h-8 rounded border border-input bg-background px-2 text-xs"
-          />
-        </div>
-        <div className="w-24">
-          <input
-            type="number"
-            min="0"
-            step="0.01"
-            value={rate}
-            onChange={(e) => setRate(e.target.value)}
-            placeholder="Rate (R)"
-            className="w-full h-8 rounded border border-input bg-background px-2 text-xs"
-          />
-        </div>
-        <div className="w-28">
-          <select
-            value={vatMode}
-            onChange={(e) => setVatMode(e.target.value as VatMode)}
-            className="w-full h-8 rounded border border-input bg-background px-2 text-xs"
-          >
-            <option value="INCLUSIVE">VAT Incl.</option>
-            <option value="EXCLUSIVE">VAT Excl.</option>
-          </select>
-        </div>
-        <Button size="sm" className="h-8 text-xs px-3" onClick={handleAdd} disabled={saving || !desc.trim()}>
-          {saving ? "Adding…" : "Add"}
-        </Button>
       </div>
     </div>
   );
 }
 
-// ─── PO Detail Row ──────────────────────────────────────────────────────────────
-function PORow({
-  po,
-  supplierName,
-  onStatusChange,
-  onItemAdded,
-}: {
-  po: PurchaseOrder;
-  supplierName: string;
-  onStatusChange: (poId: string, next: RecordStatus) => Promise<void>;
-  onItemAdded: (poId: string) => void;
+// ── MR Detail Modal ───────────────────────────────────────────────────────────
+
+function MRDetailModal({ mr, suppliers, onClose, onUpdated }: {
+  mr: MaterialRequest; suppliers: Supplier[]; onClose: () => void; onUpdated: () => void;
 }) {
-  const [expanded, setExpanded] = useState(false);
-  const [updating, setUpdating] = useState(false);
-  const status = po.status as POStatus;
-  const action = STATUS_ACTIONS[status];
-
-  const handleAction = async () => {
-    if (!action) return;
-    setUpdating(true);
-    try {
-      await onStatusChange(po.id, action.next);
-    } finally {
-      setUpdating(false);
-    }
-  };
-
-  return (
-    <>
-      <tr className="border-b border-border hover:bg-muted/30 transition-colors">
-        <td className="px-4 py-3">
-          <button onClick={() => setExpanded((v) => !v)} className="text-muted-foreground hover:text-foreground">
-            {expanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
-          </button>
-        </td>
-        <td className="px-4 py-3 font-mono font-medium text-xs">{po.po_number}</td>
-        <td className="px-4 py-3 text-sm">{supplierName}</td>
-        <td className="px-4 py-3">
-          <Badge variant={poStatusVariant[status]}>{status}</Badge>
-        </td>
-        <td className="px-4 py-3 text-right tabular-nums font-medium">{formatCurrency(po.subtotal_amount)}</td>
-        <td className="px-4 py-3 text-right tabular-nums text-muted-foreground text-xs">{formatCurrency(po.vat_amount)}</td>
-        <td className="px-4 py-3 text-right tabular-nums font-semibold text-xs">{formatCurrency(po.total_amount)}</td>
-        <td className="px-4 py-3 text-xs text-muted-foreground">{formatDate(po.po_date)}</td>
-        <td className="px-4 py-3">
-          {action && (
-            <Button
-              size="sm"
-              variant={action.variant}
-              className="h-7 text-xs px-2"
-              onClick={handleAction}
-              disabled={updating}
-            >
-              <Send className="w-3 h-3 mr-1" />
-              {updating ? "…" : action.label}
-            </Button>
-          )}
-        </td>
-      </tr>
-      {expanded && (
-        <tr className="border-b border-border bg-muted/20">
-          <td colSpan={9} className="px-8 py-3">
-            {po.order_items.length > 0 ? (
-              <table className="w-full text-xs mb-1">
-                <thead>
-                  <tr className="text-muted-foreground">
-                    <th className="text-left pb-1.5 font-medium">Description</th>
-                    <th className="text-right pb-1.5 font-medium">Qty</th>
-                    <th className="text-right pb-1.5 font-medium">Unit</th>
-                    <th className="text-right pb-1.5 font-medium">Rate</th>
-                    <th className="text-right pb-1.5 font-medium">VAT</th>
-                    <th className="text-right pb-1.5 font-medium">Excl. VAT</th>
-                    <th className="text-right pb-1.5 font-medium">Incl. VAT</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {po.order_items.map((item) => (
-                    <tr key={item.id} className="border-t border-border/50">
-                      <td className="py-1.5">{item.description}</td>
-                      <td className="py-1.5 text-right tabular-nums">{item.quantity_ordered}</td>
-                      <td className="py-1.5 text-right text-muted-foreground">{item.unit ?? "—"}</td>
-                      <td className="py-1.5 text-right tabular-nums">{item.rate != null ? formatCurrency(item.rate) : "—"}</td>
-                      <td className="py-1.5 text-right tabular-nums text-muted-foreground">
-                        <span className="text-[10px] mr-0.5">{item.vat_mode === "INCLUSIVE" ? "incl" : "excl"}</span>
-                        {item.line_vat_amount != null ? formatCurrency(item.line_vat_amount) : "—"}
-                      </td>
-                      <td className="py-1.5 text-right tabular-nums">{item.line_excl_vat != null ? formatCurrency(item.line_excl_vat) : "—"}</td>
-                      <td className="py-1.5 text-right tabular-nums font-medium">{item.line_total != null ? formatCurrency(item.line_total) : "—"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-                <tfoot>
-                  <tr className="border-t border-border">
-                    <td colSpan={5} className="py-1.5 text-right text-muted-foreground font-medium">Totals</td>
-                    <td className="py-1.5 text-right tabular-nums font-semibold">{formatCurrency(po.subtotal_amount)}</td>
-                    <td className="py-1.5 text-right tabular-nums font-semibold">{formatCurrency(po.total_amount)}</td>
-                  </tr>
-                </tfoot>
-              </table>
-            ) : (
-              <p className="text-xs text-muted-foreground mb-2">No line items yet.</p>
-            )}
-            {/* Only allow adding items on DRAFT POs */}
-            {status === "DRAFT" && (
-              <AddItemForm poId={po.id} onAdded={onItemAdded} />
-            )}
-          </td>
-        </tr>
-      )}
-    </>
+  const [loading, setLoading] = useState<string | null>(null);
+  const [error, setError] = useState("");
+  const [result, setResult] = useState("");
+  const [overBoqReason, setOverBoqReason] = useState("");
+  const [showReject, setShowReject] = useState(false);
+  const [rejectReason, setRejectReason] = useState("");
+  const [showConvert, setShowConvert] = useState(false);
+  const [convertSupplierId, setConvertSupplierId] = useState(suppliers[0]?.id || "");
+  const [convertItems, setConvertItems] = useState(
+    mr.items.map((i) => ({ description: i.description, quantity: i.requested_quantity, unit: i.unit || "", rate: 0, item_id: i.item_id }))
   );
-}
+  const [quotes, setQuotes] = useState<MRQuote[]>([]);
 
-// ─── New PO Modal ──────────────────────────────────────────────────────────────
-function NewPOModal({
-  open,
-  onClose,
-  suppliers,
-  onSubmit,
-}: {
-  open: boolean;
-  onClose: () => void;
-  suppliers: Supplier[];
-  onSubmit: (supplierId: string, notes: string) => Promise<void>;
-}) {
-  const [supplierId, setSupplierId] = useState(suppliers[0]?.id ?? "");
-  const [notes, setNotes] = useState("");
-  const [saving, setSaving] = useState(false);
+  useEffect(() => { procurementApi.listQuotes(mr.id).then(setQuotes).catch(() => {}); }, [mr.id]);
 
-  useEffect(() => {
-    if (suppliers.length > 0 && !supplierId) setSupplierId(suppliers[0].id);
-  }, [suppliers, supplierId]);
-
-  const handleSubmit = async () => {
-    if (!supplierId) return;
-    setSaving(true);
-    try {
-      await onSubmit(supplierId, notes.trim());
-      setNotes("");
-      onClose();
-    } finally {
-      setSaving(false);
-    }
+  const act = async (fn: () => Promise<unknown>, label: string) => {
+    setLoading(label); setError("");
+    try { await fn(); setResult(`${label} successful.`); onUpdated(); }
+    catch (err: unknown) { setError((err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Action failed."); }
+    finally { setLoading(null); }
   };
 
+  const handleConvert = async () => {
+    await act(async () => {
+      const res = await procurementApi.convertToPO(
+        mr.id, convertSupplierId,
+        convertItems.map((i) => ({ description: i.description, quantity: i.quantity, unit: i.unit, rate: i.rate, item_id: i.item_id || undefined })),
+      );
+      setResult(`PO ${res.po_number} created.`);
+    }, "convert");
+    setShowConvert(false);
+  };
+
+  const canApprove = ["SUBMITTED", "PENDING_APPROVAL"].includes(mr.status);
+  const canConvert = mr.status === "APPROVED";
+
   return (
-    <Modal open={open} title="New Purchase Order" onClose={onClose} size="sm">
-      <div className="p-6 space-y-4">
-        <div>
-          <label className="text-xs text-muted-foreground block mb-1">Supplier *</label>
-          <select
-            value={supplierId}
-            onChange={(e) => setSupplierId(e.target.value)}
-            className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm"
-          >
-            {suppliers.map((s) => (
-              <option key={s.id} value={s.id}>{s.name}</option>
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-foreground/40">
+      <div className="bg-card border border-border rounded-xl w-full max-w-lg max-h-[85vh] overflow-y-auto animate-fade-in">
+        <div className="sticky top-0 bg-card border-b border-border px-5 py-4 flex items-center justify-between">
+          <div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <h2 className="font-semibold">{mr.request_number}</h2>
+              <Badge variant={STATUS_BADGE[mr.status] || "outline"} className="text-xs">{mr.status.replace(/_/g, " ")}</Badge>
+              {mr.over_boq && <Badge variant="destructive" className="text-xs"><AlertTriangle className="w-3 h-3 mr-0.5" />Over BOQ</Badge>}
+            </div>
+            <p className="text-xs text-muted-foreground mt-0.5">{mr.priority} · {mr.delivery_destination.replace(/_/g, " ")} · {timeAgo(mr.created_at)}</p>
+          </div>
+          <button onClick={onClose}><X className="w-4 h-4 text-muted-foreground" /></button>
+        </div>
+
+        <div className="p-5 space-y-4">
+          {/* Items */}
+          <div className="bg-muted/30 rounded-lg divide-y divide-border">
+            {mr.items.map((item) => (
+              <div key={item.id} className="flex items-center justify-between px-3 py-2.5">
+                <span className="text-sm">{item.description || "Item"}</span>
+                <div className="flex items-center gap-2 text-xs">
+                  <span className="font-medium">{item.requested_quantity} {item.unit || ""}</span>
+                  {item.over_boq_quantity && item.over_boq_quantity > 0 && (
+                    <span className="text-destructive">+{item.over_boq_quantity} over</span>
+                  )}
+                </div>
+              </div>
             ))}
-          </select>
-        </div>
-        <div>
-          <label className="text-xs text-muted-foreground block mb-1">Notes</label>
-          <textarea
-            value={notes}
-            onChange={(e) => setNotes(e.target.value)}
-            rows={3}
-            className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm resize-none"
-          />
-        </div>
-        <div className="flex justify-end gap-2 pt-1">
-          <Button variant="outline" size="sm" onClick={onClose}>Cancel</Button>
-          <Button size="sm" onClick={handleSubmit} disabled={saving || !supplierId}>
-            {saving ? "Creating…" : "Create PO"}
-          </Button>
+          </div>
+
+          {mr.notes && <p className="text-sm text-muted-foreground bg-muted/30 rounded-lg px-3 py-2">{mr.notes}</p>}
+
+          {/* ── Email status ── */}
+          {mr.status === "APPROVED" && (
+            <div className="bg-muted/30 rounded-lg px-3 py-3 space-y-1.5">
+              <div className="flex items-center justify-between">
+                <p className="text-xs font-medium text-muted-foreground">Supplier Email</p>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 text-xs gap-1"
+                  disabled={loading === "email"}
+                  onClick={() => act(async () => {
+                    const { materialRequestsApi } = await import("@/api/materialRequests");
+                    return materialRequestsApi.sendEmail(mr.id);
+                  }, "email")}
+                >
+                  {loading === "email" ? "Sending…" : mr.email_log?.sent_at ? "Resend Email" : "Send Email"}
+                </Button>
+              </div>
+              {mr.email_log ? (
+                <div className="flex items-center gap-2 text-xs">
+                  <span className={
+                    mr.email_log.status === "SENT"      ? "text-green-600 font-medium" :
+                    mr.email_log.status === "MOCK_SENT" ? "text-blue-600 font-medium"  :
+                    "text-destructive font-medium"
+                  }>
+                    {mr.email_log.status === "MOCK_SENT" ? "MOCK SENT" : mr.email_log.status}
+                  </span>
+                  <span className="text-muted-foreground">→ {mr.email_log.sent_to_email}</span>
+                  {mr.email_log.sent_at && (
+                    <span className="text-muted-foreground">
+                      · {new Date(mr.email_log.sent_at).toLocaleString()}
+                    </span>
+                  )}
+                </div>
+              ) : (
+                <p className="text-xs text-muted-foreground">No email sent yet.</p>
+              )}
+              {mr.email_log?.error_message && (
+                <p className="text-xs text-destructive">{mr.email_log.error_message}</p>
+              )}
+            </div>
+          )}
+
+          {quotes.length > 0 && (
+            <div>
+              <p className="text-xs font-medium text-muted-foreground mb-2">Quotes ({quotes.length})</p>
+              <div className="space-y-1.5">
+                {quotes.map((q) => (
+                  <div key={q.id} className={cn("flex items-center justify-between px-3 py-2 rounded-lg border text-sm", q.is_selected ? "border-green-500/40 bg-green-500/5" : "border-border")}>
+                    <span>{q.description}</span>
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium">R{q.unit_price.toFixed(2)}/{q.unit || "unit"}</span>
+                      {q.is_selected && <Check className="w-3.5 h-3.5 text-green-500" />}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {mr.over_boq && canApprove && (
+            <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-3 space-y-2">
+              <p className="text-xs font-medium text-amber-600 dark:text-amber-400">⚠ Over BOQ — reason required to approve.</p>
+              <Input value={overBoqReason} onChange={(e) => setOverBoqReason(e.target.value)} placeholder="Reason for approving over-BOQ request" className="text-sm h-8" />
+            </div>
+          )}
+
+          {showReject && (
+            <Input value={rejectReason} onChange={(e) => setRejectReason(e.target.value)} placeholder="Rejection reason *" className="text-sm" autoFocus />
+          )}
+
+          {showConvert && (
+            <div className="bg-muted/30 rounded-lg p-3 space-y-3">
+              <p className="text-xs font-medium text-muted-foreground">Convert to PO</p>
+              <div className="space-y-1.5">
+                <Label className="text-xs">Supplier</Label>
+                <select value={convertSupplierId} onChange={(e) => setConvertSupplierId(e.target.value)} className="h-8 w-full rounded-md border border-input bg-background px-2 text-xs">
+                  {suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}{s.email ? ` (${s.email})` : ""}</option>)}
+                </select>
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs">Rates (R)</Label>
+                {convertItems.map((item, i) => (
+                  <div key={i} className="grid grid-cols-[1fr_100px] gap-2 items-center">
+                    <span className="text-xs bg-muted rounded px-2 py-1 truncate">{item.description} × {item.quantity}</span>
+                    <Input type="number" min="0" step="0.01" value={item.rate} onChange={(e) => setConvertItems((prev) => prev.map((it, idx) => idx === i ? { ...it, rate: parseFloat(e.target.value) || 0 } : it))} placeholder="Rate" className="h-7 text-xs" />
+                  </div>
+                ))}
+              </div>
+              <div className="flex gap-2">
+                <Button size="sm" onClick={handleConvert} disabled={loading === "convert"} className="flex-1 h-8 text-xs">{loading === "convert" ? "Creating…" : "Create PO"}</Button>
+                <Button size="sm" variant="outline" onClick={() => setShowConvert(false)} className="h-8 text-xs">Cancel</Button>
+              </div>
+            </div>
+          )}
+
+          {error && <p className="text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-lg px-3 py-2">{error}</p>}
+          {result && <p className="text-sm text-green-600 dark:text-green-400 bg-green-500/10 border border-green-500/20 rounded-lg px-3 py-2">{result}</p>}
+
+          <div className="flex flex-wrap gap-2">
+            {canApprove && <Button size="sm" onClick={() => act(() => procurementApi.approveMR(mr.id, overBoqReason || undefined), "approve")} disabled={loading !== null || (mr.over_boq && !overBoqReason.trim())} className="h-8 text-xs"><Check className="w-3.5 h-3.5 mr-1" />{loading === "approve" ? "Approving…" : "Approve"}</Button>}
+            {["SUBMITTED", "PENDING_APPROVAL", "DRAFT"].includes(mr.status) && !showReject && <Button size="sm" variant="outline" onClick={() => setShowReject(true)} className="h-8 text-xs"><X className="w-3.5 h-3.5 mr-1" />Reject</Button>}
+            {showReject && <Button size="sm" variant="destructive" onClick={() => act(() => procurementApi.rejectMR(mr.id, rejectReason), "reject")} disabled={!rejectReason.trim() || loading !== null} className="h-8 text-xs">{loading === "reject" ? "Rejecting…" : "Confirm Reject"}</Button>}
+            {mr.status === "DRAFT" && <Button size="sm" variant="outline" onClick={() => act(() => procurementApi.submitMR(mr.id), "submit")} disabled={loading !== null} className="h-8 text-xs">{loading === "submit" ? "Submitting…" : "Submit"}</Button>}
+            {canConvert && !showConvert && <Button size="sm" variant="outline" onClick={() => setShowConvert(true)} className="h-8 text-xs"><ShoppingCart className="w-3.5 h-3.5 mr-1" />Convert to PO</Button>}
+          </div>
         </div>
       </div>
-    </Modal>
+    </div>
   );
 }
 
-// ─── Main Component ─────────────────────────────────────────────────────────────
+// ── PO Detail Modal ───────────────────────────────────────────────────────────
+
+function PODetailModal({ po, onClose, onUpdated }: { po: PurchaseOrder; onClose: () => void; onUpdated: () => void; }) {
+  const [loading, setLoading] = useState<string | null>(null);
+  const [emailResult, setEmailResult] = useState<{ sent_to: string; status: string; is_mock: boolean } | null>(null);
+  const [emailLog, setEmailLog] = useState<Array<{ sent_to: string; status: string; sent_at: string | null }>>([]);
+  const [error, setError] = useState("");
+
+  useEffect(() => { procurementApi.getEmailLog(po.id).then(setEmailLog).catch(() => {}); }, [po.id]);
+
+  const handleApprove = async () => {
+    setLoading("approve");
+    try { await procurementApi.approvePO(po.id); onUpdated(); }
+    catch (err: unknown) { setError((err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Failed."); }
+    finally { setLoading(null); }
+  };
+
+  const handleEmail = async () => {
+    setLoading("email"); setError("");
+    try { const r = await procurementApi.sendEmail(po.id); setEmailResult(r); onUpdated(); }
+    catch (err: unknown) { setError((err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Failed."); }
+    finally { setLoading(null); }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-foreground/40">
+      <div className="bg-card border border-border rounded-xl w-full max-w-lg max-h-[85vh] overflow-y-auto animate-fade-in">
+        <div className="sticky top-0 bg-card border-b border-border px-5 py-4 flex items-center justify-between">
+          <div>
+            <div className="flex items-center gap-2"><h2 className="font-semibold">{po.po_number}</h2><Badge variant={STATUS_BADGE[po.status] || "outline"} className="text-xs">{po.status.replace(/_/g, " ")}</Badge>{po.sent_at && <MailCheck className="w-4 h-4 text-green-500" />}</div>
+            <p className="text-xs text-muted-foreground mt-0.5">Total: R{po.total_amount.toLocaleString()}</p>
+          </div>
+          <button onClick={onClose}><X className="w-4 h-4 text-muted-foreground" /></button>
+        </div>
+        <div className="p-5 space-y-4">
+          <div className="bg-muted/30 rounded-lg overflow-hidden">
+            <table className="w-full text-xs">
+              <thead><tr className="border-b border-border bg-muted/50"><th className="text-left px-3 py-2 font-medium text-muted-foreground">Item</th><th className="text-right px-3 py-2 font-medium text-muted-foreground">Ordered</th><th className="text-right px-3 py-2 font-medium text-muted-foreground">Recv</th><th className="text-right px-3 py-2 font-medium text-muted-foreground">Total</th></tr></thead>
+              <tbody>
+                {po.order_items.map((item) => {
+                  const outstanding = item.quantity_ordered - (item.quantity_received || 0);
+                  return (
+                    <tr key={item.id} className="border-b border-border last:border-0">
+                      <td className="px-3 py-2">{item.description}</td>
+                      <td className="px-3 py-2 text-right">{item.quantity_ordered} {item.unit || ""}</td>
+                      <td className={cn("px-3 py-2 text-right", outstanding > 0 ? "text-amber-500" : "text-green-600 dark:text-green-400")}>{item.quantity_received || 0}{outstanding > 0 && <span className="text-muted-foreground ml-1">(-{outstanding.toFixed(1)})</span>}</td>
+                      <td className="px-3 py-2 text-right font-medium">R{(item.line_total || 0).toLocaleString()}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          {emailResult && (
+            <div className={cn("rounded-lg p-3 text-sm border", emailResult.status === "sent" ? "bg-green-500/10 border-green-500/30 text-green-600 dark:text-green-400" : "bg-destructive/10 border-destructive/30 text-destructive")}>
+              {emailResult.is_mock ? `Mock email stored — SMTP disabled. To: ${emailResult.sent_to}` : `Email sent to ${emailResult.sent_to}`}
+            </div>
+          )}
+
+          {emailLog.length > 0 && (
+            <div>
+              <p className="text-xs font-medium text-muted-foreground mb-1.5">Email History</p>
+              {emailLog.map((log, i) => (
+                <div key={i} className="flex items-center justify-between text-xs py-1.5 border-b border-border last:border-0">
+                  <span className="text-muted-foreground">{log.sent_to}</span>
+                  <div className="flex items-center gap-2">
+                    <span className={log.status === "sent" ? "text-green-600 dark:text-green-400" : "text-destructive"}>{log.status}</span>
+                    {log.sent_at && <span className="text-muted-foreground">{timeAgo(log.sent_at)}</span>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {error && <p className="text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-lg px-3 py-2">{error}</p>}
+
+          <div className="flex flex-wrap gap-2">
+            {["DRAFT", "SUBMITTED"].includes(po.status) && <Button size="sm" onClick={handleApprove} disabled={loading === "approve"} className="h-8 text-xs"><Check className="w-3.5 h-3.5 mr-1" />{loading === "approve" ? "Approving…" : "Approve PO"}</Button>}
+            {["APPROVED", "SENT"].includes(po.status) && <Button size="sm" variant="outline" onClick={handleEmail} disabled={loading === "email"} className="h-8 text-xs">{loading === "email" ? <RefreshCw className="w-3.5 h-3.5 mr-1 animate-spin" /> : <Mail className="w-3.5 h-3.5 mr-1" />}{loading === "email" ? "Sending…" : po.sent_at ? "Resend Email" : "Send to Supplier"}</Button>}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Main Page ─────────────────────────────────────────────────────────────────
+
 export default function ProcurementPage() {
-  const [tab, setTab] = useState("po");
+  const [tab, setTab] = useState<"mr" | "po">("mr");
   const [projects, setProjects] = useState<Project[]>([]);
-  const [selectedProjectId, setSelectedProjectId] = useState<string>("");
+  const [projectId, setProjectId] = useState("");
+  const [sites, setSites] = useState<Site[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
-  const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>([]);
-  const [materialRequests, setMaterialRequests] = useState<MaterialRequest[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [loadingProjects, setLoadingProjects] = useState(true);
-  const [showNewPO, setShowNewPO] = useState(false);
+  const [mrs, setMRs] = useState<MaterialRequest[]>([]);
+  const [pos, setPOs] = useState<PurchaseOrder[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [showCreate, setShowCreate] = useState(false);
+  const [selectedMR, setSelectedMR] = useState<MaterialRequest | null>(null);
+  const [selectedPO, setSelectedPO] = useState<PurchaseOrder | null>(null);
+  const [mrFilter, setMrFilter] = useState("ALL");
 
   useEffect(() => {
-    Promise.all([
-      projectsApi.list(1, 100),
-      suppliersApi.list(),
-    ])
-      .then(([projRes, suppRes]) => {
-        setProjects(projRes.items);
-        setSuppliers(suppRes);
-        if (projRes.items.length > 0) setSelectedProjectId(projRes.items[0].id);
-      })
-      .catch(() => {})
-      .finally(() => setLoadingProjects(false));
+    projectsApi.list(1, 100).then((r) => {
+      setProjects(r.items);
+      if (r.items.length) setProjectId(r.items[0].id);
+    }).catch(() => {}).finally(() => setLoading(false));
   }, []);
 
-  useEffect(() => {
-    if (!selectedProjectId) return;
-    setLoading(true);
-    Promise.all([
-      purchaseOrdersApi.list(selectedProjectId),
-      materialRequestsApi.list(selectedProjectId),
-    ])
-      .then(([pos, mrs]) => {
-        setPurchaseOrders(pos);
-        setMaterialRequests(mrs);
-      })
-      .catch(() => {
-        setPurchaseOrders([]);
-        setMaterialRequests([]);
-      })
-      .finally(() => setLoading(false));
-  }, [selectedProjectId]);
+  const loadData = useCallback(async () => {
+    if (!projectId) return;
+    const [mrData, poData] = await Promise.allSettled([
+      procurementApi.listMRs(projectId),
+      procurementApi.listPOs(projectId),
+    ]);
+    if (mrData.status === "fulfilled") setMRs(mrData.value);
+    if (poData.status === "fulfilled") setPOs(poData.value);
+    try {
+      const [sitesRes, suppliersRes] = await Promise.all([
+        client.get<{ data: Site[] }>(`/projects/${projectId}/sites/`),
+        client.get<{ data: Supplier[] }>("/suppliers/"),
+      ]);
+      setSites(sitesRes.data.data || []);
+      setSuppliers(suppliersRes.data.data || []);
+    } catch { /* ignore */ }
+  }, [projectId]);
 
-  const supplierMap = Object.fromEntries(suppliers.map((s) => [s.id, s.name]));
+  useEffect(() => { loadData(); }, [loadData]);
 
-  const draftPOs = purchaseOrders.filter((p) => p.status === "DRAFT").length;
-  const pendingApproval = purchaseOrders.filter((p) => p.status === "SUBMITTED").length;
-  const approvedPOs = purchaseOrders.filter((p) => ["APPROVED", "SENT"].includes(p.status)).length;
-  const totalPOValue = purchaseOrders
-    .filter((p) => p.status !== "CANCELLED")
-    .reduce((sum, p) => sum + p.total_amount, 0);
+  const filteredMRs = mrFilter === "ALL" ? mrs : mrs.filter((m) => m.status === mrFilter);
+  const pendingCount = mrs.filter((m) => ["SUBMITTED", "PENDING_APPROVAL"].includes(m.status)).length;
+  const overBoqCount = mrs.filter((m) => m.over_boq && !["REJECTED", "CLOSED"].includes(m.status)).length;
 
-  const tabsWithCount = [
-    { ...PAGE_TABS[0], count: purchaseOrders.length },
-    { ...PAGE_TABS[1], count: materialRequests.length },
-  ];
-
-  const handleCreatePO = async (supplierId: string, notes: string) => {
-    const created = await purchaseOrdersApi.create(selectedProjectId, {
-      supplier_id: supplierId,
-      notes: notes || null,
-      items: [],
-    });
-    setPurchaseOrders((prev) => [created, ...prev]);
-  };
-
-  const handleStatusChange = async (poId: string, next: RecordStatus) => {
-    const updated = await purchaseOrdersApi.update(poId, { status: next });
-    setPurchaseOrders((prev) => prev.map((p) => (p.id === poId ? updated : p)));
-  };
-
-  // Re-fetch a single PO after items added (to get updated totals)
-  const handleItemAdded = async (poId: string) => {
-    const updated = await purchaseOrdersApi.get(poId);
-    setPurchaseOrders((prev) => prev.map((p) => (p.id === poId ? updated : p)));
-  };
-
-  if (loadingProjects) {
-    return (
-      <div className="space-y-5 animate-fade-in">
-        <Skeleton className="h-12 rounded-xl" />
-        <div className="grid grid-cols-4 gap-4">
-          {[1, 2, 3, 4].map((i) => <Skeleton key={i} className="h-24 rounded-xl" />)}
-        </div>
-        <Skeleton className="h-64 rounded-xl" />
-      </div>
-    );
-  }
+  if (loading) return <div className="space-y-4">{[1, 2, 3].map((i) => <Skeleton key={i} className="h-16 rounded-xl" />)}</div>;
 
   return (
     <div className="space-y-5 animate-fade-in">
-      <PageHeader
-        title="Procurement"
-        description="Manage material requests and purchase orders."
-        actions={
-          selectedProjectId ? (
-            <Button size="sm" onClick={() => setShowNewPO(true)}>
-              <Plus className="w-4 h-4" />
-              {tab === "po" ? "New PO" : "New Request"}
-            </Button>
-          ) : undefined
-        }
-      />
-
-      {/* Project selector */}
-      <div>
-        <label className="text-xs text-muted-foreground block mb-1">Project</label>
-        <select
-          value={selectedProjectId}
-          onChange={(e) => setSelectedProjectId(e.target.value)}
-          className="h-9 rounded-md border border-input bg-background px-3 text-sm min-w-[240px]"
-        >
-          {projects.map((p) => (
-            <option key={p.id} value={p.id}>{p.name}</option>
-          ))}
-        </select>
+      {/* Header */}
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-bold">Procurement</h1>
+          <p className="text-sm text-muted-foreground">
+            {pendingCount > 0 && <span className="text-amber-500 font-medium">{pendingCount} awaiting approval</span>}
+            {pendingCount > 0 && overBoqCount > 0 && " · "}
+            {overBoqCount > 0 && <span className="text-destructive font-medium">{overBoqCount} over BOQ</span>}
+          </p>
+        </div>
+        <div className="flex gap-2">
+          <select value={projectId} onChange={(e) => setProjectId(e.target.value)} className="h-9 rounded-md border border-input bg-background px-3 text-sm max-w-[180px]">
+            {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+          {tab === "mr" && <Button size="sm" onClick={() => setShowCreate(true)}><Plus className="w-4 h-4" />New MR</Button>}
+        </div>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard title="Total PO Value" value={formatCurrency(totalPOValue)} icon={ShoppingCart} color="bg-primary/10 text-primary" />
-        <StatCard title="Approved / Sent" value={approvedPOs} icon={CheckCircle2} color="bg-success/10 text-success" />
-        <StatCard title="Pending Approval" value={pendingApproval} icon={FileText} color="bg-warning/10 text-warning" />
-        <StatCard title="Drafts" value={draftPOs} icon={ShoppingCart} color="bg-muted-foreground/10 text-muted-foreground" />
+      {/* Tabs */}
+      <div className="flex gap-1">
+        {(["mr", "po"] as const).map((t) => (
+          <button key={t} onClick={() => setTab(t)} className={cn("px-4 py-2 rounded-lg text-sm font-medium transition-colors", tab === t ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted")}>
+            {t === "mr" ? `Material Requests (${mrs.length})` : `Purchase Orders (${pos.length})`}
+          </button>
+        ))}
       </div>
 
-      <Tabs tabs={tabsWithCount} active={tab} onChange={setTab} />
-
-      {loading ? (
+      {/* MR tab */}
+      {tab === "mr" && (
         <div className="space-y-3">
-          {[1, 2, 3].map((i) => <Skeleton key={i} className="h-14 rounded-xl" />)}
-        </div>
-      ) : tab === "po" ? (
-        <div className="bg-card border border-border rounded-xl overflow-hidden">
-          {purchaseOrders.length === 0 ? (
-            <div className="p-12 text-center text-sm text-muted-foreground">
-              No purchase orders for this project.
+          <div className="flex overflow-x-auto gap-1 pb-1">
+            {["ALL", "DRAFT", "SUBMITTED", "PENDING_APPROVAL", "APPROVED", "REJECTED", "CONVERTED_TO_PO"].map((s) => (
+              <button key={s} onClick={() => setMrFilter(s)} className={cn("shrink-0 px-2.5 py-1 rounded-lg text-xs font-medium transition-colors", mrFilter === s ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted")}>
+                {s.replace(/_/g, " ")}
+              </button>
+            ))}
+          </div>
+          {filteredMRs.length === 0 ? (
+            <div className="bg-card border border-border rounded-xl p-10 text-center">
+              <FileText className="w-8 h-8 text-muted-foreground mx-auto mb-2" />
+              <p className="text-sm text-muted-foreground">No material requests.</p>
             </div>
           ) : (
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-border bg-muted/50">
-                  <th className="px-4 py-3 w-8" />
-                  <th className="text-left px-4 py-3 font-medium text-muted-foreground">PO Number</th>
-                  <th className="text-left px-4 py-3 font-medium text-muted-foreground">Supplier</th>
-                  <th className="text-left px-4 py-3 font-medium text-muted-foreground">Status</th>
-                  <th className="text-right px-4 py-3 font-medium text-muted-foreground">Subtotal</th>
-                  <th className="text-right px-4 py-3 font-medium text-muted-foreground">VAT</th>
-                  <th className="text-right px-4 py-3 font-medium text-muted-foreground">Total</th>
-                  <th className="text-left px-4 py-3 font-medium text-muted-foreground">PO Date</th>
-                  <th className="px-4 py-3 font-medium text-muted-foreground">Action</th>
-                </tr>
-              </thead>
-              <tbody>
-                {purchaseOrders.map((po) => (
-                  <PORow
-                    key={po.id}
-                    po={po}
-                    supplierName={supplierMap[po.supplier_id] ?? po.supplier_id}
-                    onStatusChange={handleStatusChange}
-                    onItemAdded={handleItemAdded}
-                  />
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
-      ) : (
-        <div className="bg-card border border-border rounded-xl overflow-hidden">
-          {materialRequests.length === 0 ? (
-            <div className="p-12 text-center text-sm text-muted-foreground">
-              No material requests for this project.
+            <div className="space-y-2">
+              {filteredMRs.map((mr) => (
+                <button key={mr.id} onClick={() => setSelectedMR(mr)} className="w-full text-left bg-card border border-border rounded-xl px-4 py-3 flex items-center gap-4 hover:bg-muted/30 active:scale-[0.99] transition-all">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-medium text-sm">{mr.request_number}</span>
+                      <Badge variant={STATUS_BADGE[mr.status] || "outline"} className="text-xs">{mr.status.replace(/_/g, " ")}</Badge>
+                      {mr.over_boq && <Badge variant="destructive" className="text-xs">Over BOQ</Badge>}
+                      <span className={cn("text-[10px] font-medium rounded px-1.5 py-0.5", PRIORITY_COLOR[mr.priority])}>{mr.priority}</span>
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-0.5">{mr.items.length} item{mr.items.length !== 1 ? "s" : ""} · {mr.delivery_destination.replace(/_/g, " ")} · {timeAgo(mr.created_at)}</p>
+                  </div>
+                  <ChevronRight className="w-4 h-4 text-muted-foreground shrink-0" />
+                </button>
+              ))}
             </div>
-          ) : (
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-border bg-muted/50">
-                  <th className="text-left px-4 py-3 font-medium text-muted-foreground">Request #</th>
-                  <th className="text-left px-4 py-3 font-medium text-muted-foreground">Status</th>
-                  <th className="text-left px-4 py-3 font-medium text-muted-foreground">Requested</th>
-                  <th className="text-left px-4 py-3 font-medium text-muted-foreground">Needed By</th>
-                  <th className="text-right px-4 py-3 font-medium text-muted-foreground">Items</th>
-                  <th className="text-left px-4 py-3 font-medium text-muted-foreground">Notes</th>
-                </tr>
-              </thead>
-              <tbody>
-                {materialRequests.map((mr) => (
-                  <tr key={mr.id} className="border-b border-border last:border-0 hover:bg-muted/30 transition-colors">
-                    <td className="px-4 py-3 font-mono font-medium text-xs">{mr.request_number}</td>
-                    <td className="px-4 py-3">
-                      <Badge variant={mrStatusVariant[mr.status]}>{mr.status}</Badge>
-                    </td>
-                    <td className="px-4 py-3 text-xs text-muted-foreground">{formatDate(mr.requested_date)}</td>
-                    <td className="px-4 py-3 text-xs text-muted-foreground">
-                      {mr.needed_by_date ? formatDate(mr.needed_by_date) : "—"}
-                    </td>
-                    <td className="px-4 py-3 text-right tabular-nums">{mr.items.length}</td>
-                    <td className="px-4 py-3 text-xs text-muted-foreground max-w-[200px] truncate" title={mr.notes ?? ""}>
-                      {mr.notes ?? "—"}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
           )}
         </div>
       )}
 
-      <NewPOModal
-        open={showNewPO}
-        onClose={() => setShowNewPO(false)}
-        suppliers={suppliers}
-        onSubmit={handleCreatePO}
-      />
+      {/* PO tab */}
+      {tab === "po" && (
+        <div className="space-y-2">
+          {pos.length === 0 ? (
+            <div className="bg-card border border-border rounded-xl p-10 text-center">
+              <ShoppingCart className="w-8 h-8 text-muted-foreground mx-auto mb-2" />
+              <p className="text-sm text-muted-foreground">No purchase orders yet. Approve an MR and convert it.</p>
+            </div>
+          ) : (
+            pos.map((po) => (
+              <button key={po.id} onClick={() => setSelectedPO(po)} className="w-full text-left bg-card border border-border rounded-xl px-4 py-3 flex items-center gap-4 hover:bg-muted/30 active:scale-[0.99] transition-all">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-medium text-sm">{po.po_number}</span>
+                    <Badge variant={STATUS_BADGE[po.status] || "outline"} className="text-xs">{po.status.replace(/_/g, " ")}</Badge>
+                    {po.sent_at && <MailCheck className="w-3.5 h-3.5 text-green-500" />}
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-0.5">R{po.total_amount.toLocaleString()} · {po.order_items.length} items · {timeAgo(po.created_at)}</p>
+                </div>
+                <ChevronRight className="w-4 h-4 text-muted-foreground shrink-0" />
+              </button>
+            ))
+          )}
+        </div>
+      )}
+
+      {showCreate && <CreateMRModal projectId={projectId} sites={sites} onClose={() => setShowCreate(false)} onCreated={() => { setShowCreate(false); loadData(); }} />}
+      {selectedMR && <MRDetailModal mr={selectedMR} suppliers={suppliers} onClose={() => setSelectedMR(null)} onUpdated={() => { loadData(); setSelectedMR(null); }} />}
+      {selectedPO && <PODetailModal po={selectedPO} onClose={() => setSelectedPO(null)} onUpdated={() => { loadData(); setSelectedPO(null); }} />}
     </div>
   );
 }

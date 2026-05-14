@@ -10,7 +10,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
 from app.models.base import TimestampMixin
-from app.models.enums import EmailStatus, RecordStatus, VatMode
+from app.models.enums import DeliveryDestination, EmailStatus, RecordStatus, VatMode
 
 
 class PurchaseOrder(TimestampMixin, Base):
@@ -65,6 +65,17 @@ class PurchaseOrder(TimestampMixin, Base):
     )
     sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # Extended fields
+    lot_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("lots.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    delivery_destination: Mapped[Optional[DeliveryDestination]] = mapped_column(
+        Enum(DeliveryDestination, name="delivery_destination_enum", create_type=False),
+        nullable=True,
+    )
 
     supplier: Mapped["Supplier"] = relationship("Supplier", back_populates="purchase_orders")  # type: ignore[name-defined]
     order_items: Mapped[list["PurchaseOrderItem"]] = relationship(
@@ -125,6 +136,9 @@ class PurchaseOrderItem(Base):
     )
     line_total: Mapped[Optional[float]] = mapped_column(Numeric(14, 2), nullable=True)
 
+    quantity_received: Mapped[float] = mapped_column(
+        Numeric(14, 3), nullable=False, default=0, server_default="0"
+    )
     from sqlalchemy import DateTime as _DT
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
@@ -164,6 +178,12 @@ class PoEmailLog(Base):
         default=EmailStatus.queued,
     )
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    email_body: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    material_request_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("material_requests.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 

@@ -4,8 +4,8 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Numeric, String, Text
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import DateTime, Enum, Float, ForeignKey, Numeric, String, Text
+from sqlalchemy.dialects.postgresql import JSON, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -55,6 +55,14 @@ class Delivery(TimestampMixin, Base):
         default=RecordStatus.RECEIVED,
     )
     comments: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # Capture fields
+    delivery_note_image_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    signature_image_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    receiver_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    gps_lat: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    gps_lng: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    ocr_raw_data: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
 
     items: Mapped[list["DeliveryItem"]] = relationship(
         "DeliveryItem", back_populates="delivery", cascade="all, delete-orphan"

@@ -27,6 +27,12 @@ export interface Delivery {
   supplier_delivery_note_number: string | null;
   delivery_status: RecordStatus;
   comments: string | null;
+  receiver_name: string | null;
+  delivery_note_image_url: string | null;
+  signature_image_url: string | null;
+  ocr_raw_data: { driver_name?: string; driver_signature_path?: string; signed_at?: string; receiver_name?: string } | null;
+  gps_lat: number | null;
+  gps_lng: number | null;
   created_at: string;
   updated_at: string;
   items: DeliveryItem[];
@@ -52,6 +58,11 @@ export interface DeliveryCreate {
   delivery_date?: string | null;
   comments?: string | null;
   items: DeliveryItemCreate[];
+  // Signature fields
+  receiver_name?: string | null;
+  signature_data?: string | null;         // site staff base64 PNG data URL
+  driver_name?: string | null;
+  driver_signature_data?: string | null;  // driver base64 PNG data URL
 }
 
 export interface DeliveryUpdate {
@@ -83,6 +94,38 @@ export const deliveriesApi = {
 
   update: async (deliveryId: string, body: DeliveryUpdate): Promise<Delivery> => {
     const res = await client.patch<{ data: Delivery }>(`/deliveries/${deliveryId}`, body);
+    return res.data.data;
+  },
+
+  receiveWithDocument: async (formData: FormData): Promise<{
+    delivery_id:     string;
+    delivery_number: string;
+    status:          string;
+    items_count:     number;
+    is_partial:      boolean;
+    has_file:        boolean;
+  }> => {
+    const res = await client.post(
+      "/deliveries/receive-with-document",
+      formData,
+      { headers: { "Content-Type": "multipart/form-data" } },
+    );
+    return res.data.data;
+  },
+
+  reconcile: async (deliveryId: string): Promise<{
+    delivery_id:          string;
+    delivery_number:      string;
+    po_number:            string | null;
+    supplier:             string | null;
+    invoice_number:       string | null;
+    delivery_note_number: string | null;
+    ordered_total:        number | null;
+    invoice_total:        number | null;
+    overall_status:       string;
+    checks:               Array<{ type: string; status: string; item?: string; ordered_qty?: number; received_qty?: number }>;
+  }> => {
+    const res = await client.get(`/deliveries/${deliveryId}/reconcile`);
     return res.data.data;
   },
 };

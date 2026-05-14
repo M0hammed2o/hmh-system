@@ -35,6 +35,8 @@ class BOQHeader(Base):
         default=BoqStatus.DRAFT,
     )
     is_active_version: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    is_template: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
+    template_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     uploaded_by: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="SET NULL"),

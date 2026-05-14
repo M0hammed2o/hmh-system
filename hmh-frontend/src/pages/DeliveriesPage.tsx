@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Plus, Truck, CheckCircle2, AlertCircle, Package, Trash2, RefreshCw, Paperclip, ExternalLink } from "lucide-react";
+import { Plus, Truck, CheckCircle2, AlertCircle, Package, Trash2, RefreshCw, Paperclip, ExternalLink, Download, FileText, PenLine } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -13,6 +13,14 @@ import { suppliersApi, type Supplier } from "@/api/suppliers";
 import { purchaseOrdersApi, type PurchaseOrder } from "@/api/purchaseOrders";
 import { attachmentsApi, type Attachment } from "@/api/attachments";
 import { formatDateTime } from "@/lib/format";
+import { API_BASE } from "@/lib/constants";
+
+const SERVER_BASE = API_BASE.replace(/\/api\/v1\/?$/, "");
+function fileUrl(path: string | null | undefined): string | undefined {
+  if (!path) return undefined;
+  if (path.startsWith("http")) return path;
+  return `${SERVER_BASE}${path}`;
+}
 
 const deliveryStatusVariant: Record<string, "success" | "default" | "destructive" | "secondary"> = {
   MATCHED: "success",
@@ -625,47 +633,118 @@ export default function DeliveriesPage() {
               </div>
             )}
 
-            {/* Attachments */}
+            {/* Proof / Documents */}
             <div>
               <p className="text-xs font-medium text-muted-foreground mb-2 flex items-center gap-1.5">
                 <Paperclip className="w-3.5 h-3.5" />
-                Proof / Attachments
+                Proof / Documents
               </p>
-              {loadingAttachments ? (
-                <p className="text-xs text-muted-foreground">Loading…</p>
-              ) : deliveryAttachments.length === 0 ? (
-                <p className="text-xs text-muted-foreground">No attachments for this delivery.</p>
-              ) : (
-                <div className="space-y-1.5">
-                  {deliveryAttachments.map((att) => (
-                    <div key={att.id} className="flex items-center gap-2 bg-muted/40 rounded-lg px-3 py-2">
-                      {att.is_image ? (
-                        <img
-                          src={`/api/v1/attachments/${att.id}/download`}
-                          alt={att.file_name}
-                          className="w-10 h-10 object-cover rounded border border-border shrink-0"
-                        />
-                      ) : (
-                        <div className="w-10 h-10 flex items-center justify-center bg-muted rounded border border-border shrink-0">
-                          <Paperclip className="w-4 h-4 text-muted-foreground" />
-                        </div>
-                      )}
-                      <div className="flex-1 min-w-0">
-                        <p className="text-xs font-medium truncate">{att.file_name}</p>
-                        <p className="text-[10px] text-muted-foreground">{att.file_size_display}</p>
-                      </div>
-                      <a
-                        href={`/api/v1/attachments/${att.id}/download`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-primary hover:text-primary/80 shrink-0"
-                      >
-                        <ExternalLink className="w-3.5 h-3.5" />
+              <div className="space-y-1.5">
+
+                {/* Delivery note file from delivery record */}
+                {selectedDelivery.delivery_note_image_url && (
+                  <div className="flex items-center gap-2 bg-muted/40 rounded-lg px-3 py-2">
+                    <div className="w-9 h-9 flex items-center justify-center bg-blue-50 rounded border border-blue-200 shrink-0">
+                      <FileText className="w-4 h-4 text-blue-500" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-medium">Delivery Note</p>
+                      <p className="text-[10px] text-muted-foreground">Uploaded with delivery</p>
+                    </div>
+                    <div className="flex gap-1 shrink-0">
+                      <a href={fileUrl(selectedDelivery.delivery_note_image_url)} target="_blank" rel="noopener noreferrer">
+                        <Button size="sm" variant="outline" className="h-6 text-[10px] px-2 gap-1">
+                          <ExternalLink className="w-3 h-3" />View
+                        </Button>
+                      </a>
+                      <a href={fileUrl(selectedDelivery.delivery_note_image_url)} download>
+                        <Button size="sm" variant="outline" className="h-6 text-[10px] px-2 gap-1">
+                          <Download className="w-3 h-3" />Download
+                        </Button>
                       </a>
                     </div>
-                  ))}
-                </div>
-              )}
+                  </div>
+                )}
+
+                {/* Receiver signature */}
+                {selectedDelivery.signature_image_url && (
+                  <div className="flex items-center gap-2 bg-muted/40 rounded-lg px-3 py-2">
+                    <div className="w-9 h-9 flex items-center justify-center bg-green-50 rounded border border-green-200 shrink-0">
+                      <PenLine className="w-4 h-4 text-green-600" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-medium">Receiver Signature</p>
+                      <p className="text-[10px] text-muted-foreground">
+                        {selectedDelivery.receiver_name ?? selectedDelivery.ocr_raw_data?.receiver_name ?? "Site receiver"}
+                      </p>
+                    </div>
+                    <a href={fileUrl(selectedDelivery.signature_image_url)} target="_blank" rel="noopener noreferrer">
+                      <Button size="sm" variant="outline" className="h-6 text-[10px] px-2 gap-1 shrink-0">
+                        <ExternalLink className="w-3 h-3" />View
+                      </Button>
+                    </a>
+                  </div>
+                )}
+
+                {/* Driver signature */}
+                {selectedDelivery.ocr_raw_data?.driver_signature_path && (
+                  <div className="flex items-center gap-2 bg-muted/40 rounded-lg px-3 py-2">
+                    <div className="w-9 h-9 flex items-center justify-center bg-amber-50 rounded border border-amber-200 shrink-0">
+                      <PenLine className="w-4 h-4 text-amber-600" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-medium">Driver Signature</p>
+                      <p className="text-[10px] text-muted-foreground">
+                        {selectedDelivery.ocr_raw_data?.driver_name ?? "Driver / Supplier rep"}
+                      </p>
+                    </div>
+                    <a href={fileUrl(selectedDelivery.ocr_raw_data.driver_signature_path)} target="_blank" rel="noopener noreferrer">
+                      <Button size="sm" variant="outline" className="h-6 text-[10px] px-2 gap-1 shrink-0">
+                        <ExternalLink className="w-3 h-3" />View
+                      </Button>
+                    </a>
+                  </div>
+                )}
+
+                {/* Generic attachment records */}
+                {loadingAttachments ? (
+                  <p className="text-xs text-muted-foreground">Loading attachments…</p>
+                ) : deliveryAttachments.map((att) => (
+                  <div key={att.id} className="flex items-center gap-2 bg-muted/40 rounded-lg px-3 py-2">
+                    {att.is_image ? (
+                      <img
+                        src={`/api/v1/attachments/${att.id}/download`}
+                        alt={att.file_name}
+                        className="w-9 h-9 object-cover rounded border border-border shrink-0"
+                      />
+                    ) : (
+                      <div className="w-9 h-9 flex items-center justify-center bg-muted rounded border border-border shrink-0">
+                        <Paperclip className="w-4 h-4 text-muted-foreground" />
+                      </div>
+                    )}
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-medium truncate">{att.file_name}</p>
+                      <p className="text-[10px] text-muted-foreground">{att.file_size_display}</p>
+                    </div>
+                    <a
+                      href={`/api/v1/attachments/${att.id}/download`}
+                      target="_blank" rel="noopener noreferrer"
+                      className="text-primary hover:text-primary/80 shrink-0"
+                    >
+                      <ExternalLink className="w-3.5 h-3.5" />
+                    </a>
+                  </div>
+                ))}
+
+                {/* Empty state only when no documents at all */}
+                {!selectedDelivery.delivery_note_image_url &&
+                 !selectedDelivery.signature_image_url &&
+                 !selectedDelivery.ocr_raw_data?.driver_signature_path &&
+                 !loadingAttachments &&
+                 deliveryAttachments.length === 0 && (
+                  <p className="text-xs text-muted-foreground">No documents for this delivery.</p>
+                )}
+              </div>
             </div>
           </div>
         </Modal>

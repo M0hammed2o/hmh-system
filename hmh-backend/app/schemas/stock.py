@@ -75,3 +75,4 @@ class UsageLogCreate(BaseModel):
     used_by_team_name: Optional[str] = None
     usage_date: Optional[datetime] = None
     comments: Optional[str] = None
+    overrun_reason: Optional[str] = None

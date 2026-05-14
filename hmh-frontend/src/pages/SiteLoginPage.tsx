@@ -1,58 +1,57 @@
 import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
-import { HardHat, ArrowRight } from "lucide-react";
+import { ArrowRight } from "lucide-react";
 import { authApi } from "@/api/auth";
 import { usersApi } from "@/api/users";
-import { TOKEN_KEY, REFRESH_TOKEN_KEY } from "@/lib/constants";
+import { TOKEN_KEY, REFRESH_TOKEN_KEY, ROLE_KEY, SITE_ROLE_SET } from "@/lib/constants";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { SITE_ROLES } from "@/routes/SiteRoute";
+import { HMHLogo } from "@/components/HMHLogo";
 
 export default function SiteLoginPage() {
   const navigate = useNavigate();
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [error, setError] = useState("");
+  const [loginMode, setLoginMode]       = useState<"email" | "phone">("email");
+  const [email, setEmail]               = useState("");
+  const [password, setPassword]         = useState("");
+  const [phone, setPhone]               = useState("");
+  const [pin, setPin]                   = useState("");
+  const [error, setError]               = useState("");
   const [accessDenied, setAccessDenied] = useState(false);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading]           = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
     setAccessDenied(false);
     setLoading(true);
+    // For phone mode, send phone number as the "email" field — backend checks both
+    const loginEmail    = loginMode === "phone" ? phone.trim() : email.trim();
+    const loginPassword = loginMode === "phone" ? pin.trim()   : password;
     try {
-      // 1. Authenticate with the shared backend
-      const tokens = await authApi.login({ email, password });
+      const tokens = await authApi.login({ email: loginEmail, password: loginPassword });
       localStorage.setItem(TOKEN_KEY, tokens.access_token);
       localStorage.setItem(REFRESH_TOKEN_KEY, tokens.refresh_token);
 
-      // 2. Check if password reset is required first
       if (tokens.must_reset_password) {
         navigate("/set-password", { replace: true });
         return;
       }
 
-      // 3. Fetch the user's role to decide where to send them
       const user = await usersApi.me();
+      localStorage.setItem(ROLE_KEY, user.role);
 
-      if (SITE_ROLES.includes(user.role)) {
-        // Site manager or site staff → site dashboard
+      if (SITE_ROLE_SET.has(user.role)) {
         navigate("/site", { replace: true });
       } else {
-        // Office / owner role tried to log in via the site portal
-        // Keep their token (it's valid) but tell them to use the right portal
+        // Office/owner tried the site portal — keep their valid token but show the message
         setAccessDenied(true);
       }
-    } catch (err: unknown) {
-      // Clear any partial token on auth failure
+    } catch {
       localStorage.removeItem(TOKEN_KEY);
       localStorage.removeItem(REFRESH_TOKEN_KEY);
-      const msg =
-        (err as { response?: { data?: { message?: string } } })?.response?.data?.message ||
-        "Login failed. Check your credentials.";
-      setError(msg);
+      localStorage.removeItem(ROLE_KEY);
+      setError(loginMode === "phone" ? "Invalid phone number or PIN." : "Invalid email or password.");
     } finally {
       setLoading(false);
     }
@@ -64,10 +63,8 @@ export default function SiteLoginPage() {
 
         {/* Logo + branding */}
         <div className="flex flex-col items-center mb-8">
-          <div className="flex items-center justify-center w-16 h-16 rounded-3xl bg-warning/15 mb-4">
-            <HardHat className="w-8 h-8 text-warning" />
-          </div>
-          <h1 className="text-2xl font-bold tracking-tight">HMH Site Portal</h1>
+          <HMHLogo size="lg" className="mb-3" />
+          <p className="text-base font-semibold tracking-tight text-foreground">Site Portal</p>
           <p className="text-sm text-muted-foreground mt-1 text-center">
             For site managers and site staff only
           </p>
@@ -94,31 +91,49 @@ export default function SiteLoginPage() {
         {/* Login form */}
         {!accessDenied && (
           <form onSubmit={handleSubmit} className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="site-email">Email address</Label>
-              <Input
-                id="site-email"
-                type="email"
-                placeholder="site.manager@hmhgroup.com"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                required
-                autoFocus
-                className="h-11 text-base"
-              />
+            {/* Mode tabs */}
+            <div className="flex gap-1 bg-muted/50 p-1 rounded-lg text-sm">
+              <button type="button" onClick={() => { setLoginMode("email"); setError(""); }}
+                className={`flex-1 py-1.5 rounded-md font-medium transition-colors ${loginMode === "email" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}>
+                Email / Password
+              </button>
+              <button type="button" onClick={() => { setLoginMode("phone"); setError(""); }}
+                className={`flex-1 py-1.5 rounded-md font-medium transition-colors ${loginMode === "phone" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}>
+                Phone / PIN
+              </button>
             </div>
-            <div className="space-y-2">
-              <Label htmlFor="site-password">Password</Label>
-              <Input
-                id="site-password"
-                type="password"
-                placeholder="••••••••"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-                className="h-11 text-base"
-              />
-            </div>
+            {loginMode === "email" ? (
+              <>
+                <div className="space-y-2">
+                  <Label htmlFor="site-email">Email address</Label>
+                  <Input id="site-email" type="email" placeholder="site.manager@hmhgroup.com"
+                    value={email} onChange={(e) => setEmail(e.target.value)}
+                    required autoFocus disabled={loading} className="h-11 text-base" />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="site-password">Password</Label>
+                  <Input id="site-password" type="password" placeholder="••••••••"
+                    value={password} onChange={(e) => setPassword(e.target.value)}
+                    required disabled={loading} className="h-11 text-base" />
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="space-y-2">
+                  <Label htmlFor="site-phone">Phone number</Label>
+                  <Input id="site-phone" type="tel" placeholder="0831234567"
+                    value={phone} onChange={(e) => setPhone(e.target.value)}
+                    required autoFocus disabled={loading} className="h-11 text-base" />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="site-pin">PIN</Label>
+                  <Input id="site-pin" type="password" placeholder="••••" maxLength={12}
+                    value={pin} onChange={(e) => setPin(e.target.value)}
+                    required disabled={loading} className="h-11 text-base tracking-widest" />
+                  <p className="text-xs text-muted-foreground">Enter your site access PIN.</p>
+                </div>
+              </>
+            )}
 
             {error && (
               <div className="text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-lg px-3 py-2">

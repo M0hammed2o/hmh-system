@@ -21,6 +21,7 @@ export interface MaterialRequest {
   site_id: string | null;
   lot_id: string | null;
   requested_by_user_id: string;
+  preferred_supplier_id: string | null;
   status: MRStatus;
   requested_date: string;
   needed_by_date: string | null;
@@ -31,6 +32,7 @@ export interface MaterialRequest {
   created_at: string;
   updated_at: string;
   items: MRItem[];
+  email_log: MREmailLog | null;
 }
 
 export interface MRItemCreate {
@@ -42,9 +44,19 @@ export interface MRItemCreate {
   notes?: string | null;
 }
 
+export interface MREmailLog {
+  id: string;
+  status: "SENT" | "MOCK_SENT" | "FAILED";
+  sent_to_email: string;
+  sent_at: string | null;
+  error_message: string | null;
+  created_at: string;
+}
+
 export interface MaterialRequestCreate {
   site_id?: string | null;
   lot_id?: string | null;
+  preferred_supplier_id?: string | null;
   needed_by_date?: string | null;
   notes?: string | null;
   items: MRItemCreate[];
@@ -80,6 +92,18 @@ export const materialRequestsApi = {
 
   update: async (mrId: string, body: MaterialRequestUpdate): Promise<MaterialRequest> => {
     const res = await client.patch<{ data: MaterialRequest }>(`/material-requests/${mrId}`, body);
+    return res.data.data;
+  },
+
+  sendEmail: async (mrId: string): Promise<{ status: string; sent_to_email: string; sent_at: string | null; error: string | null }> => {
+    const res = await client.post<{ data: { status: string; sent_to_email: string; sent_at: string | null; error: string | null } }>(
+      `/material-requests/${mrId}/send-email`,
+    );
+    return res.data.data;
+  },
+
+  getEmailLog: async (mrId: string): Promise<MREmailLog[]> => {
+    const res = await client.get<{ data: MREmailLog[] }>(`/material-requests/${mrId}/email-log`);
     return res.data.data;
   },
 };

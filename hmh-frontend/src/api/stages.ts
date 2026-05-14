@@ -46,6 +46,7 @@ export interface StageStatusUpsert {
   certification_required?: boolean;
   ready_for_labour_payment?: boolean;
   notes?: string | null;
+  delay_reason?: string | null;
 }
 
 export const stagesApi = {
@@ -72,6 +73,18 @@ export const stagesApi = {
     const res = await client.post<{ data: ProjectStageStatus }>(
       `/projects/${projectId}/stage-statuses/`,
       body
+    );
+    return res.data.data;
+  },
+
+  upsertWithEvidence: async (
+    projectId: string,
+    formData: FormData
+  ): Promise<ProjectStageStatus> => {
+    const res = await client.post<{ data: ProjectStageStatus }>(
+      `/projects/${projectId}/stage-statuses/with-evidence`,
+      formData,
+      { headers: { "Content-Type": "multipart/form-data" } }
     );
     return res.data.data;
   },

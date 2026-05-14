@@ -2,7 +2,10 @@
 
 import uuid
 
+from typing import Optional
+
 from fastapi import APIRouter, Query
+from pydantic import BaseModel, field_validator
 
 from app.dependencies import ALL_ROLES, CurrentUser, DbSession, OFFICE_ADMIN_AND_ABOVE
 from app.schemas.common import ApiSuccess
@@ -77,3 +80,48 @@ def get_site(site_id: uuid.UUID, db: DbSession):
     """Get a single site by ID."""
     site = site_service.get_site(db, site_id)
     return ApiSuccess(data=SiteRead.model_validate(site))
+
+
+# ── Bulk create ───────────────────────────────────────────────────────────────
+
+class SiteBulkCreate(BaseModel):
+    prefix: str
+    count: int
+    site_type: str = "construction_site"
+    location_description: Optional[str] = None
+
+    @field_validator("count")
+    @classmethod
+    def sane_count(cls, v: int) -> int:
+        if v < 1 or v > 50:
+            raise ValueError("count must be between 1 and 50")
+        return v
+
+    @field_validator("prefix")
+    @classmethod
+    def not_blank(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("prefix cannot be blank")
+        return v.strip()
+
+
+@project_sites_router.post(
+    "/bulk",
+    response_model=ApiSuccess[list[SiteRead]],
+    status_code=201,
+    dependencies=[OFFICE_ADMIN_AND_ABOVE],
+)
+def bulk_create_sites(project_id: uuid.UUID, body: SiteBulkCreate, db: DbSession):
+    """Create multiple sites with auto-numbered names: '{prefix} 1', '{prefix} 2', …"""
+    created = []
+    for i in range(1, body.count + 1):
+        site = site_service.create_site(db, project_id, SiteCreate(
+            name=f"{body.prefix} {i}",
+            site_type=body.site_type,
+            location_description=body.location_description,
+        ))
+        created.append(site)
+    return ApiSuccess(
+        data=[SiteRead.model_validate(s) for s in created],
+        message=f"{body.count} sites created.",
+    )

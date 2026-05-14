@@ -57,6 +57,12 @@ class DeliveryRead(BaseModel):
     supplier_delivery_note_number: Optional[str] = None
     delivery_status: RecordStatus
     comments: Optional[str] = None
+    receiver_name: Optional[str] = None
+    delivery_note_image_url: Optional[str] = None
+    signature_image_url: Optional[str] = None
+    ocr_raw_data: Optional[dict] = None
+    gps_lat: Optional[float] = None
+    gps_lng: Optional[float] = None
     created_at: datetime
     updated_at: datetime
     items: list[DeliveryItemRead] = []
@@ -71,6 +77,11 @@ class DeliveryCreate(BaseModel):
     delivery_date: Optional[datetime] = None
     comments: Optional[str] = None
     items: list[DeliveryItemCreate] = []
+    # Signature fields — stored in existing Delivery model columns
+    receiver_name: Optional[str] = None           # site staff / receiver name
+    signature_data: Optional[str] = None          # site staff signature (base64 PNG data URL)
+    driver_name: Optional[str] = None             # driver / supplier rep name
+    driver_signature_data: Optional[str] = None   # driver signature (base64 PNG data URL)
 
 
 class DeliveryUpdate(BaseModel):

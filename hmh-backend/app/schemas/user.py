@@ -90,7 +90,8 @@ class SiteAccessGrant(BaseModel):
 # ── Auth schemas ──────────────────────────────────────────────────────────────
 
 class LoginRequest(BaseModel):
-    email: EmailStr
+    # Accepts email address OR phone number (phone login supported via auth_service fallback)
+    email: str
     password: str
 
 

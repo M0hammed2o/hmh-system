@@ -81,6 +81,67 @@ def create_lot(db: Session, project_id: uuid.UUID, data: LotCreate) -> Lot:
     return lot
 
 
+def generate_lots(
+    db: Session,
+    project_id: uuid.UUID,
+    start_number: int,
+    end_number: int,
+    site_id: Optional[uuid.UUID] = None,
+    unit_type: Optional[str] = None,
+    boq_template_id: Optional[uuid.UUID] = None,
+    actor_id: Optional[uuid.UUID] = None,
+) -> list[Lot]:
+    """
+    Create lots numbered start_number..end_number (inclusive).
+    Silently skips numbers where a lot already exists.
+    If boq_template_id is given, clone the template BOQ to each new lot.
+    """
+    _get_project_or_404(db, project_id)
+
+    # Get existing lot numbers for fast lookup
+    existing = {
+        l.lot_number
+        for l in db.query(Lot.lot_number)
+        .filter(Lot.project_id == project_id)
+        .all()
+    }
+
+    created: list[Lot] = []
+    for n in range(start_number, end_number + 1):
+        lot_number = str(n)
+        if lot_number in existing:
+            continue
+
+        lot = Lot(
+            project_id=project_id,
+            lot_number=lot_number,
+            site_id=site_id,
+            unit_type=unit_type,
+            boq_template_id=boq_template_id,
+        )
+        db.add(lot)
+        created.append(lot)
+
+    db.flush()
+
+    # Clone BOQ template if requested
+    if boq_template_id and created:
+        from app.services.boq_template_service import clone_template_to_lots
+        clone_template_to_lots(
+            db,
+            template_boq_id=boq_template_id,
+            project_id=project_id,
+            lot_ids=[l.id for l in created],
+            actor_id=actor_id,
+        )
+    else:
+        db.commit()
+
+    for lot in created:
+        db.refresh(lot)
+    return created
+
+
 def update_lot(db: Session, lot_id: uuid.UUID, data: LotUpdate) -> Lot:
     lot = _get_lot_or_404(db, lot_id)
     fields = data.model_fields_set

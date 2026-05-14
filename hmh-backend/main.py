@@ -13,6 +13,7 @@ import sys
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.core.config import settings
 from app.core.exceptions import HMHException
@@ -41,6 +42,19 @@ from app.api.v1.alerts import router as alerts_router
 from app.api.v1.dashboard import router as dashboard_router
 from app.api.v1.fuel import project_fuel_router, fuel_router
 from app.api.v1.attachments import router as attachments_router
+from app.api.v1.vehicles import router as vehicles_router
+from app.api.v1.allocation import router as allocation_router
+from app.api.v1.boq_templates import router as boq_templates_router
+from app.api.v1.delivery_capture import router as delivery_capture_router
+from app.api.v1.summary import router as summary_router
+from app.api.v1.whatsapp_webhook import router as whatsapp_router
+from app.api.v1.job_cards import project_jc_router, jc_router
+from app.api.v1.site_dashboard import router as site_dashboard_router
+from app.api.v1.gmail import gmail_router, gmail_docs_router
+from app.api.v1.proof_packs import router as proof_packs_router
+from app.api.v1.site_capture import router as site_capture_router
+from app.api.v1.document_ai import router as document_ai_router
+from app.api.v1.expenses import router as expenses_router
 
 
 app = FastAPI(
@@ -69,14 +83,14 @@ app.add_middleware(
 # ── Exception handlers ────────────────────────────────────────────────────────
 @app.exception_handler(HMHException)
 async def hmh_exception_handler(request: Request, exc: HMHException) -> JSONResponse:
-    return JSONResponse(
-        status_code=exc.status_code,
-        content={
-            "success": False,
-            "message": exc.message,
-            "code": exc.error_code,
-        },
-    )
+    content: dict = {
+        "success": False,
+        "message": exc.message,
+        "code": exc.error_code,
+    }
+    if exc.detail:
+        content["detail"] = exc.detail
+    return JSONResponse(status_code=exc.status_code, content=content)
 
 # ── Routers ──────────────────────────────────────────────────────────────────
 app.include_router(health_router)
@@ -112,9 +126,46 @@ app.include_router(dashboard_router, prefix="/api/v1")
 app.include_router(project_fuel_router, prefix="/api/v1")
 app.include_router(fuel_router, prefix="/api/v1")
 app.include_router(attachments_router, prefix="/api/v1")
+app.include_router(vehicles_router, prefix="/api/v1")
+app.include_router(allocation_router, prefix="/api/v1")
+app.include_router(boq_templates_router, prefix="/api/v1")
+app.include_router(delivery_capture_router, prefix="/api/v1")
+app.include_router(summary_router, prefix="/api/v1")
+app.include_router(whatsapp_router, prefix="/api/v1")
+app.include_router(project_jc_router, prefix="/api/v1")
+app.include_router(jc_router, prefix="/api/v1")
+app.include_router(site_dashboard_router, prefix="/api/v1")
+app.include_router(gmail_router, prefix="/api/v1")
+app.include_router(gmail_docs_router, prefix="/api/v1")
+app.include_router(proof_packs_router, prefix="/api/v1")
+app.include_router(site_capture_router, prefix="/api/v1")
+app.include_router(document_ai_router, prefix="/api/v1")
+app.include_router(expenses_router, prefix="/api/v1")
+
+# ── Static file serving for uploaded documents ────────────────────────────────
+_uploads_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "uploads")
+os.makedirs(_uploads_dir, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=_uploads_dir), name="uploads")
 
 
 # ── Temporary startup seeding ────────────────────────────────────────────────
+@app.on_event("startup")
+def ensure_default_stages() -> None:
+    """Auto-seed construction stages if the stage_master table is empty."""
+    try:
+        from app.db.session import SessionLocal
+        from app.services.stage_service import seed_default_stages, list_stage_masters
+        db = SessionLocal()
+        try:
+            if not list_stage_masters(db):
+                seed_default_stages(db)
+                print("Default stages seeded on startup.")
+        finally:
+            db.close()
+    except Exception as exc:
+        print(f"Stage auto-seed skipped: {exc}")
+
+
 @app.on_event("startup")
 def run_demo_seed_once() -> None:
     """

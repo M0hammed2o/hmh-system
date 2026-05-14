@@ -84,10 +84,50 @@ export const stockApi = {
     return res.data.data;
   },
 
-  recordUsage: async (projectId: string, body: UsageLogCreate): Promise<UsageLog> => {
+  recordUsage: async (projectId: string, body: UsageLogCreate, overrunReason?: string): Promise<UsageLog> => {
     const res = await client.post<{ data: UsageLog }>("/stock/usage", body, {
       params: { project_id: projectId },
     });
+    return res.data.data;
+  },
+
+  recordUsageWithEvidence: async (projectId: string, formData: FormData): Promise<UsageLog> => {
+    const res = await client.post<{ data: UsageLog }>(
+      `/stock/usage-with-evidence?project_id=${projectId}`,
+      formData,
+      { headers: { "Content-Type": "multipart/form-data" } },
+    );
+    return res.data.data;
+  },
+
+  issueToLot: async (body: {
+    project_id: string;
+    from_site_id: string;
+    lot_id: string;
+    item_id: string;
+    quantity: number;
+    notes?: string;
+    overrun_reason?: string;
+    unit_cost?: number;
+  }): Promise<{ ledger_id: string; lot_id: string; quantity: number }> => {
+    const res = await client.post<{ data: { ledger_id: string; lot_id: string; quantity: number } }>(
+      "/stock/issue-to-lot", body
+    );
+    return res.data.data;
+  },
+
+  siteTransfer: async (body: {
+    project_id: string;
+    from_site_id: string;
+    to_site_id: string;
+    item_id: string;
+    quantity: number;
+    notes?: string;
+    unit_cost?: number;
+  }): Promise<{ out_ledger_id: string; in_ledger_id: string }> => {
+    const res = await client.post<{ data: { out_ledger_id: string; in_ledger_id: string } }>(
+      "/stock/site-transfer", body
+    );
     return res.data.data;
   },
 };

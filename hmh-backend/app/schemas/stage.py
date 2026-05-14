@@ -54,3 +54,4 @@ class StageStatusUpsert(BaseModel):
     certification_required: Optional[bool] = None
     ready_for_labour_payment: Optional[bool] = None
     notes: Optional[str] = None
+    delay_reason: Optional[str] = None  # appended to notes if provided

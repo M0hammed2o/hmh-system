@@ -1,5 +1,5 @@
 import axios from "axios";
-import { TOKEN_KEY, REFRESH_TOKEN_KEY, API_BASE } from "@/lib/constants";
+import { TOKEN_KEY, REFRESH_TOKEN_KEY, ROLE_KEY, API_BASE, SITE_ROLE_SET } from "@/lib/constants";
 
 const client = axios.create({
   baseURL: API_BASE,
@@ -13,14 +13,18 @@ client.interceptors.request.use((config) => {
   return config;
 });
 
-// On 401, clear tokens and redirect to login
+// On 401: clear session and redirect to the correct login page
 client.interceptors.response.use(
   (res) => res,
   (err) => {
     if (err.response?.status === 401) {
       localStorage.removeItem(TOKEN_KEY);
       localStorage.removeItem(REFRESH_TOKEN_KEY);
-      window.location.href = "/login";
+      localStorage.removeItem(ROLE_KEY);
+
+      // Redirect to site-login if the user was on a site route, else admin login
+      const isSiteRoute = window.location.pathname.startsWith("/site");
+      window.location.href = isSiteRoute ? "/site-login" : "/login";
     }
     return Promise.reject(err);
   }
