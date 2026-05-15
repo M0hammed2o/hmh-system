@@ -60,4 +60,8 @@ export const suppliersApi = {
     const res = await client.patch<{ data: Supplier }>(`/suppliers/${id}`, body);
     return res.data.data;
   },
+
+  delete: async (id: string): Promise<void> => {
+    await client.delete(`/suppliers/${id}`);
+  },
 };

@@ -152,7 +152,8 @@ class TestSignatures:
         assert d.signature_image_url == "MM"
         assert d.ocr_raw_data is not None
         assert d.ocr_raw_data.get("driver_name") == "Ali Hassan"
-        assert d.ocr_raw_data.get("driver_signature") == "AH"
+        # key renamed to driver_signature_path (stores file path, not raw Base64)
+        assert d.ocr_raw_data.get("driver_signature_path") == "AH"
 
 
 class TestShortDeliveryAlert:

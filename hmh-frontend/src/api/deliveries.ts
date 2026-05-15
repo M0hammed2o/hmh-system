@@ -98,17 +98,32 @@ export const deliveriesApi = {
   },
 
   receiveWithDocument: async (formData: FormData): Promise<{
-    delivery_id:     string;
-    delivery_number: string;
-    status:          string;
-    items_count:     number;
-    is_partial:      boolean;
-    has_file:        boolean;
+    delivery_id:          string;
+    delivery_number:      string;
+    status:               string;
+    items_count:          number;
+    is_partial:           boolean;
+    has_file:             boolean;
+    unlinked_items:       Array<{ description: string; quantity_received: number; unit: string | null }>;
+    unlinked_count:       number;
+    stock_updated_count:  number;
   }> => {
     const res = await client.post(
       "/deliveries/receive-with-document",
       formData,
       { headers: { "Content-Type": "multipart/form-data" } },
+    );
+    return res.data.data;
+  },
+
+  linkDeliveryItem: async (
+    deliveryId:     string,
+    deliveryItemId: string,
+    catalogItemId:  string,
+  ): Promise<Delivery> => {
+    const res = await client.patch<{ data: Delivery }>(
+      `/deliveries/${deliveryId}/items/${deliveryItemId}/link`,
+      { item_id: catalogItemId },
     );
     return res.data.data;
   },

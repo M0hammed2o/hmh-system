@@ -54,8 +54,14 @@ class Settings(BaseSettings):
     # Google Cloud Vision credentials (JSON key file path or inline JSON)
     GOOGLE_APPLICATION_CREDENTIALS: str = ""
 
-    # CORS
-    CORS_ORIGINS: str = "http://localhost:3000,http://localhost:5173"
+    # Alert thresholds — read by alert_scan and reactive alert logic
+    LOW_STOCK_THRESHOLD:     float = 5.0    # items below this trigger LOW_STOCK alert
+    BOQ_VARIANCE_ALERT_PCT:  float = 10.0   # BOQ usage variance % that triggers BOQ_VARIANCE alert
+    PENDING_MR_DAYS:         int   = 5      # MR pending longer than this triggers REQUEST_PENDING_TOO_LONG
+
+    # CORS — comma-separated allowed origins
+    # Render env var should set the production domain(s)
+    CORS_ORIGINS: str = "http://localhost:3000,http://localhost:5173,https://app.hmhgroup.co.za"
 
     # Rate limiting
     RATE_LIMIT_PER_MINUTE: int = 100

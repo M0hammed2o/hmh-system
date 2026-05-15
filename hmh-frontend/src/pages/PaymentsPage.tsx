@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Plus, CreditCard, CheckCircle2, Clock, FileText } from "lucide-react";
+import { Plus, CreditCard, CheckCircle2, Clock, FileText, AlertTriangle } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -10,10 +10,28 @@ import { Tabs } from "@/components/shared/Tabs";
 import { StatCard } from "@/components/shared/StatCard";
 import { Modal } from "@/components/shared/Modal";
 import { projectsApi, type Project } from "@/api/projects";
-import { invoicesApi, type Invoice, type InvoiceCreate } from "@/api/invoices";
+import { invoicesApi, type Invoice, type InvoiceCreate, type EnrichedInvoice } from "@/api/invoices";
 import { paymentsApi, type Payment, type PaymentCreate, type PaymentStatus } from "@/api/payments";
 import { suppliersApi, type Supplier } from "@/api/suppliers";
 import { formatCurrency, formatDate } from "@/lib/format";
+import client from "@/api/client";
+
+interface OutstandingInvoice {
+  invoice_id: string;
+  invoice_number: string;
+  supplier_name: string | null;
+  total_amount: number;
+  due_date: string | null;
+  status: string;
+  is_overdue: boolean;
+}
+interface OutstandingSummary {
+  total_outstanding_invoices: number;
+  overdue_amount: number;
+  pending_payments_amount: number;
+  outstanding_invoices: OutstandingInvoice[];
+  overdue_count: number;
+}
 
 type RecordStatus = "DRAFT" | "SUBMITTED" | "APPROVED" | "REJECTED" | "SENT" | "RECEIVED" | "MATCHED" | "PAID" | "CANCELLED";
 
@@ -62,6 +80,8 @@ function CaptureInvoiceModal({
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [extracting, setExtracting] = useState(false);
+  const [extractMsg, setExtractMsg] = useState("");
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -80,6 +100,46 @@ function CaptureInvoiceModal({
   return (
     <Modal open title="Capture Invoice" onClose={onClose} size="md">
       <form onSubmit={submit} className="p-6 space-y-4">
+        {/* AI Extraction — upload invoice PDF/image to auto-fill fields */}
+        <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 space-y-2">
+          <p className="text-xs font-medium text-blue-800">✨ Extract from invoice file</p>
+          <div className="flex items-center gap-2">
+            <input
+              type="file"
+              accept="image/*,.pdf"
+              id="invoice-upload"
+              className="text-xs flex-1 file:mr-2 file:text-xs file:rounded file:border-0 file:bg-blue-100 file:text-blue-700 file:px-2 file:py-1"
+              onChange={async (e) => {
+                const f = e.target.files?.[0];
+                if (!f) return;
+                setExtracting(true); setExtractMsg("");
+                try {
+                  const { visionApi } = await import("@/api/vision");
+                  const result = await visionApi.extract(f, "invoice");
+                  if (result.status === "OCR_NOT_AVAILABLE") {
+                    setExtractMsg("AI Vision not configured. Enter fields manually.");
+                  } else {
+                    const p = result.preview as { invoice_number?: string | null; total_amount?: number | null; date?: string | null; supplier_name?: string | null };
+                    setForm(prev => ({
+                      ...prev,
+                      invoice_number: p.invoice_number ?? prev.invoice_number,
+                      total_amount:   p.total_amount   ?? prev.total_amount,
+                      invoice_date:   p.date           ?? prev.invoice_date,
+                    }));
+                    setExtractMsg(result.status === "NEEDS_REVIEW"
+                      ? "⚠ Partial extraction — review all fields."
+                      : "✓ Fields extracted — confirm before saving.");
+                  }
+                } catch {
+                  setExtractMsg("Extraction failed. Enter manually.");
+                } finally { setExtracting(false); }
+              }}
+            />
+            {extracting && <span className="text-xs text-blue-600">Extracting…</span>}
+          </div>
+          {extractMsg && <p className="text-[10px] text-blue-700">{extractMsg}</p>}
+        </div>
+
         <div className="grid grid-cols-2 gap-4">
           <div className="space-y-2">
             <Label>Invoice Number <span className="text-destructive">*</span></Label>
@@ -238,6 +298,8 @@ export default function PaymentsPage() {
   const [selectedProjectId, setSelectedProjectId] = useState<string>("");
   const [payments, setPayments] = useState<Payment[]>([]);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
+  const [enrichedInvoices, setEnrichedInvoices] = useState<EnrichedInvoice[]>([]);
+  const [outstanding, setOutstanding] = useState<OutstandingSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [showCaptureInvoice, setShowCaptureInvoice] = useState(false);
@@ -266,10 +328,15 @@ export default function PaymentsPage() {
     Promise.all([
       paymentsApi.list(selectedProjectId),
       invoicesApi.list(selectedProjectId),
+      invoicesApi.listEnriched(selectedProjectId).catch((): EnrichedInvoice[] => []),
+      client.get<{ data: OutstandingSummary }>(`/projects/${selectedProjectId}/payments/outstanding-summary`)
+        .then(r => r.data.data).catch(() => null),
     ])
-      .then(([pays, invs]) => {
+      .then(([pays, invs, enriched, outstand]) => {
         setPayments(pays);
         setInvoices(invs);
+        setEnrichedInvoices(enriched);
+        setOutstanding(outstand);
       })
       .catch((err: unknown) => {
         const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message
@@ -284,9 +351,18 @@ export default function PaymentsPage() {
   const paidPays    = payments.filter((p) => p.status === "PAID").length;
   const pendingInvs = invoices.filter((i) => ["DRAFT", "SUBMITTED"].includes(i.status)).length;
 
+  const totalOutstanding = enrichedInvoices.reduce((s, i) => s + i.outstanding_amount, 0);
+
+  const PAGE_TABS_EXTRA = [
+    { key: "payments", label: "Payments" },
+    { key: "invoices", label: "Invoices" },
+    { key: "outstanding", label: "Outstanding" },
+  ];
+
   const tabsWithCount = [
-    { ...PAGE_TABS[0], count: payments.length },
-    { ...PAGE_TABS[1], count: invoices.length },
+    { ...PAGE_TABS_EXTRA[0], count: payments.length },
+    { ...PAGE_TABS_EXTRA[1], count: invoices.length },
+    { ...PAGE_TABS_EXTRA[2], count: outstanding?.outstanding_invoices.length ?? 0 },
   ];
 
   return (
@@ -321,10 +397,10 @@ export default function PaymentsPage() {
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard title="Total Paid"       value={formatCurrency(totalPaid)} icon={CreditCard}   color="bg-success/10 text-success" />
-        <StatCard title="Pending Payments" value={pendingPays}               icon={Clock}        color="bg-warning/10 text-warning" />
-        <StatCard title="Paid Payments"    value={paidPays}                  icon={CheckCircle2} color="bg-success/10 text-success" />
-        <StatCard title="Pending Invoices" value={pendingInvs}               icon={FileText}     color="bg-secondary/10 text-secondary-foreground" />
+        <StatCard title="Total Paid"           value={formatCurrency(totalPaid)}                              icon={CreditCard}   color="bg-success/10 text-success" />
+        <StatCard title="Pending Payments"     value={pendingPays}                                             icon={Clock}        color="bg-warning/10 text-warning" />
+        <StatCard title="Outstanding Invoices" value={formatCurrency(outstanding?.total_outstanding_invoices ?? 0)} icon={FileText} color="bg-destructive/10 text-destructive" />
+        <StatCard title="Overdue Amount"       value={formatCurrency(outstanding?.overdue_amount ?? 0)}        icon={AlertTriangle} color="bg-destructive/10 text-destructive" />
       </div>
 
       <Tabs tabs={tabsWithCount} active={tab} onChange={setTab} />
@@ -368,36 +444,121 @@ export default function PaymentsPage() {
             </table>
           )}
         </div>
-      ) : (
-        <div className="bg-card border border-border rounded-xl overflow-hidden">
-          {invoices.length === 0 ? (
-            <div className="p-12 text-center text-sm text-muted-foreground">No invoices captured yet.</div>
-          ) : (
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-border bg-muted/50">
-                  <th className="text-left px-4 py-3 font-medium text-muted-foreground">Invoice #</th>
-                  <th className="text-left px-4 py-3 font-medium text-muted-foreground">Amount</th>
-                  <th className="text-left px-4 py-3 font-medium text-muted-foreground">Invoice Date</th>
-                  <th className="text-left px-4 py-3 font-medium text-muted-foreground">Due Date</th>
-                  <th className="text-left px-4 py-3 font-medium text-muted-foreground">Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {invoices.map((inv) => (
-                  <tr key={inv.id} className="border-b border-border last:border-0 hover:bg-muted/30 transition-colors">
-                    <td className="px-4 py-3 font-mono text-xs">{inv.invoice_number}</td>
-                    <td className="px-4 py-3 font-semibold">{formatCurrency(inv.total_amount)}</td>
-                    <td className="px-4 py-3 text-muted-foreground">{inv.invoice_date ? formatDate(inv.invoice_date) : "—"}</td>
-                    <td className="px-4 py-3 text-muted-foreground">{inv.due_date ? formatDate(inv.due_date) : "—"}</td>
-                    <td className="px-4 py-3">
-                      <Badge variant={invoiceStatusVariant[inv.status]}>{inv.status}</Badge>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+      ) : tab === "invoices" ? (
+        <div className="space-y-3">
+          {totalOutstanding > 0 && (
+            <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-2.5 text-xs text-amber-700 flex items-center gap-2">
+              <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+              Total outstanding across all invoices: <strong className="ml-1">{formatCurrency(totalOutstanding)}</strong>
+            </div>
           )}
+          <div className="bg-card border border-border rounded-xl overflow-hidden">
+            {enrichedInvoices.length === 0 ? (
+              <div className="p-12 text-center text-sm text-muted-foreground">No invoices captured yet.</div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-border bg-muted/50">
+                      <th className="text-left px-4 py-3 font-medium text-muted-foreground whitespace-nowrap">Invoice #</th>
+                      <th className="text-left px-4 py-3 font-medium text-muted-foreground">Supplier</th>
+                      <th className="text-left px-4 py-3 font-medium text-muted-foreground hidden md:table-cell">PO #</th>
+                      <th className="text-right px-4 py-3 font-medium text-muted-foreground">Amount</th>
+                      <th className="text-right px-4 py-3 font-medium text-muted-foreground hidden sm:table-cell">Outstanding</th>
+                      <th className="text-left px-4 py-3 font-medium text-muted-foreground hidden sm:table-cell">Due Date</th>
+                      <th className="text-left px-4 py-3 font-medium text-muted-foreground">Status</th>
+                      <th className="text-left px-4 py-3 font-medium text-muted-foreground hidden md:table-cell">Match</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {enrichedInvoices.map((inv) => (
+                      <tr key={inv.invoice_id} className={`border-b border-border last:border-0 transition-colors ${inv.is_overdue ? "bg-destructive/5 hover:bg-destructive/10" : "hover:bg-muted/30"}`}>
+                        <td className="px-4 py-3 font-mono text-xs font-medium">{inv.invoice_number}</td>
+                        <td className="px-4 py-3 text-muted-foreground text-xs">{inv.supplier_name ?? "—"}</td>
+                        <td className="px-4 py-3 font-mono text-xs text-muted-foreground hidden md:table-cell">{inv.po_number ?? "—"}</td>
+                        <td className="px-4 py-3 text-right font-semibold">{formatCurrency(inv.total_amount)}</td>
+                        <td className="px-4 py-3 text-right hidden sm:table-cell">
+                          {inv.outstanding_amount > 0
+                            ? <span className={inv.is_overdue ? "text-destructive font-semibold" : "text-amber-600 font-medium"}>{formatCurrency(inv.outstanding_amount)}</span>
+                            : <span className="text-green-600 font-medium">Paid</span>
+                          }
+                        </td>
+                        <td className="px-4 py-3 hidden sm:table-cell">
+                          {inv.due_date ? (
+                            <span className={inv.is_overdue ? "text-destructive font-medium text-xs" : "text-muted-foreground text-xs"}>
+                              {inv.is_overdue && <AlertTriangle className="w-3 h-3 inline mr-1" />}
+                              {formatDate(inv.due_date)}
+                            </span>
+                          ) : "—"}
+                        </td>
+                        <td className="px-4 py-3">
+                          <Badge variant={invoiceStatusVariant[inv.status as RecordStatus] ?? "outline"} className="text-xs">
+                            {inv.status}
+                          </Badge>
+                        </td>
+                        <td className="px-4 py-3 hidden md:table-cell">
+                          <span className={`text-xs font-medium ${
+                            inv.match_status === "MATCHED" ? "text-green-600" :
+                            inv.match_status === "UNLINKED" ? "text-muted-foreground" :
+                            "text-amber-600"
+                          }`}>
+                            {inv.match_status?.replace(/_/g, " ") ?? "—"}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      ) : (
+        /* Outstanding tab */
+        <div className="space-y-4">
+          {outstanding && outstanding.overdue_count > 0 && (
+            <div className="bg-destructive/10 border border-destructive/30 rounded-xl px-4 py-3 flex items-center gap-2 text-sm text-destructive">
+              <AlertTriangle className="w-4 h-4 shrink-0" />
+              <span><strong>{outstanding.overdue_count}</strong> overdue invoice{outstanding.overdue_count !== 1 ? "s" : ""} — total overdue: <strong>{formatCurrency(outstanding.overdue_amount)}</strong></span>
+            </div>
+          )}
+          <div className="bg-card border border-border rounded-xl overflow-hidden">
+            {!outstanding || outstanding.outstanding_invoices.length === 0 ? (
+              <div className="p-12 text-center text-sm text-muted-foreground">No outstanding invoices. All up to date.</div>
+            ) : (
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-border bg-muted/50">
+                    <th className="text-left px-4 py-3 font-medium text-muted-foreground">Invoice #</th>
+                    <th className="text-left px-4 py-3 font-medium text-muted-foreground">Supplier</th>
+                    <th className="text-right px-4 py-3 font-medium text-muted-foreground">Amount</th>
+                    <th className="text-left px-4 py-3 font-medium text-muted-foreground">Due Date</th>
+                    <th className="text-left px-4 py-3 font-medium text-muted-foreground">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {outstanding.outstanding_invoices.map((inv) => (
+                    <tr key={inv.invoice_id} className={`border-b border-border last:border-0 ${inv.is_overdue ? "bg-destructive/5" : "hover:bg-muted/30"} transition-colors`}>
+                      <td className="px-4 py-3 font-mono text-xs">{inv.invoice_number}</td>
+                      <td className="px-4 py-3 text-muted-foreground">{inv.supplier_name ?? "—"}</td>
+                      <td className="px-4 py-3 text-right font-semibold">{formatCurrency(inv.total_amount)}</td>
+                      <td className="px-4 py-3">
+                        {inv.due_date ? (
+                          <span className={inv.is_overdue ? "text-destructive font-medium" : "text-muted-foreground"}>
+                            {inv.is_overdue && <AlertTriangle className="w-3 h-3 inline mr-1" />}
+                            {formatDate(inv.due_date)}
+                          </span>
+                        ) : "—"}
+                      </td>
+                      <td className="px-4 py-3">
+                        <Badge variant={invoiceStatusVariant[inv.status as keyof typeof invoiceStatusVariant] ?? "outline"}>{inv.status}</Badge>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
         </div>
       )}
 

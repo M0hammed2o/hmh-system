@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Plus, Truck, CheckCircle2, AlertCircle, Package, Trash2, RefreshCw, Paperclip, ExternalLink, Download, FileText, PenLine } from "lucide-react";
+import { Plus, Truck, CheckCircle2, AlertCircle, Package, Trash2, RefreshCw, Paperclip, ExternalLink, Download, FileText, PenLine, Link as LinkIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -14,6 +14,7 @@ import { purchaseOrdersApi, type PurchaseOrder } from "@/api/purchaseOrders";
 import { attachmentsApi, type Attachment } from "@/api/attachments";
 import { formatDateTime } from "@/lib/format";
 import { API_BASE } from "@/lib/constants";
+import client from "@/api/client";
 
 const SERVER_BASE = API_BASE.replace(/\/api\/v1\/?$/, "");
 function fileUrl(path: string | null | undefined): string | undefined {
@@ -331,6 +332,11 @@ export default function DeliveriesPage() {
   const [deliveryAttachments, setDeliveryAttachments] = useState<Attachment[]>([]);
   const [loadingAttachments, setLoadingAttachments] = useState(false);
   const [showRecord, setShowRecord] = useState(false);
+  // Catalog item linking
+  const [catalogItems, setCatalogItems] = useState<Array<{ id: string; name: string; default_unit: string | null }>>([]);
+  const [linkingItemId, setLinkingItemId] = useState<string | null>(null); // delivery_item.id being linked
+  const [linkSelectedCatalog, setLinkSelectedCatalog] = useState("");
+  const [linkSaving, setLinkSaving] = useState(false);
 
   useEffect(() => {
     Promise.all([projectsApi.list(1, 100), suppliersApi.list()])
@@ -355,7 +361,7 @@ export default function DeliveriesPage() {
 
   // Fetch attachments when a delivery is opened
   useEffect(() => {
-    if (!selectedDelivery) { setDeliveryAttachments([]); return; }
+    if (!selectedDelivery) { setDeliveryAttachments([]); setLinkingItemId(null); return; }
     setLoadingAttachments(true);
     attachmentsApi
       .listByEntity("DELIVERY", selectedDelivery.id)
@@ -363,6 +369,27 @@ export default function DeliveriesPage() {
       .catch(() => setDeliveryAttachments([]))
       .finally(() => setLoadingAttachments(false));
   }, [selectedDelivery]);
+
+  // Load catalog items once for the link-item dropdown
+  useEffect(() => {
+    if (catalogItems.length > 0) return;
+    client.get<{ data: Array<{ id: string; name: string; default_unit: string | null }> }>("/items/")
+      .then(r => setCatalogItems(r.data.data || []))
+      .catch(() => {});
+  }, [catalogItems.length]);
+
+  const handleLinkItem = async (deliveryItemId: string) => {
+    if (!selectedDelivery || !linkSelectedCatalog) return;
+    setLinkSaving(true);
+    try {
+      const updated = await deliveriesApi.linkDeliveryItem(selectedDelivery.id, deliveryItemId, linkSelectedCatalog);
+      setSelectedDelivery(updated);
+      setLinkingItemId(null);
+      setLinkSelectedCatalog("");
+    } catch {
+      // keep panel open so user can retry
+    } finally { setLinkSaving(false); }
+  };
 
   const refreshDeliveries = async () => {
     if (!selectedProjectId) return;
@@ -594,6 +621,7 @@ export default function DeliveriesPage() {
                         <th className="text-right px-3 py-2 font-medium">Expected</th>
                         <th className="text-right px-3 py-2 font-medium">Received</th>
                         <th className="text-right px-3 py-2 font-medium">Unit</th>
+                        <th className="px-3 py-2" />
                       </tr>
                     </thead>
                     <tbody>
@@ -601,17 +629,78 @@ export default function DeliveriesPage() {
                         const hasDiscrepancy =
                           item.quantity_expected != null &&
                           item.quantity_received !== item.quantity_expected;
+                        const isUnlinked = !item.item_id;
+                        const isLinking  = linkingItemId === item.id;
                         return (
-                          <tr key={item.id} className="border-t border-border/50">
-                            <td className="px-3 py-2">{item.description}</td>
-                            <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">
-                              {item.quantity_expected ?? "—"}
-                            </td>
-                            <td className={`px-3 py-2 text-right tabular-nums font-medium ${hasDiscrepancy ? "text-warning" : ""}`}>
-                              {item.quantity_received}
-                            </td>
-                            <td className="px-3 py-2 text-right text-muted-foreground">{item.unit ?? "—"}</td>
-                          </tr>
+                          <>
+                            <tr
+                              key={item.id}
+                              className={`border-t border-border/50 ${isUnlinked ? "bg-amber-50 dark:bg-amber-950/20" : ""}`}
+                            >
+                              <td className="px-3 py-2">
+                                {item.description}
+                                {isUnlinked && (
+                                  <span className="ml-1.5 text-[10px] bg-amber-200 text-amber-800 rounded px-1 py-0.5 font-medium">
+                                    No catalog link
+                                  </span>
+                                )}
+                              </td>
+                              <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">
+                                {item.quantity_expected ?? "—"}
+                              </td>
+                              <td className={`px-3 py-2 text-right tabular-nums font-medium ${hasDiscrepancy ? "text-warning" : ""}`}>
+                                {item.quantity_received}
+                              </td>
+                              <td className="px-3 py-2 text-right text-muted-foreground">{item.unit ?? "—"}</td>
+                              <td className="px-3 py-2 text-right">
+                                {isUnlinked && !isLinking && (
+                                  <button
+                                    onClick={() => { setLinkingItemId(item.id); setLinkSelectedCatalog(""); }}
+                                    className="text-[10px] text-amber-700 hover:underline flex items-center gap-0.5 ml-auto"
+                                    title="Link to catalog item to update stock"
+                                  >
+                                    <LinkIcon className="w-3 h-3" />Link
+                                  </button>
+                                )}
+                              </td>
+                            </tr>
+                            {isLinking && (
+                              <tr key={`${item.id}-link`} className="border-t border-amber-200 bg-amber-50 dark:bg-amber-950/30">
+                                <td colSpan={5} className="px-3 py-2">
+                                  <div className="flex items-center gap-2">
+                                    <select
+                                      value={linkSelectedCatalog}
+                                      onChange={e => setLinkSelectedCatalog(e.target.value)}
+                                      className="flex-1 h-7 rounded border border-input bg-background px-2 text-xs"
+                                    >
+                                      <option value="">— Select catalog item —</option>
+                                      {catalogItems.map(ci => (
+                                        <option key={ci.id} value={ci.id}>
+                                          {ci.name}{ci.default_unit ? ` (${ci.default_unit})` : ""}
+                                        </option>
+                                      ))}
+                                    </select>
+                                    <button
+                                      onClick={() => handleLinkItem(item.id)}
+                                      disabled={!linkSelectedCatalog || linkSaving}
+                                      className="text-xs px-2 py-1 rounded bg-primary text-primary-foreground disabled:opacity-50"
+                                    >
+                                      {linkSaving ? "Saving…" : "Save"}
+                                    </button>
+                                    <button
+                                      onClick={() => setLinkingItemId(null)}
+                                      className="text-xs text-muted-foreground hover:text-foreground"
+                                    >
+                                      Cancel
+                                    </button>
+                                  </div>
+                                  <p className="text-[10px] text-amber-700 mt-1">
+                                    Stock balance will be updated immediately after linking.
+                                  </p>
+                                </td>
+                              </tr>
+                            )}
+                          </>
                         );
                       })}
                     </tbody>

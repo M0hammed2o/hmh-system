@@ -101,6 +101,203 @@ def generate_daily_summary(db: DbSession):
     )
 
 
+# ── Proactive alert scan ──────────────────────────────────────────────────────
+
+@router.post("/scan", response_model=ApiSuccess[dict], dependencies=[OFFICE_AND_ABOVE])
+def scan_and_create_alerts(db: DbSession, project_id: Optional[uuid.UUID] = Query(None)):
+    """
+    Proactive scan: creates alerts for conditions that aren't triggered by events.
+    Covers: low/negative stock, overdue payments, long-pending MRs, deliveries without PO,
+    missing delivery notes, missing signatures.
+    Safe to call repeatedly — deduplicates by checking for existing OPEN alerts of the same type.
+    """
+    from datetime import datetime, timezone, timedelta
+    from app.models.alert import SystemAlert
+    from app.models.enums import (
+        AlertType, AlertSeverity, AlertStatus, RecordStatus, MovementType
+    )
+    from app.models.stock import StockLedger
+    from app.models.item import Item
+    from app.models.project import Project
+    from app.models.site import Site
+    from app.models.delivery import Delivery
+    from app.models.invoice import Invoice
+    from app.models.material_request import MaterialRequest
+    from app.core.config import settings
+
+    now = datetime.now(timezone.utc)
+    created = 0
+
+    def _already_open(project_id_val, site_id_val, alert_type: AlertType) -> bool:
+        """Return True if an OPEN alert of this type already exists."""
+        q = db.query(SystemAlert).filter(
+            SystemAlert.alert_type == alert_type,
+            SystemAlert.status == AlertStatus.OPEN,
+        )
+        if project_id_val:
+            q = q.filter(SystemAlert.project_id == project_id_val)
+        if site_id_val:
+            q = q.filter(SystemAlert.site_id == site_id_val)
+        return q.first() is not None
+
+    def _add(alert: SystemAlert) -> None:
+        nonlocal created
+        db.add(alert)
+        created += 1
+
+    # ── Determine scope ───────────────────────────────────────────────────────
+    projects = db.query(Project).filter(
+        Project.id == project_id if project_id else True
+    ).all()
+
+    for project in projects:
+        pid = project.id
+
+        # 1. Low / Negative stock ──────────────────────────────────────────────
+        from sqlalchemy import func, text as _t
+        try:
+            low_threshold = float(getattr(settings, "LOW_STOCK_THRESHOLD", 5))
+        except Exception:
+            low_threshold = 5.0
+
+        try:
+            neg_rows = db.execute(_t("""
+                SELECT item_id, site_id, SUM(quantity_in) - SUM(quantity_out) AS balance
+                FROM stock_ledger
+                WHERE project_id = :pid
+                GROUP BY item_id, site_id
+                HAVING SUM(quantity_in) - SUM(quantity_out) < :threshold
+            """), {"pid": pid, "threshold": low_threshold}).mappings().all()
+
+            for row in neg_rows:
+                atype = AlertType.NEGATIVE_STOCK if row["balance"] < 0 else AlertType.LOW_STOCK
+                if not _already_open(pid, row["site_id"], atype):
+                    item = db.get(Item, row["item_id"])
+                    _add(SystemAlert(
+                        project_id=pid, site_id=row["site_id"],
+                        alert_type=atype,
+                        severity=AlertSeverity.HIGH if row["balance"] < 0 else AlertSeverity.MEDIUM,
+                        title=f"{'Negative' if row['balance'] < 0 else 'Low'} stock: {item.name if item else row['item_id']}",
+                        message=f"Balance is {row['balance']:.2f} {'(below zero — over-issued)' if row['balance'] < 0 else f'(below threshold {low_threshold})'}.",
+                        status=AlertStatus.OPEN,
+                        notification_channel="in_app",
+                        created_at=now,
+                    ))
+        except Exception:
+            pass
+
+        # 2. Overdue invoices ──────────────────────────────────────────────────
+        from datetime import date
+        overdue_invs = (
+            db.query(Invoice)
+            .filter(
+                Invoice.project_id == pid,
+                Invoice.due_date < now.date(),
+                Invoice.status.notin_([RecordStatus.PAID, RecordStatus.CANCELLED]),
+            )
+            .all()
+        )
+        for inv in overdue_invs:
+            if not _already_open(pid, None, AlertType.OVERDUE_PAYMENT):
+                _add(SystemAlert(
+                    project_id=pid,
+                    alert_type=AlertType.OVERDUE_PAYMENT,
+                    severity=AlertSeverity.HIGH,
+                    title=f"Overdue invoice: {inv.invoice_number}",
+                    message=f"Invoice {inv.invoice_number} was due {inv.due_date}.",
+                    status=AlertStatus.OPEN,
+                    notification_channel="in_app",
+                    created_at=now,
+                ))
+                break  # one alert per project
+
+        # 3. Material Requests pending too long ────────────────────────────────
+        try:
+            pending_days = int(getattr(settings, "PENDING_MR_DAYS", 5))
+        except Exception:
+            pending_days = 5
+        cutoff = now - timedelta(days=pending_days)
+        stale_mrs = (
+            db.query(MaterialRequest)
+            .filter(
+                MaterialRequest.project_id == pid,
+                MaterialRequest.status.in_([RecordStatus.SUBMITTED, RecordStatus.PENDING_APPROVAL]),
+                MaterialRequest.created_at < cutoff,
+            )
+            .all()
+        )
+        for mr in stale_mrs:
+            if not _already_open(pid, mr.site_id, AlertType.REQUEST_PENDING_TOO_LONG):
+                _add(SystemAlert(
+                    project_id=pid, site_id=mr.site_id,
+                    reference_type="material_request", reference_id=mr.id,
+                    alert_type=AlertType.REQUEST_PENDING_TOO_LONG,
+                    severity=AlertSeverity.MEDIUM,
+                    title=f"MR pending too long: {mr.request_number}",
+                    message=f"Material request {mr.request_number} has been pending for over {pending_days} days.",
+                    status=AlertStatus.OPEN,
+                    notification_channel="in_app",
+                    created_at=now,
+                ))
+
+        # 4. Deliveries without PO ────────────────────────────────────────────
+        no_po_dels = (
+            db.query(Delivery)
+            .filter(
+                Delivery.project_id == pid,
+                Delivery.purchase_order_id.is_(None),
+                Delivery.created_at > now - timedelta(days=30),
+            )
+            .all()
+        )
+        for d in no_po_dels:
+            if not _already_open(pid, d.site_id, AlertType.DELIVERY_WITHOUT_PO):
+                _add(SystemAlert(
+                    project_id=pid, site_id=d.site_id,
+                    reference_type="delivery", reference_id=d.id,
+                    alert_type=AlertType.DELIVERY_WITHOUT_PO,
+                    severity=AlertSeverity.MEDIUM,
+                    title=f"Delivery without PO: {d.delivery_number or str(d.id)[:8]}",
+                    message="This delivery was received without a linked Purchase Order (PO).",
+                    status=AlertStatus.OPEN,
+                    notification_channel="in_app",
+                    created_at=now,
+                ))
+                break  # one alert per project for this type
+
+        # 5. Missing signatures ────────────────────────────────────────────────
+        unsigned_dels = (
+            db.query(Delivery)
+            .filter(
+                Delivery.project_id == pid,
+                Delivery.signature_image_url.is_(None),
+                Delivery.created_at > now - timedelta(days=30),
+            )
+            .limit(5)
+            .all()
+        )
+        for d in unsigned_dels:
+            if not _already_open(pid, d.site_id, AlertType.DELIVERY_SIGNATURE_MISSING):
+                _add(SystemAlert(
+                    project_id=pid, site_id=d.site_id,
+                    reference_type="delivery", reference_id=d.id,
+                    alert_type=AlertType.DELIVERY_SIGNATURE_MISSING,
+                    severity=AlertSeverity.LOW,
+                    title=f"Missing signature: {d.delivery_number or str(d.id)[:8]}",
+                    message="Delivery was recorded without a receiver signature.",
+                    status=AlertStatus.OPEN,
+                    notification_channel="in_app",
+                    created_at=now,
+                ))
+                break
+
+    db.commit()
+    return ApiSuccess(
+        data={"alerts_created": created, "projects_scanned": len(projects)},
+        message=f"{created} alert(s) created.",
+    )
+
+
 # ── WhatsApp Recipients ───────────────────────────────────────────────────────
 
 @router.get("/recipients", response_model=ApiSuccess[list[AlertRecipientRead]], dependencies=[ALL_ROLES])

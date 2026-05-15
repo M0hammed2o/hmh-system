@@ -220,4 +220,9 @@ export const procurementApi = {
     const res = await client.get<{ data: unknown }>(`/purchase-orders/${poId}/outstanding`);
     return res.data.data as ReturnType<typeof procurementApi.getOutstanding> extends Promise<infer T> ? T : never;
   },
+
+  markSent: async (poId: string): Promise<PurchaseOrder> => {
+    const res = await client.post<{ data: PurchaseOrder }>(`/purchase-orders/${poId}/mark-sent`);
+    return res.data.data;
+  },
 };

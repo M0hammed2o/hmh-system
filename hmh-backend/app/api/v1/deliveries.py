@@ -255,7 +255,11 @@ async def receive_delivery_with_document(
         ))
 
     # ── Create DeliveryItems + update PO + add stock ledger entries ───────────
-    has_discrepancy = False
+    has_discrepancy  = False
+    unlinked_items: list[dict] = []   # items with no catalog item_id — stock NOT updated
+    stock_updated_count = 0
+    non_boq_items: list[str]  = []    # items received outside the BOQ (item_id present, boq_item_id absent)
+
     for item_data in items_data:
         qty_exp = item_data.get("quantity_expected")
         qty_rec = float(item_data.get("quantity_received", 0))
@@ -266,6 +270,10 @@ async def receive_delivery_with_document(
 
         item_id    = uuid.UUID(item_data["item_id"])    if item_data.get("item_id")    else None
         boq_item_id = uuid.UUID(item_data["boq_item_id"]) if item_data.get("boq_item_id") else None
+
+        # Track non-BOQ items (item_id present but boq_item_id absent) for alerting
+        if item_id and not boq_item_id:
+            non_boq_items.append(item_data.get("description", "Unknown"))
 
         d_item = DeliveryItem(
             delivery_id           = delivery.id,
@@ -293,7 +301,8 @@ async def receive_delivery_with_document(
             if poi:
                 poi.quantity_received = float(poi.quantity_received or 0) + qty_rec
 
-        # Stock ledger entry for BOQ "Delivered" tracking (only when item_id is known)
+        # Stock ledger entry — only when item_id is linked to the catalog.
+        # Items without item_id are tracked in unlinked_items so office staff can fix them.
         if item_id and lot_id:
             db.add(StockLedger(
                 project_id    = uuid.UUID(project_id),
@@ -311,6 +320,7 @@ async def receive_delivery_with_document(
                 entered_by    = current_user.id,
                 created_at    = now,
             ))
+            stock_updated_count += 1
         elif item_id and site_id:
             # No lot — record at site level
             db.add(StockLedger(
@@ -329,6 +339,20 @@ async def receive_delivery_with_document(
                 entered_by    = current_user.id,
                 created_at    = now,
             ))
+            stock_updated_count += 1
+        else:
+            # No catalog link — stock cannot be updated for this line
+            unlinked_items.append({
+                "description":      item_data.get("description", ""),
+                "quantity_received": qty_rec,
+                "unit":             item_data.get("unit"),
+            })
+            if item_data.get("description"):
+                print(
+                    f"[DELIVERY] item '{item_data.get('description')}' has no item_id — "
+                    "stock ledger NOT updated. Link via PATCH /deliveries/{id}/items/{item_id}/link",
+                    flush=True,
+                )
 
     # ── Update PO status ──────────────────────────────────────────────────────
     if purchase_order_id:
@@ -355,6 +379,27 @@ async def receive_delivery_with_document(
             sent_at              = now,
         ))
 
+    # ── Alert on non-BOQ items ────────────────────────────────────────────────
+    # Non-BOQ items are valid deliveries but office should be aware.
+    if non_boq_items:
+        items_preview = ", ".join(non_boq_items[:3])
+        if len(non_boq_items) > 3:
+            items_preview += f" (+{len(non_boq_items) - 3} more)"
+        db.add(SystemAlert(
+            alert_type           = AlertType.DELIVERY_MISMATCH,
+            severity             = AlertSeverity.LOW,
+            title                = f"Non-BOQ item(s) received — {delivery.delivery_number}",
+            message              = (
+                f"Delivery {delivery.delivery_number} contains {len(non_boq_items)} item(s) "
+                f"not on the BOQ: {items_preview}. Review and update the BOQ if required."
+            ),
+            status               = AlertStatus.OPEN,
+            project_id           = uuid.UUID(project_id),
+            site_id              = uuid.UUID(site_id),
+            notification_channel = "in_app",
+            created_at           = now,
+        ))
+
     db.commit()
 
     # Refresh materialized view — skip in pytest (CONCURRENTLY cannot run inside a transaction)
@@ -368,17 +413,136 @@ async def receive_delivery_with_document(
         except Exception:
             pass
 
-    print(f"[DELIVERY] saved — id={delivery.id} partial={is_partial} items={len(items_data)}", flush=True)
+    print(
+        f"[DELIVERY] saved — id={delivery.id} partial={is_partial} "
+        f"items={len(items_data)} stock_updated={stock_updated_count} unlinked={len(unlinked_items)}",
+        flush=True,
+    )
+    msg = "Delivery recorded successfully."
+    if unlinked_items:
+        msg = (
+            f"Delivery recorded. {len(unlinked_items)} item(s) have no catalog link — "
+            "stock balances NOT updated for those lines. Use the Deliveries page to link them."
+        )
     return ApiSuccess(
         data={
-            "delivery_id":     str(delivery.id),
-            "delivery_number": delivery.delivery_number,
-            "status":          delivery.delivery_status.value,
-            "items_count":     len(items_data),
-            "is_partial":      is_partial,
-            "has_file":        delivery_note_url is not None,
+            "delivery_id":          str(delivery.id),
+            "delivery_number":      delivery.delivery_number,
+            "status":               delivery.delivery_status.value,
+            "items_count":          len(items_data),
+            "is_partial":           is_partial,
+            "has_file":             delivery_note_url is not None,
+            "unlinked_items":       unlinked_items,
+            "unlinked_count":       len(unlinked_items),
+            "stock_updated_count":  stock_updated_count,
         },
-        message="Delivery recorded successfully.",
+        message=msg,
+    )
+
+
+# ── Link delivery item to catalog item ───────────────────────────────────────
+
+class _LinkItemBody(BaseModel):
+    item_id: uuid.UUID
+
+
+@delivery_router.patch(
+    "/{delivery_id}/items/{delivery_item_id}/link",
+    response_model=ApiSuccess[DeliveryRead],
+    dependencies=[OFFICE_AND_ABOVE],
+)
+def link_delivery_item(
+    delivery_id:      uuid.UUID,
+    delivery_item_id: uuid.UUID,
+    body:             _LinkItemBody,
+    db:               DbSession,
+    current_user:     CurrentUser,
+):
+    """
+    Link a delivery item to a catalog item (set item_id) and write the missing
+    StockLedger entry.  Called by office staff when a delivery was recorded with
+    an unlinked item — fixes the stock balance retroactively.
+    """
+    from app.models.delivery import Delivery, DeliveryItem
+    from app.models.item import Item
+    from app.models.stock import StockLedger
+    from app.models.enums import MovementType
+    from sqlalchemy.orm import joinedload
+
+    delivery = db.get(Delivery, delivery_id)
+    if not delivery:
+        raise HTTPException(404, "Delivery not found.")
+
+    d_item = (
+        db.query(DeliveryItem)
+        .filter(DeliveryItem.id == delivery_item_id, DeliveryItem.delivery_id == delivery_id)
+        .first()
+    )
+    if not d_item:
+        raise HTTPException(404, "Delivery item not found.")
+
+    catalog_item = db.get(Item, body.item_id)
+    if not catalog_item:
+        raise HTTPException(404, "Catalog item not found.")
+
+    if d_item.item_id is not None and d_item.item_id != body.item_id:
+        raise HTTPException(
+            422,
+            f"Item already linked to '{catalog_item.name}'. "
+            "Cannot re-link a delivery item that already has a catalog entry.",
+        )
+
+    # Set the catalog link
+    d_item.item_id = body.item_id
+
+    now = datetime.now(timezone.utc)
+
+    # Write the missing stock ledger entry at site level.
+    # (We don't store lot_id on the Delivery record, so we use site-level.)
+    db.add(StockLedger(
+        project_id    = delivery.project_id,
+        site_id       = delivery.site_id,
+        lot_id        = None,
+        item_id       = body.item_id,
+        boq_item_id   = d_item.boq_item_id,
+        movement_type = MovementType.DELIVERY_RECEIVED,
+        reference_type = "delivery",
+        reference_id  = delivery.id,
+        quantity_in   = float(d_item.quantity_received),
+        quantity_out  = 0,
+        unit          = d_item.unit,
+        movement_date = delivery.delivery_date or now,
+        entered_by    = current_user.id,
+        notes         = f"Linked post-delivery: {delivery.delivery_number or str(delivery.id)[:8]}",
+        created_at    = now,
+    ))
+
+    db.commit()
+    print(
+        f"[DELIVERY] item linked — delivery={delivery.delivery_number} "
+        f"item='{catalog_item.name}' qty={d_item.quantity_received}",
+        flush=True,
+    )
+
+    # Refresh materialized view
+    import os as _os
+    if not (bool(_os.getenv("PYTEST_CURRENT_TEST")) or _os.getenv("APP_ENV", "").lower() == "test"):
+        try:
+            from sqlalchemy import text as _t
+            db.execute(_t("REFRESH MATERIALIZED VIEW CONCURRENTLY stock_balances"))
+            db.commit()
+        except Exception:
+            db.rollback()
+
+    updated = (
+        db.query(Delivery)
+        .options(joinedload(Delivery.items))
+        .filter(Delivery.id == delivery_id)
+        .first()
+    )
+    return ApiSuccess(
+        data=DeliveryRead.model_validate(updated),
+        message=f"Item linked to '{catalog_item.name}'. Stock balance updated.",
     )
 
 

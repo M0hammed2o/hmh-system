@@ -82,6 +82,52 @@ def get_site(site_id: uuid.UUID, db: DbSession):
     return ApiSuccess(data=SiteRead.model_validate(site))
 
 
+@sites_router.delete(
+    "/{site_id}",
+    response_model=ApiSuccess[dict],
+    dependencies=[OFFICE_ADMIN_AND_ABOVE],
+)
+def delete_site(site_id: uuid.UUID, db: DbSession):
+    """
+    Soft-delete a site (set is_active=False).
+
+    Sites are never hard-deleted because they are referenced by deliveries,
+    material requests, job cards, and stock ledger entries.
+    Soft-deleting hides the site from normal lists (include_inactive=False)
+    while preserving all historical data.
+
+    Blocked if the site still has active lots — lots must be deleted or
+    reassigned first.
+    """
+    from app.models.lot import Lot
+    from app.models.enums import LotStatus
+
+    site = site_service.get_site(db, site_id)
+
+    # Prevent deactivation if active lots are attached
+    active_lots = (
+        db.query(Lot)
+        .filter(
+            Lot.site_id == site_id,
+            Lot.status.notin_([LotStatus.COMPLETED]),
+        )
+        .count()
+    )
+    if active_lots > 0:
+        raise HTTPException(
+            409,
+            f"Cannot deactivate site '{site.name}': {active_lots} active lot(s) are "
+            "attached. Complete or delete those lots first.",
+        )
+
+    site.is_active = False
+    db.commit()
+    return ApiSuccess(
+        data={"site_id": str(site_id), "site_name": site.name},
+        message=f"Site '{site.name}' deactivated. It is hidden from lists but data is preserved.",
+    )
+
+
 # ── Bulk create ───────────────────────────────────────────────────────────────
 
 class SiteBulkCreate(BaseModel):

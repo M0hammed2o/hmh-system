@@ -19,6 +19,7 @@ import {
 } from "@/api/procurement";
 import { cn } from "@/lib/utils";
 import client from "@/api/client";
+import { EmailDraftModal } from "@/components/EmailDraftModal";
 
 function timeAgo(iso: string) {
   const m = Math.floor((Date.now() - new Date(iso).getTime()) / 60000);
@@ -160,6 +161,7 @@ function MRDetailModal({ mr, suppliers, onClose, onUpdated }: {
     mr.items.map((i) => ({ description: i.description, quantity: i.requested_quantity, unit: i.unit || "", rate: 0, item_id: i.item_id }))
   );
   const [quotes, setQuotes] = useState<MRQuote[]>([]);
+  const [showMREmail, setShowMREmail] = useState(false);
 
   useEffect(() => { procurementApi.listQuotes(mr.id).then(setQuotes).catch(() => {}); }, [mr.id]);
 
@@ -171,12 +173,20 @@ function MRDetailModal({ mr, suppliers, onClose, onUpdated }: {
   };
 
   const handleConvert = async () => {
+    const supplierName = suppliers.find(s => s.id === convertSupplierId)?.name ?? "the supplier";
+    const confirmed = window.confirm(
+      `Are you sure you want to place this order with ${supplierName}?\n\n` +
+      `This will create a Purchase Order (PO) and notify your team that the order is being placed. ` +
+      `This action cannot be undone without cancelling the PO.`
+    );
+    if (!confirmed) return;
+
     await act(async () => {
       const res = await procurementApi.convertToPO(
         mr.id, convertSupplierId,
         convertItems.map((i) => ({ description: i.description, quantity: i.quantity, unit: i.unit, rate: i.rate, item_id: i.item_id || undefined })),
       );
-      setResult(`PO ${res.po_number} created.`);
+      setResult(`Purchase Order (PO) ${res.po_number} created. Order placed with ${supplierName}.`);
     }, "convert");
     setShowConvert(false);
   };
@@ -185,6 +195,7 @@ function MRDetailModal({ mr, suppliers, onClose, onUpdated }: {
   const canConvert = mr.status === "APPROVED";
 
   return (
+    <>
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-foreground/40">
       <div className="bg-card border border-border rounded-xl w-full max-w-lg max-h-[85vh] overflow-y-auto animate-fade-in">
         <div className="sticky top-0 bg-card border-b border-border px-5 py-4 flex items-center justify-between">
@@ -289,16 +300,22 @@ function MRDetailModal({ mr, suppliers, onClose, onUpdated }: {
           )}
 
           {showConvert && (
-            <div className="bg-muted/30 rounded-lg p-3 space-y-3">
-              <p className="text-xs font-medium text-muted-foreground">Convert to PO</p>
+            <div className="bg-muted/30 rounded-lg p-3 space-y-3 border border-primary/20">
+              <div className="flex items-center gap-2">
+                <ShoppingCart className="w-4 h-4 text-primary" />
+                <p className="text-xs font-semibold">Convert to Purchase Order (PO)</p>
+              </div>
+              <p className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                ⚠ This will place an order with the supplier. Review rates before confirming.
+              </p>
               <div className="space-y-1.5">
-                <Label className="text-xs">Supplier</Label>
+                <Label className="text-xs">Supplier *</Label>
                 <select value={convertSupplierId} onChange={(e) => setConvertSupplierId(e.target.value)} className="h-8 w-full rounded-md border border-input bg-background px-2 text-xs">
                   {suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}{s.email ? ` (${s.email})` : ""}</option>)}
                 </select>
               </div>
               <div className="space-y-1.5">
-                <Label className="text-xs">Rates (R)</Label>
+                <Label className="text-xs">Unit Rates (R excl. VAT)</Label>
                 {convertItems.map((item, i) => (
                   <div key={i} className="grid grid-cols-[1fr_100px] gap-2 items-center">
                     <span className="text-xs bg-muted rounded px-2 py-1 truncate">{item.description} × {item.quantity}</span>
@@ -307,7 +324,9 @@ function MRDetailModal({ mr, suppliers, onClose, onUpdated }: {
                 ))}
               </div>
               <div className="flex gap-2">
-                <Button size="sm" onClick={handleConvert} disabled={loading === "convert"} className="flex-1 h-8 text-xs">{loading === "convert" ? "Creating…" : "Create PO"}</Button>
+                <Button size="sm" onClick={handleConvert} disabled={loading === "convert" || !convertSupplierId} className="flex-1 h-8 text-xs bg-primary">
+                  {loading === "convert" ? "Placing Order…" : "✓ Place Order (Create PO)"}
+                </Button>
                 <Button size="sm" variant="outline" onClick={() => setShowConvert(false)} className="h-8 text-xs">Cancel</Button>
               </div>
             </div>
@@ -321,11 +340,26 @@ function MRDetailModal({ mr, suppliers, onClose, onUpdated }: {
             {["SUBMITTED", "PENDING_APPROVAL", "DRAFT"].includes(mr.status) && !showReject && <Button size="sm" variant="outline" onClick={() => setShowReject(true)} className="h-8 text-xs"><X className="w-3.5 h-3.5 mr-1" />Reject</Button>}
             {showReject && <Button size="sm" variant="destructive" onClick={() => act(() => procurementApi.rejectMR(mr.id, rejectReason), "reject")} disabled={!rejectReason.trim() || loading !== null} className="h-8 text-xs">{loading === "reject" ? "Rejecting…" : "Confirm Reject"}</Button>}
             {mr.status === "DRAFT" && <Button size="sm" variant="outline" onClick={() => act(() => procurementApi.submitMR(mr.id), "submit")} disabled={loading !== null} className="h-8 text-xs">{loading === "submit" ? "Submitting…" : "Submit"}</Button>}
-            {canConvert && !showConvert && <Button size="sm" variant="outline" onClick={() => setShowConvert(true)} className="h-8 text-xs"><ShoppingCart className="w-3.5 h-3.5 mr-1" />Convert to PO</Button>}
+            {canConvert && !showConvert && <Button size="sm" variant="outline" onClick={() => setShowConvert(true)} className="h-8 text-xs"><ShoppingCart className="w-3.5 h-3.5 mr-1" />Convert to Purchase Order (PO)</Button>}
+            {["APPROVED"].includes(mr.status) && (
+              <Button size="sm" variant="outline" onClick={() => setShowMREmail(true)} className="h-8 text-xs">
+                <Mail className="w-3.5 h-3.5 mr-1" />Email Supplier
+              </Button>
+            )}
           </div>
         </div>
       </div>
     </div>
+
+    {/* MR Supplier Enquiry email draft */}
+    <EmailDraftModal
+      open={showMREmail}
+      onClose={() => setShowMREmail(false)}
+      mode="mr"
+      entityId={mr.id}
+      title={`Email Supplier — ${mr.request_number}`}
+    />
+    </>
   );
 }
 
@@ -334,10 +368,33 @@ function MRDetailModal({ mr, suppliers, onClose, onUpdated }: {
 function PODetailModal({ po, onClose, onUpdated }: { po: PurchaseOrder; onClose: () => void; onUpdated: () => void; }) {
   const [loading, setLoading] = useState<string | null>(null);
   const [emailResult, setEmailResult] = useState<{ sent_to: string; status: string; is_mock: boolean } | null>(null);
+  const [showDeliveryCharge, setShowDeliveryCharge] = useState(false);
+  const [deliveryChargeAmt, setDeliveryChargeAmt] = useState("");
   const [emailLog, setEmailLog] = useState<Array<{ sent_to: string; status: string; sent_at: string | null }>>([]);
   const [error, setError] = useState("");
+  // Email draft
+  const [draft, setDraft] = useState<{ exists: boolean; to_email?: string; subject?: string; body_html?: string } | null>(null);
+  const [showDraft, setShowDraft] = useState(false);
+  const [draftSubject, setDraftSubject] = useState("");
+  const [draftTo, setDraftTo] = useState("");
 
   useEffect(() => { procurementApi.getEmailLog(po.id).then(setEmailLog).catch(() => {}); }, [po.id]);
+
+  const handlePrepareDraft = async () => {
+    setLoading("draft"); setError("");
+    try {
+      const res = await client.post<{ data: { to_email: string; subject: string; body_html: string } }>(
+        `/purchase-orders/${po.id}/prepare-email`
+      );
+      const d = res.data.data;
+      setDraft({ exists: true, to_email: d.to_email, subject: d.subject, body_html: d.body_html });
+      setDraftSubject(d.subject);
+      setDraftTo(d.to_email);
+      setShowDraft(true);
+    } catch (e: unknown) {
+      setError((e as { response?: { data?: { detail?: string } } })?.response?.data?.detail ?? "Failed to prepare draft.");
+    } finally { setLoading(null); }
+  };
 
   const handleApprove = async () => {
     setLoading("approve");
@@ -349,6 +406,16 @@ function PODetailModal({ po, onClose, onUpdated }: { po: PurchaseOrder; onClose:
   const handleEmail = async () => {
     setLoading("email"); setError("");
     try { const r = await procurementApi.sendEmail(po.id); setEmailResult(r); onUpdated(); }
+    catch (err: unknown) { setError((err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Failed."); }
+    finally { setLoading(null); }
+  };
+
+  const handleMarkSent = async () => {
+    setLoading("marksent"); setError("");
+    try {
+      await client.post(`/purchase-orders/${po.id}/mark-sent`);
+      onUpdated();
+    }
     catch (err: unknown) { setError((err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Failed."); }
     finally { setLoading(null); }
   };
@@ -383,6 +450,58 @@ function PODetailModal({ po, onClose, onUpdated }: { po: PurchaseOrder; onClose:
             </table>
           </div>
 
+          {/* Delivery charge */}
+          {["APPROVED", "DRAFT", "SUBMITTED"].includes(po.status) && !showDeliveryCharge && (
+            <button
+              className="text-xs text-primary hover:underline"
+              onClick={() => setShowDeliveryCharge(true)}
+            >
+              + Add Supplier Delivery Charge
+            </button>
+          )}
+          {showDeliveryCharge && (
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 space-y-2">
+              <p className="text-xs font-semibold text-blue-800">Add Delivery Charge to PO</p>
+              <div className="flex items-center gap-2">
+                <label className="text-xs text-muted-foreground whitespace-nowrap">Amount (R)</label>
+                <input
+                  type="number" min="0" step="0.01"
+                  value={deliveryChargeAmt}
+                  onChange={e => setDeliveryChargeAmt(e.target.value)}
+                  placeholder="e.g. 350.00"
+                  className="flex-1 h-7 rounded border border-input bg-background px-2 text-xs"
+                />
+                <Button
+                  size="sm"
+                  className="h-7 text-xs"
+                  disabled={!deliveryChargeAmt || loading === "delivery_charge"}
+                  onClick={async () => {
+                    setLoading("delivery_charge"); setError("");
+                    try {
+                      await client.post(`/purchase-orders/${po.id}/items`, {
+                        description:      "Supplier Delivery Charge",
+                        quantity_ordered: 1,
+                        unit:             "service",
+                        rate:             parseFloat(deliveryChargeAmt),
+                      });
+                      setDeliveryChargeAmt("");
+                      setShowDeliveryCharge(false);
+                      onUpdated();
+                    } catch (e: unknown) {
+                      setError((e as { response?: { data?: { detail?: string } } })?.response?.data?.detail ?? "Failed to add charge.");
+                    } finally { setLoading(null); }
+                  }}
+                >
+                  {loading === "delivery_charge" ? "Adding…" : "Add"}
+                </Button>
+                <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setShowDeliveryCharge(false)}>Cancel</Button>
+              </div>
+              <p className="text-[10px] text-blue-600">
+                PO total will update. To reject delivery, use "Prepare Email Draft" and inform the supplier.
+              </p>
+            </div>
+          )}
+
           {emailResult && (
             <div className={cn("rounded-lg p-3 text-sm border", emailResult.status === "sent" ? "bg-green-500/10 border-green-500/30 text-green-600 dark:text-green-400" : "bg-destructive/10 border-destructive/30 text-destructive")}>
               {emailResult.is_mock ? `Mock email stored — SMTP disabled. To: ${emailResult.sent_to}` : `Email sent to ${emailResult.sent_to}`}
@@ -406,12 +525,36 @@ function PODetailModal({ po, onClose, onUpdated }: { po: PurchaseOrder; onClose:
 
           {error && <p className="text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-lg px-3 py-2">{error}</p>}
 
+          {/* PO lifecycle: DRAFT → APPROVED → SENT */}
+          <div className="text-xs text-muted-foreground bg-muted/30 rounded-lg px-3 py-2">
+            Lifecycle: <span className="font-mono text-[10px]">DRAFT → APPROVED → SENT → PARTIALLY_RECEIVED / RECEIVED → MATCHED → PAID</span>
+          </div>
           <div className="flex flex-wrap gap-2">
-            {["DRAFT", "SUBMITTED"].includes(po.status) && <Button size="sm" onClick={handleApprove} disabled={loading === "approve"} className="h-8 text-xs"><Check className="w-3.5 h-3.5 mr-1" />{loading === "approve" ? "Approving…" : "Approve PO"}</Button>}
-            {["APPROVED", "SENT"].includes(po.status) && <Button size="sm" variant="outline" onClick={handleEmail} disabled={loading === "email"} className="h-8 text-xs">{loading === "email" ? <RefreshCw className="w-3.5 h-3.5 mr-1 animate-spin" /> : <Mail className="w-3.5 h-3.5 mr-1" />}{loading === "email" ? "Sending…" : po.sent_at ? "Resend Email" : "Send to Supplier"}</Button>}
+            {["DRAFT", "SUBMITTED"].includes(po.status) && <Button size="sm" onClick={handleApprove} disabled={loading === "approve"} className="h-8 text-xs"><Check className="w-3.5 h-3.5 mr-1" />{loading === "approve" ? "Approving…" : "Approve Purchase Order (PO)"}</Button>}
+            {["APPROVED", "SENT"].includes(po.status) && (
+              <Button size="sm" variant="outline" onClick={() => setShowDraft(true)} className="h-8 text-xs">
+                <Mail className="w-3.5 h-3.5 mr-1" />Email Supplier
+              </Button>
+            )}
+            {["APPROVED"].includes(po.status) && !po.sent_at && (
+              <Button size="sm" variant="outline" onClick={handleMarkSent} disabled={loading === "marksent"} className="h-8 text-xs">
+                <MailCheck className="w-3.5 h-3.5 mr-1" />
+                {loading === "marksent" ? "Marking…" : "Mark as Sent (Manual)"}
+              </Button>
+            )}
+            {po.sent_at && <span className="text-xs text-green-600 flex items-center gap-1"><MailCheck className="w-3.5 h-3.5" />Order Placed — Sent {new Date(po.sent_at).toLocaleDateString()}</span>}
           </div>
         </div>
       </div>
+
+      {/* PO email draft — full compose modal */}
+      <EmailDraftModal
+        open={showDraft}
+        onClose={() => setShowDraft(false)}
+        mode="po"
+        entityId={po.id}
+        title={`Email Supplier — ${po.po_number}`}
+      />
     </div>
   );
 }

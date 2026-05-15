@@ -354,7 +354,17 @@ export default function BOQPage() {
     if (!selectedSiteId) return;
     try {
       const res = await boqApi.generateSiteLotBoqs(selectedSiteId);
-      alert(`Generated ${res.created} BOQ item(s) across ${res.lot_count} lot(s).`);
+      if (res.used_fallback) {
+        // Fallback was used — show a prominent warning, not just a success toast
+        setError(
+          `⚠ ${res.created} BOQ item(s) generated, but ${res.unassigned_lots} lot(s) ` +
+          `had no site assignment and were used as a fallback. ` +
+          `Go to the Lots section and assign those lots to this site to prevent them ` +
+          `being reused when generating for other sites.`
+        );
+      } else {
+        alert(`Generated ${res.created} BOQ item(s) across ${res.lot_count} lot(s).`);
+      }
       loadData();
     } catch (e: unknown) {
       const msg = (e as {response?: {data?: {detail?: string}}})?.response?.data?.detail || "Failed.";

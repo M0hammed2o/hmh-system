@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Plus, Car, Wrench, Fuel, MoreHorizontal } from "lucide-react";
+import { Plus, Car, Wrench, Fuel, MoreHorizontal, Trash2 } from "lucide-react";
 import { vehiclesApi, type Vehicle, type VehicleCost, type VehicleCreate, type VehicleCostCreate, type VehicleType, type VehicleCostType } from "@/api/vehicles";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -222,10 +222,33 @@ export default function VehiclesPage() {
                   <Wrench className="w-3.5 h-3.5" />
                   <span className="hidden sm:inline ml-1">Log Cost</span>
                 </Button>
+                <button
+                  onClick={async (e) => {
+                    e.stopPropagation();
+                    if (!window.confirm(`Delete vehicle "${v.registration}"?\n\nBlocked if it has cost records. Set to RETIRED status instead for vehicles in active use.`)) return;
+                    try {
+                      await vehiclesApi.delete(v.id);
+                      setVehicles(prev => prev.filter(x => x.id !== v.id));
+                    } catch (err: unknown) {
+                      alert((err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ?? "Cannot delete vehicle.");
+                    }
+                  }}
+                  className="p-1.5 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive shrink-0"
+                  title="Delete vehicle"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
               </div>
 
               {expanded === v.id && costs[v.id] && (
                 <div className="border-t border-border px-4 py-3 bg-muted/20 space-y-2">
+                  {/* Cost summary */}
+                  {costs[v.id].length > 0 && (
+                    <div className="flex gap-4 text-xs text-muted-foreground pb-1 border-b border-border/50">
+                      <span>Total cost: <strong className="text-foreground">R{costs[v.id].reduce((s, c) => s + c.amount, 0).toLocaleString()}</strong></span>
+                      <span>Entries: <strong className="text-foreground">{costs[v.id].length}</strong></span>
+                    </div>
+                  )}
                   {costs[v.id].length === 0 ? (
                     <p className="text-xs text-muted-foreground">No costs logged yet.</p>
                   ) : (

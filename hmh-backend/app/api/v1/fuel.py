@@ -8,7 +8,7 @@ Two-router pattern:
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 
 from app.dependencies import ALL_ROLES, CurrentUser, DbSession, OFFICE_AND_ABOVE
 from app.schemas.common import ApiSuccess
@@ -71,3 +71,15 @@ def get_fuel_log(log_id: uuid.UUID, db: DbSession):
 def update_fuel_log(log_id: uuid.UUID, body: FuelLogUpdate, db: DbSession):
     log = fuel_service.update_fuel_log(db, log_id, body)
     return ApiSuccess(data=FuelLogRead.model_validate(log), message="Fuel log updated.")
+
+
+@fuel_router.delete("/{log_id}", response_model=ApiSuccess[dict], dependencies=[OFFICE_AND_ABOVE])
+def delete_fuel_log(log_id: uuid.UUID, db: DbSession):
+    """Hard-delete a fuel log entry."""
+    from app.models.fuel import FuelLog
+    log = db.get(FuelLog, log_id)
+    if not log:
+        raise HTTPException(404, "Fuel log not found.")
+    db.delete(log)
+    db.commit()
+    return ApiSuccess(data={"log_id": str(log_id)}, message="Fuel log deleted.")

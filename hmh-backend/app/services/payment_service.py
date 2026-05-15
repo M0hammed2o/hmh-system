@@ -70,6 +70,42 @@ def create_payment(
         notes=data.notes,
     )
     db.add(payment)
+    db.flush()
+
+    # PO lifecycle: when a payment is recorded against an invoice, advance PO to PAID
+    # if the full invoice amount is now covered.
+    if data.invoice_id:
+        try:
+            from app.models.invoice import Invoice
+            from app.models.purchase_order import PurchaseOrder
+            from app.models.enums import RecordStatus
+            from sqlalchemy import func
+            inv = db.get(Invoice, data.invoice_id)
+            if inv and inv.purchase_order_id:
+                total_paid = float(
+                    db.query(func.coalesce(func.sum(Payment.amount_paid), 0))
+                    .filter(Payment.invoice_id == data.invoice_id)
+                    .scalar() or 0
+                ) + float(data.amount_paid)
+                if total_paid >= float(inv.total_amount or 0):
+                    po = db.get(PurchaseOrder, inv.purchase_order_id)
+                    if po and po.status in (RecordStatus.MATCHED, RecordStatus.APPROVED):
+                        po.status = RecordStatus.PAID
+                    inv.status = RecordStatus.PAID
+        except Exception:
+            pass  # never block payment creation
+
+    from app.services import audit_service
+    from app.models.enums import AuditAction
+    audit_service.write_event(
+        db, AuditAction.CREATE, "payment", captured_by_id, payment.id,
+        after_value={
+            "payment_type":      data.payment_type.value if hasattr(data.payment_type, "value") else str(data.payment_type),
+            "amount_paid":       float(data.amount_paid),
+            "payment_reference": data.payment_reference,
+        },
+    )
+
     db.commit()
     db.refresh(payment)
     return payment

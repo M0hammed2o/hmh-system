@@ -219,6 +219,17 @@ def create_delivery(
         ))
 
     db.commit()
+
+    # Refresh stock balances view so StockPage shows up-to-date data
+    import os as _os
+    _in_test = bool(_os.getenv("PYTEST_CURRENT_TEST")) or _os.getenv("APP_ENV", "").lower() == "test"
+    if not _in_test:
+        try:
+            db.execute(text("REFRESH MATERIALIZED VIEW CONCURRENTLY stock_balances"))
+            db.commit()
+        except Exception:
+            db.rollback()
+
     return _get_delivery_or_404(db, delivery.id)
 
 
@@ -340,11 +351,14 @@ def receive_stock(
     delivery_id_saved = delivery.id
     db.commit()
 
-    try:
-        db.execute(text("REFRESH MATERIALIZED VIEW CONCURRENTLY stock_balances"))
-        db.commit()
-    except Exception:
-        pass  # view may not exist — never rollback here
+    import os as _os
+    _in_test = bool(_os.getenv("PYTEST_CURRENT_TEST")) or _os.getenv("APP_ENV", "").lower() == "test"
+    if not _in_test:
+        try:
+            db.execute(text("REFRESH MATERIALIZED VIEW CONCURRENTLY stock_balances"))
+            db.commit()
+        except Exception:
+            db.rollback()  # reset PostgreSQL aborted-transaction state; view may not exist everywhere
 
     reloaded = db.get(Delivery, delivery_id_saved)
     return reloaded if reloaded is not None else delivery

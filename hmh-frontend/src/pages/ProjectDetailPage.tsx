@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import {
   ArrowLeft, Plus, MapPin, Calendar, Building2, Pencil, Layers, Wand2,
-  FileSpreadsheet, ChevronRight, Copy,
+  FileSpreadsheet, ChevronRight, Copy, Trash2,
 } from "lucide-react";
 import { SitesBulkCreateModal } from "@/components/SitesBulkCreateModal";
 import { LotsGeneratorModal } from "@/components/LotsGeneratorModal";
@@ -559,6 +559,10 @@ export default function ProjectDetailPage() {
   const [showAddLot, setShowAddLot] = useState(false);
   const [showGenerateLots, setShowGenerateLots] = useState(false);
   const [showApplyBOQ, setShowApplyBOQ] = useState(false);
+  // Unassigned lots admin helper
+  const [assigningSiteId, setAssigningSiteId] = useState("");
+  const [assigningLots, setAssigningLots] = useState(false);
+  const [assignMsg, setAssignMsg] = useState("");
 
   // Stage update state
   const [updatingStage, setUpdatingStage] = useState<string | null>(null); // stage master id
@@ -847,13 +851,39 @@ export default function ProjectDetailPage() {
                         </Badge>
                       </td>
                       <td className="px-4 py-3">
-                        <button
-                          onClick={() => setEditingSite(site)}
-                          className="p-1.5 rounded-md hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
-                          title="Edit site"
-                        >
-                          <Pencil className="w-3.5 h-3.5" />
-                        </button>
+                        <div className="flex items-center gap-1">
+                          <button
+                            onClick={() => setEditingSite(site)}
+                            className="p-1.5 rounded-md hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
+                            title="Edit site"
+                          >
+                            <Pencil className="w-3.5 h-3.5" />
+                          </button>
+                          {site.is_active && (
+                            <button
+                              onClick={async () => {
+                                if (!window.confirm(
+                                  `Deactivate site "${site.name}"?\n\n` +
+                                  `The site will be hidden from all lists. All historical data ` +
+                                  `(deliveries, stock, BOQ) is preserved.\n\n` +
+                                  `This can be undone by editing the site and setting it back to Active.`
+                                )) return;
+                                try {
+                                  await sitesApi.delete(site.id);
+                                  setSites(prev => prev.filter(s => s.id !== site.id));
+                                } catch (err: unknown) {
+                                  const msg = (err as { response?: { data?: { detail?: string } } })
+                                    ?.response?.data?.detail ?? "Cannot delete site.";
+                                  alert(`⚠ ${msg}`);
+                                }
+                              }}
+                              className="p-1.5 rounded-md hover:bg-destructive/10 transition-colors text-muted-foreground hover:text-destructive"
+                              title="Deactivate site (soft delete)"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -886,6 +916,58 @@ export default function ProjectDetailPage() {
               </Button>
             </div>
           </div>
+
+          {/* Unassigned lots admin banner — only shown when unassigned lots exist */}
+          {!lotsLoading && lots.some(l => !l.site_id) && sites.length > 0 && (
+            <div className="bg-amber-50 border border-amber-300 rounded-xl p-4 space-y-3">
+              <div>
+                <p className="text-sm font-semibold text-amber-800">
+                  ⚠ {lots.filter(l => !l.site_id).length} lot{lots.filter(l => !l.site_id).length !== 1 ? "s" : ""} have no site assignment
+                </p>
+                <p className="text-xs text-amber-700 mt-0.5">
+                  Lots without a site break BOQ generation — they may be incorrectly assigned to all sites.
+                  Assign them to the correct site below.
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <select
+                  value={assigningSiteId}
+                  onChange={e => { setAssigningSiteId(e.target.value); setAssignMsg(""); }}
+                  className="h-8 rounded-md border border-amber-300 bg-white px-2 text-xs min-w-[180px]"
+                >
+                  <option value="">— Select site to assign to —</option>
+                  {sites.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                </select>
+                <button
+                  disabled={!assigningSiteId || assigningLots}
+                  onClick={async () => {
+                    if (!assigningSiteId || !projectId) return;
+                    setAssigningLots(true);
+                    try {
+                      const unassignedIds = lots.filter(l => !l.site_id).map(l => l.id);
+                      const res = await import("@/api/client").then(m =>
+                        m.default.patch<{ data: { updated: number; skipped: number }; message: string }>(
+                          `/projects/${projectId}/lots/assign-site`,
+                          { site_id: assigningSiteId, lot_ids: unassignedIds },
+                        )
+                      );
+                      setAssignMsg(res.data.message);
+                      // Reload lots
+                      const updated = await import("@/api/lots").then(m => m.lotsApi.list(projectId));
+                      setLots(updated);
+                    } catch { setAssignMsg("Failed to assign lots. Try again."); }
+                    finally { setAssigningLots(false); }
+                  }}
+                  className="text-xs px-3 py-1.5 rounded-md bg-amber-600 text-white disabled:opacity-50 hover:bg-amber-700"
+                >
+                  {assigningLots ? "Assigning…" : "Assign unassigned lots to this site"}
+                </button>
+              </div>
+              {assignMsg && (
+                <p className="text-xs font-medium text-amber-900">{assignMsg}</p>
+              )}
+            </div>
+          )}
 
           <div className="bg-card border border-border rounded-xl overflow-hidden">
             {lotsLoading ? (
@@ -920,16 +1002,17 @@ export default function ProjectDetailPage() {
                     <tr
                       key={lot.id}
                       onClick={() => navigate(`/lots/${lot.id}`)}
-                      className="border-b border-border last:border-0 hover:bg-muted/30 transition-colors cursor-pointer"
+                      className="border-b border-border last:border-0 hover:bg-muted/30 transition-colors cursor-pointer group"
                     >
                       <td className="px-4 py-3 font-medium font-mono">{lot.lot_number}</td>
                       <td className="px-4 py-3 text-muted-foreground hidden sm:table-cell">
                         {lot.unit_type ?? "—"}
                       </td>
-                      <td className="px-4 py-3 text-muted-foreground text-xs hidden md:table-cell">
+                      <td className="px-4 py-3 text-xs hidden md:table-cell">
                         {lot.site_id
-                          ? sites.find((s) => s.id === lot.site_id)?.name ?? lot.site_id.slice(0, 8)
-                          : "—"}
+                          ? <span className="text-muted-foreground">{sites.find((s) => s.id === lot.site_id)?.name ?? lot.site_id.slice(0, 8)}</span>
+                          : <span className="text-amber-600 font-medium">⚠ No site</span>
+                        }
                       </td>
                       <td className="px-4 py-3">
                         <Badge variant={lotStatusVariant[lot.status]}>
@@ -943,8 +1026,39 @@ export default function ProjectDetailPage() {
                           <span className="text-xs text-muted-foreground">—</span>
                         )}
                       </td>
-                      <td className="px-2 py-3">
-                        <ChevronRight className="w-4 h-4 text-muted-foreground" />
+                      <td className="px-2 py-3 text-right">
+                        <div className="flex items-center justify-end gap-1">
+                          <ChevronRight className="w-4 h-4 text-muted-foreground" />
+                          <button
+                            onClick={async (e) => {
+                              e.stopPropagation();
+                              const hasStock = lot.status !== "AVAILABLE";
+                              const confirmMsg = hasStock
+                                ? `Delete lot ${lot.lot_number}?\n\n` +
+                                  `Status: ${lot.status}. BOQ items linked to this lot will become ` +
+                                  `unlinked (lot_id cleared). Stock ledger entries and usage logs ` +
+                                  `will block deletion — you will see an error if they exist.\n\n` +
+                                  `This action cannot be undone.`
+                                : `Delete lot ${lot.lot_number}?\n\nThis cannot be undone.`;
+                              if (!window.confirm(confirmMsg)) return;
+                              try {
+                                const res = await lotsApi.delete(lot.id);
+                                setLots(prev => prev.filter(l => l.id !== lot.id));
+                                if (res.boq_items_unlinked > 0) {
+                                  alert(`Lot ${res.deleted_lot_number} deleted. ${res.boq_items_unlinked} BOQ item(s) were unlinked.`);
+                                }
+                              } catch (err: unknown) {
+                                const msg = (err as { response?: { data?: { detail?: string } } })
+                                  ?.response?.data?.detail ?? "Cannot delete lot.";
+                                alert(`⚠ ${msg}`);
+                              }
+                            }}
+                            className="p-1.5 rounded-md hover:bg-destructive/10 transition-colors text-muted-foreground hover:text-destructive opacity-0 group-hover:opacity-100"
+                            title="Delete lot"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}

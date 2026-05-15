@@ -89,4 +89,8 @@ export const vehiclesApi = {
     const res = await client.get<{ data: VehicleCost[] }>(`/vehicles/${vehicleId}/costs`);
     return res.data.data;
   },
+
+  delete: async (vehicleId: string): Promise<void> => {
+    await client.delete(`/vehicles/${vehicleId}`);
+  },
 };

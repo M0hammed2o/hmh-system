@@ -15,6 +15,7 @@ class FuelLogRead(BaseModel):
     id: uuid.UUID
     project_id: uuid.UUID
     site_id: Optional[uuid.UUID] = None
+    vehicle_id: Optional[uuid.UUID] = None   # added in 0002
     fuel_type: FuelType
     usage_type: FuelUsageType
     equipment_ref: Optional[str] = None
@@ -33,6 +34,7 @@ class FuelLogCreate(BaseModel):
     fuel_type: FuelType = FuelType.DIESEL
     usage_type: FuelUsageType = FuelUsageType.EQUIPMENT
     equipment_ref: Optional[str] = None
+    vehicle_id: Optional[uuid.UUID] = None   # optional FK to vehicles table
     litres: float
     cost_per_litre: Optional[float] = None
     fuelled_by: Optional[str] = None

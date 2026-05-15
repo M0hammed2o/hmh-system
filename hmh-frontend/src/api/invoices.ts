@@ -43,9 +43,35 @@ export interface InvoiceUpdate {
   notes?: string | null;
 }
 
+export interface EnrichedInvoice {
+  invoice_id:         string;
+  invoice_number:     string;
+  supplier_id:        string | null;
+  supplier_name:      string | null;
+  purchase_order_id:  string | null;
+  po_number:          string | null;
+  invoice_date:       string | null;
+  due_date:           string | null;
+  total_amount:       number;
+  paid_amount:        number;
+  outstanding_amount: number;
+  status:             string;
+  match_status:       string;
+  is_overdue:         boolean;
+  notes:              string | null;
+  captured_at:        string | null;
+}
+
 export const invoicesApi = {
   list: async (projectId: string): Promise<Invoice[]> => {
     const res = await client.get<{ data: Invoice[] }>(`/projects/${projectId}/invoices/`);
+    return res.data.data;
+  },
+
+  listEnriched: async (projectId: string): Promise<EnrichedInvoice[]> => {
+    const res = await client.get<{ data: EnrichedInvoice[] }>(
+      `/projects/${projectId}/invoices/enriched`
+    );
     return res.data.data;
   },
 

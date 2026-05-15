@@ -53,4 +53,9 @@ export const sitesApi = {
     const res = await client.patch<{ data: Site }>(`/sites/${siteId}`, body);
     return res.data.data;
   },
+
+  delete: async (siteId: string): Promise<{ site_name: string }> => {
+    const res = await client.delete<{ data: { site_name: string } }>(`/sites/${siteId}`);
+    return res.data.data;
+  },
 };

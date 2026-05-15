@@ -392,6 +392,8 @@ export default function AlertsPage() {
   const [summaryResult, setSummaryResult] = useState<{ summary_text: string; queued: number; send_counts: Record<string, number> } | null>(null);
   const [generatingSummary, setGeneratingSummary] = useState(false);
   const [processingQueue, setProcessingQueue] = useState(false);
+  const [scanning, setScanning] = useState(false);
+  const [scanResult, setScanResult] = useState<{ alerts_created: number } | null>(null);
 
   const loadAll = useCallback(async (quiet = false) => {
     if (!quiet) setLoading(true);
@@ -425,6 +427,17 @@ export default function AlertsPage() {
   const handleResolve = async (id: string) => {
     await alertsApi.resolve(id);
     loadAll(true);
+  };
+
+  const handleScan = async () => {
+    setScanning(true); setScanResult(null);
+    try {
+      const res = await import("@/api/client").then(m =>
+        m.default.post<{ data: { alerts_created: number } }>("/alerts/scan")
+      );
+      setScanResult(res.data.data);
+      loadAll(true);
+    } finally { setScanning(false); }
   };
 
   const handleDailySummary = async () => {
@@ -467,12 +480,20 @@ export default function AlertsPage() {
           <Button size="sm" variant="outline" onClick={() => loadAll(true)} disabled={refreshing}>
             <RefreshCw className={cn("w-4 h-4", refreshing && "animate-spin")} />
           </Button>
+          <Button size="sm" variant="outline" onClick={handleScan} disabled={scanning} title="Scan for low stock, overdue invoices, pending MRs">
+            {scanning ? <RefreshCw className="w-4 h-4 animate-spin" /> : "Scan Alerts"}
+          </Button>
           <Button size="sm" variant="outline" onClick={handleDailySummary} disabled={generatingSummary} className="hidden sm:flex">
             <FileText className="w-4 h-4 mr-1" />
             {generatingSummary ? "Generating…" : "Daily Summary"}
           </Button>
         </div>
       </div>
+      {scanResult && (
+        <div className="bg-green-500/10 border border-green-500/30 rounded-xl px-4 py-3 text-sm text-green-700 dark:text-green-400">
+          Scan complete — {scanResult.alerts_created} new alert{scanResult.alerts_created !== 1 ? "s" : ""} created.
+        </div>
+      )}
 
       {/* Stats row */}
       {loading ? (

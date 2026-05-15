@@ -50,9 +50,14 @@ export function LotsGeneratorModal({ projectId, onClose, onGenerated }: Props) {
   const endNum = parseInt(end) || 1;
   const count = Math.max(0, endNum - startNum + 1);
 
+  // Site is required when the project has sites — prevents creating unassigned lots
+  // that break BOQ generation and mix Site 2/3/4 lot pools.
+  const siteRequired = sites.length > 0;
+  const canSubmit    = count >= 1 && count <= 500 && (!siteRequired || !!siteId);
+
   const handleGenerate = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (count < 1 || count > 500) return;
+    if (!canSubmit) return;
     setLoading(true);
     setError("");
     try {
@@ -126,17 +131,33 @@ export function LotsGeneratorModal({ projectId, onClose, onGenerated }: Props) {
               </div>
             )}
 
-            {/* Site */}
+            {/* Site — required when the project has sites */}
             <div className="space-y-2">
-              <Label>Assign to Site (optional)</Label>
+              <Label>
+                Assign to Site
+                {siteRequired && <span className="text-destructive ml-1">*</span>}
+              </Label>
               <select
                 value={siteId}
                 onChange={(e) => setSiteId(e.target.value)}
-                className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                required={siteRequired}
+                className={`h-10 w-full rounded-md border bg-background px-3 text-sm ${
+                  siteRequired && !siteId ? "border-destructive" : "border-input"
+                }`}
               >
-                <option value="">— No site —</option>
+                <option value="">— Select a site —</option>
                 {sites.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
               </select>
+              {siteRequired && !siteId ? (
+                <p className="text-xs text-destructive">
+                  Site is required. Lots without a site cannot be used for BOQ generation
+                  and will corrupt the lot pool for all sites.
+                </p>
+              ) : !siteId ? (
+                <p className="text-xs text-muted-foreground">
+                  No sites found — lots will be created at project level only.
+                </p>
+              ) : null}
             </div>
 
             {/* Unit type */}
@@ -174,7 +195,7 @@ export function LotsGeneratorModal({ projectId, onClose, onGenerated }: Props) {
             {error && <p className="text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-lg px-3 py-2">{error}</p>}
 
             <div className="flex gap-2 pt-1">
-              <Button type="submit" disabled={loading || count < 1 || count > 500} className="flex-1">
+              <Button type="submit" disabled={loading || !canSubmit} className="flex-1">
                 {loading ? "Generating…" : `Generate ${count} Lot${count !== 1 ? "s" : ""}`}
               </Button>
               <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>

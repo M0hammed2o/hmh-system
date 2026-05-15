@@ -50,4 +50,11 @@ export const lotsApi = {
     const res = await client.patch<{ data: Lot }>(`/lots/${lotId}`, body);
     return res.data.data;
   },
+
+  delete: async (lotId: string): Promise<{ deleted_lot_number: string; boq_items_unlinked: number }> => {
+    const res = await client.delete<{ data: { deleted_lot_number: string; boq_items_unlinked: number } }>(
+      `/lots/${lotId}`
+    );
+    return res.data.data;
+  },
 };

@@ -157,6 +157,146 @@ def update_boq_item(item_id: uuid.UUID, body: BOQItemUpdate, db: DbSession):
     return ApiSuccess(data=BOQItemRead.model_validate(item), message="BOQ item updated.")
 
 
+@boq_item_router.post(
+    "/{item_id}/apply-to-all-site-lots",
+    response_model=ApiSuccess[dict],
+    dependencies=[OFFICE_AND_ABOVE],
+)
+def apply_item_to_all_site_lots(item_id: uuid.UUID, body: BOQItemUpdate, db: DbSession):
+    """
+    Update this BOQ item and propagate the same changes to all lot-specific copies
+    of this item within the same site.
+
+    Peer matching key: raw_description + unit + item_type
+    We intentionally do NOT filter by boq_section_id because lots generated via
+    different BOQ headers (site-specific vs project-level fallback) have different
+    section UUIDs even if structurally identical.
+
+    Lot scope resolution:
+    1. Lots with site_id == effective_site_id  (preferred — properly assigned)
+    2. If that yields ≤1 lot, also include lots with site_id IS NULL in the same
+       project (common when lots were created before the site-assignment fix).
+
+    Returns the number of peer items updated and the number of distinct lots affected.
+    """
+    from app.models.boq import BOQItem as _BI
+    from app.models.lot import Lot
+
+    # Apply to the source item first
+    updated = boq_service.update_item(db, item_id, body)
+
+    # ── Resolve source lot and project ────────────────────────────────────────
+    source_lot: Lot | None = None
+    if updated.lot_id:
+        source_lot = db.get(Lot, updated.lot_id)
+
+    effective_site_id = updated.site_id or (source_lot.site_id if source_lot else None)
+    project_id        = updated.project_id
+
+    if not project_id:
+        return ApiSuccess(
+            data={"updated": 1, "lots_affected": 0, "warning": "No project context found."},
+            message="Item updated. Cannot propagate without project context.",
+        )
+
+    # ── Build candidate lot ID pool ───────────────────────────────────────────
+    # Start with lots that are properly assigned to the same site.
+    site_lot_ids: list = []
+    if effective_site_id:
+        site_lot_ids = [
+            row[0] for row in (
+                db.query(Lot.id)
+                .filter(Lot.site_id == effective_site_id, Lot.project_id == project_id)
+                .all()
+            )
+        ]
+
+    # If we found ≤1 lot (just the source lot or none), the other lots are likely
+    # still unassigned (site_id=NULL).  Include them so the user's edit propagates.
+    used_unassigned_fallback = False
+    if len(site_lot_ids) <= 1:
+        extra = [
+            row[0] for row in (
+                db.query(Lot.id)
+                .filter(Lot.project_id == project_id, Lot.site_id.is_(None))
+                .all()
+            )
+        ]
+        if extra:
+            # Merge, deduplicate, keep order stable
+            combined = list(dict.fromkeys(site_lot_ids + extra))
+            site_lot_ids = combined
+            used_unassigned_fallback = True
+
+    if len(site_lot_ids) <= 1:
+        # Only the source lot — nothing else to propagate to
+        return ApiSuccess(
+            data={"updated": 1, "lots_affected": 0,
+                  "warning": "No other lots found for this site. Assign lots to a site first."},
+            message="Item updated. No other lots found in this site to propagate to.",
+        )
+
+    # ── Find peers: same content (description + unit + item_type), any site lot ─
+    # Exclude the source item and exclude site-level items (lot_id IS NULL).
+    desc      = updated.raw_description
+    unit      = updated.unit
+    item_type = updated.item_type
+
+    peer_q = (
+        db.query(_BI)
+        .filter(
+            _BI.lot_id.in_(site_lot_ids),
+            _BI.raw_description == desc,
+            _BI.is_active == True,
+            _BI.id != item_id,
+        )
+    )
+    # Add unit/item_type filters only when they are set, to avoid missing
+    # items that have NULL unit (treat NULL == NULL as a match).
+    if unit is not None:
+        peer_q = peer_q.filter(_BI.unit == unit)
+    if item_type is not None:
+        peer_q = peer_q.filter(_BI.item_type == item_type)
+
+    peers = peer_q.all()
+
+    if not peers:
+        reason = (
+            f"No items matching description='{desc}', unit='{unit}', "
+            f"type='{item_type.value if hasattr(item_type,'value') else item_type}' "
+            f"were found in {len(site_lot_ids)} lot(s)."
+        )
+        if used_unassigned_fallback:
+            reason += " (Lots are unassigned — assign lots to a site to enable site-scoped propagation.)"
+        return ApiSuccess(
+            data={"updated": 1, "lots_affected": 0, "warning": reason},
+            message=f"Item updated. {reason}",
+        )
+
+    affected_lot_ids = {str(p.lot_id) for p in peers}
+    for peer in peers:
+        boq_service.update_item(db, peer.id, body)
+
+    db.commit()
+
+    warning = (
+        "Some lots are still unassigned. Assign them to a site to restrict "
+        "propagation to the correct site only."
+    ) if used_unassigned_fallback else None
+
+    return ApiSuccess(
+        data={
+            "updated":      len(peers) + 1,
+            "lots_affected": len(affected_lot_ids),
+            "warning":       warning,
+        },
+        message=(
+            f"Applied to {len(peers) + 1} item(s) across {len(affected_lot_ids)} lot(s)."
+            + (f" Warning: {warning}" if warning else "")
+        ),
+    )
+
+
 @boq_item_router.delete(
     "/{item_id}",
     response_model=ApiSuccess[None],
@@ -388,6 +528,11 @@ def generate_site_lot_boqs(site_id: uuid.UUID, db: DbSession):
     """
     Find the site's BOQ header and generate lot-specific BOQ items
     for every lot attached to this site.
+
+    Search order for site-level BOQ items (lot_id IS NULL):
+    1. Items where site_id == site_id  (site-specific BOQ)
+    2. Items where project_id == site.project_id AND site_id IS NULL (project-level template)
+    This ensures sites 2-4 work even when the BOQ was built at project level.
     """
     from fastapi import HTTPException
     from app.models.site import Site
@@ -398,6 +543,7 @@ def generate_site_lot_boqs(site_id: uuid.UUID, db: DbSession):
     if not site:
         raise HTTPException(404, "Site not found.")
 
+    # ── 1. Try site-specific items first ─────────────────────────────────────
     section_ids = [
         row[0] for row in (
             db.query(_BI.boq_section_id)
@@ -406,24 +552,98 @@ def generate_site_lot_boqs(site_id: uuid.UUID, db: DbSession):
             .all()
         )
     ]
+
+    # ── 2. Fall back to project-level (site_id IS NULL) ───────────────────────
     if not section_ids:
-        raise HTTPException(400, "No site-level BOQ found. Create a site BOQ first.")
+        section_ids = [
+            row[0] for row in (
+                db.query(_BI.boq_section_id)
+                .filter(
+                    _BI.project_id == site.project_id,
+                    _BI.site_id.is_(None),
+                    _BI.lot_id.is_(None),
+                    _BI.is_active == True,
+                )
+                .distinct()
+                .all()
+            )
+        ]
+
+    if not section_ids:
+        raise HTTPException(
+            400,
+            "No site-level BOQ found for this site or its project. "
+            "Create a site BOQ first (or ensure the project-level BOQ has items with lot_id=NULL).",
+        )
 
     header_row = db.query(_BS.boq_header_id).filter(_BS.id.in_(section_ids)).first()
     if not header_row:
         raise HTTPException(400, "Could not resolve a BOQ header for this site.")
 
-    lot_ids = [
+    site_lots = [
         row[0] for row in (
             db.query(Lot.id)
             .filter(Lot.site_id == site_id, Lot.project_id == site.project_id)
             .all()
         )
     ]
+
+    # ── Fallback: use unassigned lots (site_id IS NULL) ───────────────────────
+    # This is a safety net for projects created before site assignment was enforced.
+    # It is intentionally restricted to NULL-site lots only — it does NOT pull lots
+    # assigned to other sites, so Site 2/3/4 pools cannot contaminate each other.
+    used_fallback = False
+    unassigned_lot_ids: list[uuid.UUID] = []
+
+    if site_lots:
+        lot_ids = site_lots
+    else:
+        unassigned_lot_ids = [
+            row[0] for row in (
+                db.query(Lot.id)
+                .filter(Lot.project_id == site.project_id, Lot.site_id.is_(None))
+                .all()
+            )
+        ]
+        if unassigned_lot_ids:
+            lot_ids       = unassigned_lot_ids
+            used_fallback = True
+            print(
+                f"[BOQ][WARNING] Site {site_id} has no lots with matching site_id. "
+                f"Falling back to {len(unassigned_lot_ids)} unassigned project lot(s). "
+                "Fix this by assigning those lots to a site via PATCH /lots/assign-site.",
+                flush=True,
+            )
+        else:
+            lot_ids = []
+
+    if not lot_ids:
+        raise HTTPException(
+            400,
+            "No lots found for this site. Create lots using the Lots Generator and select "
+            "this site, or assign existing lots to this site before generating.",
+        )
+
     count = boq_service.generate_lot_boqs(db, header_row[0], lot_ids)
+
+    warning = (
+        f"Warning: {len(unassigned_lot_ids)} lot(s) had no site assignment. "
+        "They were used as a fallback and BOQ items were generated for them. "
+        "Assign these lots to the correct site to prevent them being re-used by other sites."
+    ) if used_fallback else None
+
     return ApiSuccess(
-        data={"created": count, "lot_count": len(lot_ids)},
-        message=f"{count} BOQ item(s) generated across {len(lot_ids)} lot(s).",
+        data={
+            "created":         count,
+            "lot_count":       len(lot_ids),
+            "used_fallback":   used_fallback,
+            "unassigned_lots": len(unassigned_lot_ids) if used_fallback else 0,
+            "warning":         warning,
+        },
+        message=(
+            warning if warning
+            else f"{count} BOQ item(s) generated across {len(lot_ids)} lot(s)."
+        ),
     )
 
 

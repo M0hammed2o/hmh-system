@@ -29,6 +29,74 @@ def list_invoices(project_id: uuid.UUID, db: DbSession):
     return ApiSuccess(data=[InvoiceRead.model_validate(i) for i in invoices])
 
 
+@project_invoice_router.get(
+    "/enriched",
+    response_model=ApiSuccess[list[dict]],
+    dependencies=[ALL_ROLES],
+)
+def list_invoices_enriched(project_id: uuid.UUID, db: DbSession):
+    """
+    Enriched invoice list for the Payments page.
+    Returns supplier name, PO number, match status, outstanding amount,
+    overdue flag — everything needed for the Invoices tab and Outstanding view.
+    """
+    from datetime import date
+    from sqlalchemy import func
+    from app.models.invoice import Invoice, InvoiceMatchingResult
+    from app.models.purchase_order import PurchaseOrder
+    from app.models.supplier import Supplier
+    from app.models.payment import Payment
+    from app.models.enums import PaymentStatus
+
+    invoices = (
+        db.query(Invoice)
+        .filter(Invoice.project_id == project_id)
+        .order_by(Invoice.captured_at.desc())
+        .all()
+    )
+
+    today = date.today()
+    result = []
+    for inv in invoices:
+        supplier = db.get(Supplier, inv.supplier_id) if inv.supplier_id else None
+        po       = db.get(PurchaseOrder, inv.purchase_order_id) if inv.purchase_order_id else None
+
+        match = (
+            db.query(InvoiceMatchingResult)
+            .filter(InvoiceMatchingResult.invoice_id == inv.id)
+            .first()
+        )
+
+        paid_total = float(
+            db.query(func.coalesce(func.sum(Payment.amount_paid), 0))
+            .filter(Payment.invoice_id == inv.id, Payment.status == PaymentStatus.PAID)
+            .scalar() or 0
+        )
+        outstanding = max(0.0, float(inv.total_amount or 0) - paid_total)
+        is_overdue  = inv.due_date is not None and inv.due_date < today
+
+        result.append({
+            "invoice_id":         str(inv.id),
+            "invoice_number":     inv.invoice_number,
+            "supplier_id":        str(inv.supplier_id)         if inv.supplier_id         else None,
+            "supplier_name":      supplier.name                if supplier                else None,
+            "purchase_order_id":  str(inv.purchase_order_id)  if inv.purchase_order_id   else None,
+            "po_number":          po.po_number                 if po                      else None,
+            "invoice_date":       inv.invoice_date.isoformat() if inv.invoice_date        else None,
+            "due_date":           inv.due_date.isoformat()     if inv.due_date            else None,
+            "total_amount":       float(inv.total_amount or 0),
+            "paid_amount":        paid_total,
+            "outstanding_amount": outstanding,
+            "status":             inv.status.value,
+            "match_status":       match.match_status.value     if match                   else "UNLINKED",
+            "is_overdue":         is_overdue,
+            "notes":              inv.notes,
+            "captured_at":        inv.captured_at.isoformat()  if inv.captured_at         else None,
+        })
+
+    return ApiSuccess(data=result)
+
+
 @project_invoice_router.post(
     "/",
     response_model=ApiSuccess[InvoiceRead],
@@ -256,9 +324,14 @@ def get_invoice_proof(invoice_id: uuid.UUID, db: DbSession):
     dependencies=[OFFICE_AND_ABOVE],
 )
 def approve_for_payment(invoice_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
-    from app.models.enums import RecordStatus
+    from app.models.enums import RecordStatus, AuditAction
+    from app.services import audit_service
     invoice = invoice_service.get_invoice(db, invoice_id)
     invoice.status = RecordStatus.APPROVED
+    audit_service.write_event(
+        db, AuditAction.APPROVE, "invoice", current_user.id, invoice_id,
+        after_value={"status": "APPROVED", "invoice_number": invoice.invoice_number},
+    )
     db.commit()
     db.refresh(invoice)
     return ApiSuccess(data=InvoiceRead.model_validate(invoice), message="Approved for payment.")
@@ -342,10 +415,18 @@ def manual_match_invoice(
     # Update invoice status when matched
     if ms in (InvoiceMatchStatus.MATCHED, InvoiceMatchStatus.APPROVED_FOR_PAYMENT):
         from app.models.enums import RecordStatus
+        from app.models.purchase_order import PurchaseOrder
         if invoice.status not in (
             RecordStatus.MATCHED, RecordStatus.APPROVED, RecordStatus.PAID
         ):
             invoice.status = RecordStatus.MATCHED
+
+        # PO lifecycle: when invoice is MATCHED, advance PO to MATCHED
+        po_id = match.purchase_order_id or invoice.purchase_order_id
+        if po_id:
+            po = db.get(PurchaseOrder, po_id)
+            if po and po.status in (RecordStatus.RECEIVED, RecordStatus.PARTIALLY_RECEIVED):
+                po.status = RecordStatus.MATCHED
 
     db.commit()
     db.refresh(match)

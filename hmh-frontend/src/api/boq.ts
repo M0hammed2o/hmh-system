@@ -292,6 +292,17 @@ export const boqApi = {
     return res.data.data;
   },
 
+  applyItemToAllSiteLots: async (
+    itemId: string,
+    body: BOQItemUpdate,
+  ): Promise<{ updated: number; lots_affected: number; warning: string | null }> => {
+    const res = await client.post<{ data: { updated: number; lots_affected: number; warning: string | null } }>(
+      `/boq/items/${itemId}/apply-to-all-site-lots`,
+      body,
+    );
+    return res.data.data;
+  },
+
   deleteItem: async (itemId: string): Promise<void> => {
     await client.delete(`/boq/items/${itemId}`);
   },
@@ -345,8 +356,17 @@ export const boqApi = {
     return res.data.data;
   },
 
-  generateSiteLotBoqs: async (siteId: string): Promise<{ created: number; lot_count: number }> => {
-    const res = await client.post<{ data: { created: number; lot_count: number } }>(
+  generateSiteLotBoqs: async (siteId: string): Promise<{
+    created: number;
+    lot_count: number;
+    used_fallback: boolean;
+    unassigned_lots: number;
+    warning: string | null;
+  }> => {
+    const res = await client.post<{ data: {
+      created: number; lot_count: number;
+      used_fallback: boolean; unassigned_lots: number; warning: string | null;
+    } }>(
       `/boq/items/sites/${siteId}/generate-lot-boqs`,
     );
     return res.data.data;

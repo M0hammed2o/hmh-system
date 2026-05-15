@@ -39,6 +39,13 @@ class FuelLog(TimestampMixin, Base):
         nullable=True,
         index=True,
     )
+    # Added in migration 0002 — links fuel log to a specific vehicle record
+    vehicle_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("vehicles.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
 
     # ── Fuel detail ──────────────────────────────────────────────────────────
     fuel_type: Mapped[FuelType] = mapped_column(

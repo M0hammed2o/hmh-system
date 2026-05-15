@@ -3,7 +3,7 @@
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 
 from app.dependencies import ALL_ROLES, CurrentUser, DbSession, OFFICE_AND_ABOVE
 from app.schemas.common import ApiSuccess
@@ -38,6 +38,34 @@ def get_vehicle(vehicle_id: uuid.UUID, db: DbSession):
 def update_vehicle(vehicle_id: uuid.UUID, body: VehicleUpdate, db: DbSession, current_user: CurrentUser):
     vehicle = vehicle_service.update_vehicle(db, vehicle_id, body, actor_id=current_user.id)
     return ApiSuccess(data=VehicleRead.model_validate(vehicle))
+
+
+@router.delete("/{vehicle_id}", response_model=ApiSuccess[dict], dependencies=[OFFICE_AND_ABOVE])
+def delete_vehicle(vehicle_id: uuid.UUID, db: DbSession):
+    """
+    Hard-delete a vehicle if it has no fuel logs or cost records.
+    If records exist, blocks deletion to preserve audit trail.
+    """
+    from app.models.vehicle import Vehicle, VehicleCost
+    from app.models.fuel import FuelLog
+
+    v = db.get(Vehicle, vehicle_id)
+    if not v:
+        raise HTTPException(404, "Vehicle not found.")
+
+    cost_count = db.query(VehicleCost).filter(VehicleCost.vehicle_id == vehicle_id).count()
+    fuel_count = db.query(FuelLog).filter(FuelLog.equipment_ref == v.registration).count()
+
+    if cost_count > 0 or fuel_count > 0:
+        raise HTTPException(
+            409,
+            f"Cannot delete '{v.registration}': it has {cost_count} cost record(s) and "
+            f"{fuel_count} fuel log(s). Set the vehicle to RETIRED status instead."
+        )
+    db.delete(v)
+    db.commit()
+    return ApiSuccess(data={"vehicle_id": str(vehicle_id), "registration": v.registration},
+                      message=f"Vehicle '{v.registration}' deleted.")
 
 
 @router.post(

@@ -166,6 +166,26 @@ function ProofPackDetail({ proof, onBack, onApproved }: {
   const [error, setError] = useState("");
   const [matchMsg, setMatchMsg] = useState("");
 
+  // Searchable options for deliveries and POs — loaded from the API
+  const [deliveryOptions, setDeliveryOptions] = useState<Array<{ id: string; delivery_number: string | null; delivery_date: string; supplier_name: string | null }>>([]);
+  const [poOptions,       setPoOptions]       = useState<Array<{ id: string; po_number: string; status: string }>>([]);
+
+  useEffect(() => {
+    // Load deliveries for the project linked to this invoice (via supplier_id)
+    if (!proof.po_id && !proof.delivery_id) {
+      // Try to get project_id from proof.po_id context — use supplier as hint
+      // Load all recent deliveries and POs regardless
+    }
+    // Load all deliveries (limit 50 most recent)
+    client.get<{ data: { items?: unknown[]; total?: number } | unknown[] }>("/deliveries/", { params: { limit: 50 } })
+      .then(r => {
+        const data = r.data.data;
+        const list = Array.isArray(data) ? data : (data as { items?: unknown[] }).items ?? [];
+        setDeliveryOptions(list as typeof deliveryOptions);
+      })
+      .catch(() => {});
+  }, [proof.invoice_id, proof.po_id, proof.delivery_id]);
+
   const matchCfg = MATCH_BADGE[proof.match_status] || MATCH_BADGE.UNLINKED;
   const canApprove = ["SUBMITTED", "RECEIVED", "MATCHED"].includes(proof.invoice_status);
 
@@ -469,34 +489,75 @@ function ProofPackDetail({ proof, onBack, onApproved }: {
 
       {/* Manual matching panel */}
       <div className="bg-card border border-border rounded-xl p-4 space-y-3">
-        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Manual Override</p>
+        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Manual Matching</p>
         <p className="text-xs text-muted-foreground">
-          If automatic matching failed or is incomplete, link documents manually and set the status.
+          Link this invoice to the correct Purchase Order (PO) and delivery note, then set the match status.
         </p>
         <div className="grid grid-cols-1 gap-2">
+
+          {/* Delivery dropdown */}
           <div>
-            <label className="text-[10px] text-muted-foreground block mb-0.5">Delivery ID (optional)</label>
-            <input
-              className="w-full h-8 rounded-md border border-border bg-background px-2 text-xs font-mono"
-              placeholder={proof.delivery_id ?? "Paste delivery UUID…"}
+            <label className="text-[10px] text-muted-foreground block mb-0.5">
+              Link to Delivery Note {proof.delivery_id && <span className="text-green-600">✓ currently linked</span>}
+            </label>
+            <select
               value={manualDelivery}
               onChange={e => setManualDelivery(e.target.value)}
-            />
+              className="w-full h-8 rounded-md border border-border bg-background px-2 text-xs"
+            >
+              <option value="">— No delivery linked —</option>
+              {proof.delivery_id && !deliveryOptions.find(d => d.id === proof.delivery_id) && (
+                <option value={proof.delivery_id}>Current: {proof.delivery_number ?? proof.delivery_id.slice(0, 8)}</option>
+              )}
+              {deliveryOptions.map(d => (
+                <option key={d.id} value={d.id}>
+                  {d.delivery_number ?? d.id.slice(0, 8)}
+                  {d.supplier_name ? ` · ${d.supplier_name}` : ""}
+                  {d.delivery_date ? ` · ${d.delivery_date.slice(0, 10)}` : ""}
+                </option>
+              ))}
+            </select>
           </div>
+
+          {/* PO dropdown — load inline */}
           <div>
-            <label className="text-[10px] text-muted-foreground block mb-0.5">PO ID (optional)</label>
-            <input
-              className="w-full h-8 rounded-md border border-border bg-background px-2 text-xs font-mono"
-              placeholder={proof.po_id ?? "Paste PO UUID…"}
+            <label className="text-[10px] text-muted-foreground block mb-0.5">
+              Link to Purchase Order (PO) {proof.po_id && <span className="text-green-600">✓ currently linked</span>}
+            </label>
+            <select
               value={manualPo}
               onChange={e => setManualPo(e.target.value)}
-            />
+              className="w-full h-8 rounded-md border border-border bg-background px-2 text-xs"
+            >
+              <option value="">— No PO linked —</option>
+              {proof.po_id && proof.po_number && (
+                <option value={proof.po_id}>{proof.po_number} (current)</option>
+              )}
+              {poOptions.map(p => (
+                <option key={p.id} value={p.id}>{p.po_number} · {p.status}</option>
+              ))}
+            </select>
+            {poOptions.length === 0 && (
+              <button
+                type="button"
+                className="text-[10px] text-primary hover:underline mt-0.5"
+                onClick={() => {
+                  // Load POs for the supplier's project
+                  client.get<{ data: typeof poOptions }>("/purchase-orders/").then(r => {
+                    setPoOptions(r.data.data || []);
+                  }).catch(() => {});
+                }}
+              >
+                Load POs…
+              </button>
+            )}
           </div>
+
           <div>
             <label className="text-[10px] text-muted-foreground block mb-0.5">Notes</label>
             <input
               className="w-full h-8 rounded-md border border-border bg-background px-2 text-xs"
-              placeholder="Reason for manual override…"
+              placeholder="Reason for manual match…"
               value={matchNotes}
               onChange={e => setMatchNotes(e.target.value)}
             />
@@ -608,6 +669,7 @@ export default function InvoiceReconciliationPage() {
 
   return (
     <div className="space-y-5 animate-fade-in">
+
       <div>
         <h1 className="text-xl font-bold">Invoice Reconciliation</h1>
         <p className="text-sm text-muted-foreground">

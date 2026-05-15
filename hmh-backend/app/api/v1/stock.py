@@ -66,6 +66,23 @@ def record_usage(
 # ── Issue to lot ──────────────────────────────────────────────────────────────
 
 @router.post(
+    "/refresh-balances",
+    response_model=ApiSuccess[dict],
+    dependencies=[OFFICE_AND_ABOVE],
+)
+def refresh_stock_balances(db: DbSession):
+    """Force-refresh the stock_balances materialized view."""
+    from sqlalchemy import text as _t
+    try:
+        db.execute(_t("REFRESH MATERIALIZED VIEW CONCURRENTLY stock_balances"))
+        db.commit()
+        return ApiSuccess(data={"refreshed": True}, message="Stock balances refreshed.")
+    except Exception as exc:
+        db.rollback()
+        return ApiSuccess(data={"refreshed": False, "error": str(exc)}, message="Refresh attempted.")
+
+
+@router.post(
     "/usage-with-evidence",
     response_model=ApiSuccess[UsageLogRead],
     status_code=201,

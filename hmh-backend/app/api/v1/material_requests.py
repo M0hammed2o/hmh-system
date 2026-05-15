@@ -105,6 +105,122 @@ def get_mr_email_log(mr_id: uuid.UUID, db: DbSession):
     } for l in logs])
 
 
+@mr_router.post("/{mr_id}/prepare-email", response_model=ApiSuccess[dict], dependencies=[OFFICE_AND_ABOVE])
+def prepare_mr_email_draft(mr_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
+    """
+    Generate the MR supplier enquiry email and store it as a draft (status=queued).
+    Allows office staff to review/edit before sending.
+    """
+    from app.models.mr_email_log import MREmailLog
+    from app.services.email_service import build_mr_email_body
+    from datetime import datetime, timezone
+
+    mr = mr_service.get_request(db, mr_id)
+    subject, body_html = build_mr_email_body(db, mr)
+    now = datetime.now(timezone.utc)
+
+    to_email = ""
+    if mr.preferred_supplier_id:
+        from app.models.supplier import Supplier
+        s = db.get(Supplier, mr.preferred_supplier_id)
+        to_email = s.email or "" if s else ""
+
+    # Remove existing unsent draft if any
+    db.query(MREmailLog).filter(
+        MREmailLog.material_request_id == mr_id,
+        MREmailLog.status == "queued",
+    ).delete(synchronize_session=False)
+
+    draft = MREmailLog(
+        material_request_id=mr_id,
+        supplier_id=mr.preferred_supplier_id,
+        sent_to_email=to_email or "(no email)",
+        email_subject=subject,
+        email_body=body_html,
+        status="queued",
+        sent_by=current_user.id,
+        created_at=now,
+    )
+    db.add(draft)
+    db.commit()
+    db.refresh(draft)
+
+    return ApiSuccess(data={
+        "draft_id":  str(draft.id),
+        "to_email":  to_email,
+        "subject":   subject,
+        "body_html": body_html,
+        "status":    "queued",
+    }, message="MR email draft prepared. Review and edit before sending.")
+
+
+@mr_router.get("/{mr_id}/prepare-email", response_model=ApiSuccess[dict], dependencies=[OFFICE_AND_ABOVE])
+def get_mr_email_draft(mr_id: uuid.UUID, db: DbSession):
+    """Return the current unsent draft for the MR email."""
+    from app.models.mr_email_log import MREmailLog
+    draft = (
+        db.query(MREmailLog)
+        .filter(MREmailLog.material_request_id == mr_id, MREmailLog.status == "queued")
+        .first()
+    )
+    if not draft:
+        return ApiSuccess(data={"exists": False})
+    return ApiSuccess(data={
+        "exists":    True,
+        "draft_id":  str(draft.id),
+        "to_email":  draft.sent_to_email,
+        "subject":   draft.email_subject,
+        "body_html": draft.email_body,
+        "status":    draft.status,
+    })
+
+
+@mr_router.patch("/{mr_id}/prepare-email", response_model=ApiSuccess[dict], dependencies=[OFFICE_AND_ABOVE])
+def update_mr_email_draft(
+    mr_id: uuid.UUID,
+    db: DbSession,
+    subject: str | None = None,
+    body_html: str | None = None,
+    to_email: str | None = None,
+):
+    """Update the unsent MR email draft body/subject/recipient."""
+    from app.models.mr_email_log import MREmailLog
+    from fastapi import HTTPException
+    draft = (
+        db.query(MREmailLog)
+        .filter(MREmailLog.material_request_id == mr_id, MREmailLog.status == "queued")
+        .first()
+    )
+    if not draft:
+        raise HTTPException(404, "No draft found. Call POST /prepare-email first.")
+    if subject:   draft.email_subject = subject
+    if body_html: draft.email_body    = body_html
+    if to_email:  draft.sent_to_email = to_email
+    db.commit()
+    return ApiSuccess(data={"draft_id": str(draft.id)}, message="Draft updated.")
+
+
+@mr_router.post("/{mr_id}/mark-sent", response_model=ApiSuccess[dict], dependencies=[OFFICE_AND_ABOVE])
+def mark_mr_email_sent(mr_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
+    """Mark the MR enquiry email as manually sent (e.g., via WhatsApp or phone)."""
+    from app.models.mr_email_log import MREmailLog
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+    draft = (
+        db.query(MREmailLog)
+        .filter(MREmailLog.material_request_id == mr_id, MREmailLog.status == "queued")
+        .first()
+    )
+    if draft:
+        draft.status    = "MANUAL_SENT"
+        draft.sent_at   = now
+        draft.sent_by   = current_user.id
+        db.commit()
+        return ApiSuccess(data={"status": "MANUAL_SENT", "sent_at": now.isoformat()},
+                          message="MR email marked as manually sent.")
+    return ApiSuccess(data={"status": "no_draft"}, message="No draft to mark sent.")
+
+
 @mr_router.post("/{mr_id}/reject", response_model=ApiSuccess[MaterialRequestRead], dependencies=[OFFICE_AND_ABOVE])
 def reject_request(mr_id: uuid.UUID, body: RejectBody, db: DbSession, current_user: CurrentUser):
     mr = mr_service.reject_request(db, mr_id, current_user.id, body.reason)

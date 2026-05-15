@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Plus, Droplet, Flame } from "lucide-react";
+import { Plus, Droplet, Flame, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Modal } from "@/components/shared/Modal";
@@ -8,6 +8,7 @@ import { StatCard } from "@/components/shared/StatCard";
 import { projectsApi, type Project } from "@/api/projects";
 import { sitesApi, type Site } from "@/api/sites";
 import { fuelApi, type FuelLog, type FuelType, type FuelUsageType, FUEL_TYPE_LABELS, FUEL_USAGE_LABELS } from "@/api/fuel";
+import { vehiclesApi, type Vehicle } from "@/api/vehicles";
 import { formatCurrency, formatDate } from "@/lib/format";
 
 // ─── Log Fuel Modal ────────────────────────────────────────────────────────────
@@ -34,6 +35,8 @@ function LogFuelModal({
 }) {
   const [projectId, setProjectId] = useState(projects[0]?.id ?? "");
   const [sites, setSites] = useState<Site[]>([]);
+  const [vehicles, setVehicles] = useState<Vehicle[]>([]);
+  const [vehicleId, setVehicleId] = useState("");
   const [fuelType, setFuelType] = useState<FuelType>("DIESEL");
   const [usageType, setUsageType] = useState<FuelUsageType>("EQUIPMENT");
   const [litres, setLitres] = useState("");
@@ -55,6 +58,8 @@ function LogFuelModal({
       setSites(s);
       setSiteId(s[0]?.id ?? "");
     }).catch(() => setSites([]));
+    // Load vehicles for this project so user can link fuel to a vehicle
+    vehiclesApi.list(projectId).then(setVehicles).catch(() => setVehicles([]));
   }, [projectId]);
 
   const handleSubmit = async () => {
@@ -66,12 +71,13 @@ function LogFuelModal({
         usage_type: usageType,
         litres: parseFloat(litres),
         cost_per_litre: costPerLitre,
-        equipment_ref: equipmentRef,
+        equipment_ref: equipmentRef || (vehicleId ? vehicles.find(v => v.id === vehicleId)?.registration ?? "" : ""),
         fuelled_by: fuelledBy,
         site_id: siteId,
         fuel_date: fuelDate,
         notes,
-      });
+        ...(vehicleId ? { vehicle_id: vehicleId } : {}),
+      } as Parameters<typeof onSubmit>[1]);
       setLitres(""); setCostPerLitre(""); setEquipmentRef(""); setFuelledBy(""); setNotes("");
       onClose();
     } finally {
@@ -102,6 +108,19 @@ function LogFuelModal({
             >
               <option value="">— No site —</option>
               {sites.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="text-xs text-muted-foreground block mb-1">Vehicle (optional)</label>
+            <select
+              value={vehicleId}
+              onChange={(e) => setVehicleId(e.target.value)}
+              className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm"
+            >
+              <option value="">— No vehicle —</option>
+              {vehicles.map((v) => (
+                <option key={v.id} value={v.id}>{v.registration} — {v.name}</option>
+              ))}
             </select>
           </div>
           <div>
@@ -345,11 +364,12 @@ export default function FuelPage() {
                   <th className="text-right px-4 py-3 font-medium text-muted-foreground">Cost/L</th>
                   <th className="text-right px-4 py-3 font-medium text-muted-foreground">Total</th>
                   <th className="text-left px-4 py-3 font-medium text-muted-foreground">Fuelled By</th>
+                  <th className="px-4 py-3 w-8" />
                 </tr>
               </thead>
               <tbody>
                 {logs.map((log) => (
-                  <tr key={log.id} className="border-b border-border last:border-0 hover:bg-muted/30 transition-colors">
+                  <tr key={log.id} className="border-b border-border last:border-0 hover:bg-muted/30 transition-colors group">
                     <td className="px-4 py-3 text-xs text-muted-foreground">{formatDate(log.fuel_date)}</td>
                     <td className="px-4 py-3 text-xs font-medium">{FUEL_TYPE_LABELS[log.fuel_type]}</td>
                     <td className="px-4 py-3 text-xs">{FUEL_USAGE_LABELS[log.usage_type]}</td>
@@ -364,6 +384,23 @@ export default function FuelPage() {
                       {log.total_cost != null ? formatCurrency(log.total_cost) : "—"}
                     </td>
                     <td className="px-4 py-3 text-xs text-muted-foreground">{log.fuelled_by ?? "—"}</td>
+                    <td className="px-2 py-3">
+                      <button
+                        onClick={async () => {
+                          if (!window.confirm("Delete this fuel log entry?")) return;
+                          try {
+                            await fuelApi.delete(log.id);
+                            setLogs(prev => prev.filter(l => l.id !== log.id));
+                          } catch {
+                            alert("Cannot delete fuel log.");
+                          }
+                        }}
+                        className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-opacity"
+                        title="Delete fuel log"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>

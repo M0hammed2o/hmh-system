@@ -3,7 +3,7 @@
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, field_validator
 
 from app.dependencies import ALL_ROLES, CurrentUser, DbSession, OFFICE_AND_ABOVE
@@ -100,6 +100,62 @@ def update_lot(lot_id: uuid.UUID, body: LotUpdate, db: DbSession):
     return ApiSuccess(data=LotRead.model_validate(lot), message="Lot updated successfully.")
 
 
+@lots_router.delete(
+    "/{lot_id}",
+    response_model=ApiSuccess[dict],
+    dependencies=[OFFICE_AND_ABOVE],
+)
+def delete_lot(lot_id: uuid.UUID, db: DbSession):
+    """
+    Delete a lot.
+
+    Hard-deletes the lot row.  FK constraints (ondelete=SET NULL) will NULL-out
+    boq_items.lot_id and stock_ledger.lot_id automatically, preserving audit data.
+
+    Blocked if the lot has:
+    - Active stock ledger movements  (financial record — must be zero-balanced first)
+    - Linked deliveries via site      (soft dependency check)
+
+    BOQ items are allowed — they will become unassigned (lot_id=NULL) on cascade.
+    """
+    from app.models.boq import BOQItem
+    from app.models.stock import StockLedger, UsageLog
+
+    lot = lot_service.get_lot(db, lot_id)
+
+    # Block if stock ledger entries exist — these represent real material movements
+    ledger_count = (
+        db.query(StockLedger)
+        .filter(StockLedger.lot_id == lot_id)
+        .count()
+    )
+    if ledger_count > 0:
+        raise HTTPException(
+            409,
+            f"Cannot delete lot {lot.lot_number}: it has {ledger_count} stock ledger "
+            "entries. Archive or transfer stock before deleting.",
+        )
+
+    usage_count = db.query(UsageLog).filter(UsageLog.lot_id == lot_id).count()
+    if usage_count > 0:
+        raise HTTPException(
+            409,
+            f"Cannot delete lot {lot.lot_number}: it has {usage_count} usage log "
+            "entries. These represent recorded material usage and cannot be removed.",
+        )
+
+    # BOQ items will be SET NULL automatically by the FK constraint — acceptable
+    boq_count = db.query(BOQItem).filter(BOQItem.lot_id == lot_id).count()
+
+    db.delete(lot)
+    db.commit()
+    return ApiSuccess(
+        data={"deleted_lot_number": lot.lot_number, "boq_items_unlinked": boq_count},
+        message=f"Lot {lot.lot_number} deleted."
+        + (f" {boq_count} BOQ item(s) were unlinked." if boq_count else ""),
+    )
+
+
 @lots_router.get(
     "/{lot_id}/boq-summary",
     response_model=ApiSuccess[dict],
@@ -194,6 +250,73 @@ def get_lot_boq_summary(lot_id: uuid.UUID, db: DbSession):
         "total_items": len(items_out),
         "overrun_count": sum(1 for i in items_out if i["is_over"]),
     })
+
+
+# ── Unassigned lots: list + bulk assign ──────────────────────────────────────
+
+@project_lots_router.get(
+    "/unassigned",
+    response_model=ApiSuccess[list[LotRead]],
+    dependencies=[OFFICE_AND_ABOVE],
+)
+def list_unassigned_lots(project_id: uuid.UUID, db: DbSession):
+    """Return all lots for this project that have no site_id set."""
+    from app.models.lot import Lot
+    lots = (
+        db.query(Lot)
+        .filter(Lot.project_id == project_id, Lot.site_id.is_(None))
+        .order_by(Lot.lot_number)
+        .all()
+    )
+    return ApiSuccess(data=[LotRead.model_validate(l) for l in lots])
+
+
+class _BulkAssignSiteBody(BaseModel):
+    site_id:  uuid.UUID
+    lot_ids:  list[uuid.UUID]
+
+
+@project_lots_router.patch(
+    "/assign-site",
+    response_model=ApiSuccess[dict],
+    dependencies=[OFFICE_AND_ABOVE],
+)
+def bulk_assign_lots_to_site(
+    project_id: uuid.UUID,
+    body: _BulkAssignSiteBody,
+    db: DbSession,
+):
+    """
+    Assign a list of lots to a specific site.
+    Only operates on lots that currently have site_id IS NULL — it will not
+    override an existing site assignment, preventing accidental cross-site moves.
+    """
+    from app.models.lot import Lot
+    from app.models.site import Site
+
+    site = db.get(Site, body.site_id)
+    if not site or site.project_id != project_id:
+        raise HTTPException(404, "Site not found in this project.")
+
+    updated = 0
+    skipped = 0
+    for lot_id in body.lot_ids:
+        lot = db.get(Lot, lot_id)
+        if not lot or lot.project_id != project_id:
+            skipped += 1
+            continue
+        if lot.site_id is not None:
+            # Safety: never overwrite an existing site assignment
+            skipped += 1
+            continue
+        lot.site_id = body.site_id
+        updated += 1
+
+    db.commit()
+    return ApiSuccess(
+        data={"updated": updated, "skipped": skipped},
+        message=f"{updated} lot(s) assigned to site '{site.name}'. {skipped} skipped (already assigned).",
+    )
 
 
 # ── Lots generator ────────────────────────────────────────────────────────────

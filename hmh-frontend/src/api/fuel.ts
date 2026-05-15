@@ -89,4 +89,8 @@ export const fuelApi = {
     const res = await client.patch<{ data: FuelLog }>(`/fuel/${logId}`, body);
     return res.data.data;
   },
+
+  delete: async (logId: string): Promise<void> => {
+    await client.delete(`/fuel/${logId}`);
+  },
 };

@@ -72,7 +72,7 @@ function itemTotalDisplay(item: BOQItem): number | null {
 
 interface ItemRowProps {
   item: BOQItem;
-  onSave: (id: string, patch: Partial<BOQItem>) => Promise<void>;
+  onSave: (id: string, patch: Partial<BOQItem>, applyToAllLots?: boolean) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
 }
 
@@ -87,6 +87,7 @@ function ItemRow({ item, onSave, onDelete }: ItemRowProps) {
     specification: item.specification || "",
     notes: item.notes || "",
   });
+  const [applyToAll, setApplyToAll] = useState(false);
   const [saving, setSaving] = useState(false);
 
   const handleSave = async () => {
@@ -99,9 +100,10 @@ function ItemRow({ item, onSave, onDelete }: ItemRowProps) {
       item_type: form.item_type,
       specification: form.specification || null,
       notes: form.notes || null,
-    });
+    }, applyToAll);
     setSaving(false);
     setEditing(false);
+    setApplyToAll(false);
   };
 
   const total = (() => {
@@ -141,11 +143,25 @@ function ItemRow({ item, onSave, onDelete }: ItemRowProps) {
               </div>
             </div>
             <Input value={form.specification} onChange={(e) => setForm({ ...form, specification: e.target.value })} placeholder="Specification (optional)" className="text-sm h-8" />
+            {/* Apply-to-all-lots checkbox — only shown when editing a lot-level item */}
+            {item.lot_id && (
+              <label className="flex items-center gap-2 text-xs cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={applyToAll}
+                  onChange={(e) => setApplyToAll(e.target.checked)}
+                  className="rounded"
+                />
+                <span className={applyToAll ? "font-semibold text-primary" : "text-muted-foreground"}>
+                  Apply these changes to all lots in this site
+                </span>
+              </label>
+            )}
             <div className="flex gap-2">
               <Button size="sm" onClick={handleSave} disabled={saving} className="h-7 text-xs">
-                <Save className="w-3 h-3 mr-1" />{saving ? "Saving…" : "Save"}
+                <Save className="w-3 h-3 mr-1" />{saving ? "Saving…" : applyToAll ? "Save (All Lots)" : "Save"}
               </Button>
-              <Button size="sm" variant="outline" onClick={() => setEditing(false)} className="h-7 text-xs">
+              <Button size="sm" variant="outline" onClick={() => { setEditing(false); setApplyToAll(false); }} className="h-7 text-xs">
                 <X className="w-3 h-3 mr-1" />Cancel
               </Button>
             </div>
@@ -262,8 +278,20 @@ function SectionBlock({ section, items, sectionTotal, headerId, projectId, onRef
   const [editingName, setEditingName] = useState(false);
   const [name, setName] = useState(section.section_name);
 
-  const handleSaveItem = async (id: string, patch: Partial<BOQItem>) => {
-    await boqApi.updateItem(id, patch as Parameters<typeof boqApi.updateItem>[1]);
+  const handleSaveItem = async (id: string, patch: Partial<BOQItem>, applyToAllLots = false) => {
+    if (applyToAllLots) {
+      const res = await boqApi.applyItemToAllSiteLots(id, patch as Parameters<typeof boqApi.updateItem>[1]);
+      const base = `Applied to ${res.updated} item(s) across ${res.lots_affected} lot(s).`;
+      if (res.lots_affected === 0) {
+        alert(`⚠ ${base}\n\n${res.warning ?? "No peer items were found. Check that lots are assigned to a site."}`);
+      } else if (res.warning) {
+        alert(`${base}\n\nWarning: ${res.warning}`);
+      } else {
+        alert(base);
+      }
+    } else {
+      await boqApi.updateItem(id, patch as Parameters<typeof boqApi.updateItem>[1]);
+    }
     onRefresh();
   };
 

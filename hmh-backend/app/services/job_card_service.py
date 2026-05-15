@@ -159,9 +159,29 @@ def approve_payment(db: Session, jc_id: uuid.UUID, actor_id: uuid.UUID) -> JobCa
 
 
 def mark_paid(db: Session, jc_id: uuid.UUID, actor_id: uuid.UUID) -> JobCard:
+    from datetime import datetime, timezone
+    from app.models.payment import Payment
+    from app.models.enums import PaymentStatus, PaymentType
+
     jc = _get_or_404(db, jc_id)
     if jc.status != JobCardStatus.PAYMENT_APPROVED:
         raise ValidationError("Job card must be PAYMENT_APPROVED before marking paid.")
+
+    # Create a Payment record so labour payments appear on the Payments page.
+    amount = float(jc.total_amount or 0)
+    if amount > 0:
+        db.add(Payment(
+            project_id=jc.project_id,
+            payment_type=PaymentType.LABOUR,
+            amount_paid=amount,
+            status=PaymentStatus.PAID,
+            payment_reference=jc.job_card_number,
+            payment_date=datetime.now(timezone.utc).date(),
+            notes=f"Labour: {(jc.work_description or jc.job_card_number or '')[:200]}",
+            captured_by=actor_id,
+            approved_by=actor_id,
+        ))
+
     return _transition(db, jc, JobCardStatus.PAID, actor_id)
 
 

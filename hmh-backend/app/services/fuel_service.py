@@ -52,6 +52,7 @@ def create_fuel_log(
     log = FuelLog(
         project_id=project_id,
         site_id=data.site_id,
+        vehicle_id=getattr(data, "vehicle_id", None),  # added in 0002
         fuel_type=data.fuel_type,
         usage_type=data.usage_type,
         equipment_ref=data.equipment_ref,

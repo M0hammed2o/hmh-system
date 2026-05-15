@@ -245,6 +245,8 @@ export default function StockPage() {
     setRefreshing(true);
     const siteParam = filterSiteId !== "all" ? filterSiteId : undefined;
     try {
+      // Force-refresh the materialized view first, then reload data
+      try { await import("@/api/client").then(m => m.default.post("/stock/refresh-balances")); } catch { /* best-effort */ }
       if (tab === "balances") {
         const updated = await stockApi.getBalances(selectedProjectId, siteParam);
         setBalances(updated);

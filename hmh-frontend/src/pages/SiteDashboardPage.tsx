@@ -1,8 +1,9 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, Component } from "react";
+import type { ReactNode, ErrorInfo } from "react";
 import {
   LogOut, RefreshCw, PackagePlus, Truck, Minus,
   ListChecks, Upload, PenLine, AlertTriangle, CheckCircle2,
-  Clock, Circle, ChevronRight, Box, Bell, Camera, Image,
+  Clock, Circle, ChevronRight, Box, Bell, Camera, Image, X,
 } from "lucide-react";
 import { siteCaptureApi, type ExtractedItem } from "@/api/siteCapture";
 import { siteDashboardApi, type MaterialSummaryItem, type ActivityItem } from "@/api/siteDashboard";
@@ -22,6 +23,39 @@ import { alertsApi, type Alert } from "@/api/alerts";
 import { stockApi, type StockBalance, type StockLedgerEntry } from "@/api/stock";
 import { suppliersApi, type Supplier } from "@/api/suppliers";
 import { cn } from "@/lib/utils";
+
+// ── Error boundary — prevents any modal crash from blanking the whole page ────
+class ModalErrorBoundary extends Component<
+  { children: ReactNode; fallback?: ReactNode },
+  { error: Error | null }
+> {
+  constructor(props: { children: ReactNode; fallback?: ReactNode }) {
+    super(props);
+    this.state = { error: null };
+  }
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error("[ModalErrorBoundary] render error:", error, info.componentStack);
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="bg-destructive/10 border border-destructive/30 rounded-xl p-4 text-sm text-destructive space-y-2">
+          <p className="font-semibold">Something went wrong inside this modal.</p>
+          <p className="text-xs font-mono break-all">{this.state.error.message}</p>
+          <p className="text-xs text-muted-foreground">
+            Check the browser console for the full stack trace.
+            Close and reopen the modal to try again.
+          </p>
+          {this.props.fallback}
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 // ── Storage keys ──────────────────────────────────────────────────────────────
 const SK_PROJECT = "site_project_id";
@@ -560,6 +594,7 @@ export default function SiteDashboardPage() {
         <UnifiedReceiveModal
           projectId={projectId} siteId={siteId} lotId={lotId}
           suppliers={suppliers}
+          materialSummary={materialSummary}
           onClose={() => setModal(null)} onDone={() => { setModal(null); loadData(); }}
         />
       )}
@@ -768,23 +803,135 @@ interface DeliveryLineItem {
   quantity_received: string;
   quantity_rejected: string;
   reason:            string;
+  item_id:           string;    // catalog item UUID — empty string = not linked
+  boq_item_id:       string;    // BOQ item UUID — empty string = not linked
 }
 
 const emptyItem = (): DeliveryLineItem => ({
   description: "", unit: "bags",
   quantity_expected: "", quantity_received: "", quantity_rejected: "0", reason: "",
+  item_id: "", boq_item_id: "",
 });
 
-function UnifiedReceiveModal({ projectId, siteId, lotId, suppliers, onClose, onDone }: {
+// ── BOQ item picker — extracted component so it is never rendered as an IIFE ─
+function BOQPickerPanel({
+  materialSummary, addedBOQIds, boqSearch, setBoqSearch, onSelect, onClose,
+}: {
+  materialSummary: MaterialSummaryItem[];
+  addedBOQIds:     Set<string>;
+  boqSearch:       string;
+  setBoqSearch:    (s: string) => void;
+  onSelect:        (item: DeliveryLineItem) => void;
+  onClose:         () => void;
+}) {
+  // Safe lower-case — never call .toLowerCase() on null/undefined
+  const safeLC = (s: string | null | undefined) => (s ?? "").toLowerCase();
+  const searchLC = safeLC(boqSearch);
+
+  const available = materialSummary.filter(m => {
+    const id = String(m.boq_item_id ?? "");
+    if (!id) return false;
+    if (addedBOQIds.has(id)) return false;
+    return safeLC(m.description).includes(searchLC);
+  });
+
+  return (
+    <div className="border border-green-300 rounded-xl bg-green-50 dark:bg-green-950/20 p-3 space-y-2">
+      <p className="text-xs font-semibold text-green-800">Select BOQ item that arrived:</p>
+      <input
+        type="text"
+        placeholder="Search BOQ items…"
+        value={boqSearch}
+        onChange={e => setBoqSearch(e.target.value)}
+        className="w-full h-7 rounded border border-border bg-background px-2 text-xs"
+        autoFocus
+      />
+      <div className="max-h-36 overflow-y-auto space-y-0.5">
+        {available.length === 0 ? (
+          <p className="text-xs text-muted-foreground text-center py-2">
+            {addedBOQIds.size > 0
+              ? "All matching BOQ items have been added."
+              : "No BOQ items found. Generate lot BOQs from the BOQ page first."}
+          </p>
+        ) : available.map(m => {
+          const desc     = String(m.description   ?? "");
+          const unit     = String(m.unit          ?? "");
+          const boqId    = String(m.boq_item_id   ?? "");
+          const itemId   = String(m.item_id       ?? "");
+          const allocQty = typeof m.boq_allocated_qty === "number" ? m.boq_allocated_qty : 0;
+          return (
+            <button
+              key={boqId || desc}
+              type="button"
+              onClick={() => onSelect({
+                description:       desc,
+                unit:              unit,
+                quantity_expected: allocQty > 0 ? String(allocQty) : "",
+                quantity_received: "",
+                quantity_rejected: "0",
+                reason:            "",
+                item_id:           itemId,
+                boq_item_id:       boqId,
+              })}
+              className="w-full text-left px-2 py-1.5 rounded text-xs hover:bg-green-100 dark:hover:bg-green-900/30 flex items-center justify-between"
+            >
+              <span className="font-medium">{desc || "—"}</span>
+              <span className="text-[10px] text-green-600 ml-2 shrink-0">
+                {allocQty} {unit} BOQ{itemId ? " ✓" : " ⚠"}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+      <button
+        type="button"
+        onClick={onClose}
+        className="text-xs text-muted-foreground hover:text-foreground"
+      >
+        ✕ Close picker
+      </button>
+    </div>
+  );
+}
+
+
+function UnifiedReceiveModal({ projectId, siteId, lotId, suppliers, materialSummary, onClose, onDone }: {
   projectId: string; siteId: string; lotId: string;
-  suppliers: Supplier[]; onClose: () => void; onDone: () => void;
+  suppliers: Supplier[]; materialSummary: MaterialSummaryItem[];
+  onClose: () => void; onDone: () => void;
 }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [step,         setStep]         = useState<ReceiveStep>("document");
   const [file,         setFile]         = useState<File | null>(null);
   const [supplierId,   setSupplierId]   = useState("");
+  const [poId,         setPoId]         = useState("");
   const [dnNum,        setDnNum]        = useState("");
-  const [items,        setItems]        = useState<DeliveryLineItem[]>([emptyItem()]);
+
+  // Load POs for the project (APPROVED or SENT) so user can link the delivery
+  const [projectPOs, setProjectPOs] = useState<Array<{ id: string; po_number: string; status: string }>>([]);
+  useEffect(() => {
+    if (!projectId) return;
+    import("@/api/client").then(m =>
+      m.default.get<{ data: Array<{ id: string; po_number: string; status: string }> }>(
+        `/projects/${projectId}/purchase-orders/`
+      )
+    ).then(r => {
+      const all = r.data.data || [];
+      setProjectPOs(all.filter(p => ["APPROVED", "SENT", "PARTIALLY_RECEIVED"].includes(p.status)));
+    }).catch(() => {});
+  }, [projectId]);
+
+  // Items always start empty — user adds only what actually arrived.
+  const [items, setItems] = useState<DeliveryLineItem[]>([]);
+
+  // BOQ picker state
+  const [showBOQPicker,    setShowBOQPicker]    = useState(false);
+  const [boqSearch,        setBoqSearch]        = useState("");
+
+  // Non-BOQ picker state
+  const [showNonBOQPicker, setShowNonBOQPicker] = useState(false);
+  const [nonBOQForm,       setNonBOQForm]       = useState({ description: "", unit: "", item_id: "" });
+
   const [driverName,   setDriverName]   = useState("");
   const [driverSig,    setDriverSig]    = useState("");
   const [staffName,    setStaffName]    = useState("");
@@ -792,7 +939,24 @@ function UnifiedReceiveModal({ projectId, siteId, lotId, suppliers, onClose, onD
   const [loading,      setLoading]      = useState(false);
   const [error,        setError]        = useState("");
   const [warning,      setWarning]      = useState("");
-  const [result,       setResult]       = useState<{ delivery_number: string; is_partial: boolean } | null>(null);
+  const [result,       setResult]       = useState<{
+    delivery_number:      string;
+    is_partial:           boolean;
+    unlinked_count?:      number;
+    stock_updated_count?: number;
+    unlinked_items?: Array<{ description: string; quantity_received: number; unit: string | null }>;
+  } | null>(null);
+
+  // Catalog items — always loaded so Non-BOQ picker works whether or not a lot is selected
+  const [catalogItems, setCatalogItems] = useState<Array<{ id: string; name: string; default_unit: string | null }>>([]);
+  useEffect(() => {
+    import("@/api/client").then(m =>
+      m.default.get<{ data: Array<{ id: string; name: string; default_unit: string | null }> }>("/items/")
+    ).then(r => setCatalogItems(r.data.data || [])).catch(() => {});
+  }, []);
+
+  // BOQ items already added (by boq_item_id) so the picker can hide them
+  const addedBOQIds = new Set(items.map(i => i.boq_item_id).filter(Boolean));
 
   // ── Step 1: optional document upload + try extraction ──────────────────────
   const handleDocument = async () => {
@@ -809,13 +973,19 @@ function UnifiedReceiveModal({ projectId, siteId, lotId, suppliers, onClose, onD
         if (res.status === "EXTRACTED" || res.status === "NEEDS_REVIEW") {
           if (f.delivery_note_number) setDnNum(f.delivery_note_number);
           if (res.items.length > 0) {
+            // OCR-extracted items have no catalog/BOQ link — user must add via
+            // "Add BOQ Item" or "Add Non-BOQ Item" for stock to update.
+            // We show them so the user can see what OCR found, but they're
+            // treated the same as manually-added unlinked items.
             setItems(res.items.map(i => ({
               description:       i.description || "",
-              unit:              i.unit || "bags",
+              unit:              i.unit || "",
               quantity_expected: String(i.ocr_qty ?? ""),
               quantity_received: String(i.actual_received_qty || i.ocr_qty || ""),
               quantity_rejected: "0",
               reason:            "",
+              item_id:           "",
+              boq_item_id:       "",
             })));
           }
         } else {
@@ -842,6 +1012,7 @@ function UnifiedReceiveModal({ projectId, siteId, lotId, suppliers, onClose, onD
       fd.append("supplier_id", supplierId);
       fd.append("delivery_note_number", dnNum);
       if (lotId) fd.append("lot_id", lotId);
+      if (poId)  fd.append("purchase_order_id", poId);
       fd.append("receiver_name",    staffName);
       fd.append("receiver_signature", staffSig);
       if (driverName) fd.append("driver_name",      driverName);
@@ -853,6 +1024,11 @@ function UnifiedReceiveModal({ projectId, siteId, lotId, suppliers, onClose, onD
           .map(i => ({
             description:       i.description,
             unit:              i.unit,
+            // item_id is included so the backend can write StockLedger entries.
+            // Blank/undefined means the item is not catalog-linked — backend tracks
+            // this and returns it in unlinked_items.
+            item_id:           i.item_id || undefined,
+            boq_item_id:       i.boq_item_id || undefined,
             quantity_expected: i.quantity_expected ? parseFloat(i.quantity_expected) : null,
             quantity_received: parseFloat(i.quantity_received || "0"),
             quantity_rejected: parseFloat(i.quantity_rejected || "0"),
@@ -860,9 +1036,17 @@ function UnifiedReceiveModal({ projectId, siteId, lotId, suppliers, onClose, onD
           }))
       ));
       const res = await deliveriesApi.receiveWithDocument(fd);
-      setResult({ delivery_number: res.delivery_number, is_partial: res.is_partial });
+      setResult({
+        delivery_number: res.delivery_number,
+        is_partial:      res.is_partial,
+        unlinked_count:  res.unlinked_count,
+        unlinked_items:  res.unlinked_items,
+        stock_updated_count: res.stock_updated_count,
+      });
       setStep("done");
-      onDone();
+      // NOTE: do NOT call onDone() here — the user must see the done screen
+      // (which shows unlinked-item warnings) before the modal closes.
+      // onDone() is called by the Done button below.
     } catch (e: unknown) {
       const msg = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
       setError(msg || "Failed to record delivery. Try again.");
@@ -878,6 +1062,7 @@ function UnifiedReceiveModal({ projectId, siteId, lotId, suppliers, onClose, onD
 
   return (
     <ModalShell title={titles[step]} onClose={onClose}>
+      <ModalErrorBoundary>
       {error && <p className="text-xs text-destructive bg-destructive/10 rounded-lg px-3 py-2 mb-3">{error}</p>}
 
       {/* ── STEP 1: Document upload ── */}
@@ -903,6 +1088,54 @@ function UnifiedReceiveModal({ projectId, siteId, lotId, suppliers, onClose, onD
               onChange={e => { setFile(e.target.files?.[0] ?? null); setError(""); }}
             />
           </div>
+          {/* Vision AI extraction — shown only when a file is selected */}
+          {file && (
+            <div className="bg-blue-50 border border-blue-200 rounded-lg px-3 py-2 text-xs text-blue-700 space-y-1">
+              <p className="font-medium flex items-center gap-1">✨ AI Extraction available</p>
+              <p>Click "Extract with AI" to auto-fill delivery fields. You can edit everything before saving.</p>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 text-xs border-blue-300 text-blue-700 hover:bg-blue-100 mt-1"
+                disabled={loading}
+                onClick={async () => {
+                  setLoading(true); setError("");
+                  try {
+                    const { visionApi } = await import("@/api/vision");
+                    const result = await visionApi.extract(file, "delivery_note");
+                    if (result.status === "OCR_NOT_AVAILABLE") {
+                      setWarning("AI Vision not configured — entering manually.");
+                    } else {
+                      const p = result.preview as { delivery_note_number?: string | null; items?: Array<{ description: string | null; quantity: number | null; unit: string | null }> };
+                      if (p.delivery_note_number) setDnNum(p.delivery_note_number);
+                      if (p.items && p.items.length > 0) {
+                        setItems(p.items.map(i => ({
+                          description:       String(i.description ?? ""),
+                          unit:              String(i.unit ?? ""),
+                          quantity_expected: String(i.quantity ?? ""),
+                          quantity_received: "",
+                          quantity_rejected: "0",
+                          reason:            "",
+                          item_id:           "",
+                          boq_item_id:       "",
+                        })));
+                      }
+                      setWarning(result.status === "NEEDS_REVIEW"
+                        ? "Partial extraction — please review and correct all fields."
+                        : "Fields extracted — review before submitting.");
+                    }
+                    setStep("details");
+                  } catch {
+                    setWarning("Extraction failed — entering manually.");
+                    setStep("details");
+                  } finally { setLoading(false); }
+                }}
+              >
+                {loading ? "Extracting…" : "✨ Extract with AI"}
+              </Button>
+            </div>
+          )}
+
           <div className="flex gap-2">
             <Button variant="outline" className="flex-1" onClick={onClose}>Cancel</Button>
             <Button className="flex-1" onClick={handleDocument} disabled={loading}>
@@ -933,39 +1166,213 @@ function UnifiedReceiveModal({ projectId, siteId, lotId, suppliers, onClose, onD
               <Label htmlFor="u-dn">Delivery Note #</Label>
               <Input id="u-dn" value={dnNum} onChange={e => setDnNum(e.target.value)} placeholder="DN-001" />
             </div>
+            <div className="space-y-1">
+              <Label htmlFor="u-po">Link to Purchase Order (PO)</Label>
+              <select
+                id="u-po"
+                value={poId}
+                onChange={e => setPoId(e.target.value)}
+                className="w-full h-10 px-3 text-sm rounded-md border border-border bg-background"
+              >
+                <option value="">— No PO (will create alert) —</option>
+                {projectPOs.map(p => (
+                  <option key={p.id} value={p.id}>{p.po_number} · {p.status}</option>
+                ))}
+              </select>
+              {!poId && (
+                <p className="text-[10px] text-amber-600">
+                  ⚠ Delivery without PO will create a "Delivery Without PO" alert.
+                </p>
+              )}
+            </div>
           </div>
 
+          {/* ── Items received ──────────────────────────────────────────────── */}
           <div className="space-y-2">
             <Label>Items received <span className="text-destructive">*</span></Label>
-            <div className="max-h-48 overflow-y-auto space-y-2">
-              {items.map((it, idx) => (
-                <div key={idx} className="bg-muted/30 rounded-lg p-2 space-y-1.5">
-                  <Input value={it.description} onChange={e => updateItem(idx, "description", e.target.value)}
-                         placeholder="Material description" className="h-8 text-sm" />
-                  <div className="grid grid-cols-4 gap-1">
-                    <Input type="number" placeholder="Ordered" value={it.quantity_expected}
-                           onChange={e => updateItem(idx, "quantity_expected", e.target.value)}
-                           className="h-7 text-xs" />
-                    <Input type="number" placeholder="Received" value={it.quantity_received}
-                           onChange={e => updateItem(idx, "quantity_received", e.target.value)}
-                           className="h-7 text-xs" />
-                    <Input type="number" placeholder="Rejected" value={it.quantity_rejected}
-                           onChange={e => updateItem(idx, "quantity_rejected", e.target.value)}
-                           className="h-7 text-xs" />
-                    <Input placeholder="Unit" value={it.unit}
-                           onChange={e => updateItem(idx, "unit", e.target.value)}
-                           className="h-7 text-xs" />
-                  </div>
-                  {(parseFloat(it.quantity_rejected || "0") > 0) && (
-                    <Input placeholder="Reason for rejection/shortage"
-                           value={it.reason} onChange={e => updateItem(idx, "reason", e.target.value)}
-                           className="h-7 text-xs text-amber-700 border-amber-300" />
-                  )}
+
+            {/* ── Added items list ── */}
+            {items.length > 0 && (
+              <div className="max-h-56 overflow-y-auto space-y-2">
+                {items.map((it, idx) => {
+                  // Defensive: treat any non-empty string as truthy; guard against null/undefined
+                  const isBoq     = !!(it.boq_item_id);
+                  const isCatalog = !!(it.item_id);
+                  const rowCls = isBoq
+                    ? "bg-green-50 dark:bg-green-950/20 border-green-200"
+                    : isCatalog
+                    ? "bg-blue-50 dark:bg-blue-950/20 border-blue-200"
+                    : "bg-amber-50 dark:bg-amber-950/20 border-amber-200";
+                  const tagCls  = isBoq ? "text-green-700" : isCatalog ? "text-blue-700" : "text-amber-700";
+                  const tagText = isBoq
+                    ? "✓ BOQ item — stock will update"
+                    : isCatalog
+                    ? "✓ Non-BOQ, catalog linked — stock will update"
+                    : "⚠ No catalog link — stock will NOT update";
+
+                  // Safe numeric parse — never crash on empty/invalid
+                  const rejectedQty = parseFloat(String(it.quantity_rejected || "0")) || 0;
+
+                  return (
+                    <div key={idx} className={`rounded-lg p-2.5 space-y-1.5 border ${rowCls}`}>
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs font-medium truncate">{String(it.description || "—")}</p>
+                          <p className={`text-[10px] ${tagCls}`}>{tagText}</p>
+                        </div>
+                        <button
+                          onClick={() => setItems(p => p.filter((_, i) => i !== idx))}
+                          className="shrink-0 text-muted-foreground hover:text-destructive"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                      {/* Qty inputs — always show Received + Rejected; show BOQ qty only for BOQ items */}
+                      <div className="flex gap-1">
+                        {isBoq && (
+                          <Input type="number" placeholder="BOQ qty"
+                                 value={String(it.quantity_expected ?? "")}
+                                 onChange={e => updateItem(idx, "quantity_expected", e.target.value)}
+                                 className="h-7 text-xs w-20 shrink-0" title="BOQ allocated quantity" />
+                        )}
+                        <Input type="number" placeholder="Received *"
+                               value={String(it.quantity_received ?? "")}
+                               onChange={e => updateItem(idx, "quantity_received", e.target.value)}
+                               className="h-7 text-xs flex-1" />
+                        <Input type="number" placeholder="Rej."
+                               value={String(it.quantity_rejected ?? "0")}
+                               onChange={e => updateItem(idx, "quantity_rejected", e.target.value)}
+                               className="h-7 text-xs w-16 shrink-0" />
+                        <Input placeholder="Unit"
+                               value={String(it.unit ?? "")}
+                               onChange={e => updateItem(idx, "unit", e.target.value)}
+                               className="h-7 text-xs w-16 shrink-0" />
+                      </div>
+                      {rejectedQty > 0 && (
+                        <Input placeholder="Reason for rejection"
+                               value={String(it.reason ?? "")}
+                               onChange={e => updateItem(idx, "reason", e.target.value)}
+                               className="h-7 text-xs text-amber-700 border-amber-300" />
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {items.length === 0 && !showBOQPicker && !showNonBOQPicker && (
+              <p className="text-xs text-muted-foreground bg-muted/40 rounded-lg px-3 py-3 text-center">
+                No items added yet. Use the buttons below to add what arrived.
+              </p>
+            )}
+
+            {/* ── Picker buttons ── */}
+            {!showBOQPicker && !showNonBOQPicker && (
+              <div className="flex gap-2">
+                {materialSummary.length > 0 && (
+                  <button
+                    onClick={() => setShowBOQPicker(true)}
+                    className="flex-1 py-2 rounded-lg border border-green-300 bg-green-50 text-xs font-medium text-green-700 hover:bg-green-100 transition-colors"
+                  >
+                    + Add BOQ Item
+                  </button>
+                )}
+                <button
+                  onClick={() => setShowNonBOQPicker(true)}
+                  className="flex-1 py-2 rounded-lg border border-blue-300 bg-blue-50 text-xs font-medium text-blue-700 hover:bg-blue-100 transition-colors"
+                >
+                  + Add Non-BOQ Item
+                </button>
+              </div>
+            )}
+
+            {/* ── BOQ picker panel ── */}
+            {showBOQPicker && <BOQPickerPanel
+              materialSummary={materialSummary}
+              addedBOQIds={addedBOQIds}
+              boqSearch={boqSearch}
+              setBoqSearch={setBoqSearch}
+              onSelect={(newItem) => {
+                console.log("[BOQ Picker] selected item:", newItem);
+                setItems(p => [...p, newItem]);
+                setBoqSearch("");
+              }}
+              onClose={() => { setShowBOQPicker(false); setBoqSearch(""); }}
+            />}
+
+            {/* ── Non-BOQ picker panel ── */}
+            {showNonBOQPicker && (
+              <div className="border border-blue-300 rounded-xl bg-blue-50 dark:bg-blue-950/20 p-3 space-y-2">
+                <p className="text-xs font-semibold text-blue-800">
+                  Add non-BOQ item (consumables, extras, tools):
+                </p>
+                <Input
+                  placeholder="Description *"
+                  value={nonBOQForm.description}
+                  onChange={e => setNonBOQForm(f => ({ ...f, description: e.target.value }))}
+                  className="h-8 text-sm"
+                  autoFocus
+                />
+                <div className="grid grid-cols-2 gap-2">
+                  <Input
+                    placeholder="Unit (e.g. pcs, kg)"
+                    value={nonBOQForm.unit}
+                    onChange={e => setNonBOQForm(f => ({ ...f, unit: e.target.value }))}
+                    className="h-7 text-xs"
+                  />
+                  <select
+                    value={nonBOQForm.item_id}
+                    onChange={e => setNonBOQForm(f => ({ ...f, item_id: e.target.value }))}
+                    className={`h-7 rounded border px-1 text-[10px] bg-background ${
+                      nonBOQForm.item_id ? "border-green-400 text-green-700" : "border-amber-300 text-amber-700"
+                    }`}
+                  >
+                    <option value="">⚠ No catalog — stock won't update</option>
+                    {catalogItems.map(ci => (
+                      <option key={ci.id} value={ci.id}>
+                        {ci.name}{ci.default_unit ? ` (${ci.default_unit})` : ""}
+                      </option>
+                    ))}
+                  </select>
                 </div>
-              ))}
-            </div>
-            <button onClick={() => setItems(p => [...p, emptyItem()])}
-                    className="text-xs text-primary hover:underline">+ Add item</button>
+                {!nonBOQForm.item_id && (
+                  <p className="text-[10px] text-amber-700">
+                    Link to a catalog item for stock tracking. Leave blank only for non-tracked consumables.
+                  </p>
+                )}
+                <div className="flex gap-2">
+                  <Button
+                    size="sm"
+                    disabled={!nonBOQForm.description.trim()}
+                    onClick={() => {
+                      const ci = catalogItems.find(c => c.id === nonBOQForm.item_id);
+                      setItems(p => [...p, {
+                        description:       nonBOQForm.description.trim(),
+                        unit:              nonBOQForm.unit || (ci?.default_unit ?? ""),
+                        quantity_expected: "",
+                        quantity_received: "",
+                        quantity_rejected: "0",
+                        reason:            "",
+                        item_id:           nonBOQForm.item_id,
+                        boq_item_id:       "",
+                      }]);
+                      setNonBOQForm({ description: "", unit: "", item_id: "" });
+                      setShowNonBOQPicker(false);
+                    }}
+                    className="h-7 text-xs"
+                  >
+                    Add Item
+                  </Button>
+                  <Button
+                    size="sm" variant="outline"
+                    onClick={() => { setShowNonBOQPicker(false); setNonBOQForm({ description: "", unit: "", item_id: "" }); }}
+                    className="h-7 text-xs"
+                  >
+                    Cancel
+                  </Button>
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="flex gap-2">
@@ -1010,17 +1417,46 @@ function UnifiedReceiveModal({ projectId, siteId, lotId, suppliers, onClose, onD
 
       {/* ── DONE ── */}
       {step === "done" && result && (
-        <div className="flex flex-col items-center gap-4 py-6 text-center">
-          <CheckCircle2 className="w-12 h-12 text-green-500" />
-          <div>
+        <div className="flex flex-col gap-4 py-4">
+          <div className="flex flex-col items-center gap-2 text-center">
+            <CheckCircle2 className="w-12 h-12 text-green-500" />
             <p className="font-semibold">{result.delivery_number} recorded.</p>
             {result.is_partial && (
-              <p className="text-sm text-amber-600 mt-1">Short delivery detected — alert created.</p>
+              <p className="text-sm text-amber-600">Short delivery detected — alert created.</p>
+            )}
+            {(result.stock_updated_count ?? 0) > 0 && (
+              <p className="text-xs text-green-600">
+                ✓ {result.stock_updated_count} item{result.stock_updated_count !== 1 ? "s" : ""} updated stock balance.
+              </p>
             )}
           </div>
-          <Button className="w-full" onClick={onClose}>Done</Button>
+
+          {/* Unlinked items warning — stock was not updated for these lines */}
+          {(result.unlinked_count ?? 0) > 0 && (
+            <div className="bg-amber-50 border border-amber-300 rounded-xl p-3 space-y-2">
+              <p className="text-xs font-semibold text-amber-800 flex items-center gap-1.5">
+                <span>⚠</span>
+                {result.unlinked_count} item{result.unlinked_count !== 1 ? "s" : ""} not linked to catalog — stock NOT updated
+              </p>
+              <p className="text-xs text-amber-700">
+                These items have no catalog link so their stock balances could not be updated.
+                An office admin must link them in the Deliveries page.
+              </p>
+              <div className="space-y-0.5">
+                {result.unlinked_items?.map((item, i) => (
+                  <p key={i} className="text-xs text-amber-800 font-medium">
+                    • {item.description} — {item.quantity_received} {item.unit ?? ""}
+                  </p>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Done — calls onDone which refreshes the dashboard and closes the modal */}
+          <Button className="w-full" onClick={onDone}>Done</Button>
         </div>
       )}
+      </ModalErrorBoundary>
     </ModalShell>
   );
 }
