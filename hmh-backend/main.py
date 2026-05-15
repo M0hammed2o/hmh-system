@@ -67,21 +67,67 @@ app = FastAPI(
 )
 
 # ── CORS ─────────────────────────────────────────────────────────────────────
-# CORS_ORIGINS env var: comma-separated list of allowed origins.
-# Always includes localhost for local dev.
-_cors_origins = settings.cors_origins_list
-if "http://localhost:5173" not in _cors_origins:
-    _cors_origins.append("http://localhost:5173")
+# Build allowed origins from the env var, then hard-code production origins so
+# they can never be accidentally omitted by a Render env-var override.
+_cors_origins: list[str] = settings.cors_origins_list
+
+_required_origins = [
+    # Production frontend
+    "https://app.hmhgroup.co.za",
+    "https://www.app.hmhgroup.co.za",
+    # Local dev
+    "http://localhost:5173",
+    "http://localhost:3000",
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:3000",
+]
+for _o in _required_origins:
+    if _o not in _cors_origins:
+        _cors_origins.append(_o)
+
+# Explicit methods and headers — do NOT use ["*"] when allow_credentials=True.
+# The CORS spec forbids wildcard methods/headers with credentialed requests, and
+# some browsers enforce this strictly causing preflight failures for POST/PATCH/DELETE.
+_cors_methods = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"]
+_cors_headers = [
+    "Authorization",
+    "Content-Type",
+    "Accept",
+    "Accept-Language",
+    "Origin",
+    "X-Requested-With",
+    "Access-Control-Request-Method",
+    "Access-Control-Request-Headers",
+    "Cache-Control",
+]
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=_cors_methods,
+    allow_headers=_cors_headers,
+    expose_headers=["Content-Length", "X-Total-Count"],
+    max_age=600,
 )
 
 # ── Exception handlers ────────────────────────────────────────────────────────
+def _cors_headers_for(request: Request) -> dict[str, str]:
+    """
+    Return CORS headers matching the request's Origin (if allowed).
+    Used to ensure ALL error responses include CORS headers — otherwise browsers
+    report any backend error as a CORS failure and hide the real error message.
+    """
+    origin = request.headers.get("origin", "")
+    if origin and origin in _cors_origins:
+        return {
+            "Access-Control-Allow-Origin":      origin,
+            "Access-Control-Allow-Credentials": "true",
+            "Vary":                             "Origin",
+        }
+    return {}
+
+
 @app.exception_handler(HMHException)
 async def hmh_exception_handler(request: Request, exc: HMHException) -> JSONResponse:
     content: dict = {
@@ -91,7 +137,27 @@ async def hmh_exception_handler(request: Request, exc: HMHException) -> JSONResp
     }
     if exc.detail:
         content["detail"] = exc.detail
-    return JSONResponse(status_code=exc.status_code, content=content)
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=content,
+        headers=_cors_headers_for(request),
+    )
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """
+    Catch-all for any unhandled Python exception.
+    Always adds CORS headers so the browser shows the real error, not a fake
+    'CORS blocked' message that hides the underlying 500 cause.
+    """
+    import logging
+    logging.getLogger(__name__).exception("Unhandled exception: %s", exc)
+    return JSONResponse(
+        status_code=500,
+        content={"success": False, "message": "Internal server error.", "code": "INTERNAL_ERROR"},
+        headers=_cors_headers_for(request),
+    )
 
 # ── Routers ──────────────────────────────────────────────────────────────────
 app.include_router(health_router)
