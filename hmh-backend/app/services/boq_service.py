@@ -4,6 +4,7 @@ import csv
 import io
 import uuid
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Optional
 
 from sqlalchemy import insert as _sa_insert
@@ -306,24 +307,28 @@ def get_full_boq(db: Session, header_id: uuid.UUID) -> dict:
     header = _header_or_404(db, header_id)
     sections = list_sections(db, header_id)
 
-    grand_total = 0.0
+    grand_total = Decimal("0.00")
     sections_out = []
     for section in sections:
         items = list_items(db, section.id)
-        section_total = sum(
-            (i.planned_total or 0.0) for i in items
-        )
+        section_total = Decimal("0.00")
+        for i in items:
+            if i.planned_total is not None:
+                # planned_total is Decimal from PostgreSQL NUMERIC column
+                section_total += i.planned_total
+            elif i.planned_quantity is not None and i.planned_rate is not None:
+                section_total += Decimal(str(i.planned_quantity)) * Decimal(str(i.planned_rate))
         grand_total += section_total
         sections_out.append({
             "section": section,
             "items": items,
-            "section_total": round(section_total, 2),
+            "section_total": float(round(section_total, 2)),
         })
 
     return {
         "header": header,
         "sections": sections_out,
-        "grand_total": round(grand_total, 2),
+        "grand_total": float(round(grand_total, 2)),
     }
 
 
