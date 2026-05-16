@@ -6,6 +6,7 @@ Run locally:
     uvicorn main:app --reload --host 0.0.0.0 --port 8000
 """
 
+import logging
 import os
 import subprocess
 import sys
@@ -14,6 +15,8 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+
+_log = logging.getLogger("hmh.startup")
 
 from app.core.config import settings
 from app.core.exceptions import HMHException
@@ -214,6 +217,47 @@ app.include_router(expenses_router, prefix="/api/v1")
 _uploads_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "uploads")
 os.makedirs(_uploads_dir, exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=_uploads_dir), name="uploads")
+
+
+# ── Debug route — lists registered paths (safe: no secrets) ──────────────────
+@app.get("/api/v1/debug/routes", tags=["debug"])
+def list_routes():
+    """
+    Returns all registered route paths and their HTTP methods.
+    Useful for production diagnostics without exposing secrets.
+    """
+    from fastapi.routing import APIRoute
+    routes = [
+        {
+            "path":    r.path,
+            "methods": sorted(list(r.methods or [])),
+            "name":    r.name,
+        }
+        for r in app.routes
+        if isinstance(r, APIRoute)
+    ]
+    return {
+        "total_routes": len(routes),
+        "app_env":       settings.APP_ENV,
+        "cors_origins":  _cors_origins,
+        "routes":        sorted(routes, key=lambda r: r["path"]),
+    }
+
+
+# ── Startup logging ────────────────────────────────────────────────────────────
+@app.on_event("startup")
+def _log_startup_config() -> None:
+    """Print non-secret configuration at startup for production diagnostics."""
+    from fastapi.routing import APIRoute
+    api_routes = [r for r in app.routes if isinstance(r, APIRoute)]
+    print("=" * 60, flush=True)
+    print(f"[HMH] APP_ENV        : {settings.APP_ENV}", flush=True)
+    print(f"[HMH] DEBUG          : {settings.DEBUG}", flush=True)
+    print(f"[HMH] API routes     : {len(api_routes)}", flush=True)
+    print(f"[HMH] CORS origins   : {_cors_origins}", flush=True)
+    print(f"[HMH] UPLOAD_DIR     : {settings.UPLOAD_DIR}", flush=True)
+    print(f"[HMH] SMTP_ENABLED   : {settings.SMTP_ENABLED}", flush=True)
+    print("=" * 60, flush=True)
 
 
 # ── Temporary startup seeding ────────────────────────────────────────────────
