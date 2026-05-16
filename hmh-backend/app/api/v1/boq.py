@@ -2,14 +2,16 @@
 
 import uuid
 
-from fastapi import APIRouter, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel
+from typing import Literal
 
 from app.dependencies import ALL_ROLES, CurrentUser, DbSession, OFFICE_AND_ABOVE
 from app.schemas.boq import (
     BOQHeaderCreate, BOQHeaderRead, BOQHeaderUpdate,
     BOQItemCreate, BOQItemRead, BOQItemUpdate,
     BOQSectionCreate, BOQSectionRead, BOQSectionUpdate,
+    SectionDeleteResult,
 )
 from app.schemas.common import ApiSuccess
 from app.services import boq_service
@@ -321,12 +323,17 @@ def update_section(header_id: uuid.UUID, section_id: uuid.UUID, body: BOQSection
 
 @boq_sections_router.delete(
     "/{section_id}",
-    response_model=ApiSuccess[None],
+    response_model=ApiSuccess[SectionDeleteResult],
     dependencies=[OFFICE_AND_ABOVE],
 )
-def delete_section(header_id: uuid.UUID, section_id: uuid.UUID, db: DbSession):
-    boq_service.delete_section(db, section_id)
-    return ApiSuccess(data=None, message="Section deleted.")
+def delete_section(
+    header_id: uuid.UUID,
+    section_id: uuid.UUID,
+    db: DbSession,
+    scope: Literal["lot", "site"] = Query("lot", description="'lot' deletes only this section; 'site' deletes matching sections across all lots in the same site"),
+):
+    result = boq_service.delete_section_scoped(db, section_id, scope=scope)
+    return ApiSuccess(data=SectionDeleteResult(**result), message=result["message"])
 
 
 # ── Full BOQ (nested) ─────────────────────────────────────────────────────────

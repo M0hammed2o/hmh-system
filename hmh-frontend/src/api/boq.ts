@@ -277,6 +277,17 @@ export const boqApi = {
     await client.delete(`/boq/${headerId}/sections/${sectionId}`);
   },
 
+  deleteSectionScoped: async (
+    headerId: string,
+    sectionId: string,
+    scope: "lot" | "site",
+  ): Promise<{ scope: string; sections_deleted: number; lots_affected: number; items_deleted: number; message: string }> => {
+    const res = await client.delete<{ data: { scope: string; sections_deleted: number; lots_affected: number; items_deleted: number; message: string } }>(
+      `/boq/${headerId}/sections/${sectionId}?scope=${scope}`,
+    );
+    return res.data.data;
+  },
+
   listItems: async (sectionId: string): Promise<BOQItem[]> => {
     const res = await client.get<{ data: BOQItem[] }>(`/boq/sections/${sectionId}/items/`);
     return res.data.data;

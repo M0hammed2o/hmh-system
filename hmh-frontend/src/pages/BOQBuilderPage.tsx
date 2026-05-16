@@ -6,7 +6,7 @@ import { useEffect, useState, useCallback } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import {
   ArrowLeft, Plus, Trash2, ChevronDown, ChevronRight,
-  Save, Copy, Check, Pencil, X, BookTemplate,
+  Save, Copy, Check, Pencil, X, BookTemplate, AlertTriangle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -17,6 +17,63 @@ import {
   type FullBOQ, type BOQSection, type BOQItem, type ItemType,
 } from "@/api/boq";
 import { cn } from "@/lib/utils";
+
+
+// ── Delete Section Modal ──────────────────────────────────────────────────────
+
+interface DeleteSectionModalProps {
+  sectionName: string;
+  isLotBOQ: boolean;
+  onConfirm: (scope: "lot" | "site") => void;
+  onCancel: () => void;
+}
+
+function DeleteSectionModal({ sectionName, isLotBOQ, onConfirm, onCancel }: DeleteSectionModalProps) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+      <div className="bg-background border border-border rounded-2xl shadow-xl w-full max-w-sm mx-4 p-6 space-y-4">
+        <div className="flex items-start gap-3">
+          <div className="mt-0.5 p-2 rounded-lg bg-destructive/10">
+            <AlertTriangle className="w-4 h-4 text-destructive" />
+          </div>
+          <div>
+            <h2 className="font-semibold text-base">Delete section</h2>
+            <p className="text-sm text-muted-foreground mt-0.5">
+              <span className="font-medium text-foreground">"{sectionName}"</span>
+              {" "}and all its items will be permanently removed.
+            </p>
+          </div>
+        </div>
+
+        <div className="space-y-2">
+          <Button
+            variant="outline"
+            className="w-full justify-start text-sm"
+            onClick={() => onConfirm("lot")}
+          >
+            <Trash2 className="w-3.5 h-3.5 mr-2 text-muted-foreground" />
+            Delete from this lot only
+          </Button>
+
+          {isLotBOQ && (
+            <Button
+              variant="destructive"
+              className="w-full justify-start text-sm"
+              onClick={() => onConfirm("site")}
+            >
+              <Trash2 className="w-3.5 h-3.5 mr-2" />
+              Delete from all lots in this site
+            </Button>
+          )}
+        </div>
+
+        <Button variant="ghost" className="w-full text-sm" onClick={onCancel}>
+          Cancel
+        </Button>
+      </div>
+    </div>
+  );
+}
 
 const TYPE_OPTIONS: ItemType[] = ["MATERIAL", "LABOUR", "PLANT", "SERVICE", "PACKAGE"];
 
@@ -376,6 +433,8 @@ export default function BOQBuilderPage() {
   const [markingTemplate, setMarkingTemplate] = useState(false);
   const [templateName, setTemplateName] = useState("");
   const [templateDone, setTemplateDone] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
+  const [deleteResult, setDeleteResult] = useState<string | null>(null);
   // Detect if this BOQ was cloned to a specific lot (version name contains "— Lot X")
   const lotMatch = boq?.header.version_name.match(/— Lot (\S+)$/);
   const lotNumber = lotMatch ? lotMatch[1] : null;
@@ -406,9 +465,22 @@ export default function BOQBuilderPage() {
     load();
   };
 
-  const handleDeleteSection = async (sectionId: string) => {
-    if (!headerId || !confirm("Delete this section and all its items?")) return;
-    await boqApi.deleteSection(headerId, sectionId);
+  const handleDeleteSection = (sectionId: string) => {
+    const sec = boq?.sections.find(({ section }) => section.id === sectionId);
+    if (!sec) return;
+    setDeleteResult(null);
+    setDeleteTarget({ id: sectionId, name: sec.section.section_name });
+  };
+
+  const handleConfirmDelete = async (scope: "lot" | "site") => {
+    if (!headerId || !deleteTarget) return;
+    try {
+      const result = await boqApi.deleteSectionScoped(headerId, deleteTarget.id, scope);
+      setDeleteResult(result.message);
+    } catch {
+      setDeleteResult("Delete failed — please try again.");
+    }
+    setDeleteTarget(null);
     load();
   };
 
@@ -486,6 +558,16 @@ export default function BOQBuilderPage() {
         </div>
       )}
 
+      {/* Delete result banner */}
+      {deleteResult && (
+        <div className="bg-orange-500/10 border border-orange-500/30 rounded-xl px-4 py-3 flex items-center justify-between">
+          <p className="text-sm text-orange-700 dark:text-orange-400 font-medium">
+            <Trash2 className="w-4 h-4 inline mr-1" />{deleteResult}
+          </p>
+          <button onClick={() => setDeleteResult(null)} className="text-muted-foreground hover:text-foreground"><X className="w-3.5 h-3.5" /></button>
+        </div>
+      )}
+
       {/* Grand total bar */}
       <div className="bg-card border border-border rounded-xl px-5 py-3 flex items-center justify-between">
         <span className="text-sm font-medium text-muted-foreground">Grand Total (Planned)</span>
@@ -553,6 +635,16 @@ export default function BOQBuilderPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Delete section modal */}
+      {deleteTarget && (
+        <DeleteSectionModal
+          sectionName={deleteTarget.name}
+          isLotBOQ={!!lotNumber}
+          onConfirm={handleConfirmDelete}
+          onCancel={() => setDeleteTarget(null)}
+        />
       )}
     </div>
   );

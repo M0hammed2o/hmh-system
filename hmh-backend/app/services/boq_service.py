@@ -302,6 +302,127 @@ def delete_section(db: Session, section_id: uuid.UUID) -> None:
     db.commit()
 
 
+def delete_section_scoped(
+    db: Session,
+    section_id: uuid.UUID,
+    scope: str = "lot",
+) -> dict:
+    """
+    Delete a BOQ section with either lot-only or site-wide scope.
+
+    scope="lot"  — deletes only this specific section (same as delete_section).
+    scope="site" — finds all sections with the same name across every lot in the
+                   same site, then deletes them all.  Safety constraints:
+                   - Never touches a different site.
+                   - Never touches BOQ templates (is_template=True headers).
+                   - Matches by section_name, not section_id, because each lot
+                     has its own cloned section rows.
+
+    Returns a dict with sections_deleted, lots_affected, items_deleted, message.
+    """
+    from app.models.lot import Lot
+
+    section = _section_or_404(db, section_id)
+    target_name = section.section_name
+
+    if scope == "site":
+        # Infer lot_id from any active item in this section
+        sample_item = (
+            db.query(BOQItem)
+            .filter(BOQItem.boq_section_id == section_id)
+            .first()
+        )
+        lot_id   = sample_item.lot_id if sample_item else None
+        site_id  = None
+
+        if lot_id:
+            lot = db.get(Lot, lot_id)
+            site_id = lot.site_id if lot else None
+
+        if site_id:
+            # All lots in the same site
+            site_lot_ids = [
+                row[0] for row in db.query(Lot.id).filter(Lot.site_id == site_id).all()
+            ]
+
+            # Find all section IDs that:
+            #   - have section_name matching the target
+            #   - contain at least one item whose lot_id is in this site's lots
+            # (This excludes template headers and other sites automatically.)
+            matching_section_ids = [
+                row[0] for row in (
+                    db.query(BOQItem.boq_section_id)
+                    .join(BOQSection, BOQItem.boq_section_id == BOQSection.id)
+                    .filter(
+                        BOQItem.lot_id.in_(site_lot_ids),
+                        BOQSection.section_name == target_name,
+                    )
+                    .distinct()
+                    .all()
+                )
+            ]
+            # Always include the section the user clicked on
+            if section_id not in matching_section_ids:
+                matching_section_ids.append(section_id)
+
+            # Collect metrics before deleting
+            items_deleted = (
+                db.query(BOQItem)
+                .filter(
+                    BOQItem.boq_section_id.in_(matching_section_ids),
+                    BOQItem.is_active == True,
+                )
+                .count()
+            )
+            lots_affected_ids: set = set()
+            for sid in matching_section_ids:
+                for row in (
+                    db.query(BOQItem.lot_id)
+                    .filter(BOQItem.boq_section_id == sid, BOQItem.lot_id.isnot(None))
+                    .distinct()
+                    .all()
+                ):
+                    lots_affected_ids.add(row[0])
+
+            # Soft-delete items then hard-delete sections
+            db.query(BOQItem).filter(
+                BOQItem.boq_section_id.in_(matching_section_ids),
+                BOQItem.is_active == True,
+            ).update({"is_active": False}, synchronize_session=False)
+
+            for sid in matching_section_ids:
+                sec = db.get(BOQSection, sid)
+                if sec:
+                    db.delete(sec)
+
+            db.commit()
+            lots_affected = len(lots_affected_ids)
+            return {
+                "scope": "site",
+                "sections_deleted": len(matching_section_ids),
+                "lots_affected": lots_affected,
+                "items_deleted": items_deleted,
+                "message": f"Deleted section from {lots_affected} lot(s) in this site.",
+            }
+
+    # Default / fallback: lot scope
+    items_deleted = (
+        db.query(BOQItem)
+        .filter(BOQItem.boq_section_id == section_id, BOQItem.is_active == True)
+        .count()
+    )
+    db.query(BOQItem).filter(BOQItem.boq_section_id == section_id).update({"is_active": False})
+    db.delete(section)
+    db.commit()
+    return {
+        "scope": "lot",
+        "sections_deleted": 1,
+        "lots_affected": 1,
+        "items_deleted": items_deleted,
+        "message": "Section deleted from this lot.",
+    }
+
+
 def get_full_boq(db: Session, header_id: uuid.UUID) -> dict:
     """Return full nested BOQ with section totals and grand total."""
     header = _header_or_404(db, header_id)

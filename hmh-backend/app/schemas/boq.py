@@ -154,3 +154,13 @@ class BOQItemUpdate(BaseModel):
     sort_order: Optional[int] = None
     is_active: Optional[bool] = None
     notes: Optional[str] = None
+
+
+# ── Section delete result ─────────────────────────────────────────────────────
+
+class SectionDeleteResult(BaseModel):
+    scope: str                # "lot" | "site"
+    sections_deleted: int
+    lots_affected: int
+    items_deleted: int
+    message: str
