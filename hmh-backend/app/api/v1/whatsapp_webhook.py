@@ -516,10 +516,28 @@ def _handle_delivery_status(db, status: dict) -> None:
             db.commit()
             print(f"[WA-STATUS] Marked ACKNOWLEDGED", flush=True)
         elif wa_status == "failed":
-            errs = status.get("errors", [])
-            record.status = NotificationStatus.FAILED
-            record.error_message = errs[0].get("title", "Delivery failed") if errs else "Delivery failed"
+            errs      = status.get("errors", [])
+            recipient = status.get("recipient_id", "unknown")
+            err       = errs[0] if errs else {}
+            err_code  = err.get("code", "n/a")
+            err_title = err.get("title", "Delivery failed")
+            err_msg   = err.get("message", "")
+            record.status        = NotificationStatus.FAILED
+            record.error_message = f"[{err_code}] {err_title}" + (f": {err_msg}" if err_msg else "")
             db.commit()
-            print(f"[WA-STATUS] Marked FAILED", flush=True)
+            print(
+                f"[WA-STATUS] FAILED"
+                f" | msg_id={msg_id}"
+                f" | recipient={recipient}"
+                f" | error_code={err_code}"
+                f" | error_title={err_title!r}"
+                f" | error_message={err_msg!r}",
+                flush=True,
+            )
+            logger.error(
+                "WhatsApp delivery FAILED | msg_id=%s recipient=%s error_code=%s"
+                " error_title=%r error_message=%r",
+                msg_id, recipient, err_code, err_title, err_msg,
+            )
     except Exception:
         logger.exception("delivery_status update error msg_id=%s", msg_id)
