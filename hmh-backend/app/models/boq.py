@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import Boolean, Enum, ForeignKey, Integer, Numeric, String, Text
+from sqlalchemy import Boolean, Computed, Enum, ForeignKey, Integer, Numeric, String, Text
 from sqlalchemy import DateTime
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -141,8 +141,15 @@ class BOQItem(TimestampMixin, Base):
     unit: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     planned_quantity: Mapped[Optional[float]] = mapped_column(Numeric(14, 3), nullable=True)
     planned_rate: Mapped[Optional[float]] = mapped_column(Numeric(14, 2), nullable=True)
-    # planned_total is GENERATED ALWAYS AS STORED — do NOT write this column
-    planned_total: Mapped[Optional[float]] = mapped_column(Numeric(14, 2), nullable=True)
+    # planned_total is GENERATED ALWAYS AS STORED in PostgreSQL.
+    # Computed(persisted=True) tells SQLAlchemy to NEVER include this column in
+    # INSERT or UPDATE statements — the DB computes and stores it automatically.
+    # Reading is safe; any attempt to write raises a ProgrammingError immediately.
+    planned_total: Mapped[Optional[float]] = mapped_column(
+        Numeric(14, 2),
+        Computed("planned_quantity * planned_rate", persisted=True),
+        nullable=True,
+    )
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

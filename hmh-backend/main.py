@@ -151,11 +151,78 @@ async def hmh_exception_handler(request: Request, exc: HMHException) -> JSONResp
 async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     """
     Catch-all for any unhandled Python exception.
-    Always adds CORS headers so the browser shows the real error, not a fake
-    'CORS blocked' message that hides the underlying 500 cause.
+
+    Gives specific, actionable messages for known database schema errors so the
+    browser (and Render logs) show the real cause instead of a generic 500 / fake
+    CORS error.  Always adds CORS headers.
     """
     import logging
-    logging.getLogger(__name__).exception("Unhandled exception: %s", exc)
+    log = logging.getLogger(__name__)
+
+    exc_str = str(exc)
+
+    # ── Detect generated-column write attempts ─────────────────────────────────
+    # PostgreSQL raises ProgrammingError with "cannot insert into column" when
+    # application code tries to write to a GENERATED ALWAYS AS STORED column.
+    if "cannot insert into column" in exc_str or "cannot update column" in exc_str:
+        # Extract the column name from the error message when possible
+        import re
+        m = re.search(r'column "([^"]+)"', exc_str)
+        col_name = m.group(1) if m else "unknown"
+        log.error("Generated column write attempt: %s", exc_str)
+        return JSONResponse(
+            status_code=422,
+            content={
+                "success": False,
+                "message": (
+                    f"Database schema error: '{col_name}' is a GENERATED ALWAYS column "
+                    f"and cannot be written by the application. "
+                    f"Fix: use SQLAlchemy Core INSERT (not ORM add) and omit the column."
+                ),
+                "code": "GENERATED_COLUMN_WRITE",
+                "column": col_name,
+            },
+            headers=_cors_headers_for(request),
+        )
+
+    # ── Detect missing column (migration not applied) ──────────────────────────
+    if "column" in exc_str and "does not exist" in exc_str:
+        m = re.search(r'column "?([^"]+)"? of relation "?([^"]+)"?', exc_str)
+        if not m:
+            m = re.search(r'"([^"]+)" does not exist', exc_str)
+        detail = m.group(0) if m else exc_str[:120]
+        log.error("Missing DB column: %s", exc_str)
+        return JSONResponse(
+            status_code=503,
+            content={
+                "success": False,
+                "message": (
+                    f"Database schema mismatch: {detail}. "
+                    f"Run 'alembic upgrade head' to apply pending migrations."
+                ),
+                "code": "SCHEMA_MIGRATION_REQUIRED",
+            },
+            headers=_cors_headers_for(request),
+        )
+
+    # ── Detect missing table ───────────────────────────────────────────────────
+    if "relation" in exc_str and "does not exist" in exc_str:
+        log.error("Missing DB table: %s", exc_str)
+        return JSONResponse(
+            status_code=503,
+            content={
+                "success": False,
+                "message": (
+                    f"Database schema mismatch: {exc_str[:150]}. "
+                    f"Run 'alembic upgrade head'."
+                ),
+                "code": "TABLE_MISSING",
+            },
+            headers=_cors_headers_for(request),
+        )
+
+    # ── Generic catch-all ──────────────────────────────────────────────────────
+    log.exception("Unhandled exception on %s %s: %s", request.method, request.url.path, exc)
     return JSONResponse(
         status_code=500,
         content={"success": False, "message": "Internal server error.", "code": "INTERNAL_ERROR"},
@@ -219,7 +286,78 @@ os.makedirs(_uploads_dir, exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=_uploads_dir), name="uploads")
 
 
-# ── Debug route — lists registered paths (safe: no secrets) ──────────────────
+# ── Debug routes ─────────────────────────────────────────────────────────────
+
+@app.get("/api/v1/debug/db-schema", tags=["debug"])
+def db_schema_check():
+    """
+    Admin-safe DB schema diagnostic: alembic revision, tables, generated columns, warnings.
+    No secrets or row data are exposed.
+    """
+    import sqlalchemy as _sa
+    from app.db.base import Base
+    import app.models  # noqa
+
+    engine      = _sa.create_engine(settings.DATABASE_URL, pool_pre_ping=True)
+    inspector   = _sa.inspect(engine)
+    live_tables = inspector.get_table_names()
+    orm_tables  = list(Base.metadata.tables.keys())
+
+    revision = None
+    try:
+        with engine.connect() as conn:
+            row = conn.execute(_sa.text("SELECT version_num FROM alembic_version")).fetchone()
+            revision = str(row[0]) if row else None
+    except Exception:
+        revision = "ERROR — alembic_version table not found"
+
+    generated: dict = {}
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(_sa.text("""
+                SELECT table_name, column_name
+                FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND is_generated = 'ALWAYS'
+                ORDER BY table_name, column_name
+            """)).fetchall()
+            for tbl, col in rows:
+                generated.setdefault(tbl, []).append(col)
+    except Exception as exc:
+        generated = {"error": [str(exc)]}
+
+    from app.models.boq import BOQItem
+    boq_pt = BOQItem.__table__.columns.get("planned_total")
+    has_computed = (
+        boq_pt is not None
+        and hasattr(boq_pt, "computed")
+        and boq_pt.computed is not None
+    )
+
+    warnings_list = []
+    if not has_computed:
+        warnings_list.append(
+            "boq_items.planned_total: ORM column lacks Computed() — "
+            "ORM inserts will include planned_total=NULL and fail on "
+            "PostgreSQL GENERATED ALWAYS columns"
+        )
+    missing = sorted(set(orm_tables) - set(live_tables))
+    if missing:
+        warnings_list.append(f"Tables in ORM but missing from DB: {missing} — run alembic upgrade head")
+
+    return {
+        "database_dialect":  engine.dialect.name,
+        "alembic_revision":  revision,
+        "live_tables_count": len(live_tables),
+        "orm_tables_count":  len(orm_tables),
+        "missing_tables":    missing,
+        "generated_columns": generated,
+        "boq_planned_total_has_computed_declaration": has_computed,
+        "warnings":          warnings_list,
+        "status":            "OK" if not warnings_list else "SCHEMA_WARNINGS",
+    }
+
+
 @app.get("/api/v1/debug/routes", tags=["debug"])
 def list_routes():
     """

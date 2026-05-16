@@ -10,6 +10,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
+from sqlalchemy import insert as _sa_insert
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import NotFoundError, ValidationError
@@ -116,30 +117,37 @@ def clone_template_to_lots(
             )
 
             for tmpl_item in tmpl_items:
-                # Use Core INSERT via ORM to avoid touching planned_total (GENERATED column)
-                new_item = BOQItem(
-                    id=uuid.uuid4(),
-                    boq_section_id=section.id,
-                    project_id=project_id,
-                    site_id=lot.site_id,
-                    lot_id=lot.id,
-                    stage_id=tmpl_item.stage_id,
-                    item_id=tmpl_item.item_id,
-                    supplier_id=tmpl_item.supplier_id,
-                    raw_description=tmpl_item.raw_description,
-                    normalized_description=tmpl_item.normalized_description,
-                    specification=tmpl_item.specification,
-                    item_type=tmpl_item.item_type,
-                    unit=tmpl_item.unit,
-                    planned_quantity=tmpl_item.planned_quantity,
-                    planned_rate=tmpl_item.planned_rate,
-                    sort_order=tmpl_item.sort_order,
-                    is_active=True,
-                    notes=tmpl_item.notes,
-                    created_at=now,
-                    updated_at=now,
+                # Use Core INSERT (not ORM add) so SQLAlchemy never includes
+                # planned_total in the INSERT statement.  planned_total is
+                # GENERATED ALWAYS AS STORED in PostgreSQL — any explicit value
+                # (even NULL) causes: "cannot insert into column planned_total".
+                stmt = _sa_insert(BOQItem).values(
+                    id                     = uuid.uuid4(),
+                    boq_section_id         = section.id,
+                    project_id             = project_id,
+                    site_id                = lot.site_id,
+                    lot_id                 = lot.id,
+                    stage_id               = tmpl_item.stage_id,
+                    item_id                = tmpl_item.item_id,
+                    supplier_id            = tmpl_item.supplier_id,
+                    raw_description        = tmpl_item.raw_description,
+                    normalized_description = tmpl_item.normalized_description,
+                    specification          = tmpl_item.specification,
+                    item_type              = (
+                        tmpl_item.item_type.value
+                        if hasattr(tmpl_item.item_type, "value")
+                        else tmpl_item.item_type
+                    ),
+                    unit                   = tmpl_item.unit,
+                    planned_quantity       = tmpl_item.planned_quantity,
+                    planned_rate           = tmpl_item.planned_rate,
+                    sort_order             = tmpl_item.sort_order,
+                    is_active              = True,
+                    notes                  = tmpl_item.notes,
+                    created_at             = now,
+                    updated_at             = now,
                 )
-                db.add(new_item)
+                db.execute(stmt)
 
         # Update lot to point to this template
         lot.boq_template_id = template.id
