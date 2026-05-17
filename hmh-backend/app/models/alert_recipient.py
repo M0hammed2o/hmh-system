@@ -33,6 +33,13 @@ class AlertRecipient(TimestampMixin, Base):
 
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
+    # Tracks when this recipient last sent us a WhatsApp message.
+    # Used to determine whether we're inside the 24-hour conversation window.
+    # NULL means they have never messaged us → always use template.
+    last_inbound_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     created_by: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="SET NULL"),

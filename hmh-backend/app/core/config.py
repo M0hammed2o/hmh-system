@@ -76,6 +76,10 @@ class Settings(BaseSettings):
     WHATSAPP_API_VERSION: str = "v25.0"
     WHATSAPP_TEST_TO: str = ""
 
+    # WhatsApp alert templates (used when 24-hour conversation window is closed)
+    WHATSAPP_ALERT_TEMPLATE_NAME: str = ""       # e.g. "hmh_alert_notification"
+    WHATSAPP_ALERT_TEMPLATE_LANGUAGE: str = "en_US"
+
     # Alert escalation
     CRITICAL_ALERT_MAX_ATTEMPTS: int = 5
     CRITICAL_ALERT_FIRST_REMINDER_MINUTES: int = 5

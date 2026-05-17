@@ -147,6 +147,10 @@ async def receive_webhook(request: Request, db: DbSession):
         intent      = _detect_intent(tokens)
         mr_match    = _MR_ID_RE.search(body_raw)
 
+        # Stamp last_inbound_at on the matching AlertRecipient so
+        # notification_service knows the 24-hour window is open.
+        _stamp_recipient_inbound(db, from_number)
+
         print(f"[WA-WEBHOOK] from={_normalise(from_number)} body={body_raw!r} intent={intent} mr={mr_match and mr_match.group(0)}", flush=True)
 
         # ── RESET TEST ALERTS — exact phrase, checked before intent ───────────
@@ -480,6 +484,31 @@ def _reject_mr(db, mr_number: str, from_phone: str, reason: str) -> tuple[str, s
         print(f"[WA-REJECT] EXCEPTION: {exc}", flush=True)
         logger.exception("reject_mr failed for %s", mr_number)
         return ("error", f"Error processing {mr_number}: {exc}")
+
+
+def _stamp_recipient_inbound(db, from_phone: str) -> None:
+    """
+    Record the timestamp of an inbound WhatsApp message against the matching
+    AlertRecipient row.  Called for every incoming message so notification_service
+    can decide whether the 24-hour conversation window is still open.
+    """
+    from datetime import datetime, timezone
+    from app.models.alert_recipient import AlertRecipient
+
+    now = datetime.now(timezone.utc)
+    for variant in _phone_variants(from_phone):
+        recipient = db.query(AlertRecipient).filter(
+            AlertRecipient.phone_number == variant
+        ).first()
+        if recipient:
+            recipient.last_inbound_at = now
+            db.commit()
+            print(
+                f"[WA-WEBHOOK-V2] last_inbound_at stamped"
+                f" recipient={recipient.name!r} phone={variant}",
+                flush=True,
+            )
+            return
 
 
 def _find_user_by_phone(db, from_phone: str):
