@@ -2,7 +2,7 @@ import { NavLink, useLocation } from "react-router-dom";
 import {
   LayoutDashboard, Users, FolderKanban, FileSpreadsheet,
   ShoppingCart, Truck, Package, CreditCard, Bell, Settings, LogOut, HardHat,
-  Droplet, Building2, Car, FileCheck2, Copy, Smartphone, MessageSquare, Mail,
+  Droplet, Building2, Car, FileCheck2, Copy, Smartphone, MessageSquare, Mail, Clock,
 } from "lucide-react";
 import { HMHLogo } from "@/components/HMHLogo";
 import { TOKEN_KEY, REFRESH_TOKEN_KEY, ROLE_KEY } from "@/lib/constants";
@@ -63,6 +63,12 @@ const navGroups = [
     ],
   },
   {
+    label: "Progress",
+    items: [
+      { title: "Timeline",        path: "/timeline",       icon: Clock },
+    ],
+  },
+  {
     label: "Admin",
     items: [
       { title: "Users",           path: "/users",          icon: Users },
@@ -82,7 +88,7 @@ export function AppSidebar() {
   };
 
   return (
-    <aside className="hidden lg:flex flex-col w-64 bg-sidebar border-r border-sidebar-border min-h-screen overflow-y-auto">
+    <aside className="hidden lg:flex flex-col w-64 bg-sidebar border-r border-sidebar-border h-screen overflow-y-auto sticky top-0 shrink-0">
       {/* Logo / brand */}
       <div className="flex items-center px-5 py-4 border-b border-sidebar-border shrink-0">
         <HMHLogo variant="light" size="md" />

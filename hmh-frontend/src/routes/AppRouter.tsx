@@ -29,6 +29,7 @@ import InvoiceReconciliationPage from "@/pages/InvoiceReconciliationPage";
 import LabourPage from "@/pages/LabourPage";
 import WhatsAppQueuePage from "@/pages/WhatsAppQueuePage";
 import GmailInboxPage from "@/pages/GmailInboxPage";
+import TimelinePage from "@/pages/TimelinePage";
 
 export function AppRouter() {
   return (
@@ -79,6 +80,7 @@ export function AppRouter() {
           <Route path="fuel" element={<FuelPage />} />
           <Route path="suppliers" element={<SuppliersPage />} />
           <Route path="vehicles" element={<VehiclesPage />} />
+          <Route path="timeline" element={<TimelinePage />} />
           <Route path="settings" element={<SettingsPage />} />
         </Route>
 

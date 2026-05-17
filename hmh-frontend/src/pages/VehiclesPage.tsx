@@ -8,6 +8,9 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatDate } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { projectsApi, type Project } from "@/api/projects";
+import { sitesApi } from "@/api/sites";
+import type { Site } from "@/api/sites";
 
 const vehicleTypeLabels: Record<VehicleType, string> = {
   BAKKIE: "Bakkie", TRUCK: "Truck", TLB: "TLB", EXCAVATOR: "Excavator",
@@ -80,6 +83,17 @@ function LogCostModal({ vehicle, onClose, onLogged }: { vehicle: Vehicle; onClos
   const [form, setForm] = useState<VehicleCostCreate>({ cost_type: "FUEL", amount: 0, cost_date: today });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [sites, setSites] = useState<Site[]>([]);
+
+  useEffect(() => {
+    projectsApi.list(1, 100).then(r => setProjects(r.items)).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (!form.project_id) { setSites([]); return; }
+    sitesApi.list(form.project_id as string).then(setSites).catch(() => setSites([]));
+  }, [form.project_id]);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -110,6 +124,31 @@ function LogCostModal({ vehicle, onClose, onLogged }: { vehicle: Vehicle; onClos
             >
               {costTypeOptions.map((t) => <option key={t} value={t}>{costTypeLabels[t]}</option>)}
             </select>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-2">
+              <Label>Project (optional)</Label>
+              <select
+                value={(form.project_id as string) ?? ""}
+                onChange={(e) => setForm({ ...form, project_id: e.target.value as unknown as typeof form.project_id || undefined, site_id: undefined })}
+                className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+              >
+                <option value="">— None —</option>
+                {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </select>
+            </div>
+            <div className="space-y-2">
+              <Label>Site (optional)</Label>
+              <select
+                value={(form.site_id as string) ?? ""}
+                onChange={(e) => setForm({ ...form, site_id: e.target.value as unknown as typeof form.site_id || undefined })}
+                className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                disabled={sites.length === 0}
+              >
+                <option value="">— None —</option>
+                {sites.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+              </select>
+            </div>
           </div>
           <div className="space-y-2">
             <Label>Amount (R)</Label>

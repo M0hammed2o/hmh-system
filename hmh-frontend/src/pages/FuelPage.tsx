@@ -58,8 +58,8 @@ function LogFuelModal({
       setSites(s);
       setSiteId(s[0]?.id ?? "");
     }).catch(() => setSites([]));
-    // Load vehicles for this project so user can link fuel to a vehicle
-    vehiclesApi.list(projectId).then(setVehicles).catch(() => setVehicles([]));
+    // Load all vehicles (not filtered by project) so the Site Hilux and others always appear
+    vehiclesApi.list().then(setVehicles).catch(() => setVehicles([]));
   }, [projectId]);
 
   const handleSubmit = async () => {

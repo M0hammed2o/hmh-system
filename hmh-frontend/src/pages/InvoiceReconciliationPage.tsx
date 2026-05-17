@@ -177,13 +177,11 @@ function ProofPackDetail({ proof, onBack, onApproved }: {
       // Try to get project_id from proof.po_id context — use supplier as hint
       // Load all recent deliveries and POs regardless
     }
-    // Load all deliveries (limit 50 most recent)
-    client.get<{ data: { items?: unknown[]; total?: number } | unknown[] }>("/deliveries/", { params: { limit: 50 } })
-      .then(r => {
-        const data = r.data.data;
-        const list = Array.isArray(data) ? data : (data as { items?: unknown[] }).items ?? [];
-        setDeliveryOptions(list as typeof deliveryOptions);
-      })
+    // Load deliveries for this project (use project_id path param)
+    const pid = proof.project_id;
+    const dUrl = pid ? `/projects/${pid}/deliveries/` : "/deliveries/";
+    client.get<{ data: unknown[] }>(dUrl, { params: { limit: 50 } })
+      .then(r => setDeliveryOptions((r.data.data ?? []) as typeof deliveryOptions))
       .catch(() => {});
   }, [proof.invoice_id, proof.po_id, proof.delivery_id]);
 

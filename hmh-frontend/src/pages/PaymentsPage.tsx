@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Plus, CreditCard, CheckCircle2, Clock, FileText, AlertTriangle } from "lucide-react";
+import { Plus, CreditCard, CheckCircle2, Clock, FileText, AlertTriangle, Hammer } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -13,6 +13,7 @@ import { projectsApi, type Project } from "@/api/projects";
 import { invoicesApi, type Invoice, type InvoiceCreate, type EnrichedInvoice } from "@/api/invoices";
 import { paymentsApi, type Payment, type PaymentCreate, type PaymentStatus } from "@/api/payments";
 import { suppliersApi, type Supplier } from "@/api/suppliers";
+import { jobCardsApi, type JobCard } from "@/api/jobCards";
 import { formatCurrency, formatDate } from "@/lib/format";
 import client from "@/api/client";
 
@@ -300,6 +301,12 @@ export default function PaymentsPage() {
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [enrichedInvoices, setEnrichedInvoices] = useState<EnrichedInvoice[]>([]);
   const [outstanding, setOutstanding] = useState<OutstandingSummary | null>(null);
+  const [labourJcs, setLabourJcs] = useState<JobCard[]>([]);
+  const [payingJc, setPayingJc] = useState<JobCard | null>(null);
+  const [jcPayRef, setJcPayRef] = useState("");
+  const [jcPayDate, setJcPayDate] = useState(new Date().toISOString().split("T")[0]);
+  const [jcPayNotes, setJcPayNotes] = useState("");
+  const [jcPaying, setJcPaying] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [showCaptureInvoice, setShowCaptureInvoice] = useState(false);
@@ -320,11 +327,12 @@ export default function PaymentsPage() {
       .catch(() => setLoading(false));
   }, []);
 
-  // Load payments + invoices when project changes
+  // Load payments + invoices + labour job cards when project changes
   useEffect(() => {
     if (!selectedProjectId) return;
     setLoading(true);
     setLoadError("");
+    jobCardsApi.list(selectedProjectId, "PAYMENT_APPROVED").then(setLabourJcs).catch(() => setLabourJcs([]));
     Promise.all([
       paymentsApi.list(selectedProjectId),
       invoicesApi.list(selectedProjectId),
@@ -353,16 +361,40 @@ export default function PaymentsPage() {
 
   const totalOutstanding = enrichedInvoices.reduce((s, i) => s + i.outstanding_amount, 0);
 
+  const handlePayLabour = async () => {
+    if (!payingJc || !selectedProjectId) return;
+    setJcPaying(true);
+    try {
+      await Promise.all([
+        paymentsApi.create(selectedProjectId, {
+          payment_type: "LABOUR",
+          amount_paid: payingJc.total_amount,
+          payment_date: jcPayDate || null,
+          payment_reference: jcPayRef || payingJc.job_card_number,
+          notes: jcPayNotes || `Labour payment for job card ${payingJc.job_card_number}`,
+        } as PaymentCreate),
+        jobCardsApi.markPaid(payingJc.id),
+      ]);
+      setLabourJcs(prev => prev.filter(j => j.id !== payingJc.id));
+      setPayingJc(null); setJcPayRef(""); setJcPayDate(new Date().toISOString().split("T")[0]); setJcPayNotes("");
+      paymentsApi.list(selectedProjectId).then(setPayments).catch(() => {});
+    } catch {
+      alert("Payment failed. Check backend logs.");
+    } finally { setJcPaying(false); }
+  };
+
   const PAGE_TABS_EXTRA = [
     { key: "payments", label: "Payments" },
     { key: "invoices", label: "Invoices" },
     { key: "outstanding", label: "Outstanding" },
+    { key: "labour", label: "Labour" },
   ];
 
   const tabsWithCount = [
     { ...PAGE_TABS_EXTRA[0], count: payments.length },
     { ...PAGE_TABS_EXTRA[1], count: invoices.length },
     { ...PAGE_TABS_EXTRA[2], count: outstanding?.outstanding_invoices.length ?? 0 },
+    { ...PAGE_TABS_EXTRA[3], count: labourJcs.length },
   ];
 
   return (
@@ -559,6 +591,74 @@ export default function PaymentsPage() {
               </table>
             )}
           </div>
+        </div>
+      )}
+
+      {/* ── Labour tab ── */}
+      {tab === "labour" && (
+        <div className="space-y-4">
+          <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-2.5 text-xs text-amber-700 flex items-center gap-2">
+            <Hammer className="w-3.5 h-3.5 shrink-0" />
+            These job cards are approved for payment. Click Pay to record the labour payment and mark them as Paid.
+          </div>
+          <div className="bg-card border border-border rounded-xl overflow-hidden">
+            {labourJcs.length === 0 ? (
+              <div className="p-12 text-center text-sm text-muted-foreground">No job cards pending payment. Approve payment on the Labour page first.</div>
+            ) : (
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-border bg-muted/50">
+                    <th className="text-left px-4 py-3 font-medium text-muted-foreground">Job Card #</th>
+                    <th className="text-left px-4 py-3 font-medium text-muted-foreground">Worker / Team</th>
+                    <th className="text-left px-4 py-3 font-medium text-muted-foreground">Description</th>
+                    <th className="text-right px-4 py-3 font-medium text-muted-foreground">Amount</th>
+                    <th className="text-left px-4 py-3 font-medium text-muted-foreground">Date</th>
+                    <th className="px-4 py-3"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {labourJcs.map(jc => (
+                    <tr key={jc.id} className="border-b border-border last:border-0 hover:bg-muted/30 transition-colors">
+                      <td className="px-4 py-3 font-mono text-xs font-medium">{jc.job_card_number}</td>
+                      <td className="px-4 py-3 text-xs text-muted-foreground">{jc.worker_name || jc.team_name || "—"}</td>
+                      <td className="px-4 py-3 text-xs max-w-48 truncate">{jc.work_description}</td>
+                      <td className="px-4 py-3 text-right font-semibold">{formatCurrency(jc.total_amount)}</td>
+                      <td className="px-4 py-3 text-xs text-muted-foreground">{jc.work_date ? formatDate(jc.work_date) : "—"}</td>
+                      <td className="px-4 py-3">
+                        <Button size="sm" className="h-7 text-xs" onClick={() => { setPayingJc(jc); setJcPayRef(jc.job_card_number); }}>Pay</Button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+
+          {/* Pay labour modal */}
+          {payingJc && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-foreground/40">
+              <div className="bg-card border border-border rounded-xl w-full max-w-sm p-6 space-y-4 animate-fade-in">
+                <h2 className="font-semibold text-base">Record Labour Payment</h2>
+                <p className="text-sm text-muted-foreground">{payingJc.job_card_number} — {formatCurrency(payingJc.total_amount)}</p>
+                <div className="space-y-1">
+                  <label className="text-xs text-muted-foreground">Payment Reference</label>
+                  <Input value={jcPayRef} onChange={e => setJcPayRef(e.target.value)} placeholder={payingJc.job_card_number} />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs text-muted-foreground">Payment Date</label>
+                  <Input type="date" value={jcPayDate} onChange={e => setJcPayDate(e.target.value)} />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs text-muted-foreground">Notes (optional)</label>
+                  <Input value={jcPayNotes} onChange={e => setJcPayNotes(e.target.value)} placeholder="e.g. EFT, cash, etc." />
+                </div>
+                <div className="flex gap-2">
+                  <Button onClick={handlePayLabour} disabled={jcPaying} className="flex-1">{jcPaying ? "Paying…" : "Confirm Payment"}</Button>
+                  <Button variant="outline" onClick={() => setPayingJc(null)} className="flex-1">Cancel</Button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
