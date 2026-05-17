@@ -271,6 +271,36 @@ async def receive_delivery_with_document(
         item_id    = uuid.UUID(item_data["item_id"])    if item_data.get("item_id")    else None
         boq_item_id = uuid.UUID(item_data["boq_item_id"]) if item_data.get("boq_item_id") else None
 
+        # If item_id not supplied, resolve it from the linked PO item (by explicit ID or description).
+        # This preserves the catalog link when PO was created from an MR/BOQ item.
+        if not item_id and purchase_order_id:
+            po_item_id_raw = item_data.get("purchase_order_item_id")
+            _po_item = None
+            if po_item_id_raw:
+                _po_item = db.query(PurchaseOrderItem).filter(
+                    PurchaseOrderItem.id == uuid.UUID(po_item_id_raw)
+                ).first()
+            if not _po_item:
+                # Fallback: match by description within the same PO
+                _desc = (item_data.get("description") or "").lower().strip()
+                _po_item = (
+                    db.query(PurchaseOrderItem)
+                    .filter(
+                        PurchaseOrderItem.purchase_order_id == uuid.UUID(purchase_order_id),
+                        PurchaseOrderItem.item_id.isnot(None),
+                    )
+                    .all()
+                )
+                _po_item = next(
+                    (p for p in _po_item if p.description.lower().strip() == _desc), None
+                ) if _po_item else None
+            if _po_item:
+                if not item_id and _po_item.item_id:
+                    item_id = _po_item.item_id
+                    print(f"[DELIVERY] resolved item_id={item_id} from PO item for '{item_data.get('description')}'", flush=True)
+                if not boq_item_id and _po_item.boq_item_id:
+                    boq_item_id = _po_item.boq_item_id
+
         # Track non-BOQ items (item_id present but boq_item_id absent) for alerting
         if item_id and not boq_item_id:
             non_boq_items.append(item_data.get("description", "Unknown"))

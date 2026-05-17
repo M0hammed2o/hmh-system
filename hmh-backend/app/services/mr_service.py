@@ -261,6 +261,23 @@ def approve_request(
     db.commit()
     db.refresh(mr)
 
+    # Alert: MR approved
+    try:
+        from app.models.alert import SystemAlert
+        from app.models.enums import AlertSeverity, AlertStatus
+        db.add(SystemAlert(
+            project_id=mr.project_id, site_id=mr.site_id,
+            alert_type=AlertType.REQUEST_PENDING_TOO_LONG,
+            severity=AlertSeverity.LOW,
+            title=f"MR Approved: {mr.request_number}",
+            message=f"Material request {mr.request_number} was approved.",
+            status=AlertStatus.OPEN, notification_channel="in_app",
+            created_at=datetime.now(timezone.utc),
+        ))
+        db.commit()
+    except Exception:
+        pass
+
     # Send approval email to preferred supplier (best-effort, never crashes approval)
     if mr.preferred_supplier_id:
         try:
@@ -337,6 +354,23 @@ def reject_request(
                               after_value={"reason": reason})
     db.commit()
     db.refresh(mr)
+
+    try:
+        from app.models.alert import SystemAlert
+        from app.models.enums import AlertSeverity, AlertStatus
+        db.add(SystemAlert(
+            project_id=mr.project_id, site_id=mr.site_id,
+            alert_type=AlertType.REQUEST_PENDING_TOO_LONG,
+            severity=AlertSeverity.HIGH,
+            title=f"MR Rejected: {mr.request_number}",
+            message=f"Material request {mr.request_number} was rejected. Reason: {reason}",
+            status=AlertStatus.OPEN, notification_channel="in_app",
+            created_at=now,
+        ))
+        db.commit()
+    except Exception:
+        pass
+
     return mr
 
 

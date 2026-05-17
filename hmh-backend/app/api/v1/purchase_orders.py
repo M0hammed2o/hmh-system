@@ -114,9 +114,10 @@ def prepare_po_email_draft(po_id: uuid.UUID, db: DbSession, current_user: Curren
         PoEmailLog.status == EmailStatus.queued,
     ).delete(synchronize_session=False)
 
+    _email_val = to_email or "(no email on supplier)"
     draft = PoEmailLog(
         purchase_order_id   = po_id,
-        sent_to_email       = to_email or "(no email on supplier)",
+        sent_to_email       = _email_val,   # ORM column (migration 0003)
         sent_by             = current_user.id,
         email_subject       = subject,
         email_body          = body_html,
@@ -125,6 +126,15 @@ def prepare_po_email_draft(po_id: uuid.UUID, db: DbSession, current_user: Curren
         created_at          = now,
     )
     db.add(draft)
+    db.flush()
+    # Also populate legacy sent_to (NOT NULL in migration 0001, made nullable in 0008)
+    # Use raw SQL so we stay safe if the column doesn't exist on this instance
+    try:
+        from sqlalchemy import text as _t
+        db.execute(_t("UPDATE po_email_logs SET sent_to = :v, subject = :s WHERE id = :id"),
+                   {"v": _email_val, "s": subject[:499] if subject else "", "id": str(draft.id)})
+    except Exception:
+        pass
     db.commit()
     db.refresh(draft)
 

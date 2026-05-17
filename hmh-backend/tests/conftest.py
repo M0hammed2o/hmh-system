@@ -66,6 +66,19 @@ def ensure_tables():
                 END IF;
             END $$;
         """))
+        # po_email_logs.sent_to must be nullable (migration 0008)
+        conn.execute(_t("""
+            DO $$
+            BEGIN
+                IF EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'po_email_logs'
+                    AND column_name = 'sent_to' AND is_nullable = 'NO'
+                ) THEN
+                    ALTER TABLE po_email_logs ALTER COLUMN sent_to DROP NOT NULL;
+                END IF;
+            END $$;
+        """))
         # purchase_order_items.quantity must be nullable (migration 0007)
         conn.execute(_t("""
             DO $$

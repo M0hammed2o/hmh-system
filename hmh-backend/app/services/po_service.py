@@ -112,6 +112,24 @@ def create_po(
 
     db.commit()
     db.refresh(po)
+
+    # Alert: PO created
+    try:
+        from app.models.alert import SystemAlert
+        from app.models.enums import AlertType, AlertSeverity, AlertStatus
+        db.add(SystemAlert(
+            project_id=po.project_id, site_id=po.site_id,
+            alert_type=AlertType.REQUEST_PENDING_TOO_LONG,
+            severity=AlertSeverity.LOW,
+            title=f"PO Created: {po.po_number}",
+            message=f"Purchase order {po.po_number} was created and is awaiting approval.",
+            status=AlertStatus.OPEN, notification_channel="in_app",
+            created_at=datetime.now(timezone.utc),
+        ))
+        db.commit()
+    except Exception:
+        pass
+
     return po
 
 
@@ -161,6 +179,24 @@ def send_po_email(
                               after_value={"email_status": log.status.value})
     db.commit()
     db.refresh(po)
+
+    # Alert: PO sent
+    try:
+        from app.models.alert import SystemAlert
+        from app.models.enums import AlertType, AlertSeverity, AlertStatus
+        db.add(SystemAlert(
+            project_id=po.project_id, site_id=po.site_id,
+            alert_type=AlertType.REQUEST_PENDING_TOO_LONG,
+            severity=AlertSeverity.LOW,
+            title=f"PO Sent: {po.po_number}",
+            message=f"Purchase order {po.po_number} was emailed to supplier. Status: {log.status.value}.",
+            status=AlertStatus.OPEN, notification_channel="in_app",
+            created_at=datetime.now(timezone.utc),
+        ))
+        db.commit()
+    except Exception:
+        pass
+
     return po, log
 
 
