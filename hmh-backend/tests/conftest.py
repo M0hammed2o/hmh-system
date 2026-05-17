@@ -38,18 +38,70 @@ def ensure_tables():
     """Create all tables once per test session. Also relaxes NOT NULL on updated columns."""
     from sqlalchemy import text as _t
     Base.metadata.create_all(bind=engine)
-    # Drop NOT NULL on material_request_items.item_id (made nullable in ORM)
+    # ── Schema patches for test DB (create_all skips existing tables) ────────────
     with engine.begin() as conn:
+        # material_request_items.item_id must be nullable (changed in ORM)
         conn.execute(_t("""
             DO $$
             BEGIN
                 IF EXISTS (
                     SELECT 1 FROM information_schema.columns
                     WHERE table_name = 'material_request_items'
-                    AND column_name = 'item_id'
-                    AND is_nullable = 'NO'
+                    AND column_name = 'item_id' AND is_nullable = 'NO'
                 ) THEN
                     ALTER TABLE material_request_items ALTER COLUMN item_id DROP NOT NULL;
+                END IF;
+            END $$;
+        """))
+        # alert_recipients.last_inbound_at added in migration 0005
+        conn.execute(_t("""
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'alert_recipients'
+                    AND column_name = 'last_inbound_at'
+                ) THEN
+                    ALTER TABLE alert_recipients ADD COLUMN last_inbound_at TIMESTAMPTZ;
+                END IF;
+            END $$;
+        """))
+        # purchase_order_items.quantity must be nullable (migration 0007)
+        conn.execute(_t("""
+            DO $$
+            BEGIN
+                IF EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'purchase_order_items'
+                    AND column_name = 'quantity' AND is_nullable = 'NO'
+                ) THEN
+                    ALTER TABLE purchase_order_items ALTER COLUMN quantity DROP NOT NULL;
+                END IF;
+            END $$;
+        """))
+        # material_request_items.request_id must be nullable (migration 0006)
+        conn.execute(_t("""
+            DO $$
+            BEGIN
+                IF EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'material_request_items'
+                    AND column_name = 'request_id' AND is_nullable = 'NO'
+                ) THEN
+                    ALTER TABLE material_request_items ALTER COLUMN request_id DROP NOT NULL;
+                END IF;
+            END $$;
+        """))
+        # material_request_items.quantity_requested must be nullable (migration 0006)
+        conn.execute(_t("""
+            DO $$
+            BEGIN
+                IF EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'material_request_items'
+                    AND column_name = 'quantity_requested' AND is_nullable = 'NO'
+                ) THEN
+                    ALTER TABLE material_request_items ALTER COLUMN quantity_requested DROP NOT NULL;
                 END IF;
             END $$;
         """))

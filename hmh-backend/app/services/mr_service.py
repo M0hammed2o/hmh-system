@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session, joinedload
 from app.core.exceptions import NotFoundError, ValidationError
 from app.models.enums import (
     AlertSeverity, AlertStatus, AlertType,
-    AuditAction, DeliveryDestination, MRPriority, RecordStatus,
+    AuditAction, DeliveryDestination, MRPriority, RecordStatus, VatMode,
 )
 from app.models.material_request import MaterialRequest, MaterialRequestItem
 from app.models.mr_quote import MRQuote
@@ -177,11 +177,20 @@ def submit_request(db: Session, mr_id: uuid.UUID, actor_id: uuid.UUID) -> Materi
     db.commit()
     db.refresh(mr)
 
-    # Create a SystemAlert so office/admin sees the MR on the Alerts page immediately
-    # and receives a WhatsApp notification if configured.
+    # Create a SystemAlert so office/admin sees the MR on the Alerts page immediately.
+    # The MR status was committed above. Alert creation is best-effort: any failure
+    # is caught and logged without rolling back the main session (which would undo
+    # the MR commit in the test context where a single connection is shared).
     try:
-        _create_mr_submitted_alert(db, mr)
+        _create_mr_submitted_alert(db, mr)   # flushes only; we commit below
+        db.commit()
     except Exception:
+        # Expire all objects so the session is in a usable state, but do NOT call
+        # db.rollback() which would wipe the connection-level transaction in tests.
+        try:
+            db.expire_all()
+        except Exception:
+            pass
         import logging as _log
         _log.getLogger(__name__).exception(
             "MR submission alert failed for %s — submission still stands.", mr.request_number
@@ -215,13 +224,13 @@ def _create_mr_submitted_alert(db: Session, mr: "MaterialRequest") -> None:
         created_at=now,
     )
     db.add(alert)
-    db.flush()
+    db.flush()  # get alert.id — caller commits
 
     print(f"[MR-ALERT] created alert_id={alert.id} for MR={mr.request_number}", flush=True)
 
     # Enqueue WhatsApp notifications for matching active recipients
     queued = notification_service.enqueue_for_alert(db, alert)
-    db.commit()
+    # No commit here — submit_request commits the whole alert + notification block
     print(f"[MR-ALERT] queued {len(queued)} WhatsApp notification(s) for MR={mr.request_number}", flush=True)
 
 
@@ -366,21 +375,41 @@ def convert_to_po(
     db.flush()
 
     subtotal = Decimal("0")
-    for item in items_with_rates:
-        qty = Decimal(str(item.get("quantity", 0)))
-        rate = Decimal(str(item.get("rate", 0)))
+    for idx, item in enumerate(items_with_rates, 1):
+        raw_qty  = item.get("quantity", 0) or 0
+        raw_rate = item.get("rate", 0) or 0
+        desc     = item.get("description") or f"Item {idx}"
+
+        qty  = Decimal(str(raw_qty))
+        rate = Decimal(str(raw_rate))
+
+        if qty <= 0:
+            raise ValidationError(
+                f"Item '{desc}': quantity must be greater than 0 (got {raw_qty})."
+            )
+        if rate <= 0:
+            raise ValidationError(
+                f"Item '{desc}': rate must be greater than 0 (got {raw_rate}). "
+                "Add a unit price before converting to PO."
+            )
+
         line_total = (qty * rate).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-        subtotal += line_total
+        subtotal  += line_total
 
         poi = PurchaseOrderItem(
             purchase_order_id=po.id,
             item_id=item.get("item_id"),
+            boq_item_id=item.get("boq_item_id"),
             lot_id=mr.lot_id,
-            description=item.get("description", ""),
+            stage_id=item.get("stage_id"),
+            description=desc,
             quantity_ordered=float(qty),
             unit=item.get("unit"),
             rate=float(rate),
+            vat_mode=VatMode.EXCLUSIVE,
+            vat_rate=float(item.get("vat_rate", 15.0)),
             line_total=float(line_total),
+            quantity_received=0.0,
             created_at=now,
         )
         db.add(poi)

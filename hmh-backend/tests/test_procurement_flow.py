@@ -88,7 +88,15 @@ def test_mr_approve_flow(db: Session, client: TestClient, setup: dict):
 
 
 def test_convert_mr_to_po(db: Session, client: TestClient, setup: dict):
-    """Approved MR can be converted to PO."""
+    """
+    Approved MR converts to PO.
+
+    Regression for:
+      psycopg2.errors.NotNullViolation: null value in column 'quantity'
+    purchase_order_items.quantity is NOT NULL (migration 0001 legacy column).
+    The ORM uses quantity_ordered (added in migration 0003). Migration 0007
+    makes 'quantity' nullable so ORM INSERTs succeed.
+    """
     tok = login(client, setup["office"]["email"], setup["office"]["password"])
 
     # Create + submit + approve
@@ -96,31 +104,82 @@ def test_convert_mr_to_po(db: Session, client: TestClient, setup: dict):
         f"/api/v1/projects/{setup['project']['id']}/material-requests/",
         json={
             "site_id": setup["site"]["id"],
-            "items": [{"description": "Bricks", "requested_quantity": 500.0, "unit": "each"}],
+            "items": [{"description": "Internal Door (Hollow Core)", "requested_quantity": 5.0, "unit": "Each"}],
         },
+        headers=auth(tok),
+    )
+    assert r.status_code == 201, r.text
+    mr_id = r.json()["data"]["id"]
+    client.post(f"/api/v1/material-requests/{mr_id}/submit", headers=auth(tok))
+    client.post(f"/api/v1/material-requests/{mr_id}/approve", json={}, headers=auth(tok))
+
+    # Convert to PO — sends exact payload from bug report
+    r = client.post(
+        f"/api/v1/material-requests/{mr_id}/convert-to-po",
+        json={
+            "supplier_id": setup["supplier"]["id"],
+            "items": [{
+                "description": "Internal Door (Hollow Core)",
+                "quantity": 5,
+                "unit": "Each",
+                "rate": 1800.0,
+            }],
+        },
+        headers=auth(tok),
+    )
+    assert r.status_code == 201, r.text
+    data = r.json()["data"]
+    assert data["po_number"].startswith("PO-")
+
+    # Verify PO item fields in DB
+    from app.models.purchase_order import PurchaseOrder, PurchaseOrderItem
+    po = db.query(PurchaseOrder).filter(PurchaseOrder.id == data["po_id"]).first()
+    assert po is not None
+    items = db.query(PurchaseOrderItem).filter(PurchaseOrderItem.purchase_order_id == po.id).all()
+    assert len(items) == 1
+    poi = items[0]
+    assert abs(float(poi.quantity_ordered) - 5.0) < 0.001, f"quantity_ordered={poi.quantity_ordered}"
+    assert abs(float(poi.rate) - 1800.0) < 0.01, f"rate={poi.rate}"
+    assert abs(float(poi.line_total) - 9000.0) < 0.01, f"line_total={poi.line_total}"
+    assert poi.quantity_received == 0 or poi.quantity_received is None
+
+    # MR status updated
+    r2 = client.get(f"/api/v1/material-requests/{mr_id}", headers=auth(tok))
+    assert r2.json()["data"]["status"] == "CONVERTED_TO_PO"
+
+
+def test_convert_mr_to_po_validates_quantity_and_rate(db: Session, client: TestClient, setup: dict):
+    """convert-to-po returns 422 when quantity or rate is missing/zero."""
+    tok = login(client, setup["office"]["email"], setup["office"]["password"])
+
+    # Create + submit + approve a minimal MR
+    r = client.post(
+        f"/api/v1/projects/{setup['project']['id']}/material-requests/",
+        json={"site_id": setup["site"]["id"],
+              "items": [{"description": "Cement", "requested_quantity": 10.0}]},
         headers=auth(tok),
     )
     mr_id = r.json()["data"]["id"]
     client.post(f"/api/v1/material-requests/{mr_id}/submit", headers=auth(tok))
     client.post(f"/api/v1/material-requests/{mr_id}/approve", json={}, headers=auth(tok))
 
-    # Convert to PO
+    # Missing rate → 422
     r = client.post(
         f"/api/v1/material-requests/{mr_id}/convert-to-po",
-        json={
-            "supplier_id": setup["supplier"]["id"],
-            "items": [{"description": "Bricks", "quantity": 500, "unit": "each", "rate": 1.85}],
-        },
+        json={"supplier_id": setup["supplier"]["id"],
+              "items": [{"description": "Cement", "quantity": 10}]},
         headers=auth(tok),
     )
-    assert r.status_code == 201, r.text
-    data = r.json()["data"]
-    assert "po_number" in data
-    assert data["po_number"].startswith("PO-")
+    assert r.status_code == 422, r.text
 
-    # MR should now be CONVERTED_TO_PO
-    r2 = client.get(f"/api/v1/material-requests/{mr_id}", headers=auth(tok))
-    assert r2.json()["data"]["status"] == "CONVERTED_TO_PO"
+    # Zero quantity → 422
+    r = client.post(
+        f"/api/v1/material-requests/{mr_id}/convert-to-po",
+        json={"supplier_id": setup["supplier"]["id"],
+              "items": [{"description": "Cement", "quantity": 0, "rate": 500}]},
+        headers=auth(tok),
+    )
+    assert r.status_code == 422, r.text
 
 
 def test_send_po_mock_email(db: Session, client: TestClient, setup: dict):
