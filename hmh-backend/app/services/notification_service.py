@@ -28,8 +28,6 @@ from app.services import whatsapp_service
 
 logger = logging.getLogger(__name__)
 
-_WINDOW_24H = timedelta(hours=24)
-
 # Alert types that map to each recipient subscription
 _MATERIAL_TYPES = {
     AlertType.MATERIAL_OVERUSE,
@@ -138,70 +136,51 @@ def enqueue_for_alert(db: Session, alert: SystemAlert) -> list[NotificationQueue
     return queued
 
 
-def _send_for_queue_entry(db: Session, entry: NotificationQueue) -> tuple[str, Optional[str]]:
+def _send_for_queue_entry(entry: NotificationQueue) -> tuple[str, Optional[str]]:
     """
-    Send a WhatsApp notification, choosing between free-form text and an
-    approved template based on the 24-hour conversation window.
+    Send an automatic WhatsApp alert using an approved Meta template.
 
-    Decision logic:
-      - recipient.last_inbound_at within 24 h  →  free-form text (send_text)
-      - outside 24 h (or never messaged us)    →  approved template
+    All automatic alert notifications (process_queue) use template messages so
+    they work regardless of whether the recipient has messaged us recently.
+    Free-form replies (OK/APPROVE/REJECT/LIST) are handled directly in the
+    webhook handler and are always in-window by definition.
 
-    If the template is required but WHATSAPP_ALERT_TEMPLATE_NAME is not set,
-    returns FAILED with a diagnostic message instead of attempting the send.
+    If WHATSAPP_ALERT_TEMPLATE_NAME is not configured, the send fails with a
+    clear diagnostic message.
     """
-    from app.models.alert_recipient import AlertRecipient
-
-    now = datetime.now(timezone.utc)
-
-    # Look up recipient to check conversation window
-    recipient = (
-        db.get(AlertRecipient, entry.recipient_id) if entry.recipient_id else None
-    )
-    last_inbound = recipient.last_inbound_at if recipient else None
-    in_window = last_inbound is not None and (now - last_inbound) <= _WINDOW_24H
-
-    if in_window:
-        logger.info(
-            "WhatsApp send: FREE-FORM (in 24h window, last_inbound=%s) to %s",
-            last_inbound.isoformat(), entry.phone_number,
-        )
-        print(
-            f"[WA-SEND] FREE-FORM (in 24h window)"
-            f" phone={entry.phone_number}"
-            f" last_inbound={last_inbound.isoformat()}",
-            flush=True,
-        )
-        return whatsapp_service.send_text(entry.phone_number, entry.message_body)
-
-    # Outside window — must use approved template
     template_name = settings.WHATSAPP_ALERT_TEMPLATE_NAME
     if not template_name:
         msg = (
-            "WhatsApp template required because 24-hour window is closed. "
-            "Set WHATSAPP_ALERT_TEMPLATE_NAME in environment variables."
+            "WhatsApp template not configured. Automatic alerts require an approved "
+            "WhatsApp template. Set WHATSAPP_ALERT_TEMPLATE_NAME in environment variables."
         )
         logger.error("WhatsApp send FAILED: %s (phone=%s)", msg, entry.phone_number)
         print(
-            f"[WA-SEND] FAILED (no template configured, window closed)"
-            f" phone={entry.phone_number}"
-            f" last_inbound={last_inbound.isoformat() if last_inbound else 'never'}",
+            f"[WA-SEND] FAILED — no template configured"
+            f" | phone={entry.phone_number}",
             flush=True,
         )
         return ("FAILED", msg)
 
     lang = settings.WHATSAPP_ALERT_TEMPLATE_LANGUAGE or "en_US"
     logger.info(
-        "WhatsApp send: TEMPLATE '%s' (outside 24h window, last_inbound=%s) to %s",
-        template_name, last_inbound.isoformat() if last_inbound else "never", entry.phone_number,
+        "WhatsApp send: TEMPLATE '%s' lang=%s to %s",
+        template_name, lang, entry.phone_number,
     )
     print(
-        f"[WA-SEND] TEMPLATE '{template_name}' lang={lang} (outside 24h window)"
-        f" phone={entry.phone_number}"
-        f" last_inbound={last_inbound.isoformat() if last_inbound else 'never'}",
+        f"[WA-SEND] TEMPLATE '{template_name}' lang={lang}"
+        f" | phone={entry.phone_number}",
         flush=True,
     )
-    return whatsapp_service.send_template_message(entry.phone_number, template_name, lang)
+    status, msg_id = whatsapp_service.send_template_message(
+        entry.phone_number, template_name, lang
+    )
+    print(
+        f"[WA-SEND] Result: status={status} provider_message_id={msg_id}"
+        f" | phone={entry.phone_number}",
+        flush=True,
+    )
+    return status, msg_id
 
 
 def process_queue(db: Session) -> dict:
@@ -237,7 +216,7 @@ def process_queue(db: Session) -> dict:
                 continue
 
         # Attempt send — chooses free-form or template based on 24h window
-        status_str, provider_id = _send_for_queue_entry(db, entry)
+        status_str, provider_id = _send_for_queue_entry(entry)
 
         entry.attempt_count += 1
         entry.last_attempt_at = now

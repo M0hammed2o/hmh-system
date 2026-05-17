@@ -12,7 +12,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import {
   alertsApi,
   type Alert, type AlertSeverity, type AlertStats,
-  type AlertRecipient, type AlertRecipientCreate,
+  type AlertRecipient, type AlertRecipientCreate, type AlertRecipientUpdate,
+  type TestRecipientResult,
   type NotificationQueueEntry, type QueueStats,
 } from "@/api/alerts";
 import { cn } from "@/lib/utils";
@@ -247,33 +248,156 @@ function AddRecipientModal({ onClose, onSaved }: { onClose: () => void; onSaved:
   );
 }
 
+// ── Edit recipient modal ──────────────────────────────────────────────────────
+
+function EditRecipientModal({ recipient, onClose, onSaved }: { recipient: AlertRecipient; onClose: () => void; onSaved: () => void }) {
+  const [form, setForm] = useState<AlertRecipientUpdate>({
+    name: recipient.name,
+    phone_number: recipient.phone_number,
+    label: recipient.label ?? "",
+    receives_critical_alerts: recipient.receives_critical_alerts,
+    receives_daily_summary: recipient.receives_daily_summary,
+    receives_material_alerts: recipient.receives_material_alerts,
+    receives_delivery_alerts: recipient.receives_delivery_alerts,
+    receives_invoice_alerts: recipient.receives_invoice_alerts,
+    receives_vehicle_alerts: recipient.receives_vehicle_alerts,
+  });
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    setError("");
+    try {
+      await alertsApi.updateRecipient(recipient.id, { ...form, label: form.label || undefined });
+      onSaved();
+      onClose();
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Failed to update recipient.";
+      setError(msg);
+    } finally { setLoading(false); }
+  };
+
+  const toggle = (field: keyof AlertRecipientUpdate) =>
+    setForm((f) => ({ ...f, [field]: !f[field] }));
+
+  const checks: { field: keyof AlertRecipientUpdate; label: string }[] = [
+    { field: "receives_critical_alerts", label: "Critical alerts" },
+    { field: "receives_daily_summary",   label: "Daily summary" },
+    { field: "receives_material_alerts", label: "Material overuse" },
+    { field: "receives_delivery_alerts", label: "Delivery issues" },
+    { field: "receives_invoice_alerts",  label: "Invoice alerts" },
+    { field: "receives_vehicle_alerts",  label: "Vehicle/fuel" },
+  ];
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-foreground/40">
+      <div className="bg-card border border-border rounded-xl w-full max-w-md p-6 animate-fade-in">
+        <h2 className="text-base font-semibold mb-5">Edit Recipient</h2>
+        <form onSubmit={submit} className="space-y-4">
+          <div className="space-y-2">
+            <Label>Name</Label>
+            <Input value={form.name ?? ""} onChange={(e) => setForm({ ...form, name: e.target.value })} required />
+          </div>
+          <div className="space-y-2">
+            <Label>Phone (international format)</Label>
+            <Input value={form.phone_number ?? ""} onChange={(e) => setForm({ ...form, phone_number: e.target.value })} required placeholder="+27831234567" />
+          </div>
+          <div className="space-y-2">
+            <Label>Label / Role</Label>
+            <Input value={form.label ?? ""} onChange={(e) => setForm({ ...form, label: e.target.value })} placeholder="e.g. Owner, Manager" />
+          </div>
+          <div className="space-y-2">
+            <Label>Receives alerts for</Label>
+            <div className="grid grid-cols-2 gap-2">
+              {checks.map(({ field, label }) => (
+                <label key={field} className="flex items-center gap-2 cursor-pointer">
+                  <input type="checkbox" checked={!!form[field]} onChange={() => toggle(field)} className="rounded" />
+                  <span className="text-sm">{label}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+          {error && <p className="text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-lg px-3 py-2">{error}</p>}
+          <div className="flex gap-2 pt-1">
+            <Button type="submit" disabled={loading} className="flex-1">{loading ? "Saving…" : "Save Changes"}</Button>
+            <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+
 // ── Recipients panel ──────────────────────────────────────────────────────────
 
 function RecipientsPanel({ recipients, onRefresh }: { recipients: AlertRecipient[]; onRefresh: () => void }) {
   const [showAdd, setShowAdd] = useState(false);
+  const [editTarget, setEditTarget] = useState<AlertRecipient | null>(null);
   const [testingId, setTestingId] = useState<string | null>(null);
-  const [testResult, setTestResult] = useState<Record<string, string>>({});
+  const [testResult, setTestResult] = useState<Record<string, TestRecipientResult & { label: string }>>({});
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
 
-  const handleTest = async (id: string) => {
-    setTestingId(id);
+  const handleTest = async (r: AlertRecipient) => {
+    if (!r.is_active) {
+      setTestResult((prev) => ({
+        ...prev,
+        [r.id]: { status: "INACTIVE", provider_message_id: null, method: null, label: "Recipient is inactive. Activate before testing." },
+      }));
+      return;
+    }
+    setTestingId(r.id);
     try {
-      const res = await alertsApi.testRecipient(id);
-      setTestResult((prev) => ({ ...prev, [id]: res.status }));
+      const res = await alertsApi.testRecipient(r.id);
+      const label = res.error
+        ? res.error
+        : res.status === "MOCK_SENT"
+          ? "Queued (mock mode — WHATSAPP_ENABLED=false)"
+          : res.status === "SENT"
+            ? `Queued to WhatsApp API${res.template_used ? ` via template '${res.template_used}'` : ""}`
+            : res.status === "NOT_CONFIGURED"
+              ? res.error ?? "Template not configured"
+              : `Status: ${res.status}`;
+      setTestResult((prev) => ({ ...prev, [r.id]: { ...res, label } }));
     } catch {
-      setTestResult((prev) => ({ ...prev, [id]: "ERROR" }));
+      setTestResult((prev) => ({ ...prev, [r.id]: { status: "ERROR", provider_message_id: null, method: null, label: "Request failed" } }));
     } finally { setTestingId(null); }
   };
 
-  const handleDeactivate = async (id: string) => {
-    if (!confirm("Deactivate this recipient?")) return;
-    await alertsApi.deactivateRecipient(id);
-    onRefresh();
+  const handleToggleActive = async (r: AlertRecipient) => {
+    setBusyId(r.id);
+    try {
+      if (r.is_active) {
+        await alertsApi.deactivateRecipient(r.id);
+      } else {
+        await alertsApi.activateRecipient(r.id);
+      }
+      onRefresh();
+    } finally { setBusyId(null); }
   };
+
+  const handleDelete = async (id: string, name: string) => {
+    if (!confirm(`Permanently delete recipient "${name}"?\n\nThis also removes their notification history and cannot be undone.`)) return;
+    setDeletingId(id);
+    try {
+      await alertsApi.deleteRecipient(id);
+      onRefresh();
+    } finally { setDeletingId(null); }
+  };
+
+  const active   = recipients.filter((r) => r.is_active);
+  const inactive = recipients.filter((r) => !r.is_active);
+  const sorted   = [...active, ...inactive];
 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <p className="text-sm text-muted-foreground">{recipients.length} recipient{recipients.length !== 1 ? "s" : ""}</p>
+        <p className="text-sm text-muted-foreground">
+          {active.length} active{inactive.length > 0 ? `, ${inactive.length} inactive` : ""}
+        </p>
         <Button size="sm" onClick={() => setShowAdd(true)}>
           <Plus className="w-4 h-4 mr-1" />Add Recipient
         </Button>
@@ -286,46 +410,91 @@ function RecipientsPanel({ recipients, onRefresh }: { recipients: AlertRecipient
           <p className="text-xs text-muted-foreground mt-1">Add a recipient to receive alerts on WhatsApp.</p>
         </div>
       ) : (
-        <div className="bg-card border border-border rounded-xl overflow-hidden">
-          {recipients.map((r, i) => (
-            <div key={r.id} className={cn("px-4 py-3 flex items-start gap-4", i < recipients.length - 1 && "border-b border-border")}>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
-                  <p className="font-medium text-sm">{r.name}</p>
-                  {r.label && <Badge variant="outline" className="text-xs">{r.label}</Badge>}
-                  {!r.is_active && <Badge variant="secondary" className="text-xs">Inactive</Badge>}
+        <div className="bg-card border border-border rounded-xl overflow-hidden divide-y divide-border">
+          {sorted.map((r) => {
+            const tr = testResult[r.id];
+            const testOk  = tr && (tr.status === "SENT" || tr.status === "MOCK_SENT");
+            const testBad = tr && !testOk;
+            return (
+              <div key={r.id} className={cn("px-4 py-3 flex items-start gap-4", !r.is_active && "opacity-60")}>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <p className="font-medium text-sm">{r.name}</p>
+                    {r.label && <Badge variant="outline" className="text-xs">{r.label}</Badge>}
+                    {!r.is_active && <Badge variant="secondary" className="text-xs bg-amber-500/10 text-amber-600 border-amber-400/30">Inactive</Badge>}
+                  </div>
+                  <p className="text-xs text-muted-foreground font-mono mt-0.5">{r.phone_number}</p>
+                  <div className="flex flex-wrap gap-1 mt-1.5">
+                    {r.receives_critical_alerts && <span className="text-[10px] bg-destructive/10 text-destructive rounded px-1.5 py-0.5">Critical</span>}
+                    {r.receives_daily_summary    && <span className="text-[10px] bg-primary/10 text-primary rounded px-1.5 py-0.5">Daily Summary</span>}
+                    {r.receives_material_alerts  && <span className="text-[10px] bg-muted text-muted-foreground rounded px-1.5 py-0.5">Materials</span>}
+                    {r.receives_delivery_alerts  && <span className="text-[10px] bg-muted text-muted-foreground rounded px-1.5 py-0.5">Deliveries</span>}
+                    {r.receives_invoice_alerts   && <span className="text-[10px] bg-muted text-muted-foreground rounded px-1.5 py-0.5">Invoices</span>}
+                    {r.receives_vehicle_alerts   && <span className="text-[10px] bg-muted text-muted-foreground rounded px-1.5 py-0.5">Vehicles</span>}
+                  </div>
+                  {tr && (
+                    <p className={cn("text-xs mt-1.5 font-medium", testOk ? "text-green-600 dark:text-green-400" : "text-destructive")}>
+                      {testOk ? "✓" : "✗"} {tr.label}
+                    </p>
+                  )}
                 </div>
-                <p className="text-xs text-muted-foreground font-mono mt-0.5">{r.phone_number}</p>
-                <div className="flex flex-wrap gap-1 mt-1.5">
-                  {r.receives_critical_alerts && <span className="text-[10px] bg-destructive/10 text-destructive rounded px-1.5 py-0.5">Critical</span>}
-                  {r.receives_daily_summary    && <span className="text-[10px] bg-primary/10 text-primary rounded px-1.5 py-0.5">Daily Summary</span>}
-                  {r.receives_material_alerts  && <span className="text-[10px] bg-muted text-muted-foreground rounded px-1.5 py-0.5">Materials</span>}
-                  {r.receives_delivery_alerts  && <span className="text-[10px] bg-muted text-muted-foreground rounded px-1.5 py-0.5">Deliveries</span>}
-                  {r.receives_invoice_alerts   && <span className="text-[10px] bg-muted text-muted-foreground rounded px-1.5 py-0.5">Invoices</span>}
-                  {r.receives_vehicle_alerts   && <span className="text-[10px] bg-muted text-muted-foreground rounded px-1.5 py-0.5">Vehicles</span>}
-                </div>
-                {testResult[r.id] && (
-                  <p className={cn("text-xs mt-1 font-medium", testResult[r.id] === "MOCK_SENT" || testResult[r.id] === "SENT" ? "text-green-600 dark:text-green-400" : "text-destructive")}>
-                    Test: {testResult[r.id]}
-                  </p>
-                )}
-              </div>
-              <div className="flex items-center gap-1 shrink-0">
-                <Button size="sm" variant="ghost" onClick={() => handleTest(r.id)} disabled={testingId === r.id} className="h-7 px-2 text-xs">
-                  {testingId === r.id ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
-                </Button>
-                {r.is_active && (
-                  <Button size="sm" variant="ghost" onClick={() => handleDeactivate(r.id)} className="h-7 px-2 text-xs text-muted-foreground hover:text-destructive">
-                    <UserX className="w-3 h-3" />
+
+                <div className="flex items-center gap-1 shrink-0 flex-wrap justify-end">
+                  {/* Test */}
+                  <Button
+                    size="sm" variant="ghost"
+                    onClick={() => handleTest(r)}
+                    disabled={testingId === r.id}
+                    title="Send test message"
+                    className="h-7 px-2 text-xs"
+                  >
+                    {testingId === r.id ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
                   </Button>
-                )}
+
+                  {/* Edit */}
+                  <Button
+                    size="sm" variant="ghost"
+                    onClick={() => setEditTarget(r)}
+                    title="Edit recipient"
+                    className="h-7 px-2 text-xs"
+                  >
+                    <Pencil className="w-3 h-3" />
+                  </Button>
+
+                  {/* Activate / Deactivate toggle */}
+                  <Button
+                    size="sm" variant="ghost"
+                    onClick={() => handleToggleActive(r)}
+                    disabled={busyId === r.id}
+                    title={r.is_active ? "Deactivate recipient" : "Activate recipient"}
+                    className={cn("h-7 px-2 text-xs", r.is_active ? "text-muted-foreground hover:text-amber-600" : "text-green-600 hover:text-green-700")}
+                  >
+                    {busyId === r.id
+                      ? <RefreshCw className="w-3 h-3 animate-spin" />
+                      : r.is_active ? <UserX className="w-3 h-3" /> : <CheckCircle2 className="w-3 h-3" />}
+                  </Button>
+
+                  {/* Delete */}
+                  <Button
+                    size="sm" variant="ghost"
+                    onClick={() => handleDelete(r.id, r.name)}
+                    disabled={deletingId === r.id}
+                    title="Delete recipient"
+                    className="h-7 px-2 text-xs text-muted-foreground hover:text-destructive"
+                  >
+                    {deletingId === r.id
+                      ? <RefreshCw className="w-3 h-3 animate-spin" />
+                      : <X className="w-3 h-3" />}
+                  </Button>
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
-      {showAdd && <AddRecipientModal onClose={() => setShowAdd(false)} onSaved={onRefresh} />}
+      {showAdd   && <AddRecipientModal onClose={() => setShowAdd(false)} onSaved={onRefresh} />}
+      {editTarget && <EditRecipientModal recipient={editTarget} onClose={() => setEditTarget(null)} onSaved={onRefresh} />}
     </div>
   );
 }

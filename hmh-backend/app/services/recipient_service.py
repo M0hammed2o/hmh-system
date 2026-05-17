@@ -66,7 +66,19 @@ def update_recipient(
 ) -> AlertRecipient:
     recipient = get_recipient(db, recipient_id)
 
-    for field, value in data.model_dump(exclude_none=True).items():
+    updates = data.model_dump(exclude_none=True)
+
+    # If changing phone number, check uniqueness
+    if "phone_number" in updates and updates["phone_number"] != recipient.phone_number:
+        clash = db.query(AlertRecipient).filter(
+            AlertRecipient.phone_number == updates["phone_number"],
+            AlertRecipient.id != recipient_id,
+        ).first()
+        if clash:
+            from app.core.exceptions import ConflictError
+            raise ConflictError(f"Phone number {updates['phone_number']} is already registered.")
+
+    for field, value in updates.items():
         setattr(recipient, field, value)
 
     from datetime import datetime, timezone
@@ -75,3 +87,10 @@ def update_recipient(
     db.commit()
     db.refresh(recipient)
     return recipient
+
+
+def delete_recipient(db: Session, recipient_id: uuid.UUID) -> None:
+    """Permanently remove an AlertRecipient and all their notification history."""
+    recipient = get_recipient(db, recipient_id)
+    db.delete(recipient)
+    db.commit()

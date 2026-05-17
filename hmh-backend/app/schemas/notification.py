@@ -36,6 +36,7 @@ class AlertRecipientCreate(BaseModel):
 
 class AlertRecipientUpdate(BaseModel):
     name: Optional[str] = None
+    phone_number: Optional[str] = None
     label: Optional[str] = None
     receives_critical_alerts: Optional[bool] = None
     receives_daily_summary: Optional[bool] = None
@@ -44,6 +45,19 @@ class AlertRecipientUpdate(BaseModel):
     receives_vehicle_alerts: Optional[bool] = None
     receives_material_alerts: Optional[bool] = None
     is_active: Optional[bool] = None
+
+    @field_validator("phone_number")
+    @classmethod
+    def validate_phone(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        v = v.strip()
+        if not v.startswith("+"):
+            raise ValueError("Phone number must be in international format, e.g. +27831234567")
+        digits = v[1:].replace(" ", "")
+        if not digits.isdigit() or len(digits) < 8:
+            raise ValueError("Invalid phone number")
+        return v
 
 
 class AlertRecipientRead(BaseModel):

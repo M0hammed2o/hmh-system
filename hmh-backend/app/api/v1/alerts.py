@@ -16,6 +16,7 @@ from app.schemas.notification import (
     NotificationQueueRead,
     QueueStats,
 )
+from app.core.config import settings
 from app.services import alert_service, notification_service, recipient_service
 
 router = APIRouter(prefix="/alerts", tags=["alerts"])
@@ -315,28 +316,74 @@ def create_recipient(body: AlertRecipientCreate, db: DbSession, current_user: Cu
 @router.patch("/recipients/{recipient_id}", response_model=ApiSuccess[AlertRecipientRead], dependencies=[OFFICE_AND_ABOVE])
 def update_recipient(recipient_id: uuid.UUID, body: AlertRecipientUpdate, db: DbSession):
     recipient = recipient_service.update_recipient(db, recipient_id, body)
-    return ApiSuccess(data=AlertRecipientRead.model_validate(recipient))
+    return ApiSuccess(data=AlertRecipientRead.model_validate(recipient), message="Recipient updated.")
+
+
+@router.patch("/recipients/{recipient_id}/activate", response_model=ApiSuccess[AlertRecipientRead], dependencies=[OFFICE_AND_ABOVE])
+def activate_recipient(recipient_id: uuid.UUID, db: DbSession):
+    from app.schemas.notification import AlertRecipientUpdate as ARU
+    recipient = recipient_service.update_recipient(db, recipient_id, ARU(is_active=True))
+    return ApiSuccess(data=AlertRecipientRead.model_validate(recipient), message="Recipient activated.")
+
+
+@router.patch("/recipients/{recipient_id}/deactivate", response_model=ApiSuccess[AlertRecipientRead], dependencies=[OFFICE_AND_ABOVE])
+def deactivate_recipient_toggle(recipient_id: uuid.UUID, db: DbSession):
+    from app.schemas.notification import AlertRecipientUpdate as ARU
+    recipient = recipient_service.update_recipient(db, recipient_id, ARU(is_active=False))
+    return ApiSuccess(data=AlertRecipientRead.model_validate(recipient), message="Recipient deactivated.")
 
 
 @router.delete("/recipients/{recipient_id}", response_model=ApiSuccess[None], dependencies=[OFFICE_AND_ABOVE])
-def deactivate_recipient(recipient_id: uuid.UUID, db: DbSession):
-    from app.schemas.notification import AlertRecipientUpdate as ARU
-    recipient_service.update_recipient(db, recipient_id, ARU(is_active=False))
-    return ApiSuccess(data=None, message="Recipient deactivated.")
+def delete_recipient(recipient_id: uuid.UUID, db: DbSession):
+    """Permanently remove a recipient and all their notification history."""
+    recipient_service.delete_recipient(db, recipient_id)
+    return ApiSuccess(data=None, message="Recipient deleted.")
 
 
 @router.post("/recipients/{recipient_id}/test", response_model=ApiSuccess[dict], dependencies=[OFFICE_AND_ABOVE])
 def send_test_message(recipient_id: uuid.UUID, db: DbSession):
-    """Send a test WhatsApp message to this recipient."""
+    """
+    Send a test WhatsApp message to this recipient using the configured alert template.
+    Blocked for inactive recipients.
+    """
     from app.services import whatsapp_service
+    from app.core.exceptions import ValidationError
+
     recipient = recipient_service.get_recipient(db, recipient_id)
-    status, msg_id = whatsapp_service.send_text(
-        recipient.phone_number,
-        f"✅ *HMH Test Message*\n\nHi {recipient.name}, this is a test from the HMH Construction System.\nYou are configured as: {recipient.label or 'Recipient'}",
+
+    if not recipient.is_active:
+        raise ValidationError("Recipient is inactive. Activate before testing.")
+
+    template_name = settings.WHATSAPP_ALERT_TEMPLATE_NAME
+    if not template_name:
+        return ApiSuccess(
+            data={"status": "NOT_CONFIGURED", "provider_message_id": None, "method": None,
+                  "error": "WhatsApp template not configured. Automatic alerts require an approved WhatsApp template. Set WHATSAPP_ALERT_TEMPLATE_NAME."},
+            message="Template not configured.",
+        )
+
+    lang = settings.WHATSAPP_ALERT_TEMPLATE_LANGUAGE or "en_US"
+    print(
+        f"[WA-TEST] Sending template='{template_name}' lang={lang}"
+        f" recipient={recipient.name!r} phone={recipient.phone_number}",
+        flush=True,
+    )
+    status, msg_id = whatsapp_service.send_template_message(
+        recipient.phone_number, template_name, lang
+    )
+    print(
+        f"[WA-TEST] Result: status={status} provider_message_id={msg_id}"
+        f" recipient={recipient.name!r}",
+        flush=True,
     )
     return ApiSuccess(
-        data={"status": status, "provider_message_id": msg_id},
-        message=f"Test message status: {status}",
+        data={
+            "status": status,
+            "provider_message_id": msg_id,
+            "method": "template",
+            "template_used": template_name,
+        },
+        message=f"Test queued to WhatsApp API: {status}",
     )
 
 

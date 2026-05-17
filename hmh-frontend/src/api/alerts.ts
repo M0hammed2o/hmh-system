@@ -68,6 +68,27 @@ export interface AlertRecipientCreate {
   receives_material_alerts?: boolean;
 }
 
+export interface AlertRecipientUpdate {
+  name?: string;
+  phone_number?: string;
+  label?: string;
+  is_active?: boolean;
+  receives_critical_alerts?: boolean;
+  receives_daily_summary?: boolean;
+  receives_invoice_alerts?: boolean;
+  receives_delivery_alerts?: boolean;
+  receives_vehicle_alerts?: boolean;
+  receives_material_alerts?: boolean;
+}
+
+export interface TestRecipientResult {
+  status: string;
+  provider_message_id: string | null;
+  method: string | null;
+  template_used?: string;
+  error?: string;
+}
+
 export interface NotificationQueueEntry {
   id: string;
   alert_id: string | null;
@@ -138,17 +159,27 @@ export const alertsApi = {
     return res.data.data;
   },
 
-  updateRecipient: async (id: string, body: Partial<AlertRecipientCreate & { is_active: boolean }>): Promise<AlertRecipient> => {
+  updateRecipient: async (id: string, body: AlertRecipientUpdate): Promise<AlertRecipient> => {
     const res = await client.patch<{ data: AlertRecipient }>(`/alerts/recipients/${id}`, body);
     return res.data.data;
   },
 
-  deactivateRecipient: async (id: string): Promise<void> => {
+  activateRecipient: async (id: string): Promise<AlertRecipient> => {
+    const res = await client.patch<{ data: AlertRecipient }>(`/alerts/recipients/${id}/activate`);
+    return res.data.data;
+  },
+
+  deactivateRecipient: async (id: string): Promise<AlertRecipient> => {
+    const res = await client.patch<{ data: AlertRecipient }>(`/alerts/recipients/${id}/deactivate`);
+    return res.data.data;
+  },
+
+  deleteRecipient: async (id: string): Promise<void> => {
     await client.delete(`/alerts/recipients/${id}`);
   },
 
-  testRecipient: async (id: string): Promise<{ status: string; provider_message_id: string | null }> => {
-    const res = await client.post<{ data: { status: string; provider_message_id: string | null } }>(`/alerts/recipients/${id}/test`);
+  testRecipient: async (id: string): Promise<TestRecipientResult> => {
+    const res = await client.post<{ data: TestRecipientResult }>(`/alerts/recipients/${id}/test`);
     return res.data.data;
   },
 
