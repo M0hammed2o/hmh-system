@@ -92,8 +92,16 @@ def _save_attachment(payload: bytes, filename: str, doc_type: str) -> str:
     with open(full_path, "wb") as f:
         f.write(payload)
 
-    logger.info("[GMAIL-SAVE] Saved %s → %s (%d bytes)", filename, full_path, len(payload))
-    print(f"[GMAIL-SAVE] UPLOAD_DIR={settings.UPLOAD_DIR} path={full_path} size={len(payload)}", flush=True)
+    exists = os.path.isfile(full_path)
+    logger.info("[GMAIL-SAVE-ATTACHMENT] filename=%s saved_path=%s exists=%s size=%d",
+                filename, full_path, exists, len(payload))
+    print(
+        f"[GMAIL-SAVE-ATTACHMENT] filename={filename!r}"
+        f" saved_path={full_path!r}"
+        f" exists={exists}"
+        f" size={len(payload)}",
+        flush=True,
+    )
     return full_path
 
 

@@ -297,18 +297,51 @@ def get_attachment(att_id: uuid.UUID, db: DbSession):
     return ApiSuccess(data=_att_summary(att))
 
 
+def _resolve_attachment_path(stored: str, upload_dir: str) -> tuple[str | None, list[str]]:
+    """
+    Resolve an attachment file path using four fallback strategies.
+
+    Problem: old records store relative paths like "uploads/gmail/other/file.pdf"
+    while UPLOAD_DIR is an absolute path like "/opt/render/project/src/uploads".
+    Naively joining them produces a doubled prefix:
+        /opt/render/project/src/uploads/uploads/gmail/...  ← WRONG
+
+    Correct approach: join the *parent* of UPLOAD_DIR with the stored relative path:
+        parent = /opt/render/project/src
+        path   = uploads/gmail/other/file.pdf
+        result = /opt/render/project/src/uploads/gmail/other/file.pdf  ← CORRECT
+
+    Strategy order
+    -------------
+    1. stored as-is          → absolute paths (new records saved after the fix)
+    2. parent(UPLOAD_DIR) / stored  → "uploads/..." relative paths (old records)
+    3. UPLOAD_DIR / stored   → "gmail/..." relative paths (even older records)
+    4. UPLOAD_DIR / "gmail" / basename  → filename-only fallback
+    """
+    import os
+    abs_upload  = os.path.abspath(upload_dir)
+    parent_dir  = os.path.dirname(abs_upload)   # /opt/render/project/src
+    basename    = os.path.basename(stored)
+
+    candidates = [
+        stored,                                                  # (1) absolute
+        os.path.join(parent_dir, stored),                        # (2) parent + relative
+        os.path.join(abs_upload, stored),                        # (3) UPLOAD_DIR + relative
+        os.path.join(abs_upload, "gmail", basename),             # (4) filename only
+    ]
+    for c in candidates:
+        if c and os.path.isfile(c):
+            return c, candidates
+    return None, candidates
+
+
 @gmail_router.get("/attachments/{att_id}/download", dependencies=[OFFICE_AND_ABOVE])
 def download_attachment(att_id: uuid.UUID, db: DbSession, inline: bool = False):
     """
     Serve the saved attachment file for viewing or download.
 
-    ?inline=true  → Content-Disposition: inline  (browser renders PDF/image in tab)
-    ?inline=false → Content-Disposition: attachment (browser downloads the file)
-
-    Path resolution order:
-      1. att.file_path as stored (absolute path for records saved after the fix)
-      2. os.path.join(UPLOAD_DIR, att.file_path) (relative path fallback for old records)
-      3. os.path.join(UPLOAD_DIR, "gmail", basename) (last-resort filename-only search)
+    ?inline=true  → Content-Disposition: inline  (browser opens PDF/image in tab)
+    ?inline=false → Content-Disposition: attachment (browser saves the file)
     """
     import os
     from fastapi.responses import FileResponse
@@ -321,38 +354,28 @@ def download_attachment(att_id: uuid.UUID, db: DbSession, inline: bool = False):
     if not att:
         raise HTTPException(status_code=404, detail="Attachment not found in database.")
 
-    stored = att.file_path or ""
+    stored     = att.file_path or ""
     upload_dir = settings.UPLOAD_DIR
-
-    # Try multiple candidate paths in priority order
-    candidates = [
-        stored,                                                          # absolute (new records)
-        os.path.join(upload_dir, stored),                               # relative (old records)
-        os.path.join(upload_dir, "gmail", os.path.basename(stored)),    # filename fallback
-    ]
-
-    resolved = None
-    for candidate in candidates:
-        if candidate and os.path.exists(candidate):
-            resolved = candidate
-            break
+    resolved, candidates = _resolve_attachment_path(stored, upload_dir)
 
     print(
-        f"[GMAIL-DOWNLOAD] att_id={att_id} stored={stored!r}"
-        f" UPLOAD_DIR={upload_dir} resolved={resolved!r}",
+        f"[GMAIL-DOWNLOAD] att_id={att_id}"
+        f" | stored={stored!r}"
+        f" | UPLOAD_DIR={upload_dir!r}"
+        f" | resolved={resolved!r}",
         flush=True,
     )
 
     if not resolved:
-        tried = ", ".join(repr(c) for c in candidates if c)
+        tried = " | ".join(repr(c) for c in candidates if c)
         raise HTTPException(
             status_code=404,
             detail=(
-                f"Attachment metadata exists but file is missing from disk. "
-                f"Tried: {tried}. "
-                f"UPLOAD_DIR={upload_dir!r}. "
-                f"If UPLOAD_DIR contains a typo (e.g. '/scr/' instead of '/src/'), "
-                f"correct the Render environment variable and re-fetch emails."
+                "Attachment record exists but the file is no longer on disk. "
+                "Render's ephemeral filesystem is wiped on every redeploy — "
+                "re-fetch the email via POST /api/v1/gmail/fetch to restore it. "
+                f"Tried paths: {tried}. "
+                f"UPLOAD_DIR={upload_dir!r}."
             ),
         )
 
@@ -495,21 +518,10 @@ def _email_summary(e) -> dict:
 
 
 def _att_summary(a) -> dict:
-    import os
     from app.core.config import settings
 
     stored = a.file_path or ""
-    upload_dir = settings.UPLOAD_DIR
-
-    # Check all candidate paths (same logic as download endpoint)
-    file_exists = any(
-        c and os.path.exists(c)
-        for c in [
-            stored,
-            os.path.join(upload_dir, stored),
-            os.path.join(upload_dir, "gmail", os.path.basename(stored)),
-        ]
-    )
+    resolved, _ = _resolve_attachment_path(stored, settings.UPLOAD_DIR)
 
     return {
         "id":            str(a.id),
@@ -518,5 +530,5 @@ def _att_summary(a) -> dict:
         "content_type":  a.content_type,
         "detected_type": a.detected_type,
         "created_at":    a.created_at.isoformat(),
-        "file_exists":   file_exists,
+        "file_exists":   resolved is not None,
     }
