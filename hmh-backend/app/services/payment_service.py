@@ -65,7 +65,8 @@ def create_payment(
         payment_type=data.payment_type,
         payment_reference=data.payment_reference,
         payment_date=data.payment_date,
-        amount_paid=data.amount_paid,
+        amount_paid=data.amount_paid,   # ORM column (migration 0004)
+        amount=data.amount_paid,        # legacy NOT NULL column (migration 0001)
         captured_by=captured_by_id,
         notes=data.notes,
     )

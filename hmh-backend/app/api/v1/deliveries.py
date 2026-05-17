@@ -245,7 +245,8 @@ async def receive_delivery_with_document(
             entity_type=AttachmentEntity.DELIVERY,
             entity_id=delivery.id,
             file_name=dn_fname,
-            stored_path=delivery_note_url,
+            stored_path=delivery_note_url,  # ORM column (migration 0004)
+            file_url=delivery_note_url,     # legacy NOT NULL column (migration 0001)
             mime_type=dn_mime or "application/octet-stream",
             file_size_bytes=dn_size or None,
             attachment_type=AttachmentType.DELIVERY_NOTE,

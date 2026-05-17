@@ -43,6 +43,9 @@ class Payment(TimestampMixin, Base):
     payment_reference: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     payment_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     amount_paid: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
+    # Legacy column from migration 0001 (NOT NULL until migration 0009).
+    # Always populate alongside amount_paid to keep both columns consistent.
+    amount: Mapped[Optional[float]] = mapped_column(Numeric(14, 2), nullable=True)
     status: Mapped[PaymentStatus] = mapped_column(
         Enum(PaymentStatus, name="payment_status_enum", create_type=False),
         nullable=False,

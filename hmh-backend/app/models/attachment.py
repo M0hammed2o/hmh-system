@@ -25,6 +25,9 @@ class Attachment(Base):
     entity_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     file_name: Mapped[str] = mapped_column(String(255), nullable=False)
     stored_path: Mapped[str] = mapped_column(Text, nullable=False)
+    # Legacy column from migration 0001 (NOT NULL until migration 0009 drops the constraint).
+    # Always populate alongside stored_path so both columns stay consistent.
+    file_url: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
     mime_type: Mapped[str] = mapped_column(String(100), nullable=False)
     file_size_bytes: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
     attachment_type: Mapped[AttachmentType] = mapped_column(

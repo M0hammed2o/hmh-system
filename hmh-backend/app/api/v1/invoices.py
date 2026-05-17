@@ -216,6 +216,7 @@ def get_invoice_proof(invoice_id: uuid.UUID, db: DbSession):
     return ApiSuccess(data={
         # Invoice
         "invoice_id": str(invoice.id),
+        "project_id": str(invoice.project_id) if invoice.project_id else None,
         "invoice_number": invoice.invoice_number,
         "invoice_date": _dt(invoice.invoice_date),
         "due_date": _dt(invoice.due_date),

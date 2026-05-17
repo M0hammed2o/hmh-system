@@ -64,7 +64,23 @@ def lot_material_summary(site_id: uuid.UUID, lot_id: uuid.UUID, db: DbSession):
             )
             fallback = bool(boq_items)
 
-    # ── 3. Build summary rows ─────────────────────────────────────────────────
+    # ── 3. De-duplicate by (raw_description, item_type, unit) ────────────────
+    # Duplicates arise when a template is applied to lots AND generate_lot_boqs
+    # is also called, inserting two copies of each item for the same lot.
+    # Keep only the first occurrence (highest planned_quantity wins on tie).
+    seen_keys: set = set()
+    unique_boq_items = []
+    for bi in sorted(boq_items, key=lambda x: float(x.planned_quantity or 0), reverse=True):
+        key = (
+            (bi.raw_description or "").lower().strip(),
+            bi.unit or "",
+        )
+        if key not in seen_keys:
+            seen_keys.add(key)
+            unique_boq_items.append(bi)
+    boq_items = unique_boq_items
+
+    # ── 4. Build summary rows ─────────────────────────────────────────────────
     result = []
     for bi in boq_items:
         allocated = float(bi.planned_quantity or 0)

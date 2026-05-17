@@ -66,6 +66,36 @@ def ensure_tables():
                 END IF;
             END $$;
         """))
+        # attachments.file_url: legacy NOT NULL column from migration 0001,
+        # now in ORM model.  Add if missing (test DBs created via create_all
+        # before today's model change won't have it).
+        conn.execute(_t("""
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'attachments' AND column_name = 'file_url'
+                ) THEN
+                    ALTER TABLE attachments ADD COLUMN file_url VARCHAR(1000);
+                ELSE
+                    ALTER TABLE attachments ALTER COLUMN file_url DROP NOT NULL;
+                END IF;
+            END $$;
+        """))
+        # payments.amount: legacy NOT NULL from migration 0001, now in ORM model.
+        conn.execute(_t("""
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'payments' AND column_name = 'amount'
+                ) THEN
+                    ALTER TABLE payments ADD COLUMN amount NUMERIC(14,2);
+                ELSE
+                    ALTER TABLE payments ALTER COLUMN amount DROP NOT NULL;
+                END IF;
+            END $$;
+        """))
         # po_email_logs.sent_to must be nullable (migration 0008)
         conn.execute(_t("""
             DO $$

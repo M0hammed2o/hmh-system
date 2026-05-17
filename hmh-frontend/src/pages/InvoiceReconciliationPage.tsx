@@ -27,6 +27,7 @@ function fileUrl(path: string | null | undefined): string | undefined {
 
 interface ProofPack {
   invoice_id: string;
+  project_id: string | null;
   invoice_number: string;
   invoice_date: string | null;
   due_date: string | null;
@@ -542,10 +543,14 @@ function ProofPackDetail({ proof, onBack, onApproved }: {
                 type="button"
                 className="text-[10px] text-primary hover:underline mt-0.5"
                 onClick={() => {
-                  // Load POs for the supplier's project
-                  client.get<{ data: typeof poOptions }>("/purchase-orders/").then(r => {
-                    setPoOptions(r.data.data || []);
-                  }).catch(() => {});
+                  // Load POs for the project linked to this invoice
+                  const pid = proof.project_id;
+                  const url = pid
+                    ? `/projects/${pid}/purchase-orders/`
+                    : "/purchase-orders/";
+                  client.get<{ data: Array<{ id: string; po_number: string; status: string }> }>(url)
+                    .then(r => { setPoOptions(r.data.data || []); })
+                    .catch(() => {});
                 }}
               >
                 Load POs…

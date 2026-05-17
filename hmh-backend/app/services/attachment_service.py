@@ -106,7 +106,8 @@ def save_attachment(
         entity_type=ent,
         entity_id=uuid.UUID(str(entity_id)),
         file_name=os.path.basename(file.filename or "upload"),
-        stored_path=rel_path,
+        stored_path=rel_path,   # ORM column (migration 0004)
+        file_url=rel_path,      # legacy NOT NULL column (migration 0001)
         mime_type=mime,
         file_size_bytes=file_size,
         attachment_type=att,
