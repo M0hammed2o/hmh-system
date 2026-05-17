@@ -229,16 +229,20 @@ def lot_activity(site_id: uuid.UUID, lot_id: uuid.UUID, db: DbSession, limit: in
         })
 
     # Stage updates for this lot
+    from sqlalchemy.orm import joinedload as _jl
+    from app.models.stage import StageMaster as _SM
     for s in (
         db.query(ProjectStageStatus)
+        .options(_jl(ProjectStageStatus.stage))
         .filter(ProjectStageStatus.lot_id == lot_id)
         .order_by(ProjectStageStatus.updated_at.desc())
         .limit(4)
         .all()
     ):
+        stage_name = s.stage.name if s.stage else "Unknown"
         activities.append({
             "type":   "stage",
-            "title":  f"Stage: {s.stage_name or 'Unknown'} → {s.status.value if s.status else '?'}",
+            "title":  f"Stage: {stage_name} → {s.status.value if s.status else '?'}",
             "date":   s.updated_at.isoformat() if s.updated_at else None,
             "status": s.status.value if s.status else None,
         })

@@ -49,6 +49,7 @@ def create_fuel_log(
     if not project:
         raise NotFoundError(f"Project {project_id} not found.")
 
+    _fuel_date = data.fuel_date or datetime.now(timezone.utc)
     log = FuelLog(
         project_id=project_id,
         site_id=data.site_id,
@@ -61,7 +62,8 @@ def create_fuel_log(
         # total_cost is GENERATED ALWAYS AS STORED — not set here
         fuelled_by=data.fuelled_by,
         recorded_by=recorded_by_id,
-        fuel_date=data.fuel_date or datetime.now(timezone.utc),
+        fuel_date=_fuel_date,
+        log_date=_fuel_date.date() if hasattr(_fuel_date, "date") else _fuel_date,  # legacy NOT NULL col
         notes=data.notes,
     )
     db.add(log)

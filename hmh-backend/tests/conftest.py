@@ -96,6 +96,19 @@ def ensure_tables():
                 END IF;
             END $$;
         """))
+        # fuel_logs.log_date must be nullable (migration 0010)
+        conn.execute(_t("""
+            DO $$
+            BEGIN
+                IF EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'fuel_logs'
+                    AND column_name = 'log_date' AND is_nullable = 'NO'
+                ) THEN
+                    ALTER TABLE fuel_logs ALTER COLUMN log_date DROP NOT NULL;
+                END IF;
+            END $$;
+        """))
         # po_email_logs.sent_to must be nullable (migration 0008)
         conn.execute(_t("""
             DO $$

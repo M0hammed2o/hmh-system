@@ -7,9 +7,10 @@ written by the application; the DB computes and stores it.
 """
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Optional
 
+import sqlalchemy as sa
 from sqlalchemy import Computed, DateTime, Enum, ForeignKey, Numeric, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -83,6 +84,9 @@ class FuelLog(TimestampMixin, Base):
         nullable=False,
     )
     fuel_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # Legacy column from migration 0001 (DATE NOT NULL until migration 0010).
+    # Always populate alongside fuel_date to keep both columns consistent.
+    log_date: Mapped[Optional[date]] = mapped_column(sa.Date, nullable=True)
 
     # ── Notes ────────────────────────────────────────────────────────────────
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
