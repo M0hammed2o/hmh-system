@@ -498,9 +498,40 @@ def _find_user_by_phone(db, from_phone: str):
 def _handle_delivery_status(db, status: dict) -> None:
     msg_id    = status.get("message_id")
     wa_status = status.get("status")
+    recipient = status.get("recipient_id", "unknown")
+
     if not msg_id or not wa_status:
         return
-    print(f"[WA-STATUS] id={msg_id} status={wa_status}", flush=True)
+
+    # V2 marker — confirms new code path is active
+    print(f"[WA-WEBHOOK-V2] status handler active | msg_id={msg_id} status={wa_status} recipient={recipient}", flush=True)
+
+    # Log full failure detail IMMEDIATELY — before any DB lookup so it always
+    # fires even when no NotificationQueue row exists for the message_id.
+    if wa_status == "failed":
+        errs      = status.get("errors", [])
+        err       = errs[0] if errs else {}
+        err_code  = err.get("code", "n/a")
+        err_title = err.get("title", "Delivery failed")
+        err_msg   = err.get("message", "")
+        print(
+            f"[WA-STATUS-FAILED-FULL]"
+            f" msg_id={msg_id}"
+            f" | recipient={recipient}"
+            f" | error_code={err_code}"
+            f" | error_title={err_title!r}"
+            f" | error_message={err_msg!r}"
+            f" | full_errors={errs!r}"
+            f" | full_status={status!r}",
+            flush=True,
+        )
+        logger.error(
+            "WhatsApp delivery FAILED | msg_id=%s recipient=%s error_code=%s"
+            " error_title=%r error_message=%r full_errors=%r",
+            msg_id, recipient, err_code, err_title, err_msg, errs,
+        )
+
+    # DB update (best-effort — record may not exist for unknown message IDs)
     try:
         from app.models.notification_queue import NotificationQueue
         from app.models.enums import NotificationStatus
@@ -508,16 +539,16 @@ def _handle_delivery_status(db, status: dict) -> None:
             NotificationQueue.provider_message_id == msg_id
         ).first()
         if not record:
+            print(f"[WA-STATUS] No NotificationQueue record for msg_id={msg_id}", flush=True)
             return
         if wa_status == "read":
             from datetime import datetime, timezone
             record.status = NotificationStatus.ACKNOWLEDGED
             record.acknowledged_at = datetime.now(timezone.utc)
             db.commit()
-            print(f"[WA-STATUS] Marked ACKNOWLEDGED", flush=True)
+            print(f"[WA-STATUS] Marked ACKNOWLEDGED msg_id={msg_id}", flush=True)
         elif wa_status == "failed":
             errs      = status.get("errors", [])
-            recipient = status.get("recipient_id", "unknown")
             err       = errs[0] if errs else {}
             err_code  = err.get("code", "n/a")
             err_title = err.get("title", "Delivery failed")
@@ -525,19 +556,6 @@ def _handle_delivery_status(db, status: dict) -> None:
             record.status        = NotificationStatus.FAILED
             record.error_message = f"[{err_code}] {err_title}" + (f": {err_msg}" if err_msg else "")
             db.commit()
-            print(
-                f"[WA-STATUS] FAILED"
-                f" | msg_id={msg_id}"
-                f" | recipient={recipient}"
-                f" | error_code={err_code}"
-                f" | error_title={err_title!r}"
-                f" | error_message={err_msg!r}",
-                flush=True,
-            )
-            logger.error(
-                "WhatsApp delivery FAILED | msg_id=%s recipient=%s error_code=%s"
-                " error_title=%r error_message=%r",
-                msg_id, recipient, err_code, err_title, err_msg,
-            )
+            print(f"[WA-STATUS] DB record marked FAILED msg_id={msg_id}", flush=True)
     except Exception:
-        logger.exception("delivery_status update error msg_id=%s", msg_id)
+        logger.exception("delivery_status DB update error msg_id=%s", msg_id)

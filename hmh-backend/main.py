@@ -389,6 +389,7 @@ def _log_startup_config() -> None:
     from fastapi.routing import APIRoute
     api_routes = [r for r in app.routes if isinstance(r, APIRoute)]
     print("=" * 60, flush=True)
+    print(f"HMH_BACKEND_BUILD_MARKER=whatsapp-failure-logging-v2", flush=True)
     print(f"[HMH] APP_ENV        : {settings.APP_ENV}", flush=True)
     print(f"[HMH] DEBUG          : {settings.DEBUG}", flush=True)
     print(f"[HMH] API routes     : {len(api_routes)}", flush=True)
