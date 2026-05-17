@@ -285,6 +285,23 @@ def _gmail_alert(db, email, title: str, message: str, severity: str, now) -> Non
         pass
 
 
+@gmail_router.post("/attachments/{att_id}/refetch", dependencies=[OFFICE_AND_ABOVE])
+def refetch_attachment(att_id: uuid.UUID, db: DbSession):
+    """
+    Re-connect to Gmail IMAP, find the original email by Message-ID, and
+    re-download the missing attachment file to UPLOAD_DIR.
+
+    Use this when an attachment record exists in the database but the file
+    is missing from disk (e.g. after a Render redeploy wipes the filesystem).
+    """
+    from app.services.gmail_reader_service import refetch_attachment_from_imap
+    try:
+        result = refetch_attachment_from_imap(db, att_id)
+        return ApiSuccess(data=result, message="Attachment re-fetched successfully.")
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
 @gmail_router.get("/attachments/{att_id}", dependencies=[OFFICE_AND_ABOVE])
 def get_attachment(att_id: uuid.UUID, db: DbSession):
     from app.models.incoming_email import IncomingEmailAttachment
@@ -371,10 +388,9 @@ def download_attachment(att_id: uuid.UUID, db: DbSession, inline: bool = False):
         raise HTTPException(
             status_code=404,
             detail=(
-                "Attachment record exists but the file is no longer on disk. "
-                "Render's ephemeral filesystem is wiped on every redeploy — "
-                "re-fetch the email via POST /api/v1/gmail/fetch to restore it. "
-                f"Tried paths: {tried}. "
+                f"Attachment file is missing from disk. "
+                f"Use POST /api/v1/gmail/attachments/{att_id}/refetch to restore it from Gmail. "
+                f"Tried: {tried}. "
                 f"UPLOAD_DIR={upload_dir!r}."
             ),
         )

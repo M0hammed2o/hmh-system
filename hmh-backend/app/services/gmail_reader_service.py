@@ -162,10 +162,14 @@ def _fetch_via_imap(db: Session, limit: int) -> dict:
                 msg = email.message_from_bytes(raw_email)
 
                 message_id = msg.get("Message-ID", "").strip()
-                # Skip duplicates
+                # Skip fully duplicate emails — but check for missing attachment files
                 if message_id and db.query(IncomingEmail).filter(
                     IncomingEmail.message_id == message_id
                 ).first():
+                    existing_email = db.query(IncomingEmail).filter(
+                        IncomingEmail.message_id == message_id
+                    ).first()
+                    _refetch_missing_attachments(db, existing_email, msg)
                     counts["skipped"] += 1
                     continue
 
@@ -269,6 +273,172 @@ def _fetch_via_imap(db: Session, limit: int) -> dict:
         counts["error"] = str(exc)
 
     return counts
+
+
+# ── Re-fetch missing attachment files ────────────────────────────────────────
+
+def _refetch_missing_attachments(db, incoming_email, msg) -> None:
+    """
+    Called when an email already exists in DB (skip duplicate path).
+    For every IncomingEmailAttachment whose file is missing on disk,
+    re-download the bytes from the already-fetched IMAP message and re-save.
+    Never raises — skipping an existing email must not fail.
+    """
+    from app.models.incoming_email import IncomingEmailAttachment
+    try:
+        for att in (
+            db.query(IncomingEmailAttachment)
+            .filter(IncomingEmailAttachment.incoming_email_id == incoming_email.id)
+            .all()
+        ):
+            resolved, _ = _resolve_path(att.file_path)
+            if resolved:
+                continue  # file is present — nothing to do
+
+            # File missing — scan message parts for this filename
+            for part in msg.walk():
+                if part.get_content_maintype() == "multipart":
+                    continue
+                if part.get("Content-Disposition") is None:
+                    continue
+                raw_fname = part.get_filename()
+                if not raw_fname:
+                    continue
+                original_fname = _decode_header_value(raw_fname)
+                if original_fname != att.filename:
+                    continue
+
+                payload_bytes = part.get_payload(decode=True)
+                if not payload_bytes:
+                    continue
+
+                doc_type = att.detected_type or classify_document(att.filename, "")
+                new_path = _save_attachment(payload_bytes, att.filename, doc_type)
+                att.file_path = new_path
+                db.commit()
+                print(
+                    f"[GMAIL-REFETCH-ATTACHMENT] att_id={att.id}"
+                    f" saved_path={new_path!r}"
+                    f" exists={os.path.isfile(new_path)}"
+                    f" size={len(payload_bytes)}",
+                    flush=True,
+                )
+                break
+    except Exception:
+        logger.exception("_refetch_missing_attachments failed for email %s", incoming_email.id)
+
+
+def _resolve_path(stored: str) -> tuple:
+    """Return (resolved_absolute_path | None, candidates_tried)."""
+    from app.core.config import settings as _s
+    abs_upload = os.path.abspath(_s.UPLOAD_DIR)
+    parent_dir = os.path.dirname(abs_upload)
+    basename   = os.path.basename(stored) if stored else ""
+    candidates = [
+        stored,
+        os.path.join(parent_dir, stored),
+        os.path.join(abs_upload, stored),
+        os.path.join(abs_upload, "gmail", basename),
+    ]
+    for c in candidates:
+        if c and os.path.isfile(c):
+            return c, candidates
+    return None, candidates
+
+
+def refetch_attachment_from_imap(db, att_id: uuid.UUID) -> dict:
+    """
+    Re-connect to IMAP, search for the parent email by Message-ID,
+    find the attachment by original filename, save it, update file_path in DB.
+
+    Returns {"att_id", "saved_path", "exists", "size"}.
+    Raises ValueError with a human-readable message on any failure.
+    """
+    from app.models.incoming_email import IncomingEmail, IncomingEmailAttachment
+
+    att = db.get(IncomingEmailAttachment, att_id)
+    if not att:
+        raise ValueError(f"Attachment {att_id} not found.")
+
+    parent = db.get(IncomingEmail, att.incoming_email_id)
+    if not parent or not parent.message_id:
+        raise ValueError("Cannot refetch: parent email has no Message-ID stored.")
+
+    if not settings.IMAP_ENABLED:
+        raise ValueError("IMAP is disabled. Set IMAP_ENABLED=true to refetch attachments.")
+
+    if not settings.IMAP_USERNAME or not settings.IMAP_PASSWORD:
+        raise ValueError("IMAP credentials missing. Set IMAP_USERNAME and IMAP_PASSWORD.")
+
+    try:
+        imap = imaplib.IMAP4_SSL(settings.IMAP_HOST, settings.IMAP_PORT)
+        imap.login(settings.IMAP_USERNAME, settings.IMAP_PASSWORD)
+        imap.select("INBOX")
+
+        # Search by Message-ID header — works for read AND unread messages
+        mid = parent.message_id.strip()
+        _, data = imap.search(None, f'HEADER "Message-ID" "{mid}"')
+        msg_ids = data[0].split() if data[0] else []
+
+        if not msg_ids:
+            # Some Gmail servers require searching All Mail
+            try:
+                imap.select('"[Gmail]/All Mail"')
+                _, data = imap.search(None, f'HEADER "Message-ID" "{mid}"')
+                msg_ids = data[0].split() if data[0] else []
+            except Exception:
+                pass
+
+        if not msg_ids:
+            raise ValueError(
+                f"Email with Message-ID={mid!r} not found in Gmail. "
+                "It may have been deleted or moved out of the mailbox."
+            )
+
+        _, raw = imap.fetch(msg_ids[0], "(RFC822)")
+        raw_bytes = raw[0][1] if raw and raw[0] else b""
+        msg = email.message_from_bytes(raw_bytes)
+        imap.logout()
+
+        # Find the attachment part matching att.filename
+        for part in msg.walk():
+            if part.get_content_maintype() == "multipart":
+                continue
+            if part.get("Content-Disposition") is None:
+                continue
+            raw_fname = part.get_filename()
+            if not raw_fname:
+                continue
+            original_fname = _decode_header_value(raw_fname)
+            if original_fname != att.filename:
+                continue
+
+            payload_bytes = part.get_payload(decode=True)
+            if not payload_bytes:
+                raise ValueError(f"Attachment '{att.filename}' has empty payload in Gmail.")
+
+            doc_type = att.detected_type or classify_document(att.filename, "")
+            new_path = _save_attachment(payload_bytes, att.filename, doc_type)
+            att.file_path = new_path
+            db.commit()
+
+            exists = os.path.isfile(new_path)
+            print(
+                f"[GMAIL-REFETCH-ATTACHMENT] att_id={att_id}"
+                f" saved_path={new_path!r}"
+                f" exists={exists}"
+                f" size={len(payload_bytes)}",
+                flush=True,
+            )
+            return {"att_id": str(att_id), "saved_path": new_path, "exists": exists, "size": len(payload_bytes)}
+
+        raise ValueError(
+            f"Attachment '{att.filename}' was not found in the original email. "
+            "The email may have been modified or the attachment removed."
+        )
+
+    except (imaplib.IMAP4.error, OSError) as exc:
+        raise ValueError(f"IMAP error: {exc}") from exc
 
 
 # ── Document AI extraction (triggered after attachment save) ──────────────────

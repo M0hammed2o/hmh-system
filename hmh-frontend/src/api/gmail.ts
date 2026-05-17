@@ -10,6 +10,7 @@ export interface IncomingEmailAttachment {
   content_type: string | null;
   detected_type: DetectedType;
   created_at: string;
+  file_exists: boolean;    // false = file missing from server disk (needs refetch)
 }
 
 export interface IncomingEmail {
@@ -105,6 +106,14 @@ export const gmailApi = {
 
   processEmail: async (emailId: string): Promise<ProcessEmailResult> => {
     const r = await client.post<{ data: ProcessEmailResult }>(`/gmail/incoming/${emailId}/process`);
+    return r.data.data;
+  },
+
+  /** Re-fetch a missing attachment from Gmail IMAP and save it to the server disk. */
+  refetchAttachment: async (attId: string): Promise<{ att_id: string; saved_path: string; exists: boolean; size: number }> => {
+    const r = await client.post<{ data: { att_id: string; saved_path: string; exists: boolean; size: number } }>(
+      `/gmail/attachments/${attId}/refetch`
+    );
     return r.data.data;
   },
 

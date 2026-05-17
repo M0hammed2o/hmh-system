@@ -2,11 +2,11 @@ import { useState, useEffect, useCallback } from "react";
 import {
   Mail, RefreshCw, FileText, Truck, MessageSquare, HelpCircle,
   CheckCircle2, Clock, AlertTriangle, ChevronRight, Download,
-  Zap, XCircle, Minus, Eye,
+  Zap, XCircle, Minus, Eye, RotateCcw,
 } from "lucide-react";
 import {
   gmailApi,
-  type IncomingEmail, type DetectedType,
+  type IncomingEmail, type IncomingEmailAttachment, type DetectedType,
   type ProcessedAttachment, type MatchStatus,
 } from "@/api/gmail";
 import { Button } from "@/components/ui/button";
@@ -183,6 +183,8 @@ export default function GmailInboxPage() {
     catch { setSelected(e); }
   };
 
+  const [refetchingId, setRefetchingId] = useState<string | null>(null);
+
   /** Open or download an attachment via the authenticated API (preserves auth headers). */
   const handleOpenAttachment = async (attId: string, inline: boolean) => {
     try {
@@ -190,7 +192,6 @@ export default function GmailInboxPage() {
       const url = URL.createObjectURL(blob);
       if (inline) {
         window.open(url, "_blank", "noopener,noreferrer");
-        // revoke after a delay so the tab has time to load it
         setTimeout(() => URL.revokeObjectURL(url), 30_000);
       } else {
         const a = document.createElement("a");
@@ -199,8 +200,25 @@ export default function GmailInboxPage() {
         a.click();
         URL.revokeObjectURL(url);
       }
-    } catch {
-      setError("Could not load attachment. Check backend logs.");
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      setError(detail || "Attachment file is missing. Use Re-fetch to restore it from Gmail.");
+    }
+  };
+
+  /** Re-fetch a missing attachment from Gmail IMAP. */
+  const handleRefetchAttachment = async (att: IncomingEmailAttachment) => {
+    setRefetchingId(att.id);
+    setError("");
+    try {
+      await gmailApi.refetchAttachment(att.id);
+      // Reload the selected email so file_exists updates
+      if (selected) setSelected(await gmailApi.getIncoming(selected.id));
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      setError(detail || "Re-fetch failed. Check that IMAP is enabled and credentials are correct.");
+    } finally {
+      setRefetchingId(null);
     }
   };
 
@@ -387,27 +405,50 @@ export default function GmailInboxPage() {
                 <div className="space-y-1.5">
                   {selAtts.map(att => {
                     const Icon = TYPE_ICON[att.detected_type] ?? HelpCircle;
+                    const missing = att.file_exists === false;
+                    const refetching = refetchingId === att.id;
                     return (
                       <div key={att.id}
-                        className={cn("flex items-center gap-2 p-2 rounded-lg border text-xs", TYPE_COLOR[att.detected_type])}>
+                        className={cn("flex items-center gap-2 p-2 rounded-lg border text-xs",
+                          missing ? "border-amber-400/40 bg-amber-500/5" : TYPE_COLOR[att.detected_type])}>
                         <Icon className="w-4 h-4 shrink-0" />
                         <span className="flex-1 truncate font-medium">{att.filename}</span>
-                        <span className="shrink-0 font-semibold mr-1">{TYPE_LABEL[att.detected_type]}</span>
-                        {/* View / Download buttons */}
-                        <button
-                          onClick={() => handleOpenAttachment(att.id, true)}
-                          className="p-1 rounded hover:bg-black/10 shrink-0"
-                          title="View in browser"
-                        >
-                          <Eye className="w-3.5 h-3.5" />
-                        </button>
-                        <button
-                          onClick={() => handleOpenAttachment(att.id, false)}
-                          className="p-1 rounded hover:bg-black/10 shrink-0"
-                          title="Download file"
-                        >
-                          <Download className="w-3.5 h-3.5" />
-                        </button>
+                        {missing ? (
+                          <span className="shrink-0 text-amber-600 font-semibold mr-1">⚠ Missing</span>
+                        ) : (
+                          <span className="shrink-0 font-semibold mr-1">{TYPE_LABEL[att.detected_type]}</span>
+                        )}
+                        {missing ? (
+                          /* Re-fetch button — restores file from Gmail IMAP */
+                          <button
+                            onClick={() => handleRefetchAttachment(att)}
+                            disabled={refetching}
+                            className="flex items-center gap-1 px-2 py-0.5 rounded bg-amber-500/20 hover:bg-amber-500/30 text-amber-700 shrink-0"
+                            title="Re-fetch attachment file from Gmail"
+                          >
+                            {refetching
+                              ? <RefreshCw className="w-3 h-3 animate-spin" />
+                              : <RotateCcw className="w-3 h-3" />}
+                            {refetching ? "Re-fetching…" : "Re-fetch"}
+                          </button>
+                        ) : (
+                          <>
+                            <button
+                              onClick={() => handleOpenAttachment(att.id, true)}
+                              className="p-1 rounded hover:bg-black/10 shrink-0"
+                              title="View in browser"
+                            >
+                              <Eye className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              onClick={() => handleOpenAttachment(att.id, false)}
+                              className="p-1 rounded hover:bg-black/10 shrink-0"
+                              title="Download file"
+                            >
+                              <Download className="w-3.5 h-3.5" />
+                            </button>
+                          </>
+                        )}
                       </div>
                     );
                   })}
