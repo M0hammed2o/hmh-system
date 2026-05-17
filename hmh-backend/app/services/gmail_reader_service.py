@@ -75,17 +75,26 @@ _TYPE_DIR = {
 
 
 def _save_attachment(payload: bytes, filename: str, doc_type: str) -> str:
-    """Save bytes to disk and return the relative file path."""
+    """
+    Save bytes to disk and return the ABSOLUTE file path.
+
+    Storing the absolute path in the DB ensures the download endpoint can
+    locate the file regardless of the process working directory.
+    """
     subdir = _TYPE_DIR.get(doc_type, "other")
     save_dir = os.path.join(settings.UPLOAD_DIR, "gmail", subdir)
     os.makedirs(save_dir, exist_ok=True)
 
     safe_name = re.sub(r"[^\w.\-]", "_", filename)
     unique_name = f"{uuid.uuid4().hex[:8]}_{safe_name}"
-    full_path = os.path.join(save_dir, unique_name)
+    full_path = os.path.abspath(os.path.join(save_dir, unique_name))
+
     with open(full_path, "wb") as f:
         f.write(payload)
-    return os.path.join("uploads", "gmail", subdir, unique_name)
+
+    logger.info("[GMAIL-SAVE] Saved %s → %s (%d bytes)", filename, full_path, len(payload))
+    print(f"[GMAIL-SAVE] UPLOAD_DIR={settings.UPLOAD_DIR} path={full_path} size={len(payload)}", flush=True)
+    return full_path
 
 
 def _decode_header_value(raw: str) -> str:

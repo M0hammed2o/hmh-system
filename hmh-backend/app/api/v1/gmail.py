@@ -304,32 +304,74 @@ def download_attachment(att_id: uuid.UUID, db: DbSession, inline: bool = False):
 
     ?inline=true  → Content-Disposition: inline  (browser renders PDF/image in tab)
     ?inline=false → Content-Disposition: attachment (browser downloads the file)
+
+    Path resolution order:
+      1. att.file_path as stored (absolute path for records saved after the fix)
+      2. os.path.join(UPLOAD_DIR, att.file_path) (relative path fallback for old records)
+      3. os.path.join(UPLOAD_DIR, "gmail", basename) (last-resort filename-only search)
     """
     import os
     from fastapi.responses import FileResponse
+    from app.core.config import settings
     from app.models.incoming_email import IncomingEmailAttachment
 
     att = db.query(IncomingEmailAttachment).filter(
         IncomingEmailAttachment.id == att_id
     ).first()
     if not att:
-        raise HTTPException(status_code=404, detail="Attachment not found.")
+        raise HTTPException(status_code=404, detail="Attachment not found in database.")
 
-    if not os.path.exists(att.file_path):
+    stored = att.file_path or ""
+    upload_dir = settings.UPLOAD_DIR
+
+    # Try multiple candidate paths in priority order
+    candidates = [
+        stored,                                                          # absolute (new records)
+        os.path.join(upload_dir, stored),                               # relative (old records)
+        os.path.join(upload_dir, "gmail", os.path.basename(stored)),    # filename fallback
+    ]
+
+    resolved = None
+    for candidate in candidates:
+        if candidate and os.path.exists(candidate):
+            resolved = candidate
+            break
+
+    print(
+        f"[GMAIL-DOWNLOAD] att_id={att_id} stored={stored!r}"
+        f" UPLOAD_DIR={upload_dir} resolved={resolved!r}",
+        flush=True,
+    )
+
+    if not resolved:
+        tried = ", ".join(repr(c) for c in candidates if c)
         raise HTTPException(
             status_code=404,
-            detail=f"File not found on server: {att.file_path}",
+            detail=(
+                f"Attachment metadata exists but file is missing from disk. "
+                f"Tried: {tried}. "
+                f"UPLOAD_DIR={upload_dir!r}. "
+                f"If UPLOAD_DIR contains a typo (e.g. '/scr/' instead of '/src/'), "
+                f"correct the Render environment variable and re-fetch emails."
+            ),
         )
 
-    media_type  = att.content_type or "application/octet-stream"
+    media_type  = att.content_type or _guess_mime(att.filename)
     disposition = "inline" if inline else "attachment"
 
     return FileResponse(
-        path=att.file_path,
+        path=resolved,
         media_type=media_type,
         filename=att.filename,
         headers={"Content-Disposition": f'{disposition}; filename="{att.filename}"'},
     )
+
+
+def _guess_mime(filename: str) -> str:
+    """Best-effort MIME type from file extension."""
+    import mimetypes
+    mime, _ = mimetypes.guess_type(filename or "")
+    return mime or "application/octet-stream"
 
 
 # ── Create invoice from Gmail attachment ──────────────────────────────────────
@@ -453,6 +495,22 @@ def _email_summary(e) -> dict:
 
 
 def _att_summary(a) -> dict:
+    import os
+    from app.core.config import settings
+
+    stored = a.file_path or ""
+    upload_dir = settings.UPLOAD_DIR
+
+    # Check all candidate paths (same logic as download endpoint)
+    file_exists = any(
+        c and os.path.exists(c)
+        for c in [
+            stored,
+            os.path.join(upload_dir, stored),
+            os.path.join(upload_dir, "gmail", os.path.basename(stored)),
+        ]
+    )
+
     return {
         "id":            str(a.id),
         "filename":      a.filename,
@@ -460,4 +518,5 @@ def _att_summary(a) -> dict:
         "content_type":  a.content_type,
         "detected_type": a.detected_type,
         "created_at":    a.created_at.isoformat(),
+        "file_exists":   file_exists,
     }

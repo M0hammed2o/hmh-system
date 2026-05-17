@@ -394,7 +394,12 @@ def _log_startup_config() -> None:
     print(f"[HMH] DEBUG          : {settings.DEBUG}", flush=True)
     print(f"[HMH] API routes     : {len(api_routes)}", flush=True)
     print(f"[HMH] CORS origins   : {_cors_origins}", flush=True)
+    import os as _os
+    _upload_exists = _os.path.isdir(settings.UPLOAD_DIR)
+    _upload_abs    = _os.path.abspath(settings.UPLOAD_DIR)
     print(f"[HMH] UPLOAD_DIR     : {settings.UPLOAD_DIR}", flush=True)
+    print(f"[HMH] UPLOAD_DIR_ABS : {_upload_abs}", flush=True)
+    print(f"[HMH] UPLOAD_DIR_OK  : {_upload_exists} {'✓' if _upload_exists else '✗ DIRECTORY MISSING — check for typo (scr vs src)'}", flush=True)
     print(f"[HMH] SMTP_ENABLED   : {settings.SMTP_ENABLED}", flush=True)
     print("=" * 60, flush=True)
 
