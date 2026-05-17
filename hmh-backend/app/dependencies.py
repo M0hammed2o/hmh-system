@@ -108,12 +108,24 @@ def require_roles(*roles: UserRole):
         ):
             ...
     """
+    allowed = [r.value for r in roles]
+
     def _check(payload: CurrentUserPayload) -> None:
         user_role = payload.get("role")
-        if user_role not in [r.value for r in roles]:
+        if user_role not in allowed:
+            import logging as _log
+            _log.getLogger(__name__).warning(
+                "ACCESS DENIED | role=%r not in allowed=%r | user=%s",
+                user_role, allowed, payload.get("sub"),
+            )
+            print(
+                f"[AUTH] 403 DENIED | role={user_role!r} | allowed={allowed!r}"
+                f" | user={payload.get('sub')}",
+                flush=True,
+            )
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="You do not have permission to perform this action.",
+                detail=f"Role '{user_role}' is not permitted. Required: {allowed}",
             )
     return Depends(_check)
 

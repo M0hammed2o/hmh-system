@@ -76,6 +76,7 @@ class ApproveBody(BaseModel):
 
 @mr_router.post("/{mr_id}/approve", response_model=ApiSuccess[MaterialRequestRead], dependencies=[OFFICE_AND_ABOVE])
 def approve_request(mr_id: uuid.UUID, body: ApproveBody, db: DbSession, current_user: CurrentUser):
+    print(f"[MR-APPROVE] mr_id={mr_id} user={current_user.id} role={current_user.role.value} allowed=True", flush=True)
     mr = mr_service.approve_request(db, mr_id, current_user.id, body.over_boq_reason)
     return ApiSuccess(data=MaterialRequestRead.model_validate(mr), message="Request approved.")
 

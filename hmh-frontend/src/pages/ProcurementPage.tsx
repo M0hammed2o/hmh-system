@@ -168,7 +168,10 @@ function MRDetailModal({ mr, suppliers, onClose, onUpdated }: {
   const act = async (fn: () => Promise<unknown>, label: string) => {
     setLoading(label); setError("");
     try { await fn(); setResult(`${label} successful.`); onUpdated(); }
-    catch (err: unknown) { setError((err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Action failed."); }
+    catch (err: unknown) {
+      const d = (err as { response?: { data?: { message?: string; detail?: string } } })?.response?.data;
+      setError(d?.message || d?.detail || "Action failed.");
+    }
     finally { setLoading(null); }
   };
 

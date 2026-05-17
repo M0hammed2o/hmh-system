@@ -606,6 +606,10 @@ export default function AlertsPage() {
       );
       setScanResult(res.data.data);
       loadAll(true);
+    } catch (err: unknown) {
+      const d = (err as { response?: { data?: { message?: string; detail?: string } } })?.response?.data;
+      const msg = d?.message || d?.detail || "Scan failed — check your permissions.";
+      alert(msg);
     } finally { setScanning(false); }
   };
 

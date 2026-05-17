@@ -105,13 +105,15 @@ def generate_daily_summary(db: DbSession):
 # ── Proactive alert scan ──────────────────────────────────────────────────────
 
 @router.post("/scan", response_model=ApiSuccess[dict], dependencies=[OFFICE_AND_ABOVE])
-def scan_and_create_alerts(db: DbSession, project_id: Optional[uuid.UUID] = Query(None)):
+def scan_and_create_alerts(db: DbSession, project_id: Optional[uuid.UUID] = Query(None), current_user: CurrentUser = None):
     """
     Proactive scan: creates alerts for conditions that aren't triggered by events.
     Covers: low/negative stock, overdue payments, long-pending MRs, deliveries without PO,
     missing delivery notes, missing signatures.
     Safe to call repeatedly — deduplicates by checking for existing OPEN alerts of the same type.
     """
+    role = current_user.role.value if current_user else "unknown"
+    print(f"[ALERT-SCAN] user={getattr(current_user, 'id', None)} role={role} allowed=True project_id={project_id}", flush=True)
     from datetime import datetime, timezone, timedelta
     from app.models.alert import SystemAlert
     from app.models.enums import (

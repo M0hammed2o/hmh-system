@@ -176,7 +176,53 @@ def submit_request(db: Session, mr_id: uuid.UUID, actor_id: uuid.UUID) -> Materi
                               after_value={"status": mr.status.value})
     db.commit()
     db.refresh(mr)
+
+    # Create a SystemAlert so office/admin sees the MR on the Alerts page immediately
+    # and receives a WhatsApp notification if configured.
+    try:
+        _create_mr_submitted_alert(db, mr)
+    except Exception:
+        import logging as _log
+        _log.getLogger(__name__).exception(
+            "MR submission alert failed for %s — submission still stands.", mr.request_number
+        )
+
     return mr
+
+
+def _create_mr_submitted_alert(db: Session, mr: "MaterialRequest") -> None:
+    """Create a SystemAlert for a submitted MR and enqueue WhatsApp notifications."""
+    from app.models.alert import SystemAlert
+    from app.models.enums import AlertSeverity, AlertStatus
+    from app.services import notification_service
+
+    now = datetime.now(timezone.utc)
+    priority_label = mr.priority.value if hasattr(mr.priority, "value") else str(mr.priority)
+
+    alert = SystemAlert(
+        project_id=mr.project_id,
+        site_id=mr.site_id,
+        alert_type=AlertType.REQUEST_PENDING_TOO_LONG,   # closest standard type for "MR needs review"
+        severity=AlertSeverity.MEDIUM,
+        title=f"MR Submitted: {mr.request_number}",
+        message=(
+            f"Material request {mr.request_number} has been submitted and is awaiting approval. "
+            f"Priority: {priority_label}. "
+            f"Items: {len(mr.items)}."
+        ),
+        status=AlertStatus.OPEN,
+        notification_channel="whatsapp",
+        created_at=now,
+    )
+    db.add(alert)
+    db.flush()
+
+    print(f"[MR-ALERT] created alert_id={alert.id} for MR={mr.request_number}", flush=True)
+
+    # Enqueue WhatsApp notifications for matching active recipients
+    queued = notification_service.enqueue_for_alert(db, alert)
+    db.commit()
+    print(f"[MR-ALERT] queued {len(queued)} WhatsApp notification(s) for MR={mr.request_number}", flush=True)
 
 
 def approve_request(
