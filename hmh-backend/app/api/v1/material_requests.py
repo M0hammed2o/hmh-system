@@ -1,10 +1,14 @@
 """Material Request routes."""
 
+import logging
+import traceback
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
+
+logger = logging.getLogger(__name__)
 
 from app.dependencies import ALL_ROLES, CurrentUser, DbSession, OFFICE_AND_ABOVE
 from app.models.enums import RecordStatus
@@ -32,8 +36,18 @@ def list_material_requests(
 
 @project_mr_router.post("/", response_model=ApiSuccess[MaterialRequestRead], status_code=201, dependencies=[ALL_ROLES])
 def create_material_request(project_id: uuid.UUID, body: MaterialRequestCreate, db: DbSession, current_user: CurrentUser):
-    mr = mr_service.create_request(db, project_id, body, current_user.id)
-    return ApiSuccess(data=MaterialRequestRead.model_validate(mr), message="Material request created.")
+    import json as _json
+    try:
+        payload_log = body.model_dump()
+        print(f"[MR-CREATE] project_id={project_id} user={current_user.id} payload={_json.dumps(payload_log, default=str)}", flush=True)
+        mr = mr_service.create_request(db, project_id, body, current_user.id)
+        print(f"[MR-CREATE] SUCCESS mr_id={mr.id} request_number={mr.request_number}", flush=True)
+        return ApiSuccess(data=MaterialRequestRead.model_validate(mr), message="Material request created.")
+    except Exception as exc:
+        tb = traceback.format_exc()
+        print(f"[MR-CREATE] FAILED project_id={project_id} error={exc!r}\n{tb}", flush=True)
+        logger.error("create_material_request failed project_id=%s: %s\n%s", project_id, exc, tb)
+        raise
 
 
 @mr_router.get("/{mr_id}", response_model=ApiSuccess[MaterialRequestRead], dependencies=[ALL_ROLES])
