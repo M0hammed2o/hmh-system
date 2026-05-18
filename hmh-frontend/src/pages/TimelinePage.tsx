@@ -9,7 +9,7 @@
  */
 
 import { useEffect, useState, useCallback } from "react";
-import { Truck, Zap, AlertTriangle, Camera, ChevronDown, ChevronRight } from "lucide-react";
+import { Truck, Zap, AlertTriangle, Camera, ChevronDown, ChevronRight, RefreshCw } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PageHeader } from "@/components/shared/PageHeader";
 import { projectsApi, type Project } from "@/api/projects";
@@ -34,6 +34,8 @@ function toAbsUrl(path: string | undefined): string | undefined {
 interface TimelineEntry {
   id: string;
   type: "delivery" | "stage" | "usage" | "alert";
+  record_id?: string;   // DB record UUID for photo replacement
+  record_type?: string; // "delivery" | "stage" | "usage"
   title: string;
   subtitle?: string;
   date: string;
@@ -77,6 +79,8 @@ export default function TimelinePage() {
   const [entries, setEntries] = useState<TimelineEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [replacingId, setReplacingId] = useState<string | null>(null);  // record_id being replaced
+  const [replaceError, setReplaceError] = useState("");
 
   // Load projects on mount
   useEffect(() => {
@@ -127,6 +131,8 @@ export default function TimelinePage() {
         return {
           id: del.id,
           type: "delivery" as const,
+          record_id:   del.id,
+          record_type: "delivery",
           title: `Delivery: ${del.delivery_number || del.id.slice(0, 8)}`,
           subtitle: del.delivery_status,
           date: del.delivery_date,
@@ -137,8 +143,6 @@ export default function TimelinePage() {
 
       const activity: TimelineEntry[] = ((activityRes as { data: { data: TimelineEntry[] } }).data.data ?? []).map((a) => ({
         ...a,
-        // Use backend-provided photo_url first; convert to absolute URL so the
-        // browser fetches the file from the API server, not the frontend domain.
         photo_url: toAbsUrl(a.photo_url || (a.subtitle?.startsWith("/uploads/") ? a.subtitle : undefined)),
       }));
 
@@ -155,6 +159,28 @@ export default function TimelinePage() {
   }, [projectId, siteId, lotId]);
 
   useEffect(() => { loadTimeline(); }, [loadTimeline]);
+
+  const handleReplacePhoto = async (entry: TimelineEntry, file: File) => {
+    if (!entry.record_id || !entry.record_type) return;
+    setReplacingId(entry.record_id);
+    setReplaceError("");
+    try {
+      const fd = new FormData();
+      fd.append("record_type", entry.record_type);
+      fd.append("record_id",   entry.record_id);
+      fd.append("photo",       file);
+      await client.post("/site-dashboard/replace-photo", fd, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+      await loadTimeline();  // refresh so new photo appears
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+        || "Failed to replace photo.";
+      setReplaceError(msg);
+    } finally {
+      setReplacingId(null);
+    }
+  };
 
   return (
     <div className="space-y-5 animate-fade-in">
@@ -221,32 +247,56 @@ export default function TimelinePage() {
                     <span className="text-xs text-muted-foreground whitespace-nowrap shrink-0">{formatDate(entry.date)}</span>
                   </div>
 
-                  {/* Evidence / delivery note photo — inline thumbnail + full-size link */}
-                  {entry.photo_url && (
-                    <a
-                      href={entry.photo_url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="mt-2 block group"
-                      title="Click to open full-size image"
-                    >
-                      <img
-                        src={entry.photo_url}
-                        alt="Evidence photo"
-                        className="h-24 w-auto rounded-lg border border-border object-cover group-hover:opacity-90 transition-opacity"
-                        onError={(e) => {
-                          // If image fails to load, fall back to a text link
-                          const parent = e.currentTarget.parentElement;
-                          if (parent) {
+                  {/* Evidence photo — inline thumbnail + replace button */}
+                  <div className="mt-2 flex items-start gap-2 flex-wrap">
+                    {entry.photo_url && (
+                      <a
+                        href={entry.photo_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="block group shrink-0"
+                        title="Click to open full-size image"
+                      >
+                        <img
+                          src={entry.photo_url}
+                          alt="Evidence photo"
+                          className="h-20 w-auto rounded-lg border border-border object-cover group-hover:opacity-80 transition-opacity"
+                          onError={(e) => {
                             e.currentTarget.style.display = "none";
-                            const link = document.createElement("span");
-                            link.className = "flex items-center gap-1.5 text-xs text-primary hover:underline";
-                            link.innerHTML = `<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"/></svg> View photo`;
-                            parent.appendChild(link);
-                          }
-                        }}
-                      />
-                    </a>
+                          }}
+                        />
+                      </a>
+                    )}
+
+                    {/* Replace photo — only for record types the endpoint supports */}
+                    {entry.record_id && entry.type !== "alert" && (
+                      <label
+                        className={`flex items-center gap-1 text-xs cursor-pointer px-2 py-1 rounded border border-border hover:bg-muted/60 transition-colors mt-0.5 ${
+                          replacingId === entry.record_id ? "opacity-50 pointer-events-none" : ""
+                        }`}
+                        title={entry.photo_url ? "Replace photo" : "Add photo"}
+                      >
+                        {replacingId === entry.record_id
+                          ? <RefreshCw className="w-3 h-3 animate-spin" />
+                          : <Camera className="w-3 h-3" />}
+                        <span>{entry.photo_url ? "Replace" : "Add photo"}</span>
+                        <input
+                          type="file"
+                          accept="image/*,application/pdf"
+                          className="sr-only"
+                          disabled={replacingId === entry.record_id}
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            if (file) handleReplacePhoto(entry, file);
+                            e.target.value = "";  // reset so same file can be reselected
+                          }}
+                        />
+                      </label>
+                    )}
+                  </div>
+
+                  {replaceError && replacingId === null && (
+                    <p className="text-xs text-destructive mt-1">{replaceError}</p>
                   )}
                 </div>
               </div>

@@ -5,12 +5,13 @@ GET  /site-dashboard/{site_id}/lots/{lot_id}/material-summary
 GET  /site-dashboard/{site_id}/lots/{lot_id}/activity
 """
 
+import os
 import uuid
 
-from fastapi import APIRouter
+from fastapi import APIRouter, File, Form, UploadFile
 from sqlalchemy import func
 
-from app.dependencies import ALL_ROLES, DbSession
+from app.dependencies import ALL_ROLES, OFFICE_AND_ABOVE, DbSession
 from app.models.boq import BOQItem
 from app.models.enums import MovementType
 from app.models.stock import StockLedger
@@ -186,10 +187,14 @@ def lot_activity(site_id: uuid.UUID, lot_id: uuid.UUID, db: DbSession, limit: in
         .all()
     ):
         activities.append({
-            "type":   "delivery",
-            "title":  f"Delivery: {d.delivery_number or str(d.id)[:8]}",
-            "date":   d.delivery_date.isoformat() if d.delivery_date else None,
-            "status": d.delivery_status.value if d.delivery_status else None,
+            "id":          str(d.id),
+            "type":        "delivery",
+            "record_id":   str(d.id),
+            "record_type": "delivery",
+            "title":       f"Delivery: {d.delivery_number or str(d.id)[:8]}",
+            "date":        d.delivery_date.isoformat() if d.delivery_date else None,
+            "status":      d.delivery_status.value if d.delivery_status else None,
+            "photo_url":   d.delivery_note_image_url or None,
         })
 
     # Usage ledger entries for this lot
@@ -219,12 +224,15 @@ def lot_activity(site_id: uuid.UUID, lot_id: uuid.UUID, db: DbSession, limit: in
                     break
 
         activities.append({
-            "type":      "usage",
-            "title":     f"Used: {item_name}",
-            "subtitle":  f"{qty:.3g} {unit}".strip(),
-            "date":      row.movement_date.isoformat() if row.movement_date else None,
-            "status":    None,
-            "photo_url": photo_url,
+            "id":          str(row.id),
+            "type":        "usage",
+            "record_id":   str(row.id),
+            "record_type": "usage",
+            "title":       f"Used: {item_name}",
+            "subtitle":    f"{qty:.3g} {unit}".strip(),
+            "date":        row.movement_date.isoformat() if row.movement_date else None,
+            "status":      None,
+            "photo_url":   photo_url,
         })
 
     # Alerts for this site
@@ -262,12 +270,112 @@ def lot_activity(site_id: uuid.UUID, lot_id: uuid.UUID, db: DbSession, limit: in
             photo_url = s.notes.split(" | ", 1)[0].replace("evidence:", "").strip()
 
         activities.append({
-            "type":      "stage",
-            "title":     f"Stage: {stage_name} → {s.status.value if s.status else '?'}",
-            "date":      s.updated_at.isoformat() if s.updated_at else None,
-            "status":    s.status.value if s.status else None,
-            "photo_url": photo_url,
+            "id":          str(s.id),
+            "type":        "stage",
+            "record_id":   str(s.id),
+            "record_type": "stage",
+            "title":       f"Stage: {stage_name} → {s.status.value if s.status else '?'}",
+            "date":        s.updated_at.isoformat() if s.updated_at else None,
+            "status":      s.status.value if s.status else None,
+            "photo_url":   photo_url,
         })
 
     activities.sort(key=lambda x: x.get("date") or "", reverse=True)
     return ApiSuccess(data=activities[:limit])
+
+
+# ── Replace evidence photo ────────────────────────────────────────────────────
+
+@router.post(
+    "/replace-photo",
+    response_model=ApiSuccess[dict],
+    dependencies=[OFFICE_AND_ABOVE],
+)
+async def replace_evidence_photo(
+    db: DbSession,
+    record_type: str = Form(...),   # "delivery" | "stage" | "usage"
+    record_id: str   = Form(...),   # UUID of the record to update
+    photo: UploadFile = File(...),
+):
+    """
+    Replace (or add) an evidence photo for an existing delivery, stage update,
+    or material usage record.
+
+    Saves the file under UPLOAD_DIR using the same directory structure as the
+    original upload endpoints, then updates the correct DB field:
+      delivery → Delivery.delivery_note_image_url
+      stage    → ProjectStageStatus.notes  (evidence: token)
+      usage    → StockLedger.notes + linked UsageLog.comments
+    """
+    import uuid as _uuid
+    from app.core.config import settings as _s
+    from fastapi import HTTPException
+
+    # ── Save file ─────────────────────────────────────────────────────────────
+    subdir_map = {
+        "delivery": ("delivery_notes",),
+        "stage":    ("site_evidence", "stages"),
+        "usage":    ("site_evidence", "usage"),
+    }
+    if record_type not in subdir_map:
+        raise HTTPException(422, f"Unsupported record_type: {record_type!r}")
+
+    ext     = os.path.splitext(photo.filename or "photo")[1] or ".jpg"
+    fname   = f"{_uuid.uuid4().hex}{ext}"
+    save_dir = os.path.join(_s.UPLOAD_DIR, *subdir_map[record_type])
+    os.makedirs(save_dir, exist_ok=True)
+    content  = await photo.read()
+    with open(os.path.join(save_dir, fname), "wb") as fh:
+        fh.write(content)
+
+    url_path = "/" + "/".join(["uploads", *subdir_map[record_type], fname])
+    print(f"[REPLACE-PHOTO] type={record_type} id={record_id} saved={url_path} size={len(content)}", flush=True)
+
+    # ── Update DB record ──────────────────────────────────────────────────────
+    rid = _uuid.UUID(record_id)
+
+    if record_type == "delivery":
+        from app.models.delivery import Delivery
+        obj = db.get(Delivery, rid)
+        if not obj:
+            raise HTTPException(404, "Delivery not found.")
+        obj.delivery_note_image_url = url_path
+
+    elif record_type == "stage":
+        from app.models.stage import ProjectStageStatus
+        obj = db.get(ProjectStageStatus, rid)
+        if not obj:
+            raise HTTPException(404, "Stage status record not found.")
+        old_notes = obj.notes or ""
+        # Replace existing evidence: token, or prepend a new one
+        if "evidence:" in old_notes:
+            parts = old_notes.split(" | ")
+            parts = [p for p in parts if not p.strip().startswith("evidence:")]
+            parts.insert(0, f"evidence:{url_path}")
+            obj.notes = " | ".join(parts)
+        else:
+            obj.notes = f"evidence:{url_path}" + (f" | {old_notes}" if old_notes else "")
+
+    elif record_type == "usage":
+        from app.models.stock import StockLedger, UsageLog
+        ledger = db.get(StockLedger, rid)
+        if not ledger:
+            raise HTTPException(404, "Usage record not found.")
+
+        def _replace_notes(notes: str | None) -> str:
+            if not notes:
+                return f"evidence:{url_path}"
+            parts = [p for p in notes.split(" | ") if not p.strip().startswith("evidence:")]
+            parts.append(f"evidence:{url_path}")
+            return " | ".join(parts)
+
+        ledger.notes = _replace_notes(ledger.notes)
+
+        # Also update the linked UsageLog if available
+        if ledger.reference_type == "usage" and ledger.reference_id:
+            usage_log = db.get(UsageLog, ledger.reference_id)
+            if usage_log:
+                usage_log.comments = _replace_notes(usage_log.comments)
+
+    db.commit()
+    return ApiSuccess(data={"photo_url": url_path}, message="Photo replaced.")
