@@ -161,6 +161,7 @@ function EditUserModal({ user, onClose, onSaved }: EditModalProps) {
   const [loading, setLoading] = useState(false);
   const [resetLoading, setResetLoading] = useState(false);
   const [unlockLoading, setUnlockLoading] = useState(false);
+  const [deleteLoading, setDeleteLoading] = useState(false);
   const [error, setError] = useState("");
   const [tempPwd, setTempPwd] = useState<string | null>(null);
   const isLocked = !!(user.locked_until && new Date(user.locked_until) > new Date());
@@ -183,6 +184,28 @@ function EditUserModal({ user, onClose, onSaved }: EditModalProps) {
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleDeleteUser = async () => {
+    const confirmed = window.confirm(
+      `PERMANENTLY DELETE "${user.full_name}" (${user.email})?\n\n` +
+      `This removes the account entirely. It cannot be undone.\n` +
+      `The account can be recreated afterwards with a new password.`
+    );
+    if (!confirmed) return;
+    setDeleteLoading(true);
+    setError("");
+    try {
+      await usersApi.deleteUser(user.id);
+      onSaved();  // refreshes the list
+      onClose();
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { message?: string; detail?: string } } })
+        ?.response?.data?.message
+        || (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+        || "Failed to delete account.";
+      setError(msg);
+    } finally { setDeleteLoading(false); }
   };
 
   const handleUnlockAccount = async () => {
@@ -289,6 +312,23 @@ function EditUserModal({ user, onClose, onSaved }: EditModalProps) {
               {loading ? "Saving…" : "Save Changes"}
             </Button>
             <Button type="button" variant="outline" onClick={onClose} className="flex-1">Cancel</Button>
+          </div>
+
+          {/* Danger zone — permanent delete */}
+          <div className="border-t border-border pt-3 mt-1">
+            <p className="text-xs text-muted-foreground mb-2">
+              Forgot password / need to recreate? Delete the account and create a new one.
+            </p>
+            <Button
+              type="button"
+              variant="destructive"
+              size="sm"
+              className="w-full"
+              onClick={handleDeleteUser}
+              disabled={deleteLoading}
+            >
+              {deleteLoading ? "Deleting…" : "Delete Account Permanently"}
+            </Button>
           </div>
         </form>
       </div>

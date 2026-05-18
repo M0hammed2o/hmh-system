@@ -106,6 +106,21 @@ def deactivate_user(user_id: uuid.UUID, db: DbSession):
     return ApiSuccess(data=UserRead.model_validate(user), message="User deactivated.")
 
 
+@router.delete(
+    "/{user_id}/delete",
+    response_model=ApiSuccess[None],
+    dependencies=[ALL_ROLES],
+)
+def delete_user_permanently(user_id: uuid.UUID, db: DbSession):
+    """
+    Permanently delete a user account.
+    Use when you need to fully remove an account and recreate it fresh.
+    This action cannot be undone.
+    """
+    user_service.delete_user(db, user_id)
+    return ApiSuccess(data=None, message="User account permanently deleted.")
+
+
 @router.post(
     "/{user_id}/unlock",
     response_model=ApiSuccess[UserRead],

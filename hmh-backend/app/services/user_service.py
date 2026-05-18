@@ -88,6 +88,17 @@ def deactivate_user(db: Session, user_id: uuid.UUID) -> User:
     return user
 
 
+def delete_user(db: Session, user_id: uuid.UUID) -> None:
+    """
+    Permanently remove a user account.
+    Related records (audit events, payments captured_by, etc.) use
+    ON DELETE SET NULL so this is safe for most FK relationships.
+    """
+    user = get_user(db, user_id)
+    db.delete(user)
+    db.commit()
+
+
 def unlock_user(db: Session, user_id: uuid.UUID) -> User:
     """Clear failed login attempts and remove any account lock, leaving password unchanged."""
     user = get_user(db, user_id)

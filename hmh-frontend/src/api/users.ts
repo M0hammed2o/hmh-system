@@ -71,6 +71,10 @@ export const usersApi = {
     return { user: res.data.data, temp_password: res.data.data.temp_password };
   },
 
+  deleteUser: async (id: string): Promise<void> => {
+    await client.delete(`/users/${id}/delete`);
+  },
+
   unlockUser: async (id: string): Promise<User> => {
     const res = await client.post<{ data: User }>(`/users/${id}/unlock`);
     return res.data.data;
