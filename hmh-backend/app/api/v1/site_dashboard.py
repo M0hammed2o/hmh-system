@@ -205,11 +205,26 @@ def lot_activity(site_id: uuid.UUID, lot_id: uuid.UUID, db: DbSession, limit: in
         .all()
     ):
         item = db.get(Item, row.item_id)
+        item_name = item.name if item else "Unknown material"
+        qty  = row.quantity_out
+        unit = row.unit or ""
+
+        # Evidence photo stored in notes as "comments | evidence:/uploads/..."
+        photo_url = None
+        if row.notes:
+            for part in row.notes.split(" | "):
+                part = part.strip()
+                if part.startswith("evidence:"):
+                    photo_url = part[len("evidence:"):].strip()
+                    break
+
         activities.append({
-            "type":   "usage",
-            "title":  f"Usage: {item.name if item else 'Unknown'} — {row.quantity_out:.1f} {row.unit or ''}",
-            "date":   row.movement_date.isoformat() if row.movement_date else None,
-            "status": None,
+            "type":      "usage",
+            "title":     f"Used: {item_name}",
+            "subtitle":  f"{qty:.3g} {unit}".strip(),
+            "date":      row.movement_date.isoformat() if row.movement_date else None,
+            "status":    None,
+            "photo_url": photo_url,
         })
 
     # Alerts for this site

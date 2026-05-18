@@ -17,6 +17,17 @@ import { sitesApi, type Site } from "@/api/sites";
 import { lotsApi, type Lot } from "@/api/lots";
 import client from "@/api/client";
 import { formatDate } from "@/lib/format";
+import { API_BASE } from "@/lib/constants";
+
+// Convert a relative /uploads/… path to an absolute backend URL so the browser
+// fetches the file from the API server, not from the frontend domain.
+const BACKEND_ORIGIN = API_BASE.replace(/\/api\/v1\/?$/, "");
+function toAbsUrl(path: string | undefined): string | undefined {
+  if (!path) return undefined;
+  if (path.startsWith("http")) return path;       // already absolute
+  if (path.startsWith("/uploads/")) return `${BACKEND_ORIGIN}${path}`;
+  return path;
+}
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -120,14 +131,15 @@ export default function TimelinePage() {
           subtitle: del.delivery_status,
           date: del.delivery_date,
           status: del.delivery_status,
-          photo_url: del.delivery_note_image_url || undefined,
+          photo_url: toAbsUrl(del.delivery_note_image_url || undefined),
         };
       });
 
       const activity: TimelineEntry[] = ((activityRes as { data: { data: TimelineEntry[] } }).data.data ?? []).map((a) => ({
         ...a,
-        // Use backend-provided photo_url first; fall back to subtitle if it looks like a path
-        photo_url: a.photo_url || (a.subtitle?.startsWith("/uploads/") ? a.subtitle : undefined),
+        // Use backend-provided photo_url first; convert to absolute URL so the
+        // browser fetches the file from the API server, not the frontend domain.
+        photo_url: toAbsUrl(a.photo_url || (a.subtitle?.startsWith("/uploads/") ? a.subtitle : undefined)),
       }));
 
       const all = [...deliveries, ...activity].sort((a, b) =>
