@@ -281,7 +281,11 @@ app.include_router(vision_router,     prefix="/api/v1")
 app.include_router(expenses_router, prefix="/api/v1")
 
 # ── Static file serving for uploaded documents ────────────────────────────────
-_uploads_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "uploads")
+# Use settings.UPLOAD_DIR (absolute path from env) so the static mount and all
+# file-save calls (stages, deliveries, usage, gmail) reference the SAME directory.
+# Previously this used os.path.dirname(__file__) + "/uploads" which resolved to
+# hmh-backend/uploads, while files were saved to UPLOAD_DIR one level higher.
+_uploads_dir = os.path.abspath(settings.UPLOAD_DIR)
 os.makedirs(_uploads_dir, exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=_uploads_dir), name="uploads")
 

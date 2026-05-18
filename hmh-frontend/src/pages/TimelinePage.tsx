@@ -221,16 +221,31 @@ export default function TimelinePage() {
                     <span className="text-xs text-muted-foreground whitespace-nowrap shrink-0">{formatDate(entry.date)}</span>
                   </div>
 
-                  {/* Evidence / delivery note photo */}
+                  {/* Evidence / delivery note photo — inline thumbnail + full-size link */}
                   {entry.photo_url && (
                     <a
                       href={entry.photo_url}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="mt-2 flex items-center gap-1.5 text-xs text-primary hover:underline"
+                      className="mt-2 block group"
+                      title="Click to open full-size image"
                     >
-                      <Camera className="w-3.5 h-3.5" />
-                      View photo
+                      <img
+                        src={entry.photo_url}
+                        alt="Evidence photo"
+                        className="h-24 w-auto rounded-lg border border-border object-cover group-hover:opacity-90 transition-opacity"
+                        onError={(e) => {
+                          // If image fails to load, fall back to a text link
+                          const parent = e.currentTarget.parentElement;
+                          if (parent) {
+                            e.currentTarget.style.display = "none";
+                            const link = document.createElement("span");
+                            link.className = "flex items-center gap-1.5 text-xs text-primary hover:underline";
+                            link.innerHTML = `<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"/></svg> View photo`;
+                            parent.appendChild(link);
+                          }
+                        }}
+                      />
                     </a>
                   )}
                 </div>
