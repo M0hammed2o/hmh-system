@@ -126,7 +126,8 @@ export default function TimelinePage() {
 
       const activity: TimelineEntry[] = ((activityRes as { data: { data: TimelineEntry[] } }).data.data ?? []).map((a) => ({
         ...a,
-        photo_url: a.subtitle?.startsWith("/uploads/") ? a.subtitle : undefined,
+        // Use backend-provided photo_url first; fall back to subtitle if it looks like a path
+        photo_url: a.photo_url || (a.subtitle?.startsWith("/uploads/") ? a.subtitle : undefined),
       }));
 
       const all = [...deliveries, ...activity].sort((a, b) =>

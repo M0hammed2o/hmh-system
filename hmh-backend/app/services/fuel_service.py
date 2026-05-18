@@ -67,8 +67,22 @@ def create_fuel_log(
         notes=data.notes,
     )
     db.add(log)
+    db.flush()  # get log.id before updating total_cost
+
+    # total_cost is declared Computed() in the ORM model but the production DB
+    # column is a plain nullable column (not GENERATED ALWAYS).  Calculate and
+    # set it via raw SQL so the value is visible immediately after INSERT.
+    if log.cost_per_litre is not None:
+        from sqlalchemy import text as _t
+        from decimal import Decimal, ROUND_HALF_UP
+        tc = (Decimal(str(log.litres)) * Decimal(str(log.cost_per_litre))).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP
+        )
+        db.execute(_t("UPDATE fuel_logs SET total_cost = :tc WHERE id = :id"),
+                   {"tc": float(tc), "id": str(log.id)})
+
     db.commit()
-    db.refresh(log)   # loads the DB-generated total_cost
+    db.refresh(log)
     return log
 
 

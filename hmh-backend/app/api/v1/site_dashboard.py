@@ -240,11 +240,18 @@ def lot_activity(site_id: uuid.UUID, lot_id: uuid.UUID, db: DbSession, limit: in
         .all()
     ):
         stage_name = s.stage.name if s.stage else "Unknown"
+
+        # Evidence photo is embedded in notes as: "evidence:/uploads/... | rest of notes"
+        photo_url = None
+        if s.notes and s.notes.startswith("evidence:"):
+            photo_url = s.notes.split(" | ", 1)[0].replace("evidence:", "").strip()
+
         activities.append({
-            "type":   "stage",
-            "title":  f"Stage: {stage_name} → {s.status.value if s.status else '?'}",
-            "date":   s.updated_at.isoformat() if s.updated_at else None,
-            "status": s.status.value if s.status else None,
+            "type":      "stage",
+            "title":     f"Stage: {stage_name} → {s.status.value if s.status else '?'}",
+            "date":      s.updated_at.isoformat() if s.updated_at else None,
+            "status":    s.status.value if s.status else None,
+            "photo_url": photo_url,
         })
 
     activities.sort(key=lambda x: x.get("date") or "", reverse=True)

@@ -251,8 +251,14 @@ export default function FuelPage() {
       .finally(() => setLoading(false));
   }, [selectedProjectId]);
 
+  // total_cost: use DB value when available; fall back to litres × cost_per_litre
+  // (the DB column is plain nullable — not a GENERATED ALWAYS column — so older
+  //  rows may have total_cost=null until they are re-saved via the service fix).
+  const lineTotal = (l: { total_cost: number | null; litres: number; cost_per_litre: number | null }) =>
+    l.total_cost ?? (l.cost_per_litre != null ? l.litres * l.cost_per_litre : null);
+
   const totalLitres = logs.reduce((s, l) => s + l.litres, 0);
-  const totalCost = logs.reduce((s, l) => s + (l.total_cost ?? 0), 0);
+  const totalCost = logs.reduce((s, l) => s + (lineTotal(l) ?? 0), 0);
   const dieselLitres = logs.filter((l) => l.fuel_type === "DIESEL").reduce((s, l) => s + l.litres, 0);
 
   const handleLogFuel = async (projectId: string, data: {
@@ -381,7 +387,7 @@ export default function FuelPage() {
                       {log.cost_per_litre != null ? `R ${log.cost_per_litre.toFixed(4)}` : "—"}
                     </td>
                     <td className="px-4 py-3 text-right tabular-nums font-medium">
-                      {log.total_cost != null ? formatCurrency(log.total_cost) : "—"}
+                      {lineTotal(log) != null ? formatCurrency(lineTotal(log)!) : "—"}
                     </td>
                     <td className="px-4 py-3 text-xs text-muted-foreground">{log.fuelled_by ?? "—"}</td>
                     <td className="px-2 py-3">
