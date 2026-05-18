@@ -383,6 +383,29 @@ export default function PaymentsPage() {
     } finally { setJcPaying(false); }
   };
 
+  const [exportFrom, setExportFrom] = useState("");
+  const [exportTo,   setExportTo]   = useState("");
+  const [exporting,  setExporting]  = useState(false);
+
+  const handleExportCSV = async () => {
+    if (!selectedProjectId) return;
+    setExporting(true);
+    try {
+      const params = new URLSearchParams();
+      if (exportFrom) params.append("from_date", exportFrom);
+      if (exportTo)   params.append("to_date",   exportTo);
+      const url = `${client.defaults.baseURL}/projects/${selectedProjectId}/payments/export?${params}`;
+      const res = await client.get(url, { responseType: "blob" });
+      const blob = new Blob([res.data as BlobPart], { type: "text/csv" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `payments_${selectedProjectId}_${exportFrom || "all"}.csv`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    } catch { alert("Export failed."); }
+    finally { setExporting(false); }
+  };
+
   const PAGE_TABS_EXTRA = [
     { key: "payments", label: "Payments" },
     { key: "invoices", label: "Invoices" },
@@ -416,8 +439,8 @@ export default function PaymentsPage() {
         }
       />
 
-      {/* Project selector */}
-      <div className="flex items-center gap-3">
+      {/* Project selector + CSV export */}
+      <div className="flex flex-wrap items-center gap-3">
         <label className="text-xs text-muted-foreground whitespace-nowrap">Project</label>
         <select
           value={selectedProjectId}
@@ -426,6 +449,19 @@ export default function PaymentsPage() {
         >
           {projects.map((p) => <option key={p.id} value={p.id}>{p.name} ({p.code})</option>)}
         </select>
+
+        <div className="flex items-center gap-2 ml-auto flex-wrap">
+          <label className="text-xs text-muted-foreground">From</label>
+          <input type="date" value={exportFrom} onChange={e => setExportFrom(e.target.value)}
+                 className="h-9 rounded-md border border-input bg-background px-3 text-sm" />
+          <label className="text-xs text-muted-foreground">To</label>
+          <input type="date" value={exportTo} onChange={e => setExportTo(e.target.value)}
+                 className="h-9 rounded-md border border-input bg-background px-3 text-sm" />
+          <Button size="sm" variant="outline" onClick={handleExportCSV} disabled={exporting || !selectedProjectId}>
+            <FileText className="w-3.5 h-3.5 mr-1" />
+            {exporting ? "Exporting…" : "Export CSV"}
+          </Button>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">

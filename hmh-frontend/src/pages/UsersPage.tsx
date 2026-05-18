@@ -160,8 +160,10 @@ function EditUserModal({ user, onClose, onSaved }: EditModalProps) {
   const [form, setForm] = useState({ full_name: user.full_name, phone: user.phone ?? "", role: user.role });
   const [loading, setLoading] = useState(false);
   const [resetLoading, setResetLoading] = useState(false);
+  const [unlockLoading, setUnlockLoading] = useState(false);
   const [error, setError] = useState("");
   const [tempPwd, setTempPwd] = useState<string | null>(null);
+  const isLocked = !!(user.locked_until && new Date(user.locked_until) > new Date());
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -183,6 +185,18 @@ function EditUserModal({ user, onClose, onSaved }: EditModalProps) {
     }
   };
 
+  const handleUnlockAccount = async () => {
+    setUnlockLoading(true);
+    setError("");
+    try {
+      await usersApi.unlockUser(user.id);
+      onSaved();
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Failed to unlock account.";
+      setError(msg);
+    } finally { setUnlockLoading(false); }
+  };
+
   const handleResetPassword = async () => {
     if (!confirm(`Reset password for ${user.full_name}? They will need to set a new password on next login.`)) return;
     setResetLoading(true);
@@ -201,7 +215,15 @@ function EditUserModal({ user, onClose, onSaved }: EditModalProps) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-foreground/40">
       <div className="bg-card border border-border rounded-xl w-full max-w-md p-6 animate-fade-in">
-        <h2 className="text-base font-semibold mb-5">Edit User</h2>
+        <div className="flex items-center justify-between mb-5">
+          <h2 className="text-base font-semibold">Edit User</h2>
+          <div className="flex gap-1.5 flex-wrap justify-end">
+            {!user.is_active   && <span className="text-[10px] px-2 py-0.5 rounded-full bg-muted text-muted-foreground font-medium">Inactive</span>}
+            {user.must_reset_password && <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 font-medium">Must Reset PW</span>}
+            {isLocked && <span className="text-[10px] px-2 py-0.5 rounded-full bg-destructive/10 text-destructive font-medium">Locked</span>}
+            {user.failed_login_attempts > 0 && !isLocked && <span className="text-[10px] px-2 py-0.5 rounded-full bg-orange-100 text-orange-700 font-medium">{user.failed_login_attempts} failed logins</span>}
+          </div>
+        </div>
         <form onSubmit={submit} className="space-y-4">
           <div className="space-y-2">
             <Label>Full Name</Label>
@@ -239,9 +261,23 @@ function EditUserModal({ user, onClose, onSaved }: EditModalProps) {
                 <p className="text-xs text-muted-foreground">User will be required to change it on next login. No special characters.</p>
               </div>
             ) : (
-              <Button type="button" variant="outline" size="sm" onClick={handleResetPassword} disabled={resetLoading}>
-                {resetLoading ? "Resetting…" : "Reset Password"}
-              </Button>
+              <div className="flex gap-2 flex-wrap">
+                <Button type="button" variant="outline" size="sm" onClick={handleResetPassword} disabled={resetLoading}>
+                  {resetLoading ? "Resetting…" : "Reset Password"}
+                </Button>
+                {(isLocked || user.failed_login_attempts > 0) && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={handleUnlockAccount}
+                    disabled={unlockLoading}
+                    className="text-green-700 border-green-300 hover:bg-green-50"
+                  >
+                    {unlockLoading ? "Unlocking…" : "Unlock Account"}
+                  </Button>
+                )}
+              </div>
             )}
           </div>
 
@@ -322,8 +358,13 @@ export default function UsersPage() {
   };
 
   const handleDeactivate = async (id: string) => {
-    if (!confirm("Deactivate this user?")) return;
+    if (!confirm("Deactivate this user? They will not be able to log in until reactivated.")) return;
     await usersApi.deactivate(id);
+    fetchUsers();
+  };
+
+  const handleReactivate = async (id: string) => {
+    await usersApi.reactivateUser(id);
     fetchUsers();
   };
 
@@ -419,13 +460,21 @@ export default function UsersPage() {
                       >
                         <Pencil className="w-3.5 h-3.5" />
                       </button>
-                      {u.is_active && (
+                      {u.is_active ? (
                         <button
                           onClick={() => handleDeactivate(u.id)}
                           className="p-1.5 rounded-md hover:bg-destructive/10 transition-colors text-muted-foreground hover:text-destructive"
-                          title="Deactivate"
+                          title="Deactivate account"
                         >
                           <UserX className="w-3.5 h-3.5" />
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => handleReactivate(u.id)}
+                          className="p-1.5 rounded-md hover:bg-green-50 transition-colors text-muted-foreground hover:text-green-700"
+                          title="Reactivate account"
+                        >
+                          <ShieldOff className="w-3.5 h-3.5" />
                         </button>
                       )}
                     </div>

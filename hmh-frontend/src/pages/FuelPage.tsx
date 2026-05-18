@@ -30,6 +30,7 @@ function LogFuelModal({
     fuelled_by: string;
     site_id: string;
     fuel_date: string;
+    odometer_reading?: number | null;
     notes: string;
   }) => Promise<void>;
 }) {
@@ -45,6 +46,7 @@ function LogFuelModal({
   const [fuelledBy, setFuelledBy] = useState("");
   const [siteId, setSiteId] = useState("");
   const [fuelDate, setFuelDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [odometer, setOdometer] = useState("");
   const [notes, setNotes] = useState("");
   const [saving, setSaving] = useState(false);
 
@@ -75,6 +77,7 @@ function LogFuelModal({
         fuelled_by: fuelledBy,
         site_id: siteId,
         fuel_date: fuelDate,
+        odometer_reading: odometer ? parseFloat(odometer) : null,
         notes,
         ...(vehicleId ? { vehicle_id: vehicleId } : {}),
       } as Parameters<typeof onSubmit>[1]);
@@ -202,6 +205,18 @@ function LogFuelModal({
           </div>
         </div>
         <div>
+          <label className="text-xs text-muted-foreground block mb-1">Odometer Reading (km) — optional</label>
+          <input
+            type="number"
+            min="0"
+            step="0.1"
+            value={odometer}
+            onChange={(e) => setOdometer(e.target.value)}
+            placeholder="e.g. 45230"
+            className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm"
+          />
+        </div>
+        <div>
           <label className="text-xs text-muted-foreground block mb-1">Notes</label>
           <textarea
             value={notes}
@@ -270,6 +285,7 @@ export default function FuelPage() {
     fuelled_by: string;
     site_id: string;
     fuel_date: string;
+    odometer_reading?: number | null;
     notes: string;
   }) => {
     const created = await fuelApi.create(projectId, {
@@ -281,6 +297,7 @@ export default function FuelPage() {
       fuelled_by: data.fuelled_by || null,
       site_id: data.site_id || null,
       fuel_date: data.fuel_date ? new Date(data.fuel_date).toISOString() : null,
+      odometer_reading: data.odometer_reading ?? null,
       notes: data.notes || null,
     });
     if (projectId === selectedProjectId) {
@@ -369,6 +386,7 @@ export default function FuelPage() {
                   <th className="text-right px-4 py-3 font-medium text-muted-foreground">Litres</th>
                   <th className="text-right px-4 py-3 font-medium text-muted-foreground">Cost/L</th>
                   <th className="text-right px-4 py-3 font-medium text-muted-foreground">Total</th>
+                  <th className="text-right px-4 py-3 font-medium text-muted-foreground hidden lg:table-cell">Odometer</th>
                   <th className="text-left px-4 py-3 font-medium text-muted-foreground">Fuelled By</th>
                   <th className="px-4 py-3 w-8" />
                 </tr>
@@ -388,6 +406,11 @@ export default function FuelPage() {
                     </td>
                     <td className="px-4 py-3 text-right tabular-nums font-medium">
                       {lineTotal(log) != null ? formatCurrency(lineTotal(log)!) : "—"}
+                    </td>
+                    <td className="px-4 py-3 text-right text-xs text-muted-foreground hidden lg:table-cell">
+                      {(log as { odometer_reading?: number | null }).odometer_reading != null
+                        ? `${(log as { odometer_reading?: number }).odometer_reading?.toLocaleString("en-ZA")} km`
+                        : "—"}
                     </td>
                     <td className="px-4 py-3 text-xs text-muted-foreground">{log.fuelled_by ?? "—"}</td>
                     <td className="px-2 py-3">

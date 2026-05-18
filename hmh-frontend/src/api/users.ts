@@ -70,4 +70,14 @@ export const usersApi = {
     const res = await client.post<{ data: User & { temp_password: string } }>(`/users/${id}/reset-password`);
     return { user: res.data.data, temp_password: res.data.data.temp_password };
   },
+
+  unlockUser: async (id: string): Promise<User> => {
+    const res = await client.post<{ data: User }>(`/users/${id}/unlock`);
+    return res.data.data;
+  },
+
+  reactivateUser: async (id: string): Promise<User> => {
+    const res = await client.post<{ data: User }>(`/users/${id}/reactivate`);
+    return res.data.data;
+  },
 };

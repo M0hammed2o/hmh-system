@@ -280,6 +280,9 @@ app.include_router(document_ai_router, prefix="/api/v1")
 app.include_router(vision_router,     prefix="/api/v1")
 app.include_router(expenses_router, prefix="/api/v1")
 
+from app.api.v1.audit_log import router as audit_router
+app.include_router(audit_router, prefix="/api/v1")
+
 # ── Static file serving for uploaded documents ────────────────────────────────
 # Use settings.UPLOAD_DIR (absolute path from env) so the static mount and all
 # file-save calls (stages, deliveries, usage, gmail) reference the SAME directory.

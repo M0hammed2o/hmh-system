@@ -107,6 +107,28 @@ def deactivate_user(user_id: uuid.UUID, db: DbSession):
 
 
 @router.post(
+    "/{user_id}/unlock",
+    response_model=ApiSuccess[UserRead],
+    dependencies=[ALL_ROLES],
+)
+def unlock_user(user_id: uuid.UUID, db: DbSession):
+    """Clear failed login counter and remove account lock. Password is unchanged."""
+    user = user_service.unlock_user(db, user_id)
+    return ApiSuccess(data=UserRead.model_validate(user), message="Account unlocked.")
+
+
+@router.post(
+    "/{user_id}/reactivate",
+    response_model=ApiSuccess[UserRead],
+    dependencies=[ALL_ROLES],
+)
+def reactivate_user(user_id: uuid.UUID, db: DbSession):
+    """Re-enable a deactivated account and clear any lock."""
+    user = user_service.reactivate_user(db, user_id)
+    return ApiSuccess(data=UserRead.model_validate(user), message="Account reactivated.")
+
+
+@router.post(
     "/{user_id}/reset-password",
     response_model=ApiSuccess[UserCreatedResponse],
     dependencies=[ALL_ROLES],  # DEMO: was OWNER_ONLY

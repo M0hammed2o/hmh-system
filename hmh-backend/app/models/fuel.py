@@ -85,8 +85,9 @@ class FuelLog(TimestampMixin, Base):
     )
     fuel_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     # Legacy column from migration 0001 (DATE NOT NULL until migration 0010).
-    # Always populate alongside fuel_date to keep both columns consistent.
     log_date: Mapped[Optional[date]] = mapped_column(sa.Date, nullable=True)
+    # Odometer reading at time of refuel (km) — in DB since migration 0001, exposed in ORM now.
+    odometer_reading: Mapped[Optional[float]] = mapped_column(Numeric(10, 1), nullable=True)
 
     # ── Notes ────────────────────────────────────────────────────────────────
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

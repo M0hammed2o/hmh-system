@@ -9,7 +9,7 @@
  */
 
 import { useEffect, useState, useCallback } from "react";
-import { Truck, Zap, AlertTriangle, Camera, ChevronDown, ChevronRight, RefreshCw } from "lucide-react";
+import { Truck, Zap, AlertTriangle, Camera, ChevronDown, ChevronRight, RefreshCw, X as XIcon } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PageHeader } from "@/components/shared/PageHeader";
 import { projectsApi, type Project } from "@/api/projects";
@@ -79,8 +79,9 @@ export default function TimelinePage() {
   const [entries, setEntries] = useState<TimelineEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [replacingId, setReplacingId] = useState<string | null>(null);  // record_id being replaced
+  const [replacingId,  setReplacingId]  = useState<string | null>(null);
   const [replaceError, setReplaceError] = useState("");
+  const [lightboxUrl,  setLightboxUrl]  = useState<string | null>(null);
 
   // Load projects on mount
   useEffect(() => {
@@ -250,22 +251,18 @@ export default function TimelinePage() {
                   {/* Evidence photo — inline thumbnail + replace button */}
                   <div className="mt-2 flex items-start gap-2 flex-wrap">
                     {entry.photo_url && (
-                      <a
-                        href={entry.photo_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="block group shrink-0"
-                        title="Click to open full-size image"
+                      <button
+                        onClick={() => setLightboxUrl(entry.photo_url!)}
+                        className="block group shrink-0 focus:outline-none"
+                        title="Click to view full-size image"
                       >
                         <img
                           src={entry.photo_url}
                           alt="Evidence photo"
-                          className="h-20 w-auto rounded-lg border border-border object-cover group-hover:opacity-80 transition-opacity"
-                          onError={(e) => {
-                            e.currentTarget.style.display = "none";
-                          }}
+                          className="h-20 w-auto rounded-lg border border-border object-cover group-hover:opacity-80 transition-opacity cursor-zoom-in"
+                          onError={(e) => { e.currentTarget.style.display = "none"; }}
                         />
-                      </a>
+                      </button>
                     )}
 
                     {/* Replace photo — only for record types the endpoint supports */}
@@ -302,6 +299,36 @@ export default function TimelinePage() {
               </div>
             ))}
           </div>
+        </div>
+      )}
+      {/* Lightbox */}
+      {lightboxUrl && (
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm"
+          onClick={() => setLightboxUrl(null)}
+        >
+          <button
+            className="absolute top-4 right-4 text-white/70 hover:text-white p-2 rounded-full bg-black/40"
+            onClick={() => setLightboxUrl(null)}
+            aria-label="Close"
+          >
+            <XIcon className="w-6 h-6" />
+          </button>
+          <img
+            src={lightboxUrl}
+            alt="Full-size evidence"
+            className="max-h-[90vh] max-w-[90vw] rounded-xl shadow-2xl object-contain"
+            onClick={(e) => e.stopPropagation()}
+          />
+          <a
+            href={lightboxUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="absolute bottom-4 text-white/70 hover:text-white text-xs underline"
+            onClick={(e) => e.stopPropagation()}
+          >
+            Open original in new tab
+          </a>
         </div>
       )}
     </div>

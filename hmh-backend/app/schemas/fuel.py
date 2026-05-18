@@ -25,6 +25,7 @@ class FuelLogRead(BaseModel):
     fuelled_by: Optional[str] = None
     recorded_by: uuid.UUID
     fuel_date: datetime
+    odometer_reading: Optional[float] = None
     notes: Optional[str] = None
     created_at: datetime
     updated_at: datetime
@@ -40,6 +41,7 @@ class FuelLogCreate(BaseModel):
     fuelled_by: Optional[str] = None
     site_id: Optional[uuid.UUID] = None
     fuel_date: Optional[datetime] = None
+    odometer_reading: Optional[float] = None
     notes: Optional[str] = None
 
     @field_validator("litres")
@@ -66,4 +68,5 @@ class FuelLogUpdate(BaseModel):
     fuelled_by: Optional[str] = None
     site_id: Optional[uuid.UUID] = None
     fuel_date: Optional[datetime] = None
+    odometer_reading: Optional[float] = None
     notes: Optional[str] = None

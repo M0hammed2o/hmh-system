@@ -1,8 +1,13 @@
 """Payment routes."""
 
+import csv
+import io
 import uuid
+from datetime import date
+from typing import Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
+from fastapi.responses import StreamingResponse
 
 from app.dependencies import ALL_ROLES, CurrentUser, DbSession, OFFICE_AND_ABOVE
 from app.schemas.common import ApiSuccess
@@ -136,3 +141,78 @@ def outstanding_summary(project_id: uuid.UUID, db: DbSession):
         "outstanding_invoices":       invoice_rows,
         "overdue_count":              sum(1 for i in invoice_rows if i["is_overdue"]),
     })
+
+
+@project_payment_router.get(
+    "/export",
+    dependencies=[OFFICE_AND_ABOVE],
+    response_class=StreamingResponse,
+)
+def export_payments_csv(
+    project_id: uuid.UUID,
+    db: DbSession,
+    from_date:     Optional[date] = Query(None),
+    to_date:       Optional[date] = Query(None),
+    payment_type:  Optional[str]  = Query(None),
+):
+    """
+    Download a CSV of all payments for the project, with optional date and type filters.
+    Used by finance to generate monthly payment reports.
+    """
+    from app.models.payment import Payment
+    from app.models.supplier import Supplier
+    from datetime import datetime, timezone
+
+    q = db.query(Payment).filter(Payment.project_id == project_id)
+
+    if from_date:
+        q = q.filter(Payment.payment_date >= from_date)
+    if to_date:
+        q = q.filter(Payment.payment_date <= to_date)
+    if payment_type:
+        q = q.filter(Payment.payment_type == payment_type.upper())
+
+    payments = q.order_by(Payment.payment_date.desc(), Payment.created_at.desc()).all()
+
+    # Build CSV in memory
+    output = io.StringIO()
+    writer = csv.writer(output)
+
+    writer.writerow([
+        "Date", "Reference", "Payment Type", "Supplier", "Amount (R)",
+        "Status", "Notes", "Captured By",
+    ])
+
+    total = 0.0
+    for p in payments:
+        supplier_name = ""
+        if p.supplier_id:
+            s = db.get(Supplier, p.supplier_id)
+            supplier_name = s.name if s else ""
+
+        amount = float(p.amount_paid or 0)
+        total += amount
+
+        writer.writerow([
+            p.payment_date.isoformat() if p.payment_date else "",
+            p.payment_reference or "",
+            p.payment_type.value if hasattr(p.payment_type, "value") else str(p.payment_type),
+            supplier_name,
+            f"{amount:.2f}",
+            p.status.value if hasattr(p.status, "value") else str(p.status),
+            (p.notes or "").replace("\n", " "),
+            str(p.captured_by) if p.captured_by else "",
+        ])
+
+    # Totals row
+    writer.writerow([])
+    writer.writerow(["", "", "", "TOTAL", f"{total:.2f}", "", "", ""])
+
+    output.seek(0)
+    filename = f"payments_{project_id}_{datetime.now(timezone.utc).strftime('%Y%m%d')}.csv"
+
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )

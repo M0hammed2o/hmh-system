@@ -64,6 +64,7 @@ def create_fuel_log(
         recorded_by=recorded_by_id,
         fuel_date=_fuel_date,
         log_date=_fuel_date.date() if hasattr(_fuel_date, "date") else _fuel_date,  # legacy NOT NULL col
+        odometer_reading=getattr(data, "odometer_reading", None),
         notes=data.notes,
     )
     db.add(log)

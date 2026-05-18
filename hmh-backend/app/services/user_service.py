@@ -88,6 +88,27 @@ def deactivate_user(db: Session, user_id: uuid.UUID) -> User:
     return user
 
 
+def unlock_user(db: Session, user_id: uuid.UUID) -> User:
+    """Clear failed login attempts and remove any account lock, leaving password unchanged."""
+    user = get_user(db, user_id)
+    user.failed_login_attempts = 0
+    user.locked_until = None
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+def reactivate_user(db: Session, user_id: uuid.UUID) -> User:
+    """Re-activate a previously deactivated account."""
+    user = get_user(db, user_id)
+    user.is_active = True
+    user.failed_login_attempts = 0
+    user.locked_until = None
+    db.commit()
+    db.refresh(user)
+    return user
+
+
 def grant_project_access(
     db: Session, user_id: uuid.UUID, data: ProjectAccessGrant
 ) -> UserProjectAccess:
