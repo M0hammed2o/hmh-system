@@ -70,17 +70,25 @@ def decode_token(token: str) -> Dict[str, Any]:
 def generate_temp_password(length: int = 12) -> str:
     """
     Generate a temporary password for new users.
-    In production, this would be emailed to the user.
+
+    Uses only unambiguous characters — no 0/O, 1/l/I, or special symbols —
+    so the password is easy to read aloud, type on a phone, or share via
+    WhatsApp without transcription errors.
+
+    Format: 12 alphanumeric chars, guaranteed to contain at least one
+    uppercase letter, one lowercase letter, and one digit.
     """
     import secrets
-    import string
-    alphabet = string.ascii_letters + string.digits + "!@#$"
-    # Ensure at least one uppercase, digit, and special char
+    # Exclude visually ambiguous characters: 0, O, o, 1, l, I, i
+    upper   = "ABCDEFGHJKMNPQRSTUVWXYZ"
+    lower   = "abcdefghjkmnpqrstuvwxyz"
+    digits  = "23456789"
+    alphabet = upper + lower + digits
     while True:
         pwd = "".join(secrets.choice(alphabet) for _ in range(length))
         if (
-            any(c.isupper() for c in pwd)
-            and any(c.isdigit() for c in pwd)
-            and any(c in "!@#$" for c in pwd)
+            any(c in upper  for c in pwd)
+            and any(c in lower  for c in pwd)
+            and any(c in digits for c in pwd)
         ):
             return pwd

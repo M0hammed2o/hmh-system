@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Plus, UserX, Pencil, ShieldOff } from "lucide-react";
+import { Plus, UserX, Pencil, ShieldOff, Copy, Check } from "lucide-react";
 import { usersApi, type User, type UserCreate, type UserRole } from "@/api/users";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -98,6 +98,35 @@ interface TempPwdBannerProps {
   onDismiss: () => void;
 }
 
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  const handleCopy = () => {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }).catch(() => {
+      // Fallback for older browsers / HTTP
+      const el = document.createElement("textarea");
+      el.value = text;
+      document.body.appendChild(el);
+      el.select();
+      document.execCommand("copy");
+      document.body.removeChild(el);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  };
+  return (
+    <button
+      onClick={handleCopy}
+      className="ml-2 p-1 rounded hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
+      title="Copy to clipboard"
+    >
+      {copied ? <Check className="w-4 h-4 text-green-600" /> : <Copy className="w-4 h-4" />}
+    </button>
+  );
+}
+
 function TempPwdBanner({ user, password, onDismiss }: TempPwdBannerProps) {
   return (
     <div className="bg-success/10 border border-success/30 rounded-xl p-4 flex items-start justify-between gap-4">
@@ -106,8 +135,14 @@ function TempPwdBanner({ user, password, onDismiss }: TempPwdBannerProps) {
         <p className="text-sm text-foreground mt-1">
           Share this temporary password with <strong>{user.full_name}</strong>. It will not be shown again.
         </p>
-        <p className="mt-2 font-mono text-sm bg-card border border-border rounded-md px-3 py-1.5 inline-block">
-          {password}
+        <div className="mt-2 flex items-center gap-1">
+          <p className="font-mono text-sm bg-card border border-border rounded-md px-3 py-1.5 inline-block tracking-wider">
+            {password}
+          </p>
+          <CopyButton text={password} />
+        </div>
+        <p className="text-xs text-muted-foreground mt-1.5">
+          No special characters — easy to type on any device.
         </p>
       </div>
       <button onClick={onDismiss} className="text-muted-foreground hover:text-foreground text-xs shrink-0">Dismiss</button>
@@ -197,8 +232,11 @@ function EditUserModal({ user, onClose, onSaved }: EditModalProps) {
             {tempPwd ? (
               <div className="space-y-1">
                 <p className="text-xs text-foreground">New temporary password — share with user:</p>
-                <p className="font-mono text-sm bg-muted border border-border rounded-md px-3 py-1.5 inline-block">{tempPwd}</p>
-                <p className="text-xs text-muted-foreground">User will be required to change it on next login.</p>
+                <div className="flex items-center gap-1">
+                  <p className="font-mono text-sm bg-muted border border-border rounded-md px-3 py-1.5 inline-block tracking-wider">{tempPwd}</p>
+                  <CopyButton text={tempPwd} />
+                </div>
+                <p className="text-xs text-muted-foreground">User will be required to change it on next login. No special characters.</p>
               </div>
             ) : (
               <Button type="button" variant="outline" size="sm" onClick={handleResetPassword} disabled={resetLoading}>
