@@ -12,6 +12,7 @@ class UserRole(str, enum.Enum):
     OFFICE_USER = "OFFICE_USER"
     SITE_MANAGER = "SITE_MANAGER"
     SITE_STAFF = "SITE_STAFF"
+    READ_ONLY = "READ_ONLY"   # View-only owner: can see everything, cannot write
 
 
 class ProjectStatus(str, enum.Enum):

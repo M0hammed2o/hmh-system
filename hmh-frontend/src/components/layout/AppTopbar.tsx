@@ -8,6 +8,7 @@ import {
   Smartphone, Clock, User,
 } from "lucide-react";
 import { TOKEN_KEY, REFRESH_TOKEN_KEY, ROLE_KEY } from "@/lib/constants";
+import { useAuthContext } from "@/context/AuthContext";
 import { cn } from "@/lib/utils";
 
 const pageTitles: Record<string, string> = {
@@ -106,6 +107,7 @@ const navGroups = [
 
 export function AppTopbar() {
   const location = useLocation();
+  const { isReadOnly } = useAuthContext();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [dark, setDark] = useState(() =>
     typeof window !== "undefined" && localStorage.getItem("theme") === "dark"
@@ -129,7 +131,12 @@ export function AppTopbar() {
 
   return (
     <>
-      <header className="sticky top-0 z-30 flex items-center justify-between h-14 px-4 lg:px-6 border-b border-border bg-card/80 backdrop-blur-sm">
+      {isReadOnly && (
+        <div className="sticky top-0 z-40 bg-amber-500 text-white text-xs font-medium text-center py-1.5 px-4 flex items-center justify-center gap-2">
+          <span>👁 View-Only Mode — you can browse everything but cannot make changes.</span>
+        </div>
+      )}
+      <header className={`${isReadOnly ? "" : "sticky top-0"} z-30 flex items-center justify-between h-14 px-4 lg:px-6 border-b border-border bg-card/80 backdrop-blur-sm`}>
         <div className="flex items-center gap-3">
           <button
             className="lg:hidden p-1.5 rounded-md hover:bg-muted"

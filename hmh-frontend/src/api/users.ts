@@ -1,6 +1,6 @@
 import client from "./client";
 
-export type UserRole = "OWNER" | "OFFICE_ADMIN" | "OFFICE_USER" | "SITE_MANAGER" | "SITE_STAFF";
+export type UserRole = "OWNER" | "OFFICE_ADMIN" | "OFFICE_USER" | "SITE_MANAGER" | "SITE_STAFF" | "READ_ONLY";
 
 export interface User {
   id: string;

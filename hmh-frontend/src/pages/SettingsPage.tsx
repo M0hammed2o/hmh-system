@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Bell, Shield, Database, Info, Layers, Check, Trash2, AlertTriangle } from "lucide-react";
+import { WriteGuard } from "@/components/shared/WriteGuard";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -75,9 +76,11 @@ export default function SettingsPage() {
               This runs automatically on startup, but you can re-run it here.
             </p>
             <div className="flex items-center gap-3">
-              <Button size="sm" variant="outline" onClick={handleSeedStages} disabled={seedingStages}>
-                {seedingStages ? "Seeding…" : "Seed Default Stages"}
-              </Button>
+              <WriteGuard>
+                <Button size="sm" variant="outline" onClick={handleSeedStages} disabled={seedingStages}>
+                  {seedingStages ? "Seeding…" : "Seed Default Stages"}
+                </Button>
+              </WriteGuard>
               {stagesDone && (
                 <span className="text-sm text-green-600 dark:text-green-400 flex items-center gap-1">
                   <Check className="w-3.5 h-3.5" />Stages seeded
@@ -209,15 +212,17 @@ export default function SettingsPage() {
               )}
 
               {!showConfirm ? (
-                <Button
-                  variant="destructive"
-                  size="sm"
-                  onClick={() => setShowConfirm(true)}
-                  className="gap-2"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                  Clear All Demo Data
-                </Button>
+                <WriteGuard>
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    onClick={() => setShowConfirm(true)}
+                    className="gap-2"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    Clear All Demo Data
+                  </Button>
+                </WriteGuard>
               ) : (
                 <div className="border border-destructive/30 rounded-lg p-4 space-y-3 bg-destructive/5">
                   <p className="text-sm font-semibold text-destructive">

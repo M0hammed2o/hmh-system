@@ -96,6 +96,14 @@ def ensure_tables():
                 END IF;
             END $$;
         """))
+        # user_role_enum: add READ_ONLY if missing (migration 0011)
+        conn.execute(_t("""
+            DO $$
+            BEGIN
+                ALTER TYPE user_role_enum ADD VALUE IF NOT EXISTS 'READ_ONLY';
+            EXCEPTION WHEN others THEN NULL;
+            END$$;
+        """))
         # fuel_logs.log_date must be nullable (migration 0010)
         conn.execute(_t("""
             DO $$

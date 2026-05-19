@@ -123,9 +123,18 @@ def require_roles(*roles: UserRole):
                 f" | user={payload.get('sub')}",
                 flush=True,
             )
+            # Give a clear message to read-only accounts
+            if user_role == "READ_ONLY":
+                detail = (
+                    "Owner account is read-only. "
+                    "This action is not permitted in view-only mode. "
+                    "Contact an admin if you need to make changes."
+                )
+            else:
+                detail = f"Role '{user_role}' is not permitted. Required: {allowed}"
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Role '{user_role}' is not permitted. Required: {allowed}",
+                detail=detail,
             )
     return Depends(_check)
 

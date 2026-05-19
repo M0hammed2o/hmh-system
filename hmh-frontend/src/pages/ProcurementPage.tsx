@@ -2,6 +2,7 @@
  * Procurement Page — MR → Approve → PO → Email workflow.
  */
 import { useEffect, useState, useCallback } from "react";
+import { WriteGuard } from "@/components/shared/WriteGuard";
 import {
   Plus, Check, X, ChevronRight, AlertTriangle, Mail,
   MailCheck, RefreshCw, FileText, ShoppingCart,
@@ -339,11 +340,13 @@ function MRDetailModal({ mr, suppliers, onClose, onUpdated }: {
           {result && <p className="text-sm text-green-600 dark:text-green-400 bg-green-500/10 border border-green-500/20 rounded-lg px-3 py-2">{result}</p>}
 
           <div className="flex flex-wrap gap-2">
-            {canApprove && <Button size="sm" onClick={() => act(() => procurementApi.approveMR(mr.id, overBoqReason || undefined), "approve")} disabled={loading !== null || (mr.over_boq && !overBoqReason.trim())} className="h-8 text-xs"><Check className="w-3.5 h-3.5 mr-1" />{loading === "approve" ? "Approving…" : "Approve"}</Button>}
-            {["SUBMITTED", "PENDING_APPROVAL", "DRAFT"].includes(mr.status) && !showReject && <Button size="sm" variant="outline" onClick={() => setShowReject(true)} className="h-8 text-xs"><X className="w-3.5 h-3.5 mr-1" />Reject</Button>}
-            {showReject && <Button size="sm" variant="destructive" onClick={() => act(() => procurementApi.rejectMR(mr.id, rejectReason), "reject")} disabled={!rejectReason.trim() || loading !== null} className="h-8 text-xs">{loading === "reject" ? "Rejecting…" : "Confirm Reject"}</Button>}
-            {mr.status === "DRAFT" && <Button size="sm" variant="outline" onClick={() => act(() => procurementApi.submitMR(mr.id), "submit")} disabled={loading !== null} className="h-8 text-xs">{loading === "submit" ? "Submitting…" : "Submit"}</Button>}
-            {canConvert && !showConvert && <Button size="sm" variant="outline" onClick={() => setShowConvert(true)} className="h-8 text-xs"><ShoppingCart className="w-3.5 h-3.5 mr-1" />Convert to Purchase Order (PO)</Button>}
+            <WriteGuard>
+              {canApprove && <Button size="sm" onClick={() => act(() => procurementApi.approveMR(mr.id, overBoqReason || undefined), "approve")} disabled={loading !== null || (mr.over_boq && !overBoqReason.trim())} className="h-8 text-xs"><Check className="w-3.5 h-3.5 mr-1" />{loading === "approve" ? "Approving…" : "Approve"}</Button>}
+              {["SUBMITTED", "PENDING_APPROVAL", "DRAFT"].includes(mr.status) && !showReject && <Button size="sm" variant="outline" onClick={() => setShowReject(true)} className="h-8 text-xs"><X className="w-3.5 h-3.5 mr-1" />Reject</Button>}
+              {showReject && <Button size="sm" variant="destructive" onClick={() => act(() => procurementApi.rejectMR(mr.id, rejectReason), "reject")} disabled={!rejectReason.trim() || loading !== null} className="h-8 text-xs">{loading === "reject" ? "Rejecting…" : "Confirm Reject"}</Button>}
+              {mr.status === "DRAFT" && <Button size="sm" variant="outline" onClick={() => act(() => procurementApi.submitMR(mr.id), "submit")} disabled={loading !== null} className="h-8 text-xs">{loading === "submit" ? "Submitting…" : "Submit"}</Button>}
+              {canConvert && !showConvert && <Button size="sm" variant="outline" onClick={() => setShowConvert(true)} className="h-8 text-xs"><ShoppingCart className="w-3.5 h-3.5 mr-1" />Convert to Purchase Order (PO)</Button>}
+            </WriteGuard>
             {["APPROVED"].includes(mr.status) && (
               <Button size="sm" variant="outline" onClick={() => setShowMREmail(true)} className="h-8 text-xs">
                 <Mail className="w-3.5 h-3.5 mr-1" />Email Supplier

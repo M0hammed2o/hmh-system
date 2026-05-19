@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { WriteGuard } from "@/components/shared/WriteGuard";
 import { Plus, CreditCard, CheckCircle2, Clock, FileText, AlertTriangle, Hammer } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -426,16 +427,18 @@ export default function PaymentsPage() {
         title="Payments"
         description="Manage supplier invoices and payment records."
         actions={
-          <div className="flex gap-2">
-            <Button size="sm" variant="outline" onClick={() => setShowCaptureInvoice(true)} disabled={!selectedProjectId}>
-              <FileText className="w-4 h-4" />
-              Capture Invoice
-            </Button>
-            <Button size="sm" onClick={() => setShowCapturePayment(true)} disabled={!selectedProjectId}>
-              <Plus className="w-4 h-4" />
-              Capture Payment
-            </Button>
-          </div>
+          <WriteGuard>
+            <div className="flex gap-2">
+              <Button size="sm" variant="outline" onClick={() => setShowCaptureInvoice(true)} disabled={!selectedProjectId}>
+                <FileText className="w-4 h-4" />
+                Capture Invoice
+              </Button>
+              <Button size="sm" onClick={() => setShowCapturePayment(true)} disabled={!selectedProjectId}>
+                <Plus className="w-4 h-4" />
+                Capture Payment
+              </Button>
+            </div>
+          </WriteGuard>
         }
       />
 
@@ -661,7 +664,9 @@ export default function PaymentsPage() {
                       <td className="px-4 py-3 text-right font-semibold">{formatCurrency(jc.total_amount)}</td>
                       <td className="px-4 py-3 text-xs text-muted-foreground">{jc.work_date ? formatDate(jc.work_date) : "—"}</td>
                       <td className="px-4 py-3">
-                        <Button size="sm" className="h-7 text-xs" onClick={() => { setPayingJc(jc); setJcPayRef(jc.job_card_number); }}>Pay</Button>
+                        <WriteGuard>
+                          <Button size="sm" className="h-7 text-xs" onClick={() => { setPayingJc(jc); setJcPayRef(jc.job_card_number); }}>Pay</Button>
+                        </WriteGuard>
                       </td>
                     </tr>
                   ))}
