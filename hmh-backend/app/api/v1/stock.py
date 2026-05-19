@@ -107,17 +107,14 @@ async def record_usage_with_evidence(
     """Record usage and optionally save an evidence photo."""
     from app.schemas.stock import UsageLogCreate
 
-    # Save evidence file first
+    # Save evidence file (Supabase Storage when configured, else local disk)
+    from app.core.storage import save_upload
     evidence_url: Optional[str] = None
     if evidence_file and evidence_file.filename:
-        ev_dir = os.path.join(settings.UPLOAD_DIR, "site_evidence", "usage")
-        os.makedirs(ev_dir, exist_ok=True)
-        ext    = os.path.splitext(evidence_file.filename)[1] or ".bin"
-        fname  = f"{uuid.uuid4().hex}{ext}"
+        ext     = os.path.splitext(evidence_file.filename)[1] or ".bin"
+        fname   = f"{uuid.uuid4().hex}{ext}"
         content = await evidence_file.read()
-        with open(os.path.join(ev_dir, fname), "wb") as fh:
-            fh.write(content)
-        evidence_url = f"/uploads/site_evidence/usage/{fname}"
+        evidence_url = save_upload(content, f"site_evidence/usage/{fname}")
 
     note_parts = []
     if comments:

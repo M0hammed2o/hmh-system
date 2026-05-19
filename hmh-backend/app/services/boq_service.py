@@ -962,29 +962,63 @@ def get_project_master_summary(db: Session, project_id: uuid.UUID) -> dict:
         .all()
     )
 
+    # ── Bulk-fetch all data in 3 queries instead of N×3 queries ─────────────
+    # Query 1: all site-level BOQ items for this project
+    all_site_items = (
+        db.query(BOQItem)
+        .filter(
+            BOQItem.project_id == project_id,
+            BOQItem.lot_id.is_(None),
+            BOQItem.is_active  == True,
+        )
+        .all()
+    )
+    site_items_by_site: dict = {}
+    for item in all_site_items:
+        if item.site_id:
+            site_items_by_site.setdefault(item.site_id, []).append(item)
+
+    # Query 2: all lots for this project (count + first-lot lookup)
+    all_lots = db.query(Lot).filter(Lot.project_id == project_id).all()
+    lots_by_site: dict = {}
+    for lot in all_lots:
+        if lot.site_id:
+            lots_by_site.setdefault(lot.site_id, []).append(lot)
+
+    # Query 3: all lot-level BOQ items (only needed if site-level items missing)
+    all_lot_items = (
+        db.query(BOQItem)
+        .filter(
+            BOQItem.project_id == project_id,
+            BOQItem.lot_id.isnot(None),
+            BOQItem.is_active  == True,
+        )
+        .all()
+    )
+    lot_items_by_lot: dict = {}
+    for item in all_lot_items:
+        if item.lot_id:
+            lot_items_by_lot.setdefault(item.lot_id, []).append(item)
+
+    # Query 4: section → header mapping (bulk)
+    section_to_header: dict = {
+        str(s.id): str(s.boq_header_id)
+        for s in db.query(BOQSection).filter(
+            BOQSection.boq_header_id.in_(
+                db.query(BOQHeader.id).filter(BOQHeader.project_id == project_id)
+            )
+        ).all()
+    }
+
     total_planned   = 0.0
     total_lot_count = 0
     proj_types: dict[str, float] = {}
     sites_out       = []
 
     for site in all_sites:
-        # Try site-level items first (lot_id IS NULL)
-        site_items = (
-            db.query(BOQItem)
-            .filter(
-                BOQItem.project_id == project_id,
-                BOQItem.site_id    == site.id,
-                BOQItem.lot_id.is_(None),
-                BOQItem.is_active  == True,
-            )
-            .all()
-        )
-
-        lot_count = (
-            db.query(Lot)
-            .filter(Lot.project_id == project_id, Lot.site_id == site.id)
-            .count()
-        )
+        site_items = site_items_by_site.get(site.id, [])
+        site_lots  = lots_by_site.get(site.id, [])
+        lot_count  = len(site_lots)
 
         if site_items:
             unit_total = sum(_item_total_safe(i) for i in site_items)
@@ -992,45 +1026,29 @@ def get_project_master_summary(db: Session, project_id: uuid.UUID) -> dict:
             type_b     = _type_breakdown(site_items)
         else:
             # Fall back to lot BOQs — use the first lot as representative
-            first_lot = (
-                db.query(Lot)
-                .filter(Lot.project_id == project_id, Lot.site_id == site.id)
-                .first()
-            )
-            if first_lot:
-                rep_items = (
-                    db.query(BOQItem)
-                    .filter(BOQItem.lot_id == first_lot.id, BOQItem.is_active == True)
-                    .all()
-                )
-                unit_total = sum(_item_total_safe(i) for i in rep_items)
-            else:
-                rep_items  = []
-                unit_total = 0.0
+            first_lot = site_lots[0] if site_lots else None
+            rep_items: list = lot_items_by_lot.get(first_lot.id, []) if first_lot else []
+            unit_total = sum(_item_total_safe(i) for i in rep_items)
 
             # Actual site total = sum of all lots
-            all_lot_ids = [
-                row[0] for row in db.query(Lot.id)
-                .filter(Lot.project_id == project_id, Lot.site_id == site.id).all()
+            all_lot_items_for_site = [
+                item
+                for lot in site_lots
+                for item in lot_items_by_lot.get(lot.id, [])
             ]
-            all_lot_items = (
-                db.query(BOQItem)
-                .filter(BOQItem.lot_id.in_(all_lot_ids), BOQItem.is_active == True)
-                .all()
-            ) if all_lot_ids else []
-            site_total = sum(_item_total_safe(i) for i in all_lot_items) if all_lot_items else unit_total
-            type_b = _type_breakdown(rep_items or all_lot_items)
+            site_total = sum(_item_total_safe(i) for i in all_lot_items_for_site) if all_lot_items_for_site else unit_total
+            type_b = _type_breakdown(rep_items or all_lot_items_for_site)
 
         # Accumulate project-wide type totals
         for k, v in type_b.items():
             proj_types[k] = proj_types.get(k, 0.0) + v
 
-        # Find header IDs
-        header_ids: set[str] = set()
-        for item in site_items:
-            sec = db.get(BOQSection, item.boq_section_id)
-            if sec:
-                header_ids.add(str(sec.boq_header_id))
+        # Find header IDs from pre-built mapping
+        header_ids: set[str] = {
+            section_to_header[str(item.boq_section_id)]
+            for item in site_items
+            if str(item.boq_section_id) in section_to_header
+        }
 
         expected = unit_total * max(lot_count, 1)
         var = _variance(site_total, expected)
@@ -1169,9 +1187,20 @@ def get_site_boq_summary(db: Session, site_id: uuid.UUID) -> dict:
             "supplier_id":      _sup_id,
             "supplier_name":    _sup_name,
         })
-        section_map[sid]["section_total"] = round(section_map[sid]["section_total"] + t, 2)
+        # Accumulate at full precision; round only in the final output to avoid
+        # floating-point drift that causes section totals to diverge from unit_total.
+        section_map[sid]["section_total"] += t
 
+    # Round section_totals at output time (not during accumulation) to avoid drift
+    for sec in section_map.values():
+        sec["section_total"] = round(sec["section_total"], 2)
+    # Round section_totals at output time (not during accumulation) to avoid drift
+    for sec in section_map.values():
+        sec["section_total"] = round(sec["section_total"], 2)
     sections = sorted(section_map.values(), key=lambda s: s["sequence_order"])
+    # Use sum of section totals as the canonical unit_total to ensure consistency
+    # with what the frontend sees when it sums sections.reduce(s + sec.section_total)
+    unit_total = sum(s["section_total"] for s in sections)
 
     return {
         "site_id":              str(site_id),

@@ -86,8 +86,16 @@ class FuelLog(TimestampMixin, Base):
     fuel_date: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     # Legacy column from migration 0001 (DATE NOT NULL until migration 0010).
     log_date: Mapped[Optional[date]] = mapped_column(sa.Date, nullable=True)
-    # Odometer reading at time of refuel (km) — in DB since migration 0001, exposed in ORM now.
+    # Odometer reading at time of refuel (km) — in DB since migration 0001.
     odometer_reading: Mapped[Optional[float]] = mapped_column(Numeric(10, 1), nullable=True)
+    # Consumption metrics derived from consecutive odometer readings (migration 0012)
+    distance_km:     Mapped[Optional[float]] = mapped_column(Numeric(10, 1), nullable=True)
+    efficiency_kpl:  Mapped[Optional[float]] = mapped_column(Numeric(8, 3), nullable=True)
+    l_per_100km:     Mapped[Optional[float]] = mapped_column(Numeric(8, 3), nullable=True)
+    # Evidence photo URLs (migration 0012)
+    photo_odometer: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
+    photo_pump:     Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
+    photo_invoice:  Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
 
     # ── Notes ────────────────────────────────────────────────────────────────
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

@@ -67,6 +67,29 @@ def create_fuel_log(
         odometer_reading=getattr(data, "odometer_reading", None),
         notes=data.notes,
     )
+    # ── Consumption calculation from previous odometer reading ──────────────
+    # Find the most recent fuel log for the same vehicle (if vehicle linked)
+    if _fuel_date and data.vehicle_id and _fuel_date and getattr(data, "odometer_reading", None):
+        prev = (
+            db.query(FuelLog)
+            .filter(
+                FuelLog.vehicle_id == data.vehicle_id,
+                FuelLog.odometer_reading.isnot(None),
+            )
+            .order_by(FuelLog.fuel_date.desc())
+            .first()
+        )
+        if prev and prev.odometer_reading is not None:
+            dist = float(data.odometer_reading) - float(prev.odometer_reading)
+            if dist > 0 and data.litres > 0:
+                log.distance_km    = dist
+                log.efficiency_kpl = round(dist / data.litres, 3)
+                log.l_per_100km    = round(data.litres / dist * 100, 3)
+                # Flag unusual consumption (> 50 L/100km is suspicious)
+                if log.l_per_100km > 50:
+                    existing_notes = log.notes or ""
+                    log.notes = f"⚠ High consumption ({log.l_per_100km:.1f} L/100km) — verify. " + existing_notes
+
     db.add(log)
     db.flush()  # get log.id before updating total_cost
 

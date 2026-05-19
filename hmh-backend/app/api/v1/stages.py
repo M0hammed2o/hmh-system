@@ -103,17 +103,14 @@ async def upsert_stage_status_with_evidence(
     """Update a stage status and optionally upload a progress photo."""
     from app.models.enums import StageStatus
 
-    # Save evidence photo to disk
+    # Save evidence photo (Supabase Storage when configured, else local disk)
+    from app.core.storage import save_upload
     evidence_url: Optional[str] = None
     if evidence_file and evidence_file.filename:
-        ev_dir = os.path.join(settings.UPLOAD_DIR, "site_evidence", "stages")
-        os.makedirs(ev_dir, exist_ok=True)
-        ext    = os.path.splitext(evidence_file.filename)[1] or ".bin"
-        fname  = f"{uuid.uuid4().hex}{ext}"
+        ext     = os.path.splitext(evidence_file.filename)[1] or ".bin"
+        fname   = f"{uuid.uuid4().hex}{ext}"
         content = await evidence_file.read()
-        with open(os.path.join(ev_dir, fname), "wb") as fh:
-            fh.write(content)
-        evidence_url = f"/uploads/site_evidence/stages/{fname}"
+        evidence_url = save_upload(content, f"site_evidence/stages/{fname}")
 
     # Append evidence URL to notes so it's linked to the record
     combined_notes = notes or ""

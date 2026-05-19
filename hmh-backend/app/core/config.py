@@ -45,9 +45,15 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 480
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
 
-    # File storage
+    # File storage — local path (set to a Render Persistent Disk mount for permanence)
     UPLOAD_DIR: str = "./uploads"
     MAX_UPLOAD_SIZE_MB: int = 5
+
+    # Supabase Storage (optional — set these env vars to enable persistent cloud storage)
+    # If set, uploaded files are stored in Supabase Storage instead of the local disk.
+    # Create a public bucket named "hmh-uploads" in your Supabase project.
+    SUPABASE_URL:         str = ""   # e.g. https://xyz.supabase.co
+    SUPABASE_SERVICE_KEY: str = ""   # service_role key (never ANON key for uploads)
 
     # OCR provider: "local" (pytesseract), "google_vision", or "disabled"
     OCR_PROVIDER: str = "local"

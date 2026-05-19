@@ -156,29 +156,23 @@ async def receive_delivery_with_document(
     dn_mime:           Optional[str] = None
     dn_size:           int           = 0
     if delivery_note_file and delivery_note_file.filename:
-        dn_dir = os.path.join(settings.UPLOAD_DIR, "delivery_notes")
-        os.makedirs(dn_dir, exist_ok=True)
+        from app.core.storage import save_upload as _save
         ext       = os.path.splitext(delivery_note_file.filename)[1] or ".bin"
         dn_fname  = f"{uuid.uuid4().hex}{ext}"
         content   = await delivery_note_file.read()
         dn_size   = len(content)
         dn_mime   = mimetypes.guess_type(delivery_note_file.filename)[0] or "application/octet-stream"
-        with open(os.path.join(dn_dir, dn_fname), "wb") as fh:
-            fh.write(content)
-        delivery_note_url = f"/uploads/delivery_notes/{dn_fname}"
+        delivery_note_url = _save(content, f"delivery_notes/{dn_fname}")
 
     # ── Save receiver signature as PNG file (never store raw Base64) ─────────
     receiver_sig_url: Optional[str] = None
     if receiver_signature:
         if receiver_signature.startswith("data:") or len(receiver_signature) > 500:
             try:
-                sig_dir = os.path.join(settings.UPLOAD_DIR, "delivery_signatures")
-                os.makedirs(sig_dir, exist_ok=True)
+                from app.core.storage import save_upload as _save
                 b64 = receiver_signature.split(",", 1)[1] if "," in receiver_signature else receiver_signature
                 sig_fname = f"{uuid.uuid4().hex}.png"
-                with open(os.path.join(sig_dir, sig_fname), "wb") as fh:
-                    fh.write(base64.b64decode(b64))
-                receiver_sig_url = f"/uploads/delivery_signatures/{sig_fname}"
+                receiver_sig_url = _save(base64.b64decode(b64), f"delivery_signatures/{sig_fname}")
             except Exception:
                 receiver_sig_url = None
         else:
@@ -189,13 +183,10 @@ async def receive_delivery_with_document(
     if driver_signature:
         if driver_signature.startswith("data:") or len(driver_signature) > 500:
             try:
-                sig_dir = os.path.join(settings.UPLOAD_DIR, "delivery_signatures")
-                os.makedirs(sig_dir, exist_ok=True)
+                from app.core.storage import save_upload as _save
                 b64 = driver_signature.split(",", 1)[1] if "," in driver_signature else driver_signature
                 sig_fname = f"{uuid.uuid4().hex}.png"
-                with open(os.path.join(sig_dir, sig_fname), "wb") as fh:
-                    fh.write(base64.b64decode(b64))
-                driver_sig_url = f"/uploads/delivery_signatures/{sig_fname}"
+                driver_sig_url = _save(base64.b64decode(b64), f"delivery_signatures/{sig_fname}")
             except Exception:
                 driver_sig_url = None
         else:

@@ -26,6 +26,12 @@ class FuelLogRead(BaseModel):
     recorded_by: uuid.UUID
     fuel_date: datetime
     odometer_reading: Optional[float] = None
+    distance_km:     Optional[float] = None
+    efficiency_kpl:  Optional[float] = None
+    l_per_100km:     Optional[float] = None
+    photo_odometer: Optional[str] = None
+    photo_pump:     Optional[str] = None
+    photo_invoice:  Optional[str] = None
     notes: Optional[str] = None
     created_at: datetime
     updated_at: datetime

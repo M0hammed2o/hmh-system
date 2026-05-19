@@ -96,6 +96,18 @@ def ensure_tables():
                 END IF;
             END $$;
         """))
+        # fuel_logs evidence photo columns (migration 0012)
+        for _col in ["photo_odometer VARCHAR(1000)", "photo_pump VARCHAR(1000)",
+                     "photo_invoice VARCHAR(1000)", "distance_km NUMERIC(10,1)",
+                     "efficiency_kpl NUMERIC(8,3)", "l_per_100km NUMERIC(8,3)"]:
+            _cn = _col.split()[0]
+            conn.execute(_t(f"""
+                DO $$ BEGIN
+                    IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                        WHERE table_name='fuel_logs' AND column_name='{_cn}')
+                    THEN ALTER TABLE fuel_logs ADD COLUMN {_col}; END IF;
+                END $$;
+            """))
         # user_role_enum: add READ_ONLY if missing (migration 0011)
         conn.execute(_t("""
             DO $$
