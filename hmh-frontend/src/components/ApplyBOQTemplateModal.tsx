@@ -66,9 +66,8 @@ export function ApplyBOQTemplateModal({ projectId, onClose, onApplied }: Props) 
       setResult({ created: count });
       onApplied(count);
     } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message
-        || "Failed to apply template.";
-      setError(msg);
+      const d = (err as { response?: { data?: { detail?: string; message?: string } } })?.response?.data;
+      setError(d?.detail || d?.message || "Failed to apply template — check Render logs for the full error.");
     } finally { setApplying(false); }
   };
 

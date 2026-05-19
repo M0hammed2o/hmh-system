@@ -48,8 +48,10 @@ function CloneWizard({ template, onClose, onDone }: CloneWizardProps) {
   const loadLots = async (projectId: string) => {
     setLoading(true);
     try {
-      const r = await client.get<{ data: { items: Lot[] } }>(`/projects/${projectId}/lots/`, { params: { limit: 100 } });
-      setLots(r.data.data?.items || []);
+      // API returns ApiSuccess<list[LotRead]> → { data: [...] } (plain array, not paginated)
+      const r = await client.get<{ data: Lot[] }>(`/projects/${projectId}/lots/`);
+      const lots = Array.isArray(r.data.data) ? r.data.data : [];
+      setLots(lots);
     } catch {
       setError("Failed to load lots.");
     } finally { setLoading(false); }
@@ -85,8 +87,8 @@ function CloneWizard({ template, onClose, onDone }: CloneWizardProps) {
       setDone(true);
       setTimeout(() => { onDone(); onClose(); }, 1500);
     } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Clone failed.";
-      setError(msg);
+      const d = (err as { response?: { data?: { detail?: string; message?: string } } })?.response?.data;
+      setError(d?.detail || d?.message || "Clone failed — check Render logs for the full error.");
     } finally { setCloning(false); }
   };
 
