@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
-import { Plus, Car, Wrench, Fuel, MoreHorizontal, Trash2 } from "lucide-react";
+import { Plus, Car, Wrench, Fuel, MoreHorizontal, Trash2, Droplet, AlertTriangle } from "lucide-react";
+import { fuelApi, fuelPhotoUrl, type FuelLog, FUEL_TYPE_LABELS } from "@/api/fuel";
+import { formatCurrency } from "@/lib/format";
 import { vehiclesApi, type Vehicle, type VehicleCost, type VehicleCreate, type VehicleCostCreate, type VehicleType, type VehicleCostType } from "@/api/vehicles";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -179,8 +181,10 @@ export default function VehiclesPage() {
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
   const [logCostFor, setLogCostFor] = useState<Vehicle | null>(null);
-  const [expanded, setExpanded] = useState<string | null>(null);
-  const [error, setError] = useState("");
+  const [expanded,      setExpanded]      = useState<string | null>(null);
+  const [error,         setError]         = useState("");
+  const [fuelLogs,      setFuelLogs]      = useState<Record<string, FuelLog[]>>({});
+  const [activeTab,     setActiveTab]     = useState<Record<string, "costs" | "fuel">>({});
 
   const loadVehicles = () => {
     setLoading(true);
@@ -195,10 +199,38 @@ export default function VehiclesPage() {
     setCosts((prev) => ({ ...prev, [vehicleId]: data }));
   };
 
+  const loadFuelLogs = async (vehicleId: string) => {
+    // Find a project from the vehicle's assigned_project_id or load all
+    const vehicle = vehicles.find(v => v.id === vehicleId);
+    const projId  = vehicle?.assigned_project_id;
+    if (!projId) {
+      // Try to get logs across all projects by fetching project list first
+      try {
+        const { projectsApi: api } = await import("@/api/projects");
+        const projects = await api.list(1, 100).then(r => r.items);
+        const allLogs: FuelLog[] = [];
+        await Promise.all(
+          projects.map(p =>
+            fuelApi.listByVehicle(p.id, vehicleId)
+              .then(logs => allLogs.push(...logs))
+              .catch(() => {})
+          )
+        );
+        allLogs.sort((a, b) => new Date(b.fuel_date).getTime() - new Date(a.fuel_date).getTime());
+        setFuelLogs(prev => ({ ...prev, [vehicleId]: allLogs }));
+      } catch { setFuelLogs(prev => ({ ...prev, [vehicleId]: [] })); }
+      return;
+    }
+    const logs = await fuelApi.listByVehicle(projId, vehicleId).catch(() => []);
+    setFuelLogs(prev => ({ ...prev, [vehicleId]: logs }));
+  };
+
   const toggleExpand = (id: string) => {
     if (expanded === id) { setExpanded(null); return; }
     setExpanded(id);
     loadCosts(id);
+    loadFuelLogs(id);
+    if (!activeTab[id]) setActiveTab(prev => ({ ...prev, [id]: "costs" }));
   };
 
   useEffect(() => { loadVehicles(); }, []);
@@ -279,31 +311,97 @@ export default function VehiclesPage() {
                 </button>
               </div>
 
-              {expanded === v.id && costs[v.id] && (
-                <div className="border-t border-border px-4 py-3 bg-muted/20 space-y-2">
-                  {/* Cost summary */}
-                  {costs[v.id].length > 0 && (
-                    <div className="flex gap-4 text-xs text-muted-foreground pb-1 border-b border-border/50">
-                      <span>Total cost: <strong className="text-foreground">R{costs[v.id].reduce((s, c) => s + c.amount, 0).toLocaleString()}</strong></span>
-                      <span>Entries: <strong className="text-foreground">{costs[v.id].length}</strong></span>
+              {expanded === v.id && (
+                <div className="border-t border-border bg-muted/20">
+                  {/* Tab switcher */}
+                  <div className="flex border-b border-border/50">
+                    {(["costs", "fuel"] as const).map(tab => (
+                      <button
+                        key={tab}
+                        onClick={() => setActiveTab(prev => ({ ...prev, [v.id]: tab }))}
+                        className={`px-4 py-2 text-xs font-medium transition-colors flex items-center gap-1.5
+                          ${(activeTab[v.id] ?? "costs") === tab
+                            ? "border-b-2 border-primary text-primary"
+                            : "text-muted-foreground hover:text-foreground"}`}
+                      >
+                        {tab === "costs" ? <Wrench className="w-3 h-3" /> : <Droplet className="w-3 h-3" />}
+                        {tab === "costs" ? `Costs (${costs[v.id]?.length ?? 0})` : `Fuel (${fuelLogs[v.id]?.length ?? 0})`}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Costs tab */}
+                  {(activeTab[v.id] ?? "costs") === "costs" && costs[v.id] && (
+                    <div className="px-4 py-3 space-y-2">
+                      {costs[v.id].length > 0 && (
+                        <div className="flex gap-4 text-xs text-muted-foreground pb-1 border-b border-border/50">
+                          <span>Total: <strong className="text-foreground">R{costs[v.id].reduce((s, c) => s + c.amount, 0).toLocaleString()}</strong></span>
+                          <span>{costs[v.id].length} entries</span>
+                        </div>
+                      )}
+                      {costs[v.id].length === 0 ? (
+                        <p className="text-xs text-muted-foreground">No costs logged yet.</p>
+                      ) : (
+                        costs[v.id].slice(0, 10).map(cost => (
+                          <div key={cost.id} className="flex items-center justify-between text-sm">
+                            <div className="flex items-center gap-2">
+                              {cost.cost_type === "FUEL" ? <Fuel className="w-3.5 h-3.5 text-muted-foreground" /> : <Wrench className="w-3.5 h-3.5 text-muted-foreground" />}
+                              <span className="text-muted-foreground text-xs">{costTypeLabels[cost.cost_type]}</span>
+                              {cost.description && <span className="text-xs text-muted-foreground">— {cost.description}</span>}
+                            </div>
+                            <div className="flex items-center gap-3">
+                              <span className="font-medium text-xs">R{cost.amount.toLocaleString()}</span>
+                              <span className="text-xs text-muted-foreground">{cost.cost_date}</span>
+                            </div>
+                          </div>
+                        ))
+                      )}
                     </div>
                   )}
-                  {costs[v.id].length === 0 ? (
-                    <p className="text-xs text-muted-foreground">No costs logged yet.</p>
-                  ) : (
-                    costs[v.id].slice(0, 10).map((cost) => (
-                      <div key={cost.id} className="flex items-center justify-between text-sm">
-                        <div className="flex items-center gap-2">
-                          {cost.cost_type === "FUEL" ? <Fuel className="w-3.5 h-3.5 text-muted-foreground" /> : <Wrench className="w-3.5 h-3.5 text-muted-foreground" />}
-                          <span className="text-muted-foreground">{costTypeLabels[cost.cost_type]}</span>
-                          {cost.description && <span className="text-xs text-muted-foreground">— {cost.description}</span>}
-                        </div>
-                        <div className="flex items-center gap-3">
-                          <span className="font-medium">R{cost.amount.toLocaleString()}</span>
-                          <span className="text-xs text-muted-foreground">{cost.cost_date}</span>
-                        </div>
-                      </div>
-                    ))
+
+                  {/* Fuel logs tab */}
+                  {(activeTab[v.id] ?? "costs") === "fuel" && (
+                    <div className="px-4 py-3 space-y-2">
+                      {!fuelLogs[v.id] ? (
+                        <p className="text-xs text-muted-foreground">Loading fuel logs…</p>
+                      ) : fuelLogs[v.id].length === 0 ? (
+                        <p className="text-xs text-muted-foreground">No fuel logs for this vehicle.</p>
+                      ) : (
+                        <>
+                          <div className="flex gap-4 text-xs text-muted-foreground pb-1 border-b border-border/50">
+                            <span>Total: <strong className="text-foreground">{fuelLogs[v.id].reduce((s, l) => s + l.litres, 0).toFixed(1)} L</strong></span>
+                            <span>Cost: <strong className="text-foreground">{formatCurrency(fuelLogs[v.id].reduce((s, l) => s + (l.total_cost ?? (l.cost_per_litre ? l.litres * l.cost_per_litre : 0)), 0))}</strong></span>
+                            <span>{fuelLogs[v.id].length} entries</span>
+                          </div>
+                          {fuelLogs[v.id].slice(0, 10).map(log => {
+                            const flagged = log.notes?.includes("⚠") ?? false;
+                            const odoUrl  = fuelPhotoUrl(log.photo_odometer);
+                            return (
+                              <div key={log.id} className={`flex items-start justify-between text-xs rounded-lg px-2 py-1.5 ${flagged ? "bg-destructive/5" : ""}`}>
+                                <div className="space-y-0.5">
+                                  <div className="flex items-center gap-2">
+                                    <Droplet className="w-3 h-3 text-muted-foreground" />
+                                    <span className="font-medium">{log.litres.toFixed(1)} L {FUEL_TYPE_LABELS[log.fuel_type]}</span>
+                                    {flagged && <AlertTriangle className="w-3 h-3 text-destructive" title="Unusual consumption" />}
+                                  </div>
+                                  <div className="text-muted-foreground pl-5 flex flex-wrap gap-2">
+                                    {log.odometer_reading != null && <span>📍 {log.odometer_reading.toLocaleString()} km</span>}
+                                    {log.distance_km      != null && <span>↔ {log.distance_km.toFixed(0)} km</span>}
+                                    {log.efficiency_kpl   != null && <span>⛽ {log.efficiency_kpl.toFixed(1)} km/L</span>}
+                                    {log.l_per_100km      != null && <span className={log.l_per_100km > 30 ? "text-destructive font-medium" : ""}>{log.l_per_100km.toFixed(1)} L/100km</span>}
+                                    {odoUrl && <a href={odoUrl} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">📷 Odo photo</a>}
+                                  </div>
+                                </div>
+                                <div className="text-right shrink-0 ml-3">
+                                  <p className="font-medium">{log.total_cost != null ? formatCurrency(log.total_cost) : "—"}</p>
+                                  <p className="text-muted-foreground">{new Date(log.fuel_date).toLocaleDateString("en-ZA")}</p>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </>
+                      )}
+                    </div>
                   )}
                 </div>
               )}
