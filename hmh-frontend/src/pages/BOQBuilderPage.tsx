@@ -16,6 +16,7 @@ import {
   boqApi,
   type FullBOQ, type BOQSection, type BOQItem, type ItemType,
 } from "@/api/boq";
+import { suppliersApi, type Supplier } from "@/api/suppliers";
 import { cn } from "@/lib/utils";
 
 
@@ -129,11 +130,12 @@ function itemTotalDisplay(item: BOQItem): number | null {
 
 interface ItemRowProps {
   item: BOQItem;
+  suppliers: Supplier[];
   onSave: (id: string, patch: Partial<BOQItem>, applyToAllLots?: boolean) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
 }
 
-function ItemRow({ item, onSave, onDelete }: ItemRowProps) {
+function ItemRow({ item, suppliers, onSave, onDelete }: ItemRowProps) {
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState({
     raw_description: item.raw_description,
@@ -143,6 +145,7 @@ function ItemRow({ item, onSave, onDelete }: ItemRowProps) {
     item_type: item.item_type,
     specification: item.specification || "",
     notes: item.notes || "",
+    supplier_id: item.supplier_id || "",
   });
   const [applyToAll, setApplyToAll] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -157,6 +160,7 @@ function ItemRow({ item, onSave, onDelete }: ItemRowProps) {
       item_type: form.item_type,
       specification: form.specification || null,
       notes: form.notes || null,
+      supplier_id: form.supplier_id || null,
     }, applyToAll);
     setSaving(false);
     setEditing(false);
@@ -200,6 +204,14 @@ function ItemRow({ item, onSave, onDelete }: ItemRowProps) {
               </div>
             </div>
             <Input value={form.specification} onChange={(e) => setForm({ ...form, specification: e.target.value })} placeholder="Specification (optional)" className="text-sm h-8" />
+            <select
+              value={form.supplier_id}
+              onChange={(e) => setForm({ ...form, supplier_id: e.target.value })}
+              className="h-8 w-full rounded-md border border-input bg-background px-2 text-sm"
+            >
+              <option value="">— No supplier —</option>
+              {suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
             {/* Apply-to-all-lots checkbox — only shown when editing a lot-level item */}
             {item.lot_id && (
               <label className="flex items-center gap-2 text-xs cursor-pointer select-none">
@@ -238,6 +250,10 @@ function ItemRow({ item, onSave, onDelete }: ItemRowProps) {
         {item.specification && (
           <span className="block text-xs text-muted-foreground mt-0.5 truncate max-w-[300px]">{item.specification}</span>
         )}
+        {item.supplier_id && (() => {
+          const sup = suppliers.find(s => s.id === item.supplier_id);
+          return sup ? <span className="block text-[10px] text-primary/70 mt-0.5">{sup.name}</span> : null;
+        })()}
       </td>
       <td className="px-3 py-2.5 text-sm text-center text-muted-foreground">{item.unit || "—"}</td>
       <td className="px-3 py-2.5 text-sm text-right">{item.planned_quantity ?? "—"}</td>
@@ -326,11 +342,12 @@ interface SectionBlockProps {
   sectionTotal: number;
   headerId: string;
   projectId: string;
+  suppliers: Supplier[];
   onRefresh: () => void;
   onDeleteSection: (id: string) => Promise<void>;
 }
 
-function SectionBlock({ section, items, sectionTotal, headerId, projectId, onRefresh, onDeleteSection }: SectionBlockProps) {
+function SectionBlock({ section, items, sectionTotal, headerId, projectId, suppliers, onRefresh, onDeleteSection }: SectionBlockProps) {
   const [collapsed, setCollapsed] = useState(false);
   const [editingName, setEditingName] = useState(false);
   const [name, setName] = useState(section.section_name);
@@ -409,7 +426,7 @@ function SectionBlock({ section, items, sectionTotal, headerId, projectId, onRef
             </thead>
             <tbody>
               {items.map((item) => (
-                <ItemRow key={item.id} item={item} onSave={handleSaveItem} onDelete={handleDeleteItem} />
+                <ItemRow key={item.id} item={item} suppliers={suppliers} onSave={handleSaveItem} onDelete={handleDeleteItem} />
               ))}
               <AddItemRow sectionId={section.id} onAdded={onRefresh} />
             </tbody>
@@ -428,6 +445,7 @@ export default function BOQBuilderPage() {
   const [boq, setBOQ] = useState<FullBOQ | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [addingSection, setAddingSection] = useState(false);
   const [newSectionName, setNewSectionName] = useState("");
   const [markingTemplate, setMarkingTemplate] = useState(false);
@@ -453,6 +471,7 @@ export default function BOQBuilderPage() {
   }, [projectId, headerId]);
 
   useEffect(() => { load(); }, [load]);
+  useEffect(() => { suppliersApi.list().then(setSuppliers).catch(() => {}); }, []);
 
   const handleAddSection = async () => {
     if (!newSectionName.trim() || !headerId) return;
@@ -586,6 +605,7 @@ export default function BOQBuilderPage() {
               sectionTotal={sectionTotal}
               headerId={boq.header.id}
               projectId={boq.header.project_id}
+              suppliers={suppliers}
               onRefresh={load}
               onDeleteSection={handleDeleteSection}
             />

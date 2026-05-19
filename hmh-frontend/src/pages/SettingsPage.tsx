@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Bell, Shield, Database, Info, Layers, Check } from "lucide-react";
+import { Bell, Shield, Database, Info, Layers, Check, Trash2, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -23,6 +23,29 @@ export default function SettingsPage() {
   const [seedingStages, setSeedingStages] = useState(false);
   const [stagesDone, setStagesDone] = useState(false);
   const [stagesError, setStagesError] = useState("");
+
+  const [clearing,     setClearing]     = useState(false);
+  const [clearResult,  setClearResult]  = useState<string | null>(null);
+  const [clearError,   setClearError]   = useState("");
+  const [showConfirm,  setShowConfirm]  = useState(false);
+
+  const handleClearDemoData = async () => {
+    setClearing(true);
+    setClearError("");
+    setClearResult(null);
+    try {
+      const res = await client.post<{ data: { rows_deleted: number }; message: string }>(
+        "/admin/clear-demo-data"
+      );
+      setClearResult(res.data.message);
+    } catch (err: unknown) {
+      const d = (err as { response?: { data?: { detail?: string; message?: string } } })?.response?.data;
+      setClearError(d?.detail || d?.message || "Clear failed.");
+    } finally {
+      setClearing(false);
+      setShowConfirm(false);
+    }
+  };
 
   const handleSeedStages = async () => {
     setSeedingStages(true);
@@ -159,6 +182,73 @@ export default function SettingsPage() {
             </div>
           </div>
         </Section>
+
+        {/* Clear Demo Data — spans full width */}
+        <div className="lg:col-span-2">
+          <Section title="Clear Demo Data" icon={Trash2}>
+            <div className="space-y-4">
+              <div className="flex items-start gap-3 bg-destructive/5 border border-destructive/20 rounded-lg p-4">
+                <AlertTriangle className="w-4 h-4 text-destructive shrink-0 mt-0.5" />
+                <div className="text-sm">
+                  <p className="font-medium text-destructive">Danger — this action cannot be undone</p>
+                  <p className="text-muted-foreground mt-1">
+                    Deletes all project, procurement, BOQ, delivery, stock, payment, job card, vehicle, and alert data.
+                    <strong className="text-foreground"> User logins, roles, supplier catalogue, item catalogue, and stage definitions are preserved.</strong>
+                  </p>
+                </div>
+              </div>
+
+              {clearResult && (
+                <div className="flex items-center gap-2 text-sm text-green-700 bg-green-50 border border-green-200 rounded-lg px-4 py-2.5">
+                  <Check className="w-4 h-4 shrink-0" />
+                  {clearResult}
+                </div>
+              )}
+              {clearError && (
+                <p className="text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-lg px-3 py-2">{clearError}</p>
+              )}
+
+              {!showConfirm ? (
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  onClick={() => setShowConfirm(true)}
+                  className="gap-2"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  Clear All Demo Data
+                </Button>
+              ) : (
+                <div className="border border-destructive/30 rounded-lg p-4 space-y-3 bg-destructive/5">
+                  <p className="text-sm font-semibold text-destructive">
+                    Are you sure? This will delete all project/demo data but keep logins.
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    Type "DELETE" or click Confirm to proceed, or Cancel to go back.
+                  </p>
+                  <div className="flex gap-2">
+                    <Button
+                      variant="destructive"
+                      size="sm"
+                      onClick={handleClearDemoData}
+                      disabled={clearing}
+                    >
+                      {clearing ? "Clearing…" : "Yes, Delete Everything"}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setShowConfirm(false)}
+                      disabled={clearing}
+                    >
+                      Cancel
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </Section>
+        </div>
       </div>
     </div>
   );
