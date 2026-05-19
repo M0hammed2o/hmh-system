@@ -45,6 +45,31 @@ def list_templates(db: DbSession):
     ])
 
 
+@router.delete(
+    "/{template_id}",
+    response_model=ApiSuccess[None],
+    dependencies=[OFFICE_AND_ABOVE],
+)
+def delete_template(template_id: uuid.UUID, db: DbSession):
+    """
+    Delete a BOQ template header (marks it as inactive / removes the is_template flag).
+    Lots that were already cloned from this template keep their BOQ data.
+    """
+    from app.models.boq import BOQHeader
+    from fastapi import HTTPException
+
+    header = db.get(BOQHeader, template_id)
+    if not header or not header.is_template:
+        raise HTTPException(404, "BOQ template not found.")
+    # Soft-remove: unmark as template rather than hard-deleting
+    # so cloned lot BOQs that reference this template_boq_id are unaffected.
+    header.is_template = False
+    header.template_name = None
+    db.commit()
+    print(f"[BOQ-TEMPLATE] Deleted template id={template_id}", flush=True)
+    return ApiSuccess(data=None, message="Template deleted.")
+
+
 @router.post(
     "/clone-to-lots",
     response_model=ApiSuccess[dict],

@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Plus, FolderKanban, MapPin, Calendar, ChevronRight } from "lucide-react";
+import { Plus, FolderKanban, MapPin, Calendar, ChevronRight, Trash2 } from "lucide-react";
+import { WriteGuard } from "@/components/shared/WriteGuard";
+import client from "@/api/client";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -178,6 +180,26 @@ export default function ProjectsPage() {
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
   const [search, setSearch] = useState("");
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  const handleDeleteProject = async (id: string, name: string, e: React.MouseEvent) => {
+    e.stopPropagation();  // don't navigate to project detail
+    const confirmed = window.confirm(
+      `DELETE PROJECT: "${name}"\n\n` +
+      `This will permanently delete the project and ALL its data:\n` +
+      `sites, lots, BOQ, procurement, deliveries, payments, and job cards.\n\n` +
+      `This action CANNOT be undone. Continue?`
+    );
+    if (!confirmed) return;
+    setDeletingId(id);
+    try {
+      await client.delete(`/projects/${id}`);
+      setProjects(prev => prev.filter(p => p.id !== id));
+    } catch (err: unknown) {
+      const d = (err as { response?: { data?: { detail?: string; message?: string } } })?.response?.data;
+      alert(d?.detail || d?.message || "Delete failed.");
+    } finally { setDeletingId(null); }
+  };
 
   const fetchProjects = () => {
     setLoading(true);
@@ -297,7 +319,19 @@ export default function ProjectsPage() {
                     </div>
                   </div>
                 </div>
-                <ChevronRight className="w-4 h-4 text-muted-foreground shrink-0 mt-1 group-hover:text-primary transition-colors" />
+                <div className="flex items-center gap-1 shrink-0">
+                  <WriteGuard>
+                    <button
+                      onClick={(e) => handleDeleteProject(project.id, project.name, e)}
+                      disabled={deletingId === project.id}
+                      className="p-1.5 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors opacity-0 group-hover:opacity-100"
+                      title="Delete project"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </WriteGuard>
+                  <ChevronRight className="w-4 h-4 text-muted-foreground group-hover:text-primary transition-colors" />
+                </div>
               </div>
             </button>
           ))

@@ -86,3 +86,21 @@ def update_project(project_id: uuid.UUID, body: ProjectUpdate, db: DbSession):
         data=ProjectRead.model_validate(project),
         message="Project updated successfully.",
     )
+
+
+@router.delete(
+    "/{project_id}",
+    response_model=ApiSuccess[dict],
+    dependencies=[OFFICE_ADMIN_AND_ABOVE],
+)
+def delete_project(project_id: uuid.UUID, db: DbSession):
+    """
+    Permanently delete a project and all its linked data (sites, lots, BOQ,
+    deliveries, payments, etc. — all cascade via DB FK).
+    Requires Office Admin or above.  Owner READ_ONLY users are blocked.
+    """
+    result = project_service.delete_project(db, project_id)
+    return ApiSuccess(
+        data=result,
+        message=f"Project '{result['deleted_project']}' deleted (cascaded {result['cascade_sites']} site(s), {result['cascade_lots']} lot(s)).",
+    )

@@ -3,11 +3,12 @@
  * Lists reusable templates, lets office users clone to selected lots.
  */
 import { useEffect, useState } from "react";
-import { Copy, FileSpreadsheet, Check, ChevronRight } from "lucide-react";
+import { Copy, FileSpreadsheet, Check, ChevronRight, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import client from "@/api/client";
+import { WriteGuard } from "@/components/shared/WriteGuard";
 
 interface BOQTemplate {
   id: string;
@@ -40,8 +41,9 @@ function CloneWizard({ template, onClose, onDone }: CloneWizardProps) {
   const [done, setDone] = useState(false);
 
   useEffect(() => {
-    client.get<{ data: Array<{ id: string; name: string; code: string }> }>("/projects/")
-      .then((r) => setProjects(r.data.data || []))
+    // /projects/ returns paginated: { data: { items: [...], total: ... } }
+    client.get<{ data: { items: Array<{ id: string; name: string; code: string }> } }>("/projects/")
+      .then((r) => setProjects(r.data.data?.items || []))
       .catch(() => {});
   }, []);
 
@@ -185,6 +187,24 @@ export default function BOQTemplatesPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [cloneTarget, setCloneTarget] = useState<BOQTemplate | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  const handleDeleteTemplate = async (t: BOQTemplate) => {
+    const confirmed = window.confirm(
+      `Delete template "${t.template_name || t.version_name}"?\n\n` +
+      `The template record will be removed. Lots that were already cloned from it keep their BOQ data.\n\n` +
+      `This cannot be undone.`
+    );
+    if (!confirmed) return;
+    setDeletingId(t.id);
+    try {
+      await client.delete(`/boq-templates/${t.id}`);
+      setTemplates(prev => prev.filter(x => x.id !== t.id));
+    } catch (err: unknown) {
+      const d = (err as { response?: { data?: { detail?: string; message?: string } } })?.response?.data;
+      setError(d?.detail || d?.message || "Delete failed.");
+    } finally { setDeletingId(null); }
+  };
 
   useEffect(() => {
     client.get<{ data: BOQTemplate[] }>("/boq-templates/")
@@ -230,14 +250,22 @@ export default function BOQTemplatesPage() {
                 <p className="font-medium text-sm">{t.template_name || t.version_name}</p>
                 {t.notes && <p className="text-xs text-muted-foreground truncate">{t.notes}</p>}
               </div>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => setCloneTarget(t)}
-              >
-                <Copy className="w-3.5 h-3.5 mr-1.5" />
-                Clone to Lots
-              </Button>
+              <div className="flex items-center gap-2 shrink-0">
+                <Button size="sm" variant="outline" onClick={() => setCloneTarget(t)}>
+                  <Copy className="w-3.5 h-3.5 mr-1.5" />
+                  Clone to Lots
+                </Button>
+                <WriteGuard>
+                  <button
+                    onClick={() => handleDeleteTemplate(t)}
+                    disabled={deletingId === t.id}
+                    className="p-1.5 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
+                    title="Delete template"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </WriteGuard>
+              </div>
             </div>
           ))}
         </div>

@@ -30,6 +30,7 @@ const pageTitles: Record<string, string> = {
   "/vehicles":        "Vehicles",
   "/fuel":            "Fuel",
   "/timeline":        "Timeline",
+  "/audit":           "User Activity",
   "/alerts":          "Alerts",
   "/whatsapp-queue":  "WhatsApp Queue",
   "/settings":        "Settings",
@@ -100,6 +101,7 @@ const navGroups = [
     label: "Admin",
     items: [
       { title: "Users",           path: "/users",           icon: Users },
+      { title: "User Activity",   path: "/audit",           icon: Clock },
       { title: "Settings",        path: "/settings",        icon: Settings },
     ],
   },

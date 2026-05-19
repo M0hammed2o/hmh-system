@@ -72,6 +72,7 @@ const navGroups = [
     label: "Admin",
     items: [
       { title: "Users",           path: "/users",          icon: Users },
+      { title: "User Activity",   path: "/audit",          icon: Clock },
       { title: "Settings",        path: "/settings",       icon: Settings },
     ],
   },

@@ -113,3 +113,25 @@ def update_project(
     db.commit()
     db.refresh(project)
     return project
+
+
+def delete_project(db: Session, project_id: uuid.UUID) -> dict:
+    """
+    Permanently delete a project and all cascade-linked data.
+    FK children (sites, lots, BOQ, deliveries, payments, etc.) cascade via DB FK.
+    Returns a summary of what was deleted.
+    """
+    from app.models.site import Site
+    from app.models.lot import Lot
+
+    project = _get_or_404(db, project_id)
+    site_count = db.query(Site).filter(Site.project_id == project_id).count()
+    lot_count  = db.query(Lot).filter(Lot.project_id == project_id).count()
+
+    db.delete(project)
+    db.commit()
+    return {
+        "deleted_project": project.name,
+        "cascade_sites":   site_count,
+        "cascade_lots":    lot_count,
+    }

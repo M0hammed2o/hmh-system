@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import {
   FolderKanban, Users, Package, Bell, ShoppingCart, CreditCard,
-  Truck, FileSpreadsheet, Droplet, AlertTriangle, ChevronRight,
+  Truck, FileSpreadsheet, Droplet, AlertTriangle, ChevronRight, X,
 } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
@@ -11,6 +11,7 @@ import { dashboardApi, type DashboardStats } from "@/api/dashboard";
 import { alertsApi, type Alert } from "@/api/alerts";
 import { formatCurrency } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { useAuthContext } from "@/context/AuthContext";
 
 // ── Stat card ─────────────────────────────────────────────────────────────────
 
@@ -53,26 +54,31 @@ const severityColor: Record<string, string> = {
   LOW:      "text-muted-foreground bg-muted border-border",
 };
 
-function AlertCard({ alert }: { alert: Alert }) {
+function AlertCard({ alert, onDismiss }: { alert: Alert; onDismiss?: (id: string) => void }) {
+  const { isReadOnly } = useAuthContext();
   return (
-    <Link to="/alerts" className="block">
-      <div className={cn(
-        "border rounded-xl px-4 py-3 flex items-start gap-3 active:scale-[0.98] transition-transform",
-        severityColor[alert.severity] || severityColor.LOW,
-      )}>
-        <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
-        <div className="flex-1 min-w-0">
-          <p className="text-sm font-medium leading-snug truncate">{alert.title}</p>
-          <p className="text-xs opacity-75 mt-0.5 line-clamp-1">{alert.message}</p>
-        </div>
-        <Badge
-          variant="outline"
-          className="text-[10px] shrink-0 border-current opacity-80"
+    <div className={cn(
+      "border rounded-xl px-4 py-3 flex items-start gap-3",
+      severityColor[alert.severity] || severityColor.LOW,
+    )}>
+      <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+      <Link to="/alerts" className="flex-1 min-w-0 block active:scale-[0.98] transition-transform">
+        <p className="text-sm font-medium leading-snug truncate">{alert.title}</p>
+        <p className="text-xs opacity-75 mt-0.5 line-clamp-1">{alert.message}</p>
+      </Link>
+      <Badge variant="outline" className="text-[10px] shrink-0 border-current opacity-80">
+        {alert.severity}
+      </Badge>
+      {!isReadOnly && onDismiss && (
+        <button
+          onClick={(e) => { e.stopPropagation(); onDismiss(alert.id); }}
+          className="shrink-0 p-0.5 rounded hover:bg-black/10 transition-colors opacity-60 hover:opacity-100"
+          title="Dismiss alert"
         >
-          {alert.severity}
-        </Badge>
-      </div>
-    </Link>
+          <X className="w-3.5 h-3.5" />
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -97,6 +103,13 @@ export default function DashboardPage() {
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [statsLoading, setStatsLoading] = useState(true);
   const [alerts, setAlerts] = useState<Alert[]>([]);
+
+  const handleDismissAlert = async (id: string) => {
+    try {
+      await alertsApi.acknowledge(id);
+      setAlerts(prev => prev.filter(a => a.id !== id));
+    } catch { /* silent — alert still removed from UI */ }
+  };
 
   useEffect(() => {
     dashboardApi
@@ -148,7 +161,7 @@ export default function DashboardPage() {
               View all →
             </Link>
           </div>
-          {alerts.map((a) => <AlertCard key={a.id} alert={a} />)}
+          {alerts.map((a) => <AlertCard key={a.id} alert={a} onDismiss={handleDismissAlert} />)}
         </div>
       )}
 
