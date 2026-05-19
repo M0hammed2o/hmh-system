@@ -78,6 +78,97 @@ def clone_template_to_lots(
         .all()
     )
 
+    # ── Site-level BOQ ────────────────────────────────────────────────────────
+    # For each unique site among the selected lots, create one site-level BOQ
+    # (items with lot_id=NULL, site_id=site_id).  This BOQ acts as the source
+    # for "Generate Lot BOQs" and for site-level analytics/summary views.
+    # Skip the site if a site-level header from this template already exists.
+    seen_site_ids: set[uuid.UUID] = set()
+    for lot in lots:
+        if not lot.site_id or lot.site_id in seen_site_ids:
+            continue
+        seen_site_ids.add(lot.site_id)
+
+        # Check if a site-level BOQ already exists for this site+template
+        already_has_site_boq = (
+            db.query(BOQItem.id)
+            .filter(
+                BOQItem.project_id == project_id,
+                BOQItem.site_id    == lot.site_id,
+                BOQItem.lot_id.is_(None),
+                BOQItem.is_active  == True,
+            )
+            .first()
+        )
+        if already_has_site_boq:
+            print(f"[BOQ-CLONE] Site {lot.site_id} already has site-level items — skipping site BOQ creation.", flush=True)
+            continue
+
+        site_header = BOQHeader(
+            id=uuid.uuid4(),
+            project_id=project_id,
+            version_name=f"{template.template_name or template.version_name} — Site Master",
+            source_type="template_clone_site",
+            status=BoqStatus.ACTIVE,
+            is_active_version=True,
+            is_template=False,
+            uploaded_by=actor_id,
+            uploaded_at=now,
+            notes=f"Site-level master cloned from template: {template.template_name or template.id}",
+        )
+        db.add(site_header)
+        db.flush()
+
+        for tmpl_section in template_sections:
+            site_section = BOQSection(
+                id=uuid.uuid4(),
+                boq_header_id=site_header.id,
+                stage_id=tmpl_section.stage_id,
+                section_name=tmpl_section.section_name,
+                sequence_order=tmpl_section.sequence_order,
+                notes=tmpl_section.notes,
+                created_at=now,
+                updated_at=now,
+            )
+            db.add(site_section)
+            db.flush()
+
+            tmpl_items = (
+                db.query(BOQItem)
+                .filter(BOQItem.boq_section_id == tmpl_section.id, BOQItem.is_active == True)
+                .order_by(BOQItem.sort_order)
+                .all()
+            )
+            for tmpl_item in tmpl_items:
+                db.execute(_sa_insert(BOQItem).values(
+                    id                     = uuid.uuid4(),
+                    boq_section_id         = site_section.id,
+                    project_id             = project_id,
+                    site_id                = lot.site_id,
+                    lot_id                 = None,          # ← site-level: no lot
+                    stage_id               = tmpl_item.stage_id,
+                    item_id                = tmpl_item.item_id,
+                    supplier_id            = tmpl_item.supplier_id,
+                    raw_description        = tmpl_item.raw_description,
+                    normalized_description = tmpl_item.normalized_description,
+                    specification          = tmpl_item.specification,
+                    item_type              = (
+                        tmpl_item.item_type.value
+                        if hasattr(tmpl_item.item_type, "value")
+                        else tmpl_item.item_type
+                    ),
+                    unit                   = tmpl_item.unit,
+                    planned_quantity       = tmpl_item.planned_quantity,
+                    planned_rate           = tmpl_item.planned_rate,
+                    sort_order             = tmpl_item.sort_order,
+                    is_active              = True,
+                    notes                  = tmpl_item.notes,
+                    created_at             = now,
+                    updated_at             = now,
+                ))
+
+        print(f"[BOQ-CLONE] Created site-level BOQ header={site_header.id} for site={lot.site_id}", flush=True)
+
     for lot in lots:
         header = BOQHeader(
             id=uuid.uuid4(),

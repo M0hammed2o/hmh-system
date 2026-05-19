@@ -577,10 +577,37 @@ def generate_site_lot_boqs(site_id: uuid.UUID, db: DbSession):
         ]
 
     if not section_ids:
+        # ── Fallback: check if lots already have BOQ items from template clone ──
+        # clone_template_to_lots creates lot-level items directly; if the user
+        # applies the template and then immediately clicks Generate Lot BOQs,
+        # the site-level BOQ may not exist yet (older clones) but the lots
+        # already have full BOQ item sets — nothing needs to be done.
+        from app.models.lot import Lot as _Lot
+        site_lot_ids = [
+            row[0] for row in db.query(_Lot.id)
+            .filter(_Lot.site_id == site_id, _Lot.project_id == site.project_id)
+            .all()
+        ]
+        lots_already_have_boq = bool(
+            db.query(_BI.id)
+            .filter(_BI.lot_id.in_(site_lot_ids), _BI.is_active == True)
+            .first()
+        ) if site_lot_ids else False
+
+        if lots_already_have_boq:
+            return ApiSuccess(
+                data={"created": 0, "lots_with_existing_boq": len(site_lot_ids)},
+                message=(
+                    "Lots already have BOQ items applied from the template clone. "
+                    "No site-level BOQ was needed — lot BOQs are up to date."
+                ),
+            )
+
         raise HTTPException(
             400,
             "No site-level BOQ found for this site or its project. "
-            "Create a site BOQ first (or ensure the project-level BOQ has items with lot_id=NULL).",
+            "Apply a BOQ template first using the BOQ Templates page, "
+            "or create a site BOQ manually before clicking Generate Lot BOQs.",
         )
 
     header_row = db.query(_BS.boq_header_id).filter(_BS.id.in_(section_ids)).first()

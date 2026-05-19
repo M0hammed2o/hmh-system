@@ -211,7 +211,11 @@ function SiteBOQTable({ summary }: { summary: SiteBOQSummary }) {
       {summary.derived_from_lots && (
         <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-2.5 text-xs text-amber-700 flex items-center gap-2">
           <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
-          No site-level BOQ exists — showing first lot as the unit template. Totals are derived from all lot BOQs.
+          <span>
+            Showing lot BOQs as the unit view (no site-level master BOQ found).
+            {" "}To create one: go to <strong>BOQ Templates</strong> and apply a template to this project's lots —
+            the site-level master will be created automatically.
+          </span>
         </div>
       )}
       {summary.sections.map((sec) => (
@@ -645,7 +649,9 @@ export default function BOQPage() {
                 {lotRow && !lotRow.has_lot_boq && (
                   <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-sm text-amber-800 flex items-start gap-2">
                     <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
-                    This lot has no dedicated BOQ. Go to <strong>Site BOQ</strong> mode → <strong>Generate Lot BOQs</strong> first.
+                    This lot has no dedicated BOQ yet.
+                    Apply a template from the <strong>BOQ Templates</strong> page to populate all lots,
+                    or switch to <strong>Site BOQ</strong> mode and click <strong>Generate Lot BOQs</strong>.
                   </div>
                 )}
 
