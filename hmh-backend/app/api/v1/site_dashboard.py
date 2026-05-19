@@ -146,6 +146,15 @@ def lot_material_summary(site_id: uuid.UUID, lot_id: uuid.UUID, db: DbSession):
                 description = cat_item.name
                 unit        = cat_item.default_unit or bi.unit
 
+        # Supplier info — used by frontend to pre-populate supplier on delivery/MR
+        supplier_id   = str(bi.supplier_id) if bi.supplier_id else None
+        supplier_name = None
+        if bi.supplier_id:
+            from app.models.supplier import Supplier as _Sup
+            sup = db.get(_Sup, bi.supplier_id)
+            if sup:
+                supplier_name = sup.name
+
         result.append({
             "boq_item_id":       str(bi.id),
             "item_id":           str(bi.item_id) if bi.item_id else None,
@@ -158,6 +167,8 @@ def lot_material_summary(site_id: uuid.UUID, lot_id: uuid.UUID, db: DbSession):
             "over_qty":          round(over, 3),
             "status":            status,
             "from_site_template": fallback,
+            "supplier_id":       supplier_id,
+            "supplier_name":     supplier_name,
         })
 
     return ApiSuccess(data=result)

@@ -240,7 +240,14 @@ function SiteBOQTable({ summary }: { summary: SiteBOQSummary }) {
                 const total = siteItemTotal(item);
                 return (
                   <tr key={item.id} className="border-b border-border last:border-0 hover:bg-muted/20">
-                    <td className="px-4 py-2.5">{item.description}</td>
+                    <td className="px-4 py-2.5">
+                      {item.description}
+                      {(item as { supplier_name?: string | null }).supplier_name && (
+                        <span className="block text-[10px] text-primary/70 mt-0.5">
+                          {(item as { supplier_name?: string | null }).supplier_name}
+                        </span>
+                      )}
+                    </td>
                     <td className="px-4 py-2.5 text-right tabular-nums">{item.planned_quantity ?? "—"}</td>
                     <td className="px-4 py-2.5 text-right text-muted-foreground">{item.unit ?? "—"}</td>
                     <td className="px-4 py-2.5 text-right tabular-nums">{item.planned_rate ?? "—"}</td>

@@ -1161,6 +1161,30 @@ function UnifiedReceiveModal({ projectId, siteId, lotId, suppliers, materialSumm
                 <option value="">— Select supplier —</option>
                 {suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
               </select>
+              {/* Multi-supplier warning — shown when BOQ items have different suppliers */}
+              {(() => {
+                const boqSuppliers = items
+                  .filter(i => i.boq_item_id)
+                  .map(i => materialSummary.find(m => String(m.boq_item_id) === i.boq_item_id)?.supplier_name)
+                  .filter((n): n is string => !!n);
+                const uniqueSuppliers = [...new Set(boqSuppliers)];
+                if (uniqueSuppliers.length > 1) {
+                  return (
+                    <p className="text-xs text-amber-600 mt-1">
+                      ⚠ Items have different BOQ suppliers: {uniqueSuppliers.join(", ")}.
+                      Consider splitting into separate delivery notes per supplier.
+                    </p>
+                  );
+                }
+                if (uniqueSuppliers.length === 1 && !supplierId) {
+                  return (
+                    <p className="text-xs text-primary mt-1">
+                      BOQ supplier suggestion: <strong>{uniqueSuppliers[0]}</strong>
+                    </p>
+                  );
+                }
+                return null;
+              })()}
             </div>
             <div className="space-y-1">
               <Label htmlFor="u-dn">Delivery Note #</Label>
@@ -1293,9 +1317,13 @@ function UnifiedReceiveModal({ projectId, siteId, lotId, suppliers, materialSumm
               boqSearch={boqSearch}
               setBoqSearch={setBoqSearch}
               onSelect={(newItem) => {
-                console.log("[BOQ Picker] selected item:", newItem);
                 setItems(p => [...p, newItem]);
                 setBoqSearch("");
+                // Auto-populate supplier from the BOQ item if not yet set
+                const boqEntry = materialSummary.find(m => String(m.boq_item_id) === newItem.boq_item_id);
+                if (boqEntry?.supplier_id && !supplierId) {
+                  setSupplierId(boqEntry.supplier_id);
+                }
               }}
               onClose={() => { setShowBOQPicker(false); setBoqSearch(""); }}
             />}

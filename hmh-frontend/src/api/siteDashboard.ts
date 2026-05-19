@@ -14,6 +14,8 @@ export interface MaterialSummaryItem {
   over_qty:           number;
   status:             MaterialStatus;
   from_site_template: boolean;         // true when derived from site-level BOQ, not lot-specific
+  supplier_id:        string | null;   // preferred supplier from the BOQ item
+  supplier_name:      string | null;   // supplier display name
 }
 
 export type ActivityType = "delivery" | "usage" | "alert" | "stage";

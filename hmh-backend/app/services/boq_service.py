@@ -1149,6 +1149,15 @@ def get_site_boq_summary(db: Session, site_id: uuid.UUID) -> dict:
                 "section_total":  0.0,
             }
         t = _item_total_safe(item)
+        # Resolve supplier name for display
+        _sup_id   = str(item.supplier_id) if item.supplier_id else None
+        _sup_name = None
+        if item.supplier_id:
+            from app.models.supplier import Supplier as _S
+            _sup = db.get(_S, item.supplier_id)
+            if _sup:
+                _sup_name = _sup.name
+
         section_map[sid]["items"].append({
             "id":               str(item.id),
             "description":      item.raw_description,
@@ -1157,6 +1166,8 @@ def get_site_boq_summary(db: Session, site_id: uuid.UUID) -> dict:
             "planned_rate":     float(item.planned_rate or 0),
             "line_total":       round(t, 2),
             "item_type":        _item_type_str(item),
+            "supplier_id":      _sup_id,
+            "supplier_name":    _sup_name,
         })
         section_map[sid]["section_total"] = round(section_map[sid]["section_total"] + t, 2)
 
