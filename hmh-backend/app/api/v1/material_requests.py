@@ -10,7 +10,7 @@ from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
-from app.dependencies import ALL_ROLES, CurrentUser, DbSession, OFFICE_AND_ABOVE
+from app.dependencies import ALL_ROLES, CurrentUser, DbSession, OFFICE_AND_ABOVE, WRITE_ROLES
 from app.models.enums import RecordStatus
 from app.schemas.common import ApiSuccess
 from app.schemas.material_request import (
@@ -28,13 +28,14 @@ mr_router = APIRouter(prefix="/material-requests", tags=["material-requests"])
 @project_mr_router.get("/", response_model=ApiSuccess[list[MaterialRequestRead]], dependencies=[ALL_ROLES])
 def list_material_requests(
     project_id: uuid.UUID, db: DbSession,
-    status: Optional[RecordStatus] = Query(None),
+    status:  Optional[RecordStatus] = Query(None),
+    site_id: Optional[uuid.UUID]    = Query(None),
 ):
-    mrs = mr_service.list_requests(db, project_id, status=status)
+    mrs = mr_service.list_requests(db, project_id, site_id=site_id, status=status)
     return ApiSuccess(data=[MaterialRequestRead.model_validate(m) for m in mrs])
 
 
-@project_mr_router.post("/", response_model=ApiSuccess[MaterialRequestRead], status_code=201, dependencies=[ALL_ROLES])
+@project_mr_router.post("/", response_model=ApiSuccess[MaterialRequestRead], status_code=201, dependencies=[WRITE_ROLES])
 def create_material_request(project_id: uuid.UUID, body: MaterialRequestCreate, db: DbSession, current_user: CurrentUser):
     import json as _json
     try:

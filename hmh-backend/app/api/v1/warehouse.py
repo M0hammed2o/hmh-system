@@ -20,7 +20,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import func, text
 
-from app.dependencies import ALL_ROLES, CurrentUser, DbSession, OFFICE_AND_ABOVE
+from app.dependencies import ALL_ROLES, CurrentUser, DbSession, OFFICE_AND_ABOVE, WRITE_ROLES
 from app.models.enums import MovementType
 from app.models.item import Item
 from app.models.lot import Lot
@@ -31,6 +31,7 @@ from app.services import audit_service
 from app.models.enums import AuditAction
 
 router = APIRouter(prefix="/sites/{site_id}/warehouse", tags=["warehouse"])
+project_warehouse_router = APIRouter(prefix="/projects/{project_id}/warehouse", tags=["warehouse"])
 
 
 # ── On-hand stock ─────────────────────────────────────────────────────────────
@@ -90,7 +91,7 @@ class TransferToLotRequest(BaseModel):
     notes:    Optional[str] = None
 
 
-@router.post("/transfer", response_model=ApiSuccess[dict], dependencies=[ALL_ROLES])
+@router.post("/transfer", response_model=ApiSuccess[dict], dependencies=[WRITE_ROLES])
 def transfer_to_lot(
     site_id: uuid.UUID,
     body: TransferToLotRequest,
@@ -269,3 +270,171 @@ def get_warehouse_history(
         }
         for r in rows
     ])
+
+
+# ── Main Warehouse (project-level stock: site_id IS NULL, lot_id IS NULL) ─────
+
+@project_warehouse_router.get("/", response_model=ApiSuccess[list[dict]], dependencies=[ALL_ROLES])
+def get_main_warehouse_stock(project_id: uuid.UUID, db: DbSession):
+    """
+    Returns current on-hand stock in the Main (Project) Warehouse.
+
+    Main Warehouse = StockLedger rows where site_id IS NULL and lot_id IS NULL.
+    Stock arrives when deliveries are set to MAIN_WAREHOUSE destination.
+    """
+    from app.models.project import Project
+    project = db.get(Project, project_id)
+    if not project:
+        raise HTTPException(404, "Project not found.")
+
+    rows = db.execute(text("""
+        SELECT
+            sl.item_id,
+            i.name                              AS item_name,
+            i.default_unit                      AS unit,
+            SUM(sl.quantity_in)                 AS total_in,
+            SUM(sl.quantity_out)                AS total_out,
+            SUM(sl.quantity_in) - SUM(sl.quantity_out) AS on_hand,
+            MAX(sl.movement_date)               AS last_movement
+        FROM stock_ledger sl
+        JOIN items i ON i.id = sl.item_id
+        WHERE sl.project_id  = :project_id
+          AND sl.site_id  IS NULL
+          AND sl.lot_id   IS NULL
+        GROUP BY sl.item_id, i.name, i.default_unit
+        HAVING SUM(sl.quantity_in) - SUM(sl.quantity_out) > 0
+        ORDER BY i.name
+    """), {"project_id": str(project_id)}).mappings().all()
+
+    result = [{
+        "item_id":       str(r["item_id"]),
+        "item_name":     r["item_name"],
+        "unit":          r["unit"],
+        "on_hand":       float(r["on_hand"]),
+        "total_in":      float(r["total_in"]),
+        "total_out":     float(r["total_out"]),
+        "last_movement": r["last_movement"].isoformat() if r["last_movement"] else None,
+    } for r in rows]
+
+    return ApiSuccess(data=result, message=f"{len(result)} item(s) in main warehouse.")
+
+
+class TransferToSiteRequest(BaseModel):
+    item_id:  uuid.UUID
+    site_id:  uuid.UUID
+    quantity: float
+    notes:    Optional[str] = None
+
+
+@project_warehouse_router.post("/transfer", response_model=ApiSuccess[dict], dependencies=[OFFICE_AND_ABOVE])
+def transfer_main_to_site(
+    project_id: uuid.UUID,
+    body: TransferToSiteRequest,
+    db: DbSession,
+    current_user: CurrentUser,
+):
+    """
+    Transfer stock from Main Warehouse to a Site Warehouse.
+
+    Creates two StockLedger entries:
+      TRANSFER_OUT — stock leaves main warehouse  (site=NULL, lot=NULL)
+      TRANSFER_IN  — stock enters site warehouse   (site=X,   lot=NULL)
+    """
+    from app.models.project import Project
+    project = db.get(Project, project_id)
+    if not project:
+        raise HTTPException(404, "Project not found.")
+
+    site = db.get(Site, body.site_id)
+    if not site or site.project_id != project_id:
+        raise HTTPException(404, "Site not found in this project.")
+
+    item = db.get(Item, body.item_id)
+    if not item:
+        raise HTTPException(404, "Item not found.")
+
+    if body.quantity <= 0:
+        raise HTTPException(422, "Transfer quantity must be greater than zero.")
+
+    balance_row = db.execute(text("""
+        SELECT SUM(quantity_in) - SUM(quantity_out) AS balance
+        FROM stock_ledger
+        WHERE project_id = :project_id
+          AND site_id  IS NULL
+          AND lot_id   IS NULL
+          AND item_id  = :item_id
+    """), {"project_id": str(project_id), "item_id": str(body.item_id)}).fetchone()
+
+    available = float(balance_row[0] or 0)
+    if body.quantity > available:
+        raise HTTPException(422,
+            f"Insufficient main warehouse stock. "
+            f"Available: {available:.3g} {item.default_unit or ''} of {item.name}; "
+            f"requested {body.quantity:.3g}."
+        )
+
+    now = datetime.now(timezone.utc)
+    transfer_ref = uuid.uuid4()
+
+    db.add(StockLedger(
+        project_id     = project_id,
+        site_id        = None,
+        lot_id         = None,
+        item_id        = body.item_id,
+        movement_type  = MovementType.TRANSFER_OUT,
+        reference_type = "main_to_site_transfer",
+        reference_id   = transfer_ref,
+        quantity_in    = 0,
+        quantity_out   = body.quantity,
+        unit           = item.default_unit,
+        movement_date  = now,
+        entered_by     = current_user.id,
+        notes          = body.notes or f"Transferred to {site.name}",
+        created_at     = now,
+    ))
+
+    db.add(StockLedger(
+        project_id     = project_id,
+        site_id        = body.site_id,
+        lot_id         = None,
+        item_id        = body.item_id,
+        movement_type  = MovementType.TRANSFER_IN,
+        reference_type = "main_to_site_transfer",
+        reference_id   = transfer_ref,
+        quantity_in    = body.quantity,
+        quantity_out   = 0,
+        unit           = item.default_unit,
+        movement_date  = now,
+        entered_by     = current_user.id,
+        notes          = body.notes or f"Received from Main Warehouse",
+        created_at     = now,
+    ))
+
+    audit_service.write_event(
+        db,
+        action=AuditAction.TRANSFER,
+        entity_type="main_warehouse",
+        actor_id=current_user.id,
+        entity_id=project_id,
+        after_value={
+            "item": item.name,
+            "quantity": body.quantity,
+            "unit": item.default_unit,
+            "site": site.name,
+            "transfer_ref": str(transfer_ref),
+        },
+    )
+
+    db.commit()
+    return ApiSuccess(
+        data={
+            "transfer_ref": str(transfer_ref),
+            "item_id":      str(body.item_id),
+            "item_name":    item.name,
+            "quantity":     body.quantity,
+            "unit":         item.default_unit,
+            "site_name":    site.name,
+            "new_balance":  available - body.quantity,
+        },
+        message=f"Transferred {body.quantity} {item.default_unit or ''} of {item.name} to {site.name}.",
+    )

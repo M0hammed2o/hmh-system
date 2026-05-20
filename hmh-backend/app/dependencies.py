@@ -146,3 +146,11 @@ OFFICE_AND_ABOVE = require_roles(
     UserRole.OWNER, UserRole.OFFICE_ADMIN, UserRole.OFFICE_USER
 )
 ALL_ROLES = require_roles(*list(UserRole))
+# All roles that can perform write operations (excludes READ_ONLY view-only accounts)
+WRITE_ROLES = require_roles(
+    UserRole.OWNER,
+    UserRole.OFFICE_ADMIN,
+    UserRole.OFFICE_USER,
+    UserRole.SITE_MANAGER,
+    UserRole.SITE_STAFF,
+)

@@ -8,8 +8,10 @@ export interface MRItem {
   item_id: string | null;
   boq_item_id: string | null;
   description: string;
-  quantity_requested: number;
+  requested_quantity: number;
+  quantity_requested: number;   // alias — backend serialises as requested_quantity
   unit: string | null;
+  remarks: string | null;
   notes: string | null;
   created_at: string;
 }
@@ -20,8 +22,11 @@ export interface MaterialRequest {
   project_id: string;
   site_id: string | null;
   lot_id: string | null;
+  requested_by: string;
   requested_by_user_id: string;
   preferred_supplier_id: string | null;
+  priority: string;
+  delivery_destination: string;
   status: MRStatus;
   requested_date: string;
   needed_by_date: string | null;
@@ -57,6 +62,7 @@ export interface MaterialRequestCreate {
   site_id?: string | null;
   lot_id?: string | null;
   preferred_supplier_id?: string | null;
+  delivery_destination?: "SITE_STORE" | "MAIN_WAREHOUSE" | null;
   needed_by_date?: string | null;
   notes?: string | null;
   items: MRItemCreate[];
@@ -70,9 +76,13 @@ export interface MaterialRequestUpdate {
 }
 
 export const materialRequestsApi = {
-  list: async (projectId: string): Promise<MaterialRequest[]> => {
+  list: async (
+    projectId: string,
+    params?: { site_id?: string; status?: MRStatus }
+  ): Promise<MaterialRequest[]> => {
     const res = await client.get<{ data: MaterialRequest[] }>(
-      `/projects/${projectId}/material-requests/`
+      `/projects/${projectId}/material-requests/`,
+      { params }
     );
     return res.data.data;
   },
@@ -92,6 +102,11 @@ export const materialRequestsApi = {
 
   update: async (mrId: string, body: MaterialRequestUpdate): Promise<MaterialRequest> => {
     const res = await client.patch<{ data: MaterialRequest }>(`/material-requests/${mrId}`, body);
+    return res.data.data;
+  },
+
+  submit: async (mrId: string): Promise<MaterialRequest> => {
+    const res = await client.post<{ data: MaterialRequest }>(`/material-requests/${mrId}/submit`);
     return res.data.data;
   },
 

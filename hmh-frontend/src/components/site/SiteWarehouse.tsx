@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { warehouseApi, type WarehouseStockItem, type WarehouseMovement } from "@/api/warehouse";
 import { lotsApi, type Lot } from "@/api/lots";
+import { ROLE_KEY } from "@/lib/constants";
 import { cn } from "@/lib/utils";
 
 // ── Transfer modal ─────────────────────────────────────────────────────────────
@@ -170,6 +171,9 @@ interface Props {
 }
 
 export function SiteWarehouse({ siteId, projectId }: Props) {
+  const userRole = localStorage.getItem(ROLE_KEY) || "";
+  const canTransfer = userRole !== "READ_ONLY";
+
   const [stock,        setStock]        = useState<WarehouseStockItem[]>([]);
   const [lots,         setLots]         = useState<Lot[]>([]);
   const [history,      setHistory]      = useState<WarehouseMovement[]>([]);
@@ -281,8 +285,8 @@ export function SiteWarehouse({ siteId, projectId }: Props) {
                 </p>
               </div>
 
-              {/* Transfer button — only if lots are available */}
-              {lots.length > 0 ? (
+              {/* Transfer button — only if lots exist and user has write access */}
+              {canTransfer && lots.length > 0 ? (
                 <Button
                   size="sm"
                   variant="outline"
@@ -292,9 +296,9 @@ export function SiteWarehouse({ siteId, projectId }: Props) {
                   <ArrowRight className="w-3 h-3" />
                   Transfer to Lot
                 </Button>
-              ) : (
+              ) : lots.length === 0 ? (
                 <span className="text-xs text-muted-foreground shrink-0">No lots in site</span>
-              )}
+              ) : null}
             </div>
           ))}
         </div>

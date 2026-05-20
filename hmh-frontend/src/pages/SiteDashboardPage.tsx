@@ -4,13 +4,14 @@ import {
   LogOut, RefreshCw, PackagePlus, Truck, Minus,
   ListChecks, Upload, PenLine, AlertTriangle, CheckCircle2,
   Clock, Circle, ChevronRight, Box, Bell, Camera, Image, X,
+  Plus, Trash2, ClipboardList,
 } from "lucide-react";
 import { siteCaptureApi, type ExtractedItem } from "@/api/siteCapture";
 import { siteDashboardApi, type MaterialSummaryItem, type ActivityItem } from "@/api/siteDashboard";
 import { BOQAllocationTable } from "@/components/site/BOQAllocationTable";
 import { SiteWarehouse } from "@/components/site/SiteWarehouse";
 import { HMHLogo } from "@/components/HMHLogo";
-import { TOKEN_KEY, REFRESH_TOKEN_KEY, ROLE_KEY } from "@/lib/constants";
+import { TOKEN_KEY, REFRESH_TOKEN_KEY, ROLE_KEY, SITE_ROLE_SET } from "@/lib/constants";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -194,6 +195,7 @@ export default function SiteDashboardPage() {
 
   // ── Live data ──
   const [mrs,       setMrs]       = useState<MaterialRequest[]>([]);
+  const [siteRequests, setSiteRequests] = useState<MaterialRequest[]>([]);
   const [deliveries, setDeliveries] = useState<Delivery[]>([]);
   const [stages,    setStages]    = useState<ProjectStageStatus[]>([]);
   const [alerts,    setAlerts]    = useState<Alert[]>([]);
@@ -232,9 +234,16 @@ export default function SiteDashboardPage() {
   // ── Load sites + lots when project changes ──
   useEffect(() => {
     if (!projectId) { setSites([]); setLots([]); return; }
-    sitesApi.list(projectId).then(setSites).catch(() => {});
+    sitesApi.list(projectId).then(s => {
+      setSites(s);
+      // Freestanding lot support: if project has exactly one site, auto-select it
+      if (s.length === 1 && !siteId) {
+        setSiteId(s[0].id);
+        localStorage.setItem(SK_SITE, s[0].id);
+      }
+    }).catch(() => {});
     lotsApi.list(projectId).then(setLots).catch(() => {});
-  }, [projectId]);
+  }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Load live data ──
   const loadData = useCallback(() => {
@@ -278,6 +287,14 @@ export default function SiteDashboardPage() {
     } else {
       setMaterialSummary([]);
       setActivity([]);
+    }
+
+    // Site-specific request history
+    if (siteId) {
+      materialRequestsApi.list(projectId, { site_id: siteId })
+        .then(setSiteRequests).catch(() => setSiteRequests([]));
+    } else {
+      setSiteRequests([]);
     }
   }, [projectId, siteId, lotId]);
 
@@ -369,25 +386,28 @@ export default function SiteDashboardPage() {
             {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
           </Select>
 
-          {projectId && (
+          {/* Only show site selector when there is more than one site */}
+          {projectId && sites.length > 1 && (
             <Select value={siteId} onChange={selectSite} disabled={!projectId}>
-              <option value="">— Select site —</option>
+              <option value="">— Select site / block —</option>
               {sites.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
             </Select>
           )}
 
           {siteId && (
             <Select value={lotId} onChange={selectLot}>
-              <option value="">— All lots —</option>
+              <option value="">— All units —</option>
               {lots
                 .filter(l => !l.site_id || l.site_id === siteId)
                 .sort((a, b) => {
+                  // Natural sort: "12A" before "B-17" — numeric first, then alpha
                   const na = parseInt(a.lot_number), nb = parseInt(b.lot_number);
-                  return isNaN(na) || isNaN(nb) ? a.lot_number.localeCompare(b.lot_number) : na - nb;
+                  if (!isNaN(na) && !isNaN(nb)) return na - nb;
+                  return a.lot_number.localeCompare(b.lot_number, undefined, { numeric: true, sensitivity: "base" });
                 })
                 .map(l => (
                   <option key={l.id} value={l.id}>
-                    {l.lot_number}{l.unit_type ? ` · ${l.unit_type}` : ""}
+                    {l.lot_number}{l.unit_type ? ` · ${l.unit_type}` : ""}{l.block_number ? ` (Block ${l.block_number})` : ""}
                   </option>
                 ))}
             </Select>
@@ -541,6 +561,11 @@ export default function SiteDashboardPage() {
               <SiteWarehouse siteId={siteId} projectId={projectId} />
             )}
 
+            {/* ── My Requests ── */}
+            {siteId && (
+              <SiteRequestHistory requests={siteRequests} />
+            )}
+
             {/* ── Recent activity ── */}
             <Section title="Recent Activity">
               {(() => {
@@ -592,7 +617,6 @@ export default function SiteDashboardPage() {
       {modal === "request"  && (
         <RequestMaterialModal
           projectId={projectId} siteId={siteId} lotId={lotId}
-          suppliers={suppliers}
           onClose={() => setModal(null)} onDone={() => { setModal(null); loadData(); }}
         />
       )}
@@ -624,83 +648,255 @@ export default function SiteDashboardPage() {
   );
 }
 
-// ── Request Material ──────────────────────────────────────────────────────────
-function RequestMaterialModal({ projectId, siteId, lotId, suppliers, onClose, onDone }: {
-  projectId: string; siteId: string; lotId: string;
-  suppliers: Supplier[]; onClose: () => void; onDone: () => void;
-}) {
-  const [desc,       setDesc]       = useState("");
-  const [qty,        setQty]        = useState("");
-  const [unit,       setUnit]       = useState("bags");
-  const [neededBy,   setNeededBy]   = useState("");
-  const [notes,      setNotes]      = useState("");
-  const [supplierId, setSupplierId] = useState("");
-  const [loading,    setLoading]    = useState(false);
-  const [error,      setError]      = useState("");
+// ── Request Material (multi-item) ─────────────────────────────────────────────
+interface ItemRow { desc: string; qty: string; unit: string; }
+const BLANK_ITEM: ItemRow = { desc: "", qty: "", unit: "" };
 
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!projectId) { setError("Select a project first."); return; }
+function RequestMaterialModal({ projectId, siteId, lotId, onClose, onDone }: {
+  projectId: string; siteId: string; lotId: string;
+  onClose: () => void; onDone: () => void;
+}) {
+  const [items,    setItems]    = useState<ItemRow[]>([{ ...BLANK_ITEM }]);
+  const [neededBy, setNeededBy] = useState("");
+  const [notes,    setNotes]    = useState("");
+  const [loading,  setLoading]  = useState(false);
+  const [error,    setError]    = useState("");
+
+  const updateItem = (i: number, field: keyof ItemRow, val: string) =>
+    setItems(prev => prev.map((row, idx) => idx === i ? { ...row, [field]: val } : row));
+
+  const addItem    = () => setItems(prev => [...prev, { ...BLANK_ITEM }]);
+  const removeItem = (i: number) => setItems(prev => prev.filter((_, idx) => idx !== i));
+
+  const submit = async () => {
+    const valid = items.filter(r => r.desc.trim() && parseFloat(r.qty) > 0);
+    if (valid.length === 0) { setError("Add at least one item with a name and quantity."); return; }
+    if (!projectId)          { setError("No project selected."); return; }
     setLoading(true); setError("");
     try {
-      await materialRequestsApi.create(projectId, {
-        site_id:                siteId      || null,
-        lot_id:                 lotId       || null,
-        preferred_supplier_id:  supplierId  || null,
-        needed_by_date:         neededBy    || null,
-        notes:                  notes       || null,
-        items: [{ description: desc, quantity_requested: parseFloat(qty), unit: unit || null }],
+      const mr = await materialRequestsApi.create(projectId, {
+        site_id:              siteId  || null,
+        lot_id:               lotId   || null,
+        delivery_destination: "SITE_STORE",
+        needed_by_date:       neededBy || null,
+        notes:                notes    || null,
+        items: valid.map(r => ({
+          description:        r.desc.trim(),
+          requested_quantity: parseFloat(r.qty),
+          unit:               r.unit.trim() || null,
+        })),
       });
+      // Auto-submit so office sees it immediately
+      await materialRequestsApi.submit(mr.id);
       onDone();
-    } catch { setError("Failed to submit. Try again."); }
-    finally  { setLoading(false); }
+    } catch {
+      setError("Failed to submit request. Please try again.");
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
-    <ModalShell title="Request Material" onClose={onClose}>
-      <form onSubmit={submit} className="space-y-3">
-        <div className="space-y-1">
-          <Label htmlFor="rm-desc">Material</Label>
-          <Input id="rm-desc" value={desc} onChange={e => setDesc(e.target.value)}
-                 required placeholder="e.g. Cement 50kg bags" />
+    <ModalShell title="Request Materials" onClose={onClose}>
+      <div className="space-y-3">
+
+        {/* Item list */}
+        <div className="space-y-2">
+          <Label className="text-xs text-muted-foreground">Items requested</Label>
+          {items.map((row, i) => (
+            <div key={i} className="flex gap-2 items-start">
+              <div className="flex-1 space-y-1.5">
+                <Input
+                  placeholder="Material description (e.g. Cement 50 kg)"
+                  value={row.desc}
+                  onChange={e => updateItem(i, "desc", e.target.value)}
+                  autoFocus={i === 0}
+                />
+                <div className="grid grid-cols-2 gap-2">
+                  <Input
+                    type="number" min="0.001" step="any"
+                    placeholder="Qty"
+                    value={row.qty}
+                    onChange={e => updateItem(i, "qty", e.target.value)}
+                  />
+                  <Input
+                    placeholder="Unit (bags, m³…)"
+                    value={row.unit}
+                    onChange={e => updateItem(i, "unit", e.target.value)}
+                  />
+                </div>
+              </div>
+              {items.length > 1 && (
+                <button
+                  type="button"
+                  onClick={() => removeItem(i)}
+                  className="mt-1 p-1.5 text-muted-foreground hover:text-destructive rounded-md hover:bg-muted transition-colors"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              )}
+            </div>
+          ))}
+
+          <button
+            type="button"
+            onClick={addItem}
+            className="flex items-center gap-1.5 text-xs text-primary hover:text-primary/80 font-medium
+                       px-2 py-1.5 rounded-md hover:bg-primary/5 transition-colors"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            Add another item
+          </button>
         </div>
-        <div className="grid grid-cols-2 gap-2">
-          <div className="space-y-1">
-            <Label htmlFor="rm-qty">Quantity</Label>
-            <Input id="rm-qty" type="number" min="0.1" step="0.1"
-                   value={qty} onChange={e => setQty(e.target.value)} required />
-          </div>
-          <div className="space-y-1">
-            <Label htmlFor="rm-unit">Unit</Label>
-            <Input id="rm-unit" value={unit} onChange={e => setUnit(e.target.value)} placeholder="bags" />
-          </div>
-        </div>
+
+        <div className="h-px bg-border" />
+
+        {/* Date + notes */}
         <div className="space-y-1">
-          <Label htmlFor="rm-supplier">Preferred supplier (optional)</Label>
-          <select id="rm-supplier" value={supplierId} onChange={e => setSupplierId(e.target.value)}
-                  className="w-full h-10 px-3 text-sm rounded-md border border-border bg-background">
-            <option value="">— No preference —</option>
-            {suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-          </select>
-        </div>
-        <div className="space-y-1">
-          <Label htmlFor="rm-date">Needed by</Label>
+          <Label htmlFor="rm-date" className="text-xs">Needed by (optional)</Label>
           <Input id="rm-date" type="date" min={todayStr()}
                  value={neededBy} onChange={e => setNeededBy(e.target.value)} />
         </div>
         <div className="space-y-1">
-          <Label htmlFor="rm-notes">Notes</Label>
-          <textarea id="rm-notes" rows={2} value={notes} onChange={e => setNotes(e.target.value)}
-                    placeholder="Any additional details…"
-                    className="w-full px-3 py-2 text-sm rounded-md border border-border bg-background resize-none
-                               focus:outline-none focus:ring-1 focus:ring-primary" />
+          <Label htmlFor="rm-notes" className="text-xs">Notes (optional)</Label>
+          <textarea
+            id="rm-notes" rows={2}
+            value={notes} onChange={e => setNotes(e.target.value)}
+            placeholder="Any extra details for the office…"
+            className="w-full px-3 py-2 text-sm rounded-md border border-border bg-background resize-none
+                       focus:outline-none focus:ring-1 focus:ring-primary"
+          />
         </div>
+
+        <div className="text-xs text-muted-foreground bg-muted/40 rounded-lg px-3 py-2">
+          Destination: <strong>Site Warehouse</strong> — office will arrange delivery or transfer.
+        </div>
+
         {error && <p className="text-xs text-destructive">{error}</p>}
-        <Button type="submit" className="w-full" disabled={loading}>
-          {loading ? "Submitting…" : "Submit Request"}
+
+        <Button onClick={submit} disabled={loading} className="w-full">
+          {loading ? "Submitting…" : `Submit Request (${items.filter(r => r.desc.trim() && parseFloat(r.qty) > 0).length || 0} item${items.filter(r => r.desc.trim() && parseFloat(r.qty) > 0).length !== 1 ? "s" : ""})`}
         </Button>
-      </form>
+      </div>
     </ModalShell>
+  );
+}
+
+// ── Site Request History ──────────────────────────────────────────────────────
+
+const STATUS_BADGE: Record<string, string> = {
+  DRAFT:             "bg-gray-100 text-gray-600 border-gray-200",
+  SUBMITTED:         "bg-blue-100 text-blue-700 border-blue-200",
+  PENDING_APPROVAL:  "bg-amber-100 text-amber-700 border-amber-200",
+  APPROVED:          "bg-green-100 text-green-700 border-green-200",
+  REJECTED:          "bg-red-100 text-red-700 border-red-200",
+  CONVERTED_TO_PO:   "bg-purple-100 text-purple-700 border-purple-200",
+};
+
+const STATUS_LABEL: Record<string, string> = {
+  DRAFT:             "Draft",
+  SUBMITTED:         "Submitted",
+  PENDING_APPROVAL:  "Pending",
+  APPROVED:          "Approved",
+  REJECTED:          "Rejected",
+  CONVERTED_TO_PO:   "Ordered",
+};
+
+function SiteRequestHistory({ requests }: { requests: MaterialRequest[] }) {
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const [showAll,  setShowAll]  = useState(false);
+
+  if (requests.length === 0) return (
+    <div className="space-y-2">
+      <div className="flex items-center gap-2">
+        <ClipboardList className="w-4 h-4 text-primary" />
+        <span className="font-semibold text-sm">My Requests</span>
+      </div>
+      <div className="bg-card border border-border rounded-xl p-6 text-center">
+        <ClipboardList className="w-7 h-7 text-muted-foreground mx-auto mb-2" />
+        <p className="text-sm text-muted-foreground">No requests submitted yet.</p>
+      </div>
+    </div>
+  );
+
+  const displayed = showAll ? requests : requests.slice(0, 5);
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <ClipboardList className="w-4 h-4 text-primary" />
+          <span className="font-semibold text-sm">My Requests</span>
+          <span className="text-xs bg-primary/10 text-primary rounded-full px-2 py-0.5">
+            {requests.length}
+          </span>
+        </div>
+      </div>
+
+      <div className="bg-card border border-border rounded-xl overflow-hidden">
+        {displayed.map((mr, i) => {
+          const isExpanded = expanded === mr.id;
+          const badge = STATUS_BADGE[mr.status] ?? "bg-gray-100 text-gray-600 border-gray-200";
+          const label = STATUS_LABEL[mr.status] ?? mr.status;
+          return (
+            <div
+              key={mr.id}
+              className={cn("border-b border-border last:border-0", i > 0 && "")}
+            >
+              <button
+                className="w-full flex items-center gap-3 px-4 py-3 hover:bg-muted/30 transition-colors text-left"
+                onClick={() => setExpanded(isExpanded ? null : mr.id)}
+              >
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-sm font-medium">{mr.request_number}</span>
+                    <span className={cn("text-xs px-1.5 py-0.5 rounded border font-medium", badge)}>
+                      {label}
+                    </span>
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    {mr.items.length} item{mr.items.length !== 1 ? "s" : ""}
+                    {" · "}{new Date(mr.requested_date || mr.created_at).toLocaleDateString("en-ZA")}
+                    {mr.needed_by_date && ` · Needed by ${new Date(mr.needed_by_date).toLocaleDateString("en-ZA")}`}
+                  </p>
+                </div>
+                <ChevronRight className={cn("w-4 h-4 text-muted-foreground shrink-0 transition-transform", isExpanded && "rotate-90")} />
+              </button>
+
+              {isExpanded && (
+                <div className="px-4 pb-3 space-y-2 border-t border-border/50 pt-2 bg-muted/20">
+                  {mr.items.map((item, j) => (
+                    <div key={item.id ?? j} className="flex items-start justify-between text-sm">
+                      <span className="text-foreground truncate flex-1">{item.description}</span>
+                      <span className="text-muted-foreground shrink-0 ml-2 text-xs">
+                        {item.requested_quantity ?? item.quantity_requested ?? "—"} {item.unit ?? ""}
+                      </span>
+                    </div>
+                  ))}
+                  {mr.notes && (
+                    <p className="text-xs text-muted-foreground italic mt-1">{mr.notes}</p>
+                  )}
+                  {mr.rejection_reason && (
+                    <p className="text-xs text-red-600 bg-red-50 rounded px-2 py-1">
+                      Rejected: {mr.rejection_reason}
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {requests.length > 5 && (
+        <button
+          onClick={() => setShowAll(p => !p)}
+          className="text-xs text-primary hover:text-primary/80 font-medium w-full text-center py-1"
+        >
+          {showAll ? "Show less" : `Show all ${requests.length} requests`}
+        </button>
+      )}
+    </div>
   );
 }
 
