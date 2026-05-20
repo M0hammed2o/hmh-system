@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import {
   FolderKanban, Users, Package, Bell, ShoppingCart, CreditCard,
-  Truck, FileSpreadsheet, Droplet, AlertTriangle, ChevronRight, X,
+  Truck, FileSpreadsheet, Droplet, AlertTriangle, ChevronRight, X, Warehouse,
 } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
@@ -85,14 +85,14 @@ function AlertCard({ alert, onDismiss }: { alert: Alert; onDismiss?: (id: string
 // ── Module shortcuts ──────────────────────────────────────────────────────────
 
 const moduleLinks = [
-  { label: "Projects",    path: "/projects",    icon: FolderKanban,    color: "bg-primary/10 text-primary",         desc: "Construction projects" },
-  { label: "BOQ",         path: "/boq",          icon: FileSpreadsheet, color: "bg-warning/10 text-warning",          desc: "Bills of quantities" },
-  { label: "Procurement", path: "/procurement",  icon: ShoppingCart,    color: "bg-success/10 text-success",          desc: "Purchase orders" },
-  { label: "Deliveries",  path: "/deliveries",   icon: Truck,           color: "bg-primary/10 text-primary",         desc: "Incoming deliveries" },
-  { label: "Stock",       path: "/stock",        icon: Package,         color: "bg-warning/10 text-warning",          desc: "Stock ledger" },
-  { label: "Payments",    path: "/payments",     icon: CreditCard,      color: "bg-success/10 text-success",          desc: "Payments" },
-  { label: "Alerts",      path: "/alerts",       icon: Bell,            color: "bg-destructive/10 text-destructive", desc: "System alerts" },
-  { label: "Users",       path: "/users",        icon: Users,           color: "bg-primary/10 text-primary",         desc: "User management" },
+  { label: "Projects",        path: "/projects",   icon: FolderKanban,    color: "bg-primary/10 text-primary",         desc: "Construction projects" },
+  { label: "BOQ",             path: "/boq",         icon: FileSpreadsheet, color: "bg-warning/10 text-warning",          desc: "Bills of quantities" },
+  { label: "Procurement",     path: "/procurement", icon: ShoppingCart,    color: "bg-success/10 text-success",          desc: "Purchase orders" },
+  { label: "Deliveries",      path: "/deliveries",  icon: Truck,           color: "bg-primary/10 text-primary",         desc: "Incoming deliveries" },
+  { label: "Main Warehouse",  path: "/warehouse",   icon: Warehouse,       color: "bg-warning/10 text-warning",          desc: "Central stock & dispatch" },
+  { label: "Stock",           path: "/stock",       icon: Package,         color: "bg-muted text-muted-foreground",      desc: "Stock ledger" },
+  { label: "Payments",        path: "/payments",    icon: CreditCard,      color: "bg-success/10 text-success",          desc: "Payments" },
+  { label: "Alerts",          path: "/alerts",      icon: Bell,            color: "bg-destructive/10 text-destructive", desc: "System alerts" },
 ];
 
 // ── Page ──────────────────────────────────────────────────────────────────────

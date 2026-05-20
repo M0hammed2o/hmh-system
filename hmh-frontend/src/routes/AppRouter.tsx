@@ -31,6 +31,7 @@ import WhatsAppQueuePage from "@/pages/WhatsAppQueuePage";
 import GmailInboxPage from "@/pages/GmailInboxPage";
 import TimelinePage from "@/pages/TimelinePage";
 import MilestonesPage from "@/pages/MilestonesPage";
+import MainWarehousePage from "@/pages/MainWarehousePage";
 import AuditPage from "@/pages/AuditPage";
 
 export function AppRouter() {
@@ -73,6 +74,7 @@ export function AppRouter() {
           <Route path="deliveries" element={<DeliveriesPage />} />
           <Route path="stock" element={<StockPage />} />
           <Route path="site-materials" element={<SiteMaterialsPage />} />
+          <Route path="warehouse" element={<MainWarehousePage />} />
           <Route path="payments" element={<PaymentsPage />} />
           <Route path="reconciliation" element={<InvoiceReconciliationPage />} />
           <Route path="alerts" element={<AlertsPage />} />

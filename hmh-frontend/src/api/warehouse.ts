@@ -1,10 +1,16 @@
 /**
- * Site Warehouse API client.
+ * Warehouse API client — covers both Site Warehouse and Main Warehouse.
  *
- * Wraps:
- *   GET  /api/v1/sites/{siteId}/warehouse          — current on-hand stock
- *   POST /api/v1/sites/{siteId}/warehouse/transfer  — transfer to lot
- *   GET  /api/v1/sites/{siteId}/warehouse/history   — movement history
+ * Site Warehouse (stock at site level, before lot allocation):
+ *   GET  /sites/{siteId}/warehouse/          — on-hand stock
+ *   POST /sites/{siteId}/warehouse/transfer  — transfer to lot
+ *   GET  /sites/{siteId}/warehouse/history   — movement history
+ *
+ * Main Warehouse (central project stock):
+ *   GET  /projects/{projectId}/warehouse/          — on-hand stock
+ *   POST /projects/{projectId}/warehouse/transfer  — dispatch to site
+ *   POST /projects/{projectId}/warehouse/return    — receive back from site
+ *   GET  /projects/{projectId}/warehouse/history   — movement history
  */
 import client from "./client";
 
@@ -37,8 +43,19 @@ export interface TransferResult {
   item_name:    string;
   quantity:     number;
   unit:         string | null;
-  lot_number:   string;
+  lot_number?:  string;   // lot transfer only
+  site_name?:   string;   // site transfer only
   new_balance:  number;
+}
+
+export interface ReturnResult {
+  transfer_ref:     string;
+  item_id:          string;
+  item_name:        string;
+  quantity:         number;
+  unit:             string | null;
+  site_name:        string;
+  new_main_balance: number;
 }
 
 export const warehouseApi = {
@@ -69,6 +86,55 @@ export const warehouseApi = {
   getHistory: async (siteId: string, limit = 50): Promise<WarehouseMovement[]> => {
     const res = await client.get<{ data: WarehouseMovement[] }>(
       `/sites/${siteId}/warehouse/history`,
+      { params: { limit } }
+    );
+    return res.data.data ?? [];
+  },
+
+  // ── Main Warehouse ────────────────────────────────────────────────────────
+
+  /** Current on-hand stock in the Main (project-level) Warehouse. */
+  getMainStock: async (projectId: string): Promise<WarehouseStockItem[]> => {
+    const res = await client.get<{ data: WarehouseStockItem[] }>(
+      `/projects/${projectId}/warehouse/`
+    );
+    return res.data.data ?? [];
+  },
+
+  /** Dispatch stock from Main Warehouse to a Site Warehouse. */
+  transferToSite: async (
+    projectId: string,
+    itemId:    string,
+    siteId:    string,
+    quantity:  number,
+    notes?:    string,
+  ): Promise<TransferResult> => {
+    const res = await client.post<{ data: TransferResult }>(
+      `/projects/${projectId}/warehouse/transfer`,
+      { item_id: itemId, site_id: siteId, quantity, notes: notes || null }
+    );
+    return res.data.data;
+  },
+
+  /** Receive stock returned from a Site Warehouse back to Main Warehouse. */
+  returnFromSite: async (
+    projectId: string,
+    itemId:    string,
+    siteId:    string,
+    quantity:  number,
+    notes?:    string,
+  ): Promise<ReturnResult> => {
+    const res = await client.post<{ data: ReturnResult }>(
+      `/projects/${projectId}/warehouse/return`,
+      { item_id: itemId, site_id: siteId, quantity, notes: notes || null }
+    );
+    return res.data.data;
+  },
+
+  /** Recent movements through the Main Warehouse. */
+  getMainHistory: async (projectId: string, limit = 100): Promise<WarehouseMovement[]> => {
+    const res = await client.get<{ data: WarehouseMovement[] }>(
+      `/projects/${projectId}/warehouse/history`,
       { params: { limit } }
     );
     return res.data.data ?? [];

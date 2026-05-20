@@ -438,3 +438,180 @@ def transfer_main_to_site(
         },
         message=f"Transferred {body.quantity} {item.default_unit or ''} of {item.name} to {site.name}.",
     )
+
+
+# ── Return from Site to Main Warehouse ────────────────────────────────────────
+
+class ReturnFromSiteRequest(BaseModel):
+    item_id:  uuid.UUID
+    site_id:  uuid.UUID
+    quantity: float
+    notes:    Optional[str] = None
+
+
+@project_warehouse_router.post("/return", response_model=ApiSuccess[dict], dependencies=[OFFICE_AND_ABOVE])
+def return_from_site_to_main(
+    project_id: uuid.UUID,
+    body: ReturnFromSiteRequest,
+    db: DbSession,
+    current_user: CurrentUser,
+):
+    """
+    Receive stock returned from a Site Warehouse back to the Main Warehouse.
+
+    Creates two StockLedger entries:
+      TRANSFER_OUT — stock leaves site warehouse  (site=X,    lot=NULL)
+      TRANSFER_IN  — stock enters main warehouse  (site=NULL, lot=NULL)
+    """
+    from app.models.project import Project
+    project = db.get(Project, project_id)
+    if not project:
+        raise HTTPException(404, "Project not found.")
+
+    site = db.get(Site, body.site_id)
+    if not site or site.project_id != project_id:
+        raise HTTPException(404, "Site not found in this project.")
+
+    item = db.get(Item, body.item_id)
+    if not item:
+        raise HTTPException(404, "Item not found.")
+
+    if body.quantity <= 0:
+        raise HTTPException(422, "Return quantity must be greater than zero.")
+
+    # Verify site warehouse has sufficient stock
+    balance_row = db.execute(text("""
+        SELECT SUM(quantity_in) - SUM(quantity_out) AS balance
+        FROM stock_ledger
+        WHERE project_id = :project_id
+          AND site_id    = :site_id
+          AND lot_id  IS NULL
+          AND item_id    = :item_id
+    """), {"project_id": str(project_id), "site_id": str(body.site_id), "item_id": str(body.item_id)}).fetchone()
+
+    available = float(balance_row[0] or 0)
+    if body.quantity > available:
+        raise HTTPException(422,
+            f"Insufficient stock at {site.name}. "
+            f"Site warehouse has {available:.3g} {item.default_unit or ''} of {item.name}; "
+            f"requested return of {body.quantity:.3g}."
+        )
+
+    now = datetime.now(timezone.utc)
+    transfer_ref = uuid.uuid4()
+
+    # TRANSFER_OUT from site warehouse
+    db.add(StockLedger(
+        project_id     = project_id,
+        site_id        = body.site_id,
+        lot_id         = None,
+        item_id        = body.item_id,
+        movement_type  = MovementType.TRANSFER_OUT,
+        reference_type = "site_to_main_return",
+        reference_id   = transfer_ref,
+        quantity_in    = 0,
+        quantity_out   = body.quantity,
+        unit           = item.default_unit,
+        movement_date  = now,
+        entered_by     = current_user.id,
+        notes          = body.notes or f"Returned to Main Warehouse",
+        created_at     = now,
+    ))
+
+    # TRANSFER_IN to main warehouse
+    db.add(StockLedger(
+        project_id     = project_id,
+        site_id        = None,
+        lot_id         = None,
+        item_id        = body.item_id,
+        movement_type  = MovementType.TRANSFER_IN,
+        reference_type = "site_to_main_return",
+        reference_id   = transfer_ref,
+        quantity_in    = body.quantity,
+        quantity_out   = 0,
+        unit           = item.default_unit,
+        movement_date  = now,
+        entered_by     = current_user.id,
+        notes          = body.notes or f"Received back from {site.name}",
+        created_at     = now,
+    ))
+
+    audit_service.write_event(
+        db,
+        action=AuditAction.TRANSFER,
+        entity_type="main_warehouse",
+        actor_id=current_user.id,
+        entity_id=project_id,
+        after_value={
+            "direction":    "site_to_main",
+            "item":         item.name,
+            "quantity":     body.quantity,
+            "unit":         item.default_unit,
+            "site":         site.name,
+            "transfer_ref": str(transfer_ref),
+        },
+    )
+
+    db.commit()
+    return ApiSuccess(
+        data={
+            "transfer_ref":  str(transfer_ref),
+            "item_id":       str(body.item_id),
+            "item_name":     item.name,
+            "quantity":      body.quantity,
+            "unit":          item.default_unit,
+            "site_name":     site.name,
+            "new_main_balance": available,       # will be recalculated on next fetch
+        },
+        message=f"Received {body.quantity} {item.default_unit or ''} of {item.name} back from {site.name}.",
+    )
+
+
+# ── Main Warehouse movement history ───────────────────────────────────────────
+
+@project_warehouse_router.get("/history", response_model=ApiSuccess[list[dict]], dependencies=[ALL_ROLES])
+def get_main_warehouse_history(
+    project_id: uuid.UUID,
+    db: DbSession,
+    limit: int = Query(100, le=500),
+):
+    """Recent movements through the Main (Project) Warehouse (site_id IS NULL, lot_id IS NULL)."""
+    from app.models.project import Project
+    project = db.get(Project, project_id)
+    if not project:
+        raise HTTPException(404, "Project not found.")
+
+    rows = db.execute(text("""
+        SELECT
+            sl.id,
+            sl.movement_type,
+            sl.quantity_in,
+            sl.quantity_out,
+            sl.unit,
+            sl.movement_date,
+            sl.notes,
+            sl.reference_type,
+            i.name          AS item_name,
+            u.full_name     AS entered_by_name
+        FROM stock_ledger sl
+        JOIN items i ON i.id = sl.item_id
+        LEFT JOIN users u ON u.id = sl.entered_by
+        WHERE sl.project_id = :project_id
+          AND sl.site_id  IS NULL
+          AND sl.lot_id   IS NULL
+        ORDER BY sl.movement_date DESC
+        LIMIT :limit
+    """), {"project_id": str(project_id), "limit": limit}).mappings().all()
+
+    return ApiSuccess(data=[{
+        "id":             str(r["id"]),
+        "movement_type":  r["movement_type"],
+        "item_name":      r["item_name"],
+        "quantity_in":    float(r["quantity_in"] or 0),
+        "quantity_out":   float(r["quantity_out"] or 0),
+        "unit":           r["unit"],
+        "movement_date":  r["movement_date"].isoformat() if r["movement_date"] else None,
+        "notes":          r["notes"],
+        "reference_type": r["reference_type"],
+        "entered_by":     r["entered_by_name"],
+    } for r in rows])
