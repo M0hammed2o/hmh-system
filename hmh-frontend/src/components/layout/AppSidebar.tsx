@@ -2,7 +2,7 @@ import { NavLink, useLocation } from "react-router-dom";
 import {
   LayoutDashboard, Users, FolderKanban, FileSpreadsheet,
   ShoppingCart, Truck, Package, CreditCard, Bell, Settings, LogOut, HardHat,
-  Droplet, Building2, Car, FileCheck2, Copy, Smartphone, MessageSquare, Mail, Clock,
+  Droplet, Building2, Car, FileCheck2, Copy, Smartphone, MessageSquare, Mail, Clock, Flag,
 } from "lucide-react";
 import { HMHLogo } from "@/components/HMHLogo";
 import { TOKEN_KEY, REFRESH_TOKEN_KEY, ROLE_KEY } from "@/lib/constants";
@@ -65,7 +65,7 @@ const navGroups = [
   {
     label: "Progress",
     items: [
-      { title: "Timeline",        path: "/timeline",       icon: Clock },
+      { title: "Milestones",      path: "/milestones",     icon: Flag },
     ],
   },
   {

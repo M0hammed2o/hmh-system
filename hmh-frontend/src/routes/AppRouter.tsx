@@ -30,6 +30,7 @@ import LabourPage from "@/pages/LabourPage";
 import WhatsAppQueuePage from "@/pages/WhatsAppQueuePage";
 import GmailInboxPage from "@/pages/GmailInboxPage";
 import TimelinePage from "@/pages/TimelinePage";
+import MilestonesPage from "@/pages/MilestonesPage";
 import AuditPage from "@/pages/AuditPage";
 
 export function AppRouter() {
@@ -81,7 +82,8 @@ export function AppRouter() {
           <Route path="fuel" element={<FuelPage />} />
           <Route path="suppliers" element={<SuppliersPage />} />
           <Route path="vehicles" element={<VehiclesPage />} />
-          <Route path="timeline" element={<TimelinePage />} />
+          <Route path="milestones" element={<MilestonesPage />} />
+          <Route path="timeline" element={<TimelinePage />} />  {/* kept for backward compat */}
           <Route path="audit" element={<AuditPage />} />
           <Route path="settings" element={<SettingsPage />} />
         </Route>

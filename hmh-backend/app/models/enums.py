@@ -185,6 +185,7 @@ class AttachmentEntity(str, enum.Enum):
     INVOICE = "INVOICE"
     USAGE_LOG = "USAGE_LOG"
     CERTIFICATION = "CERTIFICATION"
+    STAGE_STATUS = "STAGE_STATUS"   # milestone progress photos
 
 
 class AttachmentType(str, enum.Enum):

@@ -7,6 +7,14 @@ export type StageStatus =
   | "AWAITING_INSPECTION"
   | "CERTIFIED";
 
+export interface MilestonePhoto {
+  id: string;
+  url: string;
+  file_name: string;
+  mime_type: string;
+  uploaded_at: string;
+}
+
 export interface StageMaster {
   id: string;
   name: string;
@@ -87,5 +95,34 @@ export const stagesApi = {
       { headers: { "Content-Type": "multipart/form-data" } }
     );
     return res.data.data;
+  },
+
+  complete: async (projectId: string, statusId: string): Promise<ProjectStageStatus> => {
+    const res = await client.post<{ data: ProjectStageStatus }>(
+      `/projects/${projectId}/stage-statuses/${statusId}/complete`
+    );
+    return res.data.data;
+  },
+
+  listPhotos: async (projectId: string, statusId: string): Promise<MilestonePhoto[]> => {
+    const res = await client.get<{ data: MilestonePhoto[] }>(
+      `/projects/${projectId}/stage-statuses/${statusId}/photos`
+    );
+    return res.data.data;
+  },
+
+  uploadPhoto: async (projectId: string, statusId: string, file: File): Promise<MilestonePhoto> => {
+    const fd = new FormData();
+    fd.append("photo", file);
+    const res = await client.post<{ data: MilestonePhoto }>(
+      `/projects/${projectId}/stage-statuses/${statusId}/photos`,
+      fd,
+      { headers: { "Content-Type": "multipart/form-data" } }
+    );
+    return res.data.data;
+  },
+
+  deletePhoto: async (projectId: string, statusId: string, photoId: string): Promise<void> => {
+    await client.delete(`/projects/${projectId}/stage-statuses/${statusId}/photos/${photoId}`);
   },
 };

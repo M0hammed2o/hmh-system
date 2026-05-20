@@ -2,12 +2,16 @@
 
 import os
 import uuid
+from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, File, Form, Query, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 
 from app.core.config import settings
-from app.dependencies import ALL_ROLES, CurrentUser, DbSession, OFFICE_AND_ABOVE
+from app.core.storage import save_upload
+from app.dependencies import ALL_ROLES, CurrentUser, DbSession, OFFICE_AND_ABOVE, WRITE_ROLES
+from app.models.attachment import Attachment
+from app.models.enums import AttachmentEntity, AttachmentType
 from app.schemas.common import ApiSuccess
 from app.schemas.stage import ProjectStageStatusRead, StageMasterRead, StageStatusUpsert
 from app.services import stage_service
@@ -130,3 +134,151 @@ async def upsert_stage_status_with_evidence(
         data=stage_service._enrich(pss),
         message="Stage updated." + (f" Photo saved: {evidence_url}" if evidence_url else ""),
     )
+
+
+# ── Milestone: manual completion ──────────────────────────────────────────────
+
+@project_stages_router.post(
+    "/{status_id}/complete",
+    response_model=ApiSuccess[ProjectStageStatusRead],
+    dependencies=[WRITE_ROLES],
+)
+def complete_milestone(
+    project_id: uuid.UUID,
+    status_id:  uuid.UUID,
+    db: DbSession,
+    current_user: CurrentUser,
+):
+    """Manually mark a milestone as COMPLETED."""
+    from app.models.stage import ProjectStageStatus
+    from app.models.enums import StageStatus
+    pss = db.get(ProjectStageStatus, status_id)
+    if not pss or pss.project_id != project_id:
+        raise HTTPException(404, "Stage status not found.")
+    pss.status = StageStatus.COMPLETED
+    pss.completed_at = datetime.now(timezone.utc)
+    pss.updated_by   = current_user.id
+    db.commit()
+    db.refresh(pss)
+    db.refresh(pss, ["stage"])
+    return ApiSuccess(data=stage_service._enrich(pss), message="Milestone marked as completed.")
+
+
+# ── Milestone photos ──────────────────────────────────────────────────────────
+
+@project_stages_router.get(
+    "/{status_id}/photos",
+    response_model=ApiSuccess[list[dict]],
+    dependencies=[ALL_ROLES],
+)
+def list_milestone_photos(
+    project_id: uuid.UUID,
+    status_id:  uuid.UUID,
+    db: DbSession,
+):
+    """List all photos attached to a milestone (stage status)."""
+    from app.models.stage import ProjectStageStatus
+    pss = db.get(ProjectStageStatus, status_id)
+    if not pss or pss.project_id != project_id:
+        raise HTTPException(404, "Stage status not found.")
+
+    photos = (
+        db.query(Attachment)
+        .filter(
+            Attachment.entity_type == AttachmentEntity.STAGE_STATUS,
+            Attachment.entity_id   == status_id,
+            Attachment.is_active   == True,
+        )
+        .order_by(Attachment.uploaded_at.asc())
+        .all()
+    )
+    from app.core.storage import public_url as _pub
+    return ApiSuccess(data=[{
+        "id":          str(p.id),
+        "url":         _pub(p.stored_path),
+        "file_name":   p.file_name,
+        "mime_type":   p.mime_type,
+        "uploaded_at": p.uploaded_at.isoformat(),
+    } for p in photos])
+
+
+@project_stages_router.post(
+    "/{status_id}/photos",
+    response_model=ApiSuccess[dict],
+    status_code=201,
+    dependencies=[WRITE_ROLES],
+)
+async def upload_milestone_photo(
+    project_id:  uuid.UUID,
+    status_id:   uuid.UUID,
+    db:          DbSession,
+    current_user: CurrentUser,
+    photo: UploadFile = File(...),
+):
+    """Upload a progress photo to a milestone."""
+    from app.models.stage import ProjectStageStatus
+    pss = db.get(ProjectStageStatus, status_id)
+    if not pss or pss.project_id != project_id:
+        raise HTTPException(404, "Stage status not found.")
+
+    if not photo.filename:
+        raise HTTPException(422, "No file provided.")
+
+    ext     = os.path.splitext(photo.filename)[1].lower() or ".bin"
+    fname   = f"{uuid.uuid4().hex}{ext}"
+    content = await photo.read()
+
+    url = save_upload(content, f"milestones/{project_id}/{status_id}/{fname}")
+
+    now = datetime.now(timezone.utc)
+    att = Attachment(
+        entity_type      = AttachmentEntity.STAGE_STATUS,
+        entity_id        = status_id,
+        file_name        = photo.filename,
+        stored_path      = url,
+        file_url         = url,
+        mime_type        = photo.content_type or "application/octet-stream",
+        file_size_bytes  = len(content),
+        attachment_type  = AttachmentType.PHOTO,
+        uploaded_by      = current_user.id,
+        uploaded_at      = now,
+        is_active        = True,
+    )
+    db.add(att)
+    db.commit()
+    db.refresh(att)
+
+    from app.core.storage import public_url as _pub
+    return ApiSuccess(data={
+        "id":          str(att.id),
+        "url":         _pub(att.stored_path),
+        "file_name":   att.file_name,
+        "uploaded_at": att.uploaded_at.isoformat(),
+    }, message="Photo uploaded.")
+
+
+@project_stages_router.delete(
+    "/{status_id}/photos/{photo_id}",
+    response_model=ApiSuccess[dict],
+    dependencies=[WRITE_ROLES],
+)
+def delete_milestone_photo(
+    project_id: uuid.UUID,
+    status_id:  uuid.UUID,
+    photo_id:   uuid.UUID,
+    db: DbSession,
+    current_user: CurrentUser,
+):
+    """Soft-delete a milestone photo."""
+    from app.models.stage import ProjectStageStatus
+    pss = db.get(ProjectStageStatus, status_id)
+    if not pss or pss.project_id != project_id:
+        raise HTTPException(404, "Stage status not found.")
+
+    att = db.get(Attachment, photo_id)
+    if not att or att.entity_id != status_id:
+        raise HTTPException(404, "Photo not found.")
+
+    att.is_active = False
+    db.commit()
+    return ApiSuccess(data={"id": str(photo_id)}, message="Photo removed.")

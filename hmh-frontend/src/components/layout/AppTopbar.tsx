@@ -5,7 +5,7 @@ import {
   LayoutDashboard, Users, FolderKanban, FileSpreadsheet,
   ShoppingCart, Truck, Package, CreditCard, Bell, Settings,
   Copy, Building2, Mail, Layers, FileCheck2, Car, Droplet,
-  Smartphone, Clock, User,
+  Smartphone, Clock, User, Flag,
 } from "lucide-react";
 import { TOKEN_KEY, REFRESH_TOKEN_KEY, ROLE_KEY } from "@/lib/constants";
 import { useAuthContext } from "@/context/AuthContext";
@@ -29,6 +29,7 @@ const pageTitles: Record<string, string> = {
   "/reconciliation":  "Reconciliation",
   "/vehicles":        "Vehicles",
   "/fuel":            "Fuel",
+  "/milestones":      "Milestones",
   "/timeline":        "Timeline",
   "/audit":           "User Activity",
   "/alerts":          "Alerts",
@@ -94,7 +95,7 @@ const navGroups = [
   {
     label: "Progress",
     items: [
-      { title: "Timeline",        path: "/timeline",        icon: Clock },
+      { title: "Milestones",      path: "/milestones",      icon: Flag },
     ],
   },
   {
