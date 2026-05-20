@@ -1,9 +1,10 @@
-"""Attachment service — local-disk storage for V1 demo.
+"""Attachment service.
 
-Files are saved to:  {UPLOAD_DIR}/{entity_type}/{entity_id}/{uuid4}_{original_name}
+Files are saved via save_upload() which routes to:
+  - Supabase Storage when SUPABASE_URL + SUPABASE_SERVICE_KEY are configured
+  - Local disk (UPLOAD_DIR) otherwise
 
-Upgrade path for production: swap _save_to_disk() for an S3 upload and update
-stored_path to be an S3 key / presigned URL.
+stored_path is always the public-accessible URL (Supabase) or /uploads/... path (local).
 """
 
 import os
@@ -16,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.exceptions import NotFoundError
+from app.core.storage import save_upload
 from app.models.attachment import Attachment
 from app.models.enums import AttachmentEntity, AttachmentType
 
@@ -38,23 +40,17 @@ ALLOWED_MIME_TYPES = {
 }
 
 
-def _save_to_disk(file: UploadFile, entity_type: str, entity_id: str) -> tuple[str, int]:
-    """Write the upload to local disk. Returns (relative_path, file_size_bytes)."""
-    upload_dir = os.path.join(settings.UPLOAD_DIR, entity_type, entity_id)
-    os.makedirs(upload_dir, exist_ok=True)
-
-    # Unique filename avoids collisions even if original names repeat
-    safe_name = os.path.basename(file.filename or "upload")
-    unique_name = f"{uuid.uuid4().hex}_{safe_name}"
-    abs_path = os.path.join(upload_dir, unique_name)
-
+def _save_via_storage(file: UploadFile, entity_type: str, entity_id: str) -> tuple[str, int]:
+    """
+    Read file bytes, route through save_upload() (Supabase or local disk).
+    Returns (stored_url_or_path, file_size_bytes).
+    """
     content = file.file.read()
-    with open(abs_path, "wb") as fh:
-        fh.write(content)
-
-    # Relative path stored in DB — portable across restarts
-    rel_path = os.path.join(entity_type, entity_id, unique_name)
-    return rel_path, len(content)
+    ext = os.path.splitext(file.filename or "upload")[1].lower() or ".bin"
+    unique_name = f"{uuid.uuid4().hex}{ext}"
+    relative = f"attachments/{entity_type}/{entity_id}/{unique_name}"
+    stored = save_upload(content, relative)
+    return stored, len(content)
 
 
 def save_attachment(
@@ -89,31 +85,31 @@ def save_attachment(
             detail=f"File type '{mime}' is not supported. Allowed: images, PDF, spreadsheets.",
         )
 
-    # Validate size (re-read check; actual content read happens in _save_to_disk)
+    # Validate size before reading
     max_bytes = settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024
-    file.file.seek(0, 2)  # seek to end
+    file.file.seek(0, 2)
     size = file.file.tell()
-    file.file.seek(0)     # reset
+    file.file.seek(0)
     if size > max_bytes:
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail=f"File exceeds maximum size of {settings.MAX_UPLOAD_SIZE_MB} MB.",
         )
 
-    rel_path, file_size = _save_to_disk(file, entity_type, str(entity_id))
+    stored_path, file_size = _save_via_storage(file, entity_type, str(entity_id))
 
     record = Attachment(
-        entity_type=ent,
-        entity_id=uuid.UUID(str(entity_id)),
-        file_name=os.path.basename(file.filename or "upload"),
-        stored_path=rel_path,   # ORM column (migration 0004)
-        file_url=rel_path,      # legacy NOT NULL column (migration 0001)
-        mime_type=mime,
-        file_size_bytes=file_size,
-        attachment_type=att,
-        uploaded_by=uploaded_by_id,
-        uploaded_at=datetime.now(timezone.utc),
-        is_active=True,
+        entity_type     = ent,
+        entity_id       = uuid.UUID(str(entity_id)),
+        file_name       = os.path.basename(file.filename or "upload"),
+        stored_path     = stored_path,
+        file_url        = stored_path,   # legacy column kept in sync
+        mime_type       = mime,
+        file_size_bytes = file_size,
+        attachment_type = att,
+        uploaded_by     = uploaded_by_id,
+        uploaded_at     = datetime.now(timezone.utc),
+        is_active       = True,
     )
     db.add(record)
     db.commit()
@@ -149,5 +145,16 @@ def get_attachment(db: Session, attachment_id: uuid.UUID) -> Attachment:
 
 
 def resolve_abs_path(stored_path: str) -> str:
-    """Turn the stored relative path back into an absolute filesystem path."""
+    """Turn a stored path into an absolute filesystem path.
+
+    Handles three formats produced by save_upload() or legacy code:
+      https://...        → caller should redirect, not call this function
+      /uploads/...       → strip the prefix, join with UPLOAD_DIR
+      relative/path.ext  → join directly with UPLOAD_DIR (legacy format)
+    """
+    if stored_path.startswith("http"):
+        # Caller should redirect; this is a safety guard
+        return stored_path
+    if stored_path.startswith("/uploads/"):
+        return os.path.join(settings.UPLOAD_DIR, stored_path[len("/uploads/"):])
     return os.path.join(settings.UPLOAD_DIR, stored_path)

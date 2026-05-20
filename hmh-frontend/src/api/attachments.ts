@@ -6,7 +6,10 @@ export type AttachmentEntity =
   | "DELIVERY"
   | "INVOICE"
   | "USAGE_LOG"
-  | "CERTIFICATION";
+  | "CERTIFICATION"
+  | "STAGE_STATUS"
+  | "PAYMENT"
+  | "FUEL_LOG";
 
 export type AttachmentType =
   | "PHOTO"
@@ -21,6 +24,7 @@ export interface Attachment {
   entity_type: AttachmentEntity;
   entity_id: string;
   file_name: string;
+  stored_path: string;          // direct URL (Supabase) or /uploads/... (local)
   mime_type: string;
   file_size_bytes: number | null;
   file_size_display: string;
@@ -29,19 +33,16 @@ export interface Attachment {
   uploaded_at: string;
   is_active: boolean;
   is_image: boolean;
+  /** Direct URL (Supabase) or /api/v1/attachments/{id}/download (local). */
   download_url: string;
 }
 
 export const attachmentsApi = {
-  /**
-   * Upload a file linked to an entity.
-   * Uses multipart/form-data — do NOT set Content-Type manually.
-   */
   upload: async (
     file: File,
     entityType: AttachmentEntity,
     entityId: string,
-    attachmentType: AttachmentType
+    attachmentType: AttachmentType = "PHOTO"
   ): Promise<Attachment> => {
     const form = new FormData();
     form.append("file", file);
@@ -52,9 +53,6 @@ export const attachmentsApi = {
     return res.data.data;
   },
 
-  /**
-   * List all active attachments linked to an entity.
-   */
   listByEntity: async (
     entityType: AttachmentEntity,
     entityId: string
@@ -65,10 +63,11 @@ export const attachmentsApi = {
     return res.data.data;
   },
 
-  /**
-   * Returns the full URL to stream/download a single attachment.
-   * Use this as an <a href> or <img src>.
-   */
+  delete: async (attachmentId: string): Promise<void> => {
+    await client.delete(`/attachments/${attachmentId}`);
+  },
+
+  /** Backward-compatible helper — use att.download_url directly instead. */
   downloadUrl: (attachmentId: string): string =>
     `/api/v1/attachments/${attachmentId}/download`,
 };

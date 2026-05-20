@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { WriteGuard } from "@/components/shared/WriteGuard";
-import { Plus, CreditCard, CheckCircle2, Clock, FileText, AlertTriangle, Hammer } from "lucide-react";
+import { Plus, CreditCard, CheckCircle2, Clock, FileText, AlertTriangle, Hammer, Camera, ChevronDown, ChevronUp } from "lucide-react";
+import { AttachmentStrip } from "@/components/shared/AttachmentStrip";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -312,6 +313,7 @@ export default function PaymentsPage() {
   const [loadError, setLoadError] = useState("");
   const [showCaptureInvoice, setShowCaptureInvoice] = useState(false);
   const [showCapturePayment, setShowCapturePayment] = useState(false);
+  const [expandedPaymentId, setExpandedPaymentId] = useState<string | null>(null);
 
   // Load projects + suppliers on mount
   useEffect(() => {
@@ -497,19 +499,46 @@ export default function PaymentsPage() {
                   <th className="text-left px-4 py-3 font-medium text-muted-foreground">Amount</th>
                   <th className="text-left px-4 py-3 font-medium text-muted-foreground">Date</th>
                   <th className="text-left px-4 py-3 font-medium text-muted-foreground">Status</th>
+                  <th className="w-10 px-2 py-3" />
                 </tr>
               </thead>
               <tbody>
                 {payments.map((p) => (
-                  <tr key={p.id} className="border-b border-border last:border-0 hover:bg-muted/30 transition-colors">
-                    <td className="px-4 py-3 font-mono text-xs">{p.payment_reference ?? p.id.slice(0, 8)}</td>
-                    <td className="px-4 py-3 text-muted-foreground">{p.payment_type}</td>
-                    <td className="px-4 py-3 font-semibold">{formatCurrency(p.amount_paid)}</td>
-                    <td className="px-4 py-3 text-muted-foreground">{p.payment_date ? formatDate(p.payment_date) : "—"}</td>
-                    <td className="px-4 py-3">
-                      <Badge variant={paymentStatusVariant[p.status]}>{p.status}</Badge>
-                    </td>
-                  </tr>
+                  <>
+                    <tr key={p.id} className="border-b border-border last:border-0 hover:bg-muted/30 transition-colors">
+                      <td className="px-4 py-3 font-mono text-xs">{p.payment_reference ?? p.id.slice(0, 8)}</td>
+                      <td className="px-4 py-3 text-muted-foreground text-sm">{p.payment_type}</td>
+                      <td className="px-4 py-3 font-semibold">{formatCurrency(p.amount_paid)}</td>
+                      <td className="px-4 py-3 text-muted-foreground text-sm">{p.payment_date ? formatDate(p.payment_date) : "—"}</td>
+                      <td className="px-4 py-3">
+                        <Badge variant={paymentStatusVariant[p.status]}>{p.status}</Badge>
+                      </td>
+                      <td className="px-2 py-3 text-right">
+                        <button
+                          onClick={() => setExpandedPaymentId(prev => prev === p.id ? null : p.id)}
+                          className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-primary transition-colors"
+                          title="Proof of payment"
+                        >
+                          {expandedPaymentId === p.id
+                            ? <ChevronUp className="w-4 h-4" />
+                            : <Camera className="w-4 h-4" />}
+                        </button>
+                      </td>
+                    </tr>
+                    {expandedPaymentId === p.id && (
+                      <tr key={`${p.id}-proof`} className="bg-muted/20 border-b border-border">
+                        <td colSpan={6} className="px-4 py-3">
+                          <AttachmentStrip
+                            entityType="PAYMENT"
+                            entityId={p.id}
+                            attachmentType="PROOF"
+                            accept="image/*,application/pdf"
+                            label="Proof of Payment"
+                          />
+                        </td>
+                      </tr>
+                    )}
+                  </>
                 ))}
               </tbody>
             </table>

@@ -186,6 +186,8 @@ class AttachmentEntity(str, enum.Enum):
     USAGE_LOG = "USAGE_LOG"
     CERTIFICATION = "CERTIFICATION"
     STAGE_STATUS = "STAGE_STATUS"   # milestone progress photos
+    PAYMENT = "PAYMENT"             # proof of payment
+    FUEL_LOG = "FUEL_LOG"           # extra fuel evidence photos
 
 
 class AttachmentType(str, enum.Enum):

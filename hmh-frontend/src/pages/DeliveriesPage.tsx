@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Plus, Truck, CheckCircle2, AlertCircle, Package, Trash2, RefreshCw, Paperclip, ExternalLink, Download, FileText, PenLine, Link as LinkIcon } from "lucide-react";
+import { Plus, Truck, CheckCircle2, AlertCircle, Package, Trash2, RefreshCw, ExternalLink, FileText, PenLine, Link as LinkIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -11,7 +11,7 @@ import { sitesApi, type Site } from "@/api/sites";
 import { deliveriesApi, type Delivery, type DeliveryItemCreate } from "@/api/deliveries";
 import { suppliersApi, type Supplier } from "@/api/suppliers";
 import { purchaseOrdersApi, type PurchaseOrder } from "@/api/purchaseOrders";
-import { attachmentsApi, type Attachment } from "@/api/attachments";
+import { AttachmentStrip } from "@/components/shared/AttachmentStrip";
 import { formatDateTime } from "@/lib/format";
 import { API_BASE } from "@/lib/constants";
 import client from "@/api/client";
@@ -329,8 +329,6 @@ export default function DeliveriesPage() {
   const [refreshing, setRefreshing] = useState(false);
   const [loadingProjects, setLoadingProjects] = useState(true);
   const [selectedDelivery, setSelectedDelivery] = useState<Delivery | null>(null);
-  const [deliveryAttachments, setDeliveryAttachments] = useState<Attachment[]>([]);
-  const [loadingAttachments, setLoadingAttachments] = useState(false);
   const [showRecord, setShowRecord] = useState(false);
   // Catalog item linking
   const [catalogItems, setCatalogItems] = useState<Array<{ id: string; name: string; default_unit: string | null }>>([]);
@@ -359,15 +357,8 @@ export default function DeliveriesPage() {
       .finally(() => setLoading(false));
   }, [selectedProjectId]);
 
-  // Fetch attachments when a delivery is opened
   useEffect(() => {
-    if (!selectedDelivery) { setDeliveryAttachments([]); setLinkingItemId(null); return; }
-    setLoadingAttachments(true);
-    attachmentsApi
-      .listByEntity("DELIVERY", selectedDelivery.id)
-      .then(setDeliveryAttachments)
-      .catch(() => setDeliveryAttachments([]))
-      .finally(() => setLoadingAttachments(false));
+    if (!selectedDelivery) { setLinkingItemId(null); }
   }, [selectedDelivery]);
 
   // Load catalog items once for the link-item dropdown
@@ -795,44 +786,13 @@ export default function DeliveriesPage() {
                   </div>
                 )}
 
-                {/* Generic attachment records */}
-                {loadingAttachments ? (
-                  <p className="text-xs text-muted-foreground">Loading attachments…</p>
-                ) : deliveryAttachments.map((att) => (
-                  <div key={att.id} className="flex items-center gap-2 bg-muted/40 rounded-lg px-3 py-2">
-                    {att.is_image ? (
-                      <img
-                        src={`/api/v1/attachments/${att.id}/download`}
-                        alt={att.file_name}
-                        className="w-9 h-9 object-cover rounded border border-border shrink-0"
-                      />
-                    ) : (
-                      <div className="w-9 h-9 flex items-center justify-center bg-muted rounded border border-border shrink-0">
-                        <Paperclip className="w-4 h-4 text-muted-foreground" />
-                      </div>
-                    )}
-                    <div className="flex-1 min-w-0">
-                      <p className="text-xs font-medium truncate">{att.file_name}</p>
-                      <p className="text-[10px] text-muted-foreground">{att.file_size_display}</p>
-                    </div>
-                    <a
-                      href={`/api/v1/attachments/${att.id}/download`}
-                      target="_blank" rel="noopener noreferrer"
-                      className="text-primary hover:text-primary/80 shrink-0"
-                    >
-                      <ExternalLink className="w-3.5 h-3.5" />
-                    </a>
-                  </div>
-                ))}
-
-                {/* Empty state only when no documents at all */}
-                {!selectedDelivery.delivery_note_image_url &&
-                 !selectedDelivery.signature_image_url &&
-                 !selectedDelivery.ocr_raw_data?.driver_signature_path &&
-                 !loadingAttachments &&
-                 deliveryAttachments.length === 0 && (
-                  <p className="text-xs text-muted-foreground">No documents for this delivery.</p>
-                )}
+                {/* Attachments — photos and documents */}
+                <AttachmentStrip
+                  entityType="DELIVERY"
+                  entityId={selectedDelivery.id}
+                  label="Photos & Documents"
+                  accept="image/*,application/pdf"
+                />
               </div>
             </div>
           </div>

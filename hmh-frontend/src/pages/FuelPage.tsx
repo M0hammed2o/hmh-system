@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { Plus, Droplet, Flame, Trash2, Camera, AlertTriangle } from "lucide-react";
+import { Plus, Droplet, Flame, Trash2, Camera, AlertTriangle, ChevronDown, ChevronUp } from "lucide-react";
+import { AttachmentStrip } from "@/components/shared/AttachmentStrip";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Modal } from "@/components/shared/Modal";
@@ -210,6 +211,7 @@ export default function FuelPage() {
   const [loadingProjects,   setLoadingProjects]   = useState(true);
   const [loading,           setLoading]           = useState(false);
   const [showLog,           setShowLog]           = useState(false);
+  const [expandedFuelId,    setExpandedFuelId]    = useState<string | null>(null);
 
   useEffect(() => {
     projectsApi.list(1, 100)
@@ -290,6 +292,7 @@ export default function FuelPage() {
                   <th className="text-right px-3 py-3 font-medium text-muted-foreground">km/L</th>
                   <th className="text-right px-3 py-3 font-medium text-muted-foreground">L/100km</th>
                   <th className="text-left px-3 py-3 font-medium text-muted-foreground">Photos</th>
+                  <th className="px-3 py-3 w-8 text-muted-foreground font-medium">+</th>
                   <th className="px-3 py-3 w-8" />
                 </tr>
               </thead>
@@ -301,8 +304,9 @@ export default function FuelPage() {
                   const pumpUrl = fuelPhotoUrl(log.photo_pump);
                   const invUrl  = fuelPhotoUrl(log.photo_invoice);
                   return (
+                    <>
                     <tr key={log.id}
-                        className={`border-b border-border last:border-0 transition-colors group
+                        className={`border-b ${expandedFuelId === log.id ? "" : "border-border last:border-0"} transition-colors group
                           ${flagged ? "bg-destructive/5 hover:bg-destructive/10" : "hover:bg-muted/30"}`}>
                       <td className="px-3 py-2.5 text-xs text-muted-foreground whitespace-nowrap">{formatDate(log.fuel_date)}</td>
                       <td className="px-3 py-2.5 text-xs">
@@ -353,6 +357,17 @@ export default function FuelPage() {
                       </td>
                       <td className="px-2 py-2.5">
                         <button
+                          onClick={() => setExpandedFuelId(prev => prev === log.id ? null : log.id)}
+                          className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-primary transition-colors"
+                          title="Extra photos"
+                        >
+                          {expandedFuelId === log.id
+                            ? <ChevronUp className="w-3.5 h-3.5" />
+                            : <ChevronDown className="w-3.5 h-3.5" />}
+                        </button>
+                      </td>
+                      <td className="px-2 py-2.5">
+                        <button
                           onClick={async () => {
                             if (!window.confirm("Delete this fuel log?")) return;
                             try { await fuelApi.delete(log.id); setLogs(p => p.filter(l => l.id !== log.id)); }
@@ -363,12 +378,26 @@ export default function FuelPage() {
                         ><Trash2 className="w-3.5 h-3.5" /></button>
                       </td>
                     </tr>
+                    {expandedFuelId === log.id && (
+                      <tr key={`${log.id}-photos`} className="border-b border-border bg-muted/20">
+                        <td colSpan={13} className="px-4 py-3">
+                          <AttachmentStrip
+                            entityType="FUEL_LOG"
+                            entityId={log.id}
+                            label="Additional Photos"
+                            accept="image/*"
+                            compact
+                          />
+                        </td>
+                      </tr>
+                    )}
+                    </>
                   );
                 })}
               </tbody>
               <tfoot>
                 <tr className="border-t-2 border-border bg-muted/30">
-                  <td colSpan={3} className="px-3 py-2 text-xs font-medium text-muted-foreground">Totals</td>
+                  <td colSpan={3} className="px-3 py-2 text-xs font-medium text-muted-foreground" title="Totals">Totals</td>
                   <td className="px-3 py-2 text-right tabular-nums font-semibold text-xs">
                     {totalLitres.toLocaleString("en-ZA", {maximumFractionDigits:1})} L
                   </td>
