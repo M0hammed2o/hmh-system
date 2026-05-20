@@ -5,7 +5,7 @@ import { useEffect, useState, useCallback } from "react";
 import { WriteGuard } from "@/components/shared/WriteGuard";
 import {
   Plus, Check, X, ChevronRight, AlertTriangle, Mail,
-  MailCheck, RefreshCw, FileText, ShoppingCart,
+  MailCheck, RefreshCw, FileText, ShoppingCart, Warehouse, ArrowRight,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -18,9 +18,17 @@ import {
   type MaterialRequest, type MRCreate, type MRItemCreate,
   type MRQuote, type PurchaseOrder, type MRPriority, type DeliveryDestination,
 } from "@/api/procurement";
+import { warehouseApi, type WarehouseStockItem } from "@/api/warehouse";
 import { cn } from "@/lib/utils";
 import client from "@/api/client";
 import { EmailDraftModal } from "@/components/EmailDraftModal";
+
+/** Human-readable labels for delivery_destination values. */
+const DEST_LABEL: Record<DeliveryDestination, string> = {
+  SITE_STORE:      "Site Warehouse",
+  MAIN_WAREHOUSE:  "Main Warehouse (bulk)",
+  LOT:             "Direct to Lot",
+};
 
 function timeAgo(iso: string) {
   const m = Math.floor((Date.now() - new Date(iso).getTime()) / 60000);
@@ -108,9 +116,9 @@ function CreateMRModal({ projectId, sites, onClose, onCreated }: {
             <div className="space-y-1.5">
               <Label>Delivery Destination</Label>
               <select value={destination} onChange={(e) => setDestination(e.target.value as DeliveryDestination)} className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm">
-                <option value="SITE_STORE">Site Store</option>
-                <option value="MAIN_WAREHOUSE">Main Warehouse</option>
-                <option value="LOT">Lot</option>
+                <option value="SITE_STORE">Site Warehouse (from supplier)</option>
+                <option value="MAIN_WAREHOUSE">Main Warehouse (bulk purchase only)</option>
+                <option value="LOT">Direct to Lot</option>
               </select>
             </div>
             <div className="space-y-1.5">
@@ -164,6 +172,42 @@ function MRDetailModal({ mr, suppliers, onClose, onUpdated }: {
   const [quotes, setQuotes] = useState<MRQuote[]>([]);
   const [showMREmail, setShowMREmail] = useState(false);
 
+  // ── "Fulfil from Main Warehouse" section ────────────────────────────────
+  const [showMainStock, setShowMainStock]           = useState(false);
+  const [mainStock,     setMainStock]               = useState<WarehouseStockItem[]>([]);
+  const [mainStockLoading, setMainStockLoading]     = useState(false);
+  const [transferQty,   setTransferQty]             = useState<Record<string, string>>({});
+  const [transferring,  setTransferring]            = useState<string | null>(null);
+
+  const loadMainStock = async () => {
+    setMainStockLoading(true);
+    try {
+      const s = await warehouseApi.getMainStock(mr.project_id);
+      setMainStock(s);
+      const initQty: Record<string, string> = {};
+      s.forEach(item => { initQty[item.item_id] = ""; });
+      setTransferQty(initQty);
+    } catch { setMainStock([]); }
+    finally { setMainStockLoading(false); }
+  };
+
+  const handleFulfilFromMain = async (item: WarehouseStockItem) => {
+    const qty = parseFloat(transferQty[item.item_id] || "0");
+    if (!qty || qty <= 0) return;
+    if (qty > item.on_hand) return;
+    setTransferring(item.item_id);
+    try {
+      await warehouseApi.transferToSite(mr.project_id, item.item_id, mr.site_id, qty,
+        `Fulfilment for ${mr.request_number}`);
+      setResult(`Transferred ${qty} ${item.unit ?? ""} of ${item.item_name} to site warehouse.`);
+      loadMainStock();   // refresh stock
+      onUpdated();
+    } catch (err: unknown) {
+      const d = (err as { response?: { data?: { detail?: string } } })?.response?.data;
+      setError(d?.detail ?? "Transfer failed.");
+    } finally { setTransferring(null); }
+  };
+
   useEffect(() => { procurementApi.listQuotes(mr.id).then(setQuotes).catch(() => {}); }, [mr.id]);
 
   const act = async (fn: () => Promise<unknown>, label: string) => {
@@ -178,8 +222,12 @@ function MRDetailModal({ mr, suppliers, onClose, onUpdated }: {
 
   const handleConvert = async () => {
     const supplierName = suppliers.find(s => s.id === convertSupplierId)?.name ?? "the supplier";
+    const destLabel = mr.delivery_destination === "MAIN_WAREHOUSE"
+      ? "Main Warehouse (bulk stock)"
+      : "Site Warehouse";
     const confirmed = window.confirm(
       `Are you sure you want to place this order with ${supplierName}?\n\n` +
+      `Destination: ${destLabel}\n\n` +
       `This will create a Purchase Order (PO) and notify your team that the order is being placed. ` +
       `This action cannot be undone without cancelling the PO.`
     );
@@ -209,7 +257,7 @@ function MRDetailModal({ mr, suppliers, onClose, onUpdated }: {
               <Badge variant={STATUS_BADGE[mr.status] || "outline"} className="text-xs">{mr.status.replace(/_/g, " ")}</Badge>
               {mr.over_boq && <Badge variant="destructive" className="text-xs"><AlertTriangle className="w-3 h-3 mr-0.5" />Over BOQ</Badge>}
             </div>
-            <p className="text-xs text-muted-foreground mt-0.5">{mr.priority} · {mr.delivery_destination.replace(/_/g, " ")} · {timeAgo(mr.created_at)}</p>
+            <p className="text-xs text-muted-foreground mt-0.5">{mr.priority} · {DEST_LABEL[mr.delivery_destination] ?? mr.delivery_destination} · {timeAgo(mr.created_at)}</p>
           </div>
           <button onClick={onClose}><X className="w-4 h-4 text-muted-foreground" /></button>
         </div>
@@ -303,11 +351,83 @@ function MRDetailModal({ mr, suppliers, onClose, onUpdated }: {
             <Input value={rejectReason} onChange={(e) => setRejectReason(e.target.value)} placeholder="Rejection reason *" className="text-sm" autoFocus />
           )}
 
+          {/* ── Fulfil from Main Warehouse (SITE_STORE requests only) ── */}
+          {canConvert && mr.delivery_destination === "SITE_STORE" && (
+            <div className="rounded-lg border border-border overflow-hidden">
+              <button
+                className="w-full flex items-center justify-between px-3 py-2.5 bg-muted/30 hover:bg-muted/50 transition-colors text-left"
+                onClick={() => { setShowMainStock(p => !p); if (!showMainStock && mainStock.length === 0) loadMainStock(); }}
+              >
+                <div className="flex items-center gap-2">
+                  <Warehouse className="w-4 h-4 text-primary" />
+                  <span className="text-xs font-semibold">Fulfil from Main Warehouse</span>
+                </div>
+                <span className="text-xs text-muted-foreground">
+                  {showMainStock ? "Hide" : "Check stock →"}
+                </span>
+              </button>
+
+              {showMainStock && (
+                <div className="p-3 space-y-2 border-t border-border">
+                  {mainStockLoading ? (
+                    <p className="text-xs text-muted-foreground">Loading main warehouse stock…</p>
+                  ) : mainStock.length === 0 ? (
+                    <p className="text-xs text-muted-foreground">
+                      Main warehouse has no stock for this project.
+                      Use "Order from Supplier to Site Warehouse" below.
+                    </p>
+                  ) : (
+                    <div className="space-y-2">
+                      <p className="text-xs text-muted-foreground">
+                        Transfer items from Main Warehouse directly to this site.
+                        No supplier order needed.
+                      </p>
+                      {mainStock.map(item => (
+                        <div key={item.item_id} className="flex items-center gap-2 text-xs">
+                          <div className="flex-1 min-w-0">
+                            <span className="font-medium truncate">{item.item_name}</span>
+                            <span className="text-muted-foreground ml-1">
+                              ({item.on_hand} {item.unit ?? ""} available)
+                            </span>
+                          </div>
+                          <input
+                            type="number" min="0.001" step="any"
+                            max={item.on_hand}
+                            placeholder="qty"
+                            value={transferQty[item.item_id] ?? ""}
+                            onChange={e => setTransferQty(prev => ({ ...prev, [item.item_id]: e.target.value }))}
+                            className="w-20 h-7 rounded border border-input bg-background px-2 text-xs text-right"
+                          />
+                          <Button
+                            size="sm"
+                            className="h-7 text-xs px-2 gap-1"
+                            disabled={!transferQty[item.item_id] || parseFloat(transferQty[item.item_id]) <= 0
+                                      || parseFloat(transferQty[item.item_id]) > item.on_hand
+                                      || transferring === item.item_id}
+                            onClick={() => handleFulfilFromMain(item)}
+                          >
+                            {transferring === item.item_id
+                              ? <RefreshCw className="w-3 h-3 animate-spin" />
+                              : <><ArrowRight className="w-3 h-3" />Transfer</>}
+                          </Button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
           {showConvert && (
             <div className="bg-muted/30 rounded-lg p-3 space-y-3 border border-primary/20">
               <div className="flex items-center gap-2">
                 <ShoppingCart className="w-4 h-4 text-primary" />
-                <p className="text-xs font-semibold">Convert to Purchase Order (PO)</p>
+                <p className="text-xs font-semibold">
+                  {mr.delivery_destination === "MAIN_WAREHOUSE"
+                    ? "Bulk Purchase to Main Warehouse"
+                    : "Order from Supplier to Site Warehouse"}
+                </p>
               </div>
               <p className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
                 ⚠ This will place an order with the supplier. Review rates before confirming.
@@ -345,7 +465,14 @@ function MRDetailModal({ mr, suppliers, onClose, onUpdated }: {
               {["SUBMITTED", "PENDING_APPROVAL", "DRAFT"].includes(mr.status) && !showReject && <Button size="sm" variant="outline" onClick={() => setShowReject(true)} className="h-8 text-xs"><X className="w-3.5 h-3.5 mr-1" />Reject</Button>}
               {showReject && <Button size="sm" variant="destructive" onClick={() => act(() => procurementApi.rejectMR(mr.id, rejectReason), "reject")} disabled={!rejectReason.trim() || loading !== null} className="h-8 text-xs">{loading === "reject" ? "Rejecting…" : "Confirm Reject"}</Button>}
               {mr.status === "DRAFT" && <Button size="sm" variant="outline" onClick={() => act(() => procurementApi.submitMR(mr.id), "submit")} disabled={loading !== null} className="h-8 text-xs">{loading === "submit" ? "Submitting…" : "Submit"}</Button>}
-              {canConvert && !showConvert && <Button size="sm" variant="outline" onClick={() => setShowConvert(true)} className="h-8 text-xs"><ShoppingCart className="w-3.5 h-3.5 mr-1" />Convert to Purchase Order (PO)</Button>}
+              {canConvert && !showConvert && (
+                <Button size="sm" variant="outline" onClick={() => setShowConvert(true)} className="h-8 text-xs">
+                  <ShoppingCart className="w-3.5 h-3.5 mr-1" />
+                  {mr.delivery_destination === "MAIN_WAREHOUSE"
+                    ? "Bulk Purchase to Main Warehouse"
+                    : "Order from Supplier to Site Warehouse"}
+                </Button>
+              )}
             </WriteGuard>
             {["APPROVED"].includes(mr.status) && (
               <Button size="sm" variant="outline" onClick={() => setShowMREmail(true)} className="h-8 text-xs">
@@ -669,7 +796,7 @@ export default function ProcurementPage() {
                       {mr.over_boq && <Badge variant="destructive" className="text-xs">Over BOQ</Badge>}
                       <span className={cn("text-[10px] font-medium rounded px-1.5 py-0.5", PRIORITY_COLOR[mr.priority])}>{mr.priority}</span>
                     </div>
-                    <p className="text-xs text-muted-foreground mt-0.5">{mr.items.length} item{mr.items.length !== 1 ? "s" : ""} · {mr.delivery_destination.replace(/_/g, " ")} · {timeAgo(mr.created_at)}</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">{mr.items.length} item{mr.items.length !== 1 ? "s" : ""} · {DEST_LABEL[mr.delivery_destination] ?? mr.delivery_destination} · {timeAgo(mr.created_at)}</p>
                   </div>
                   <ChevronRight className="w-4 h-4 text-muted-foreground shrink-0" />
                 </button>

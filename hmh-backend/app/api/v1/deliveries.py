@@ -114,6 +114,7 @@ async def receive_delivery_with_document(
     delivery_note_number: str     = Form(""),
     purchase_order_id: Optional[str] = Form(None),
     lot_id:         Optional[str] = Form(None),
+    destination:    str           = Form("SITE_STORE"),
     items_json:     str           = Form("[]"),
     driver_name:    Optional[str] = Form(None),
     driver_signature: Optional[str] = Form(None),
@@ -130,6 +131,11 @@ async def receive_delivery_with_document(
     Saves driver and receiver signatures in the delivery record.
     Updates PO outstanding quantities and creates stock ledger entries.
     Creates a DELIVERY_DISCREPANCY alert for short deliveries.
+
+    destination: SITE_STORE (default) | MAIN_WAREHOUSE | LOT
+      SITE_STORE     → stock at (project, site, lot=NULL)  — Site Warehouse
+      MAIN_WAREHOUSE → stock at (project, site=NULL, lot=NULL) — Main Warehouse
+      LOT            → stock at (project, site, lot)       — requires lot_id
     """
     import mimetypes
     from app.models.attachment import Attachment
@@ -323,32 +329,27 @@ async def receive_delivery_with_document(
             if poi:
                 poi.quantity_received = float(poi.quantity_received or 0) + qty_rec
 
+        # ── Route stock to the correct warehouse based on destination ─────────
+        # MAIN_WAREHOUSE → project-level stock (site_id=NULL, lot_id=NULL)
+        # SITE_STORE     → site warehouse       (site_id=X,   lot_id=NULL)
+        # LOT            → lot stock            (site_id=X,   lot_id=Y)
+        if destination == "MAIN_WAREHOUSE":
+            effective_site_id  = None
+            effective_lot_id   = None
+        elif lot_id and destination in ("LOT", "SITE_STORE"):
+            effective_site_id  = uuid.UUID(site_id)
+            effective_lot_id   = uuid.UUID(lot_id)
+        else:
+            effective_site_id  = uuid.UUID(site_id)
+            effective_lot_id   = None
+
         # Stock ledger entry — only when item_id is linked to the catalog.
         # Items without item_id are tracked in unlinked_items so office staff can fix them.
-        if item_id and lot_id:
+        if item_id:
             db.add(StockLedger(
                 project_id    = uuid.UUID(project_id),
-                site_id       = uuid.UUID(site_id),
-                lot_id        = uuid.UUID(lot_id),
-                item_id       = item_id,
-                boq_item_id   = boq_item_id,
-                movement_type = MovementType.DELIVERY_RECEIVED,
-                reference_type = "delivery",
-                reference_id  = delivery.id,
-                quantity_in   = qty_rec,
-                quantity_out  = 0,
-                unit          = item_data.get("unit"),
-                movement_date = now,
-                entered_by    = current_user.id,
-                created_at    = now,
-            ))
-            stock_updated_count += 1
-        elif item_id and site_id:
-            # No lot — record at site level
-            db.add(StockLedger(
-                project_id    = uuid.UUID(project_id),
-                site_id       = uuid.UUID(site_id),
-                lot_id        = None,
+                site_id       = effective_site_id,
+                lot_id        = effective_lot_id,
                 item_id       = item_id,
                 boq_item_id   = boq_item_id,
                 movement_type = MovementType.DELIVERY_RECEIVED,
@@ -365,9 +366,9 @@ async def receive_delivery_with_document(
         else:
             # No catalog link — stock cannot be updated for this line
             unlinked_items.append({
-                "description":      item_data.get("description", ""),
+                "description":       item_data.get("description", ""),
                 "quantity_received": qty_rec,
-                "unit":             item_data.get("unit"),
+                "unit":              item_data.get("unit"),
             })
             if item_data.get("description"):
                 print(

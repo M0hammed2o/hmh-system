@@ -290,10 +290,20 @@ def receive_stock(
                     overrun_reason, actor_id=actor_id,
                 )
 
+        # Route stock to the correct warehouse:
+        #   MAIN_WAREHOUSE → project-level stock (site_id=NULL, lot_id=NULL)
+        #   SITE_STORE     → site warehouse       (site_id=X,    lot_id=NULL)
+        #   LOT            → lot stock            (site_id=X,    lot_id=Y)
+        effective_site_id = (
+            None if destination == DeliveryDestination.MAIN_WAREHOUSE
+            else delivery.site_id
+        )
+        effective_lot_id = lot_id if destination == DeliveryDestination.LOT else None
+
         ledger_entry = StockLedger(
             project_id=delivery.project_id,
-            site_id=delivery.site_id,
-            lot_id=lot_id if destination == DeliveryDestination.LOT else None,
+            site_id=effective_site_id,
+            lot_id=effective_lot_id,
             item_id=d_item.item_id,
             boq_item_id=d_item.boq_item_id,
             movement_type=MovementType.DELIVERY_RECEIVED,
