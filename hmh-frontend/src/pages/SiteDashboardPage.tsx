@@ -8,6 +8,7 @@ import {
 import { siteCaptureApi, type ExtractedItem } from "@/api/siteCapture";
 import { siteDashboardApi, type MaterialSummaryItem, type ActivityItem } from "@/api/siteDashboard";
 import { BOQAllocationTable } from "@/components/site/BOQAllocationTable";
+import { SiteWarehouse } from "@/components/site/SiteWarehouse";
 import { HMHLogo } from "@/components/HMHLogo";
 import { TOKEN_KEY, REFRESH_TOKEN_KEY, ROLE_KEY } from "@/lib/constants";
 import { Button } from "@/components/ui/button";
@@ -533,6 +534,11 @@ export default function SiteDashboardPage() {
                   ))}
                 </div>
               </Section>
+            )}
+
+            {/* ── Site Warehouse ── */}
+            {siteId && projectId && (
+              <SiteWarehouse siteId={siteId} projectId={projectId} />
             )}
 
             {/* ── Recent activity ── */}

@@ -29,6 +29,36 @@ def _supabase_enabled() -> bool:
     return bool(settings.SUPABASE_URL and settings.SUPABASE_SERVICE_KEY)
 
 
+def storage_mode() -> str:
+    """Return 'supabase' or 'local_disk' — used in startup logs and health checks."""
+    return "supabase" if _supabase_enabled() else "local_disk"
+
+
+def verify_supabase_connection() -> dict:
+    """
+    Try a lightweight Supabase Storage API call to confirm credentials work.
+    Returns {"ok": True/False, "mode": "supabase"/"local_disk", "error": str|None}.
+    """
+    if not _supabase_enabled():
+        return {"ok": False, "mode": "local_disk", "error": "SUPABASE_URL or SUPABASE_SERVICE_KEY not set — using local disk (photos lost on Render restart)"}
+    try:
+        # List objects in the bucket root — cheap read-only API call
+        url = f"{settings.SUPABASE_URL}/storage/v1/bucket/{_BUCKET}"
+        resp = httpx.get(
+            url,
+            headers={"Authorization": f"Bearer {settings.SUPABASE_SERVICE_KEY}"},
+            timeout=10,
+        )
+        if resp.status_code in (200, 206):
+            return {"ok": True, "mode": "supabase", "error": None}
+        if resp.status_code == 404:
+            return {"ok": False, "mode": "supabase",
+                    "error": f"Bucket '{_BUCKET}' not found. Create it in Supabase Dashboard → Storage → New Bucket (name: hmh-uploads, public: true)"}
+        return {"ok": False, "mode": "supabase", "error": f"Supabase returned HTTP {resp.status_code}: {resp.text[:200]}"}
+    except Exception as exc:
+        return {"ok": False, "mode": "supabase", "error": str(exc)}
+
+
 def save_upload(content: bytes, relative_path: str) -> str:
     """
     Save bytes to storage and return the public URL.

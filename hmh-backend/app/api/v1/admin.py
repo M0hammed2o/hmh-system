@@ -1,4 +1,4 @@
-"""Admin utility routes — clear demo data, BOQ seeding."""
+"""Admin utility routes — clear demo data, storage status, BOQ seeding."""
 
 from fastapi import APIRouter
 
@@ -6,6 +6,24 @@ from app.dependencies import OFFICE_AND_ABOVE, DbSession
 from app.schemas.common import ApiSuccess
 
 router = APIRouter(prefix="/admin", tags=["admin"])
+
+
+@router.get("/storage-status", response_model=ApiSuccess[dict], dependencies=[OFFICE_AND_ABOVE])
+def storage_status():
+    """Check whether Supabase Storage is configured and reachable."""
+    from app.core.storage import verify_supabase_connection, storage_mode
+    result = verify_supabase_connection()
+    result["mode"] = storage_mode()
+    result["instruction"] = (
+        "Photos are permanently stored in Supabase Storage."
+        if result["ok"]
+        else (
+            "Photos are on Render local disk and WILL BE LOST on restart. "
+            "Fix: add SUPABASE_URL + SUPABASE_SERVICE_KEY in Render env vars, "
+            "then create a public bucket named 'hmh-uploads' in Supabase Dashboard → Storage."
+        )
+    )
+    return ApiSuccess(data=result, message=f"Storage mode: {result['mode']}")
 
 
 @router.post("/clear-demo-data", response_model=ApiSuccess[dict], dependencies=[OFFICE_AND_ABOVE])

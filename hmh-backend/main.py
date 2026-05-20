@@ -286,6 +286,9 @@ app.include_router(audit_router, prefix="/api/v1")
 from app.api.v1.admin import router as admin_router
 app.include_router(admin_router, prefix="/api/v1")
 
+from app.api.v1.warehouse import router as warehouse_router
+app.include_router(warehouse_router, prefix="/api/v1")
+
 # ── Static file serving for uploaded documents ────────────────────────────────
 # Use settings.UPLOAD_DIR (absolute path from env) so the static mount and all
 # file-save calls (stages, deliveries, usage, gmail) reference the SAME directory.
@@ -410,6 +413,16 @@ def _log_startup_config() -> None:
     print(f"[HMH] UPLOAD_DIR     : {settings.UPLOAD_DIR}", flush=True)
     print(f"[HMH] UPLOAD_DIR_ABS : {_upload_abs}", flush=True)
     print(f"[HMH] UPLOAD_DIR_OK  : {_upload_exists} {'OK' if _upload_exists else 'MISSING - check for typo (scr vs src)'}", flush=True)
+    from app.core.storage import storage_mode, verify_supabase_connection
+    _mode  = storage_mode()
+    _check = verify_supabase_connection()
+    print(f"[HMH] STORAGE_MODE   : {_mode.upper()}", flush=True)
+    if _mode == "supabase":
+        _ok = "OK - photos stored permanently in Supabase" if _check["ok"] else f"ERROR: {_check.get('error','?')}"
+        print(f"[HMH] SUPABASE       : {_ok}", flush=True)
+    else:
+        print("[HMH] SUPABASE       : NOT CONFIGURED — photos lost on Render restart!", flush=True)
+        print("[HMH]                  Fix: add SUPABASE_URL + SUPABASE_SERVICE_KEY in Render env vars.", flush=True)
     print(f"[HMH] SMTP_ENABLED   : {settings.SMTP_ENABLED}", flush=True)
     print("=" * 60, flush=True)
 
