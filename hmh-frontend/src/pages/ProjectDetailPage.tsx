@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import {
   ArrowLeft, Plus, MapPin, Calendar, Building2, Pencil, Layers, Wand2,
-  FileSpreadsheet, ChevronRight, Copy, Trash2, Tag, X, Check,
+  FileSpreadsheet, ChevronRight, Copy, Trash2, Tag, X, Check, Zap,
 } from "lucide-react";
 import { SitesBulkCreateModal } from "@/components/SitesBulkCreateModal";
 import { LotsGeneratorModal } from "@/components/LotsGeneratorModal";
@@ -21,6 +21,7 @@ import { sitesApi, type Site, type SiteCreate } from "@/api/sites";
 import { lotsApi, type Lot, type LotCreate, type LotStatus } from "@/api/lots";
 import { stagesApi, type ProjectStageStatus, type StageMaster, type StageStatus } from "@/api/stages";
 import { lotTypesApi, type LotType, type LotTypeCreate, type LotTypeUpdate } from "@/api/lotTypes";
+import { BulkPropagateModal } from "@/components/BulkPropagateModal";
 import { boqApi, type BOQTemplate } from "@/api/boq";
 import { formatDate } from "@/lib/format";
 
@@ -539,24 +540,28 @@ function AddLotModal({
 
 function LotTypesTab({
   projectId, lotTypes, lots, templates, loading,
-  showCreate, editingType, assigningType,
-  onShowCreate, onCloseCreate, onEditType, onCloseEdit, onAssignType, onCloseAssign, onRefresh,
+  showCreate, editingType, assigningType, propagatingType,
+  onShowCreate, onCloseCreate, onEditType, onCloseEdit,
+  onAssignType, onCloseAssign, onPropagateType, onClosePropagate, onRefresh,
 }: {
-  projectId:    string;
-  lotTypes:     LotType[];
-  lots:         import("@/api/lots").Lot[];
-  templates:    BOQTemplate[];
-  loading:      boolean;
-  showCreate:   boolean;
-  editingType:  LotType | null;
-  assigningType: LotType | null;
-  onShowCreate:  () => void;
-  onCloseCreate: () => void;
-  onEditType:    (t: LotType) => void;
-  onCloseEdit:   () => void;
-  onAssignType:  (t: LotType) => void;
-  onCloseAssign: () => void;
-  onRefresh:     () => void;
+  projectId:      string;
+  lotTypes:       LotType[];
+  lots:           import("@/api/lots").Lot[];
+  templates:      BOQTemplate[];
+  loading:        boolean;
+  showCreate:     boolean;
+  editingType:    LotType | null;
+  assigningType:  LotType | null;
+  propagatingType: LotType | null;
+  onShowCreate:    () => void;
+  onCloseCreate:   () => void;
+  onEditType:      (t: LotType) => void;
+  onCloseEdit:     () => void;
+  onAssignType:    (t: LotType) => void;
+  onCloseAssign:   () => void;
+  onPropagateType: (t: LotType) => void;
+  onClosePropagate: () => void;
+  onRefresh:       () => void;
 }) {
   return (
     <div className="space-y-4">
@@ -620,6 +625,13 @@ function LotTypesTab({
                 )}
               </div>
               <div className="flex items-center gap-2 shrink-0">
+                {lt.default_template_id && lt.lot_count > 0 && (
+                  <Button size="sm" variant="outline"
+                    className="h-8 text-xs gap-1 border-primary/30 text-primary hover:bg-primary/5"
+                    onClick={() => onPropagateType(lt)}>
+                    <Zap className="w-3.5 h-3.5" />Propagate
+                  </Button>
+                )}
                 <Button size="sm" variant="outline" className="h-8 text-xs gap-1" onClick={() => onAssignType(lt)}>
                   <Layers className="w-3.5 h-3.5" />Assign Lots
                 </Button>
@@ -679,6 +691,15 @@ function LotTypesTab({
           allLots={lots}
           onClose={onCloseAssign}
           onSaved={() => { onCloseAssign(); onRefresh(); }}
+        />
+      )}
+
+      {/* Propagate modal */}
+      {propagatingType && (
+        <BulkPropagateModal
+          lotType={propagatingType}
+          onClose={onClosePropagate}
+          onDone={() => { onClosePropagate(); onRefresh(); }}
         />
       )}
     </div>
@@ -904,10 +925,11 @@ export default function ProjectDetailPage() {
   // Lot Types state — Phase 3D.2
   const [lotTypes, setLotTypes] = useState<LotType[]>([]);
   const [lotTypesLoading, setLotTypesLoading] = useState(false);
-  const [showCreateType, setShowCreateType] = useState(false);
-  const [editingType, setEditingType] = useState<LotType | null>(null);
-  const [assigningType, setAssigningType] = useState<LotType | null>(null);
-  const [templates, setTemplates] = useState<BOQTemplate[]>([]);
+  const [showCreateType,    setShowCreateType]    = useState(false);
+  const [editingType,       setEditingType]       = useState<LotType | null>(null);
+  const [assigningType,     setAssigningType]     = useState<LotType | null>(null);
+  const [propagatingType,   setPropagatingType]   = useState<LotType | null>(null);
+  const [templates,         setTemplates]         = useState<BOQTemplate[]>([]);
 
   // Unassigned lots admin helper
   const [assigningSiteId, setAssigningSiteId] = useState("");
@@ -1450,12 +1472,15 @@ export default function ProjectDetailPage() {
           showCreate={showCreateType}
           editingType={editingType}
           assigningType={assigningType}
+          propagatingType={propagatingType}
           onShowCreate={() => setShowCreateType(true)}
           onCloseCreate={() => setShowCreateType(false)}
           onEditType={setEditingType}
           onCloseEdit={() => setEditingType(null)}
           onAssignType={setAssigningType}
           onCloseAssign={() => setAssigningType(null)}
+          onPropagateType={setPropagatingType}
+          onClosePropagate={() => setPropagatingType(null)}
           onRefresh={() => {
             setLotTypesLoading(true);
             Promise.all([lotTypesApi.list(projectId!), lotsApi.list(projectId!)])

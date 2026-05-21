@@ -1,8 +1,10 @@
-"""LotType routes — Phase 3D.2."""
+"""LotType routes — Phase 3D.2 + 3D.3."""
 
 import uuid
+from typing import Optional
 
 from fastapi import APIRouter
+from pydantic import BaseModel
 
 from app.dependencies import ALL_ROLES, CurrentUser, DbSession, OFFICE_AND_ABOVE
 from app.schemas.common import ApiSuccess
@@ -15,6 +17,12 @@ from app.schemas.lot_type import (
     RemoveLotsRequest,
 )
 from app.services import lot_type_service
+
+
+class PropagateRequest(BaseModel):
+    mode:               str           = "SAFE"      # SAFE | FORCE
+    lot_ids:            Optional[list[uuid.UUID]] = None  # None = all linked lots
+    generate_milestones: bool         = True
 
 project_lot_types_router = APIRouter(
     prefix="/projects/{project_id}/lot-types",
@@ -121,3 +129,52 @@ def remove_lots(lot_type_id: uuid.UUID, body: RemoveLotsRequest, db: DbSession):
     """Remove lots from this type (sets lot_type_id = NULL)."""
     result = lot_type_service.remove_lots(db, lot_type_id, body.lot_ids)
     return ApiSuccess(data=result, message=f"{result['removed']} lot(s) removed from type.")
+
+
+# ── Propagation (Phase 3D.3) ──────────────────────────────────────────────────
+
+@lot_types_router.post(
+    "/{lot_type_id}/preview-propagate",
+    response_model=ApiSuccess[dict],
+    dependencies=[OFFICE_AND_ABOVE],
+)
+def preview_propagate(lot_type_id: uuid.UUID, body: PropagateRequest, db: DbSession):
+    """
+    Dry-run: show which lots would receive the BOQ changes and which would be
+    skipped, without writing anything to the database.
+    """
+    result = lot_type_service.preview_propagate(
+        db,
+        lot_type_id = lot_type_id,
+        lot_ids     = body.lot_ids,
+        mode        = body.mode,
+    )
+    return ApiSuccess(data=result)
+
+
+@lot_types_router.post(
+    "/{lot_type_id}/propagate",
+    response_model=ApiSuccess[dict],
+    dependencies=[OFFICE_AND_ABOVE],
+)
+def propagate_to_lots(
+    lot_type_id: uuid.UUID,
+    body: PropagateRequest,
+    db: DbSession,
+    current_user: CurrentUser,
+):
+    """
+    Propagate the LotType's default template to linked lots.
+
+    mode=SAFE  — skip lots where boq_customized_at IS NOT NULL (user edited the BOQ)
+    mode=FORCE — overwrite all lots regardless of customization state
+    """
+    result = lot_type_service.propagate_to_lots(
+        db,
+        lot_type_id         = lot_type_id,
+        actor_id            = current_user.id,
+        lot_ids             = body.lot_ids,
+        mode                = body.mode,
+        generate_milestones = body.generate_milestones,
+    )
+    return ApiSuccess(data=result, message=result.get("message", "Propagation complete."))

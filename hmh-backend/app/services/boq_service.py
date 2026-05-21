@@ -204,6 +204,9 @@ def create_item(
         updated_at=now,
     )
     db.execute(stmt)
+    # Phase 3D.3: creating a new item manually on a typed lot marks it customized
+    if data.lot_id:
+        _mark_lot_customized(db, data.lot_id)
     db.commit()
     return _item_or_404(db, new_id)
 
@@ -290,6 +293,7 @@ def import_csv(
 
 def delete_item(db: Session, item_id: uuid.UUID) -> None:
     item = _item_or_404(db, item_id)
+    _mark_lot_customized(db, item.lot_id)  # Phase 3D.3
     item.is_active = False
     db.commit()
 
@@ -608,6 +612,25 @@ def seed_standard_residential_template(db: Session, project_id: uuid.UUID, actor
     return header
 
 
+def _mark_lot_customized(db: Session, lot_id: Optional[uuid.UUID]) -> None:
+    """
+    Mark a lot as manually customized (boq_customized_at = now).
+    Called whenever a BOQ item belonging to a typed lot is manually changed.
+    Only fires when:
+      - lot_id is not None
+      - lot.lot_type_id is set  (lot belongs to a type — propagation applies)
+      - lot.boq_customized_at is None  (not already marked)
+    This is the gate for SAFE propagation mode.
+    """
+    if not lot_id:
+        return
+    from app.models.lot import Lot
+    lot = db.get(Lot, lot_id)
+    if lot and lot.lot_type_id and lot.boq_customized_at is None:
+        lot.boq_customized_at = datetime.now(timezone.utc)
+        # Caller is responsible for commit
+
+
 def update_item(db: Session, item_id: uuid.UUID, data: BOQItemUpdate) -> BOQItem:
     item = _item_or_404(db, item_id)
     fields = data.model_fields_set
@@ -641,6 +664,9 @@ def update_item(db: Session, item_id: uuid.UUID, data: BOQItemUpdate) -> BOQItem
         item.is_active = data.is_active
     if "notes" in fields:
         item.notes = data.notes
+
+    # Phase 3D.3: mark lot as customized when a typed lot's item is manually changed
+    _mark_lot_customized(db, item.lot_id)
 
     db.commit()
     db.refresh(item)

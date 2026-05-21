@@ -72,3 +72,10 @@ class AssignLotsRequest(BaseModel):
 class RemoveLotsRequest(BaseModel):
     """Remove a list of lots from this LotType (sets lot_type_id = NULL)."""
     lot_ids: list[uuid.UUID]
+
+
+class PropagateRequest(BaseModel):
+    """Phase 3D.3: propagate the LotType's default template to linked lots."""
+    mode:                str                     = "SAFE"   # SAFE | FORCE
+    lot_ids:             Optional[list[uuid.UUID]] = None   # None = all linked lots
+    generate_milestones: bool                    = True

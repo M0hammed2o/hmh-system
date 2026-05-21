@@ -1,7 +1,6 @@
-"""LotType service — Phase 3D.2.
+"""LotType service — Phase 3D.2 + 3D.3.
 
-CRUD for LotType records and lot assignment operations.
-Propagation (clone BOQ to all linked lots) is Phase 3D.3.
+CRUD for LotType records, lot assignment, and BOQ propagation.
 """
 
 import uuid
@@ -271,4 +270,177 @@ def remove_lots(
         "lot_type_name": lt.name,
         "removed":       len(removed),
         "not_in_type":   len(lot_ids) - len(removed),
+    }
+
+
+# ── Propagation (Phase 3D.3) ──────────────────────────────────────────────────
+
+_VALID_MODES = {"SAFE", "FORCE"}
+
+
+def _get_propagation_lots(
+    db: Session,
+    lot_type_id: uuid.UUID,
+    lot_ids: Optional[list[uuid.UUID]],
+    mode: str,
+) -> tuple[list[Lot], list[Lot]]:
+    """
+    Split the target lots into (to_propagate, skipped) based on mode.
+
+    SAFE:  skip lots where boq_customized_at IS NOT NULL (manually edited)
+    FORCE: propagate all lots regardless of customization
+    """
+    if mode not in _VALID_MODES:
+        raise ValidationError(f"Invalid mode '{mode}'. Must be SAFE or FORCE.")
+
+    # Base query: all lots linked to this type
+    q = db.query(Lot).filter(Lot.lot_type_id == lot_type_id)
+    if lot_ids:
+        q = q.filter(Lot.id.in_(lot_ids))
+    all_lots = q.order_by(Lot.lot_number).all()
+
+    if mode == "FORCE":
+        return all_lots, []
+
+    # SAFE: split customized vs clean
+    to_propagate = [l for l in all_lots if l.boq_customized_at is None]
+    skipped      = [l for l in all_lots if l.boq_customized_at is not None]
+    return to_propagate, skipped
+
+
+def preview_propagate(
+    db: Session,
+    lot_type_id: uuid.UUID,
+    lot_ids: Optional[list[uuid.UUID]] = None,
+    mode: str = "SAFE",
+) -> dict:
+    """
+    Dry-run: show which lots would receive BOQ changes and which would be skipped.
+    No DB writes.
+    """
+    lt = _get_or_404(db, lot_type_id)
+
+    if not lt.default_template_id:
+        raise ValidationError(
+            f"Lot type '{lt.name}' has no default template. "
+            "Set a default BOQ template before propagating."
+        )
+
+    from app.services.boq_template_service import preview_clone, _load_template_sections_items
+
+    to_propagate, skipped = _get_propagation_lots(db, lot_type_id, lot_ids, mode)
+    all_target_ids = [l.id for l in to_propagate]
+
+    template_preview = None
+    if all_target_ids:
+        template_preview = preview_clone(
+            db,
+            template_boq_id = lt.default_template_id,
+            project_id      = lt.project_id,
+            lot_ids         = all_target_ids,
+        )
+
+    # Per-lot detail
+    def _lot_detail(lot: Lot, action: str, skip_reason: Optional[str]) -> dict:
+        return {
+            "lot_id":        str(lot.id),
+            "lot_number":    lot.lot_number,
+            "unit_type":     lot.unit_type,
+            "site_id":       str(lot.site_id) if lot.site_id else None,
+            "is_customized": lot.boq_customized_at is not None,
+            "action":        action,
+            "skip_reason":   skip_reason,
+        }
+
+    lots_detail = (
+        [_lot_detail(l, "propagate", None) for l in to_propagate]
+        + [_lot_detail(l, "skip", "manually customized") for l in skipped]
+    )
+
+    return {
+        "lot_type_id":         str(lot_type_id),
+        "lot_type_name":       lt.name,
+        "template_name":       _template_name(db, lt.default_template_id),
+        "mode":                mode,
+        "total_linked_lots":   len(to_propagate) + len(skipped),
+        "lots_to_propagate":   len(to_propagate),
+        "lots_skipped":        len(skipped),
+        "skipped_reason":      "manually customized" if skipped else None,
+        "items_per_lot":       template_preview["template_item_count"] if template_preview else 0,
+        "stages_per_lot":      template_preview["template_stage_count"] if template_preview else 0,
+        "lots":                lots_detail,
+    }
+
+
+def propagate_to_lots(
+    db: Session,
+    lot_type_id: uuid.UUID,
+    actor_id: Optional[uuid.UUID] = None,
+    lot_ids: Optional[list[uuid.UUID]] = None,
+    mode: str = "SAFE",
+    generate_milestones: bool = True,
+) -> dict:
+    """
+    Propagate the LotType's default template to all linked lots.
+
+    SAFE mode: skips lots where boq_customized_at IS NOT NULL.
+    FORCE mode: propagates to all lots, resetting customized_at to NULL.
+
+    After propagation, resets boq_customized_at = NULL for propagated lots
+    (they now have fresh generated items — no manual edits).
+    """
+    lt = _get_or_404(db, lot_type_id)
+
+    if not lt.default_template_id:
+        raise ValidationError(
+            f"Lot type '{lt.name}' has no default template. "
+            "Set a default BOQ template before propagating."
+        )
+
+    to_propagate, skipped = _get_propagation_lots(db, lot_type_id, lot_ids, mode)
+
+    if not to_propagate:
+        return {
+            "lot_type_id":       str(lot_type_id),
+            "lot_type_name":     lt.name,
+            "mode":              mode,
+            "propagated":        0,
+            "skipped":           len(skipped),
+            "milestones_created": 0,
+            "items_replaced":    0,
+            "message":           "No lots to propagate. All linked lots are customized (use FORCE to override)." if skipped else "No lots linked to this type.",
+        }
+
+    from app.services.boq_template_service import clone_template_to_lots
+
+    result = clone_template_to_lots(
+        db,
+        template_boq_id     = lt.default_template_id,
+        project_id          = lt.project_id,
+        lot_ids             = [l.id for l in to_propagate],
+        actor_id            = actor_id,
+        overwrite           = True,             # always replace when propagating
+        generate_milestones = generate_milestones,
+        lot_type_id         = lot_type_id,      # sets generated_from_lot_type_id
+    )
+
+    # Reset customized_at for propagated lots — they're clean again
+    now = datetime.now(timezone.utc)
+    for lot in to_propagate:
+        lot.boq_customized_at = None
+        lot.updated_at = now
+    db.commit()
+
+    return {
+        "lot_type_id":        str(lot_type_id),
+        "lot_type_name":      lt.name,
+        "mode":               mode,
+        "propagated":         len(to_propagate),
+        "skipped":            len(skipped),
+        "milestones_created": result.get("milestones_created", 0),
+        "items_replaced":     result.get("deactivated_count", 0),
+        "message": (
+            f"Propagated to {len(to_propagate)} lot(s). "
+            + (f"{len(skipped)} customized lot(s) skipped." if skipped else "")
+        ).strip(),
     }

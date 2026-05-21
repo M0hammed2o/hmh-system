@@ -56,6 +56,44 @@ export interface RemoveResult {
   not_in_type:   number;
 }
 
+// Phase 3D.3 — Propagation
+export type PropagateMode = "SAFE" | "FORCE";
+
+export interface PropagatePreviewLot {
+  lot_id:        string;
+  lot_number:    string;
+  unit_type:     string | null;
+  site_id:       string | null;
+  is_customized: boolean;
+  action:        "propagate" | "skip";
+  skip_reason:   string | null;
+}
+
+export interface PropagatePreview {
+  lot_type_id:       string;
+  lot_type_name:     string;
+  template_name:     string | null;
+  mode:              string;
+  total_linked_lots: number;
+  lots_to_propagate: number;
+  lots_skipped:      number;
+  skipped_reason:    string | null;
+  items_per_lot:     number;
+  stages_per_lot:    number;
+  lots:              PropagatePreviewLot[];
+}
+
+export interface PropagateResult {
+  lot_type_id:        string;
+  lot_type_name:      string;
+  mode:               string;
+  propagated:         number;
+  skipped:            number;
+  milestones_created: number;
+  items_replaced:     number;
+  message:            string;
+}
+
 export const lotTypesApi = {
   list: async (projectId: string): Promise<LotType[]> => {
     const res = await client.get<{ data: LotType[] }>(
@@ -103,6 +141,32 @@ export const lotTypesApi = {
     const res = await client.post<{ data: RemoveResult }>(
       `/lot-types/${lotTypeId}/remove-lots`,
       { lot_ids: lotIds }
+    );
+    return res.data.data;
+  },
+
+  // Phase 3D.3 — Propagation
+  previewPropagate: async (
+    lotTypeId: string,
+    mode: PropagateMode = "SAFE",
+    lotIds?: string[],
+  ): Promise<PropagatePreview> => {
+    const res = await client.post<{ data: PropagatePreview }>(
+      `/lot-types/${lotTypeId}/preview-propagate`,
+      { mode, lot_ids: lotIds ?? null, generate_milestones: true }
+    );
+    return res.data.data;
+  },
+
+  propagate: async (
+    lotTypeId: string,
+    mode: PropagateMode,
+    lotIds?: string[],
+    generateMilestones = true,
+  ): Promise<PropagateResult> => {
+    const res = await client.post<{ data: PropagateResult }>(
+      `/lot-types/${lotTypeId}/propagate`,
+      { mode, lot_ids: lotIds ?? null, generate_milestones: generateMilestones }
     );
     return res.data.data;
   },

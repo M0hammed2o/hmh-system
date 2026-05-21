@@ -201,6 +201,7 @@ def clone_template_to_lots(
     actor_id: Optional[uuid.UUID] = None,
     overwrite: bool = False,
     generate_milestones: bool = True,
+    lot_type_id: Optional[uuid.UUID] = None,
 ) -> dict:
     """
     Clone a BOQ template into one BOQHeader per lot.
@@ -212,6 +213,7 @@ def clone_template_to_lots(
     - Does NOT include planned_total (GENERATED column)
     - If generate_milestones=True: seeds ProjectStageStatus (NOT_STARTED)
       for every stage referenced in the template sections
+    - If lot_type_id is given: sets generated_from_lot_type_id on every created item
 
     Freestanding lots (site_id=None) are supported:
     - Their lot-level items get site_id=None (valid after migration 0015)
@@ -296,10 +298,11 @@ def clone_template_to_lots(
                     planned_quantity       = tmpl_item.planned_quantity,
                     planned_rate           = tmpl_item.planned_rate,
                     sort_order             = tmpl_item.sort_order,
-                    is_active              = True,
-                    notes                  = tmpl_item.notes,
-                    created_at             = now,
-                    updated_at             = now,
+                    is_active                   = True,
+                    notes                       = tmpl_item.notes,
+                    generated_from_lot_type_id  = lot_type_id,  # Phase 3D.3
+                    created_at                  = now,
+                    updated_at                  = now,
                 ))
 
     # ── Site-level masters (one per unique site) ──────────────────────────────
