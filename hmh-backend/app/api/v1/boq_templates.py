@@ -29,14 +29,16 @@ class CloneToLotsRequest(BaseModel):
     template_boq_id:     uuid.UUID
     project_id:          uuid.UUID
     lot_ids:             list[uuid.UUID]
-    overwrite:           bool = False   # deactivate existing lot BOQ items before cloning
-    generate_milestones: bool = True    # seed ProjectStageStatus for template stages
+    mode:                str  = "CREATE"  # "CREATE" | "SAFE" | "FORCE"
+    overwrite:           bool = False     # deprecated alias for mode="FORCE"
+    generate_milestones: bool = True      # seed ProjectStageStatus for template stages
 
 
 class PreviewCloneRequest(BaseModel):
     template_boq_id: uuid.UUID
     project_id:      uuid.UUID
     lot_ids:         list[uuid.UUID]
+    mode:            str = "CREATE"     # "CREATE" | "SAFE" | "FORCE"
 
 
 @router.get("/", response_model=ApiSuccess[list[BOQTemplateRead]], dependencies=[ALL_ROLES])
@@ -96,6 +98,7 @@ def preview_clone(body: PreviewCloneRequest, db: DbSession):
             template_boq_id=body.template_boq_id,
             project_id=body.project_id,
             lot_ids=body.lot_ids,
+            mode=body.mode,
         )
         return ApiSuccess(data=result)
     except Exception as exc:
@@ -115,7 +118,7 @@ def clone_to_lots(body: CloneToLotsRequest, db: DbSession, current_user: Current
         f"[BOQ-CLONE] template_boq_id={body.template_boq_id}"
         f" project_id={body.project_id}"
         f" lot_ids={body.lot_ids}"
-        f" overwrite={body.overwrite}"
+        f" mode={body.mode} overwrite={body.overwrite}"
         f" generate_milestones={body.generate_milestones}"
         f" actor={current_user.id}",
         flush=True,
@@ -129,14 +132,18 @@ def clone_to_lots(body: CloneToLotsRequest, db: DbSession, current_user: Current
             project_id=body.project_id,
             lot_ids=body.lot_ids,
             actor_id=current_user.id,
-            overwrite=body.overwrite,
+            mode=body.mode,
+            overwrite=body.overwrite,   # compat alias
             generate_milestones=body.generate_milestones,
         )
-        msg = (
-            f"BOQ applied to {result['created_count']} lot(s). "
-            + (f"{result['milestones_created']} milestone(s) seeded. " if result.get("milestones_created") else "")
-            + (f"{result['deactivated_count']} existing item(s) replaced." if result.get("deactivated_count") else "")
-        )
+        parts = [f"BOQ applied to {result['created_count']} lot(s)"]
+        if result.get("skipped_count"):
+            parts.append(f"{result['skipped_count']} lot(s) skipped")
+        if result.get("milestones_created"):
+            parts.append(f"{result['milestones_created']} milestone(s) seeded")
+        if result.get("deactivated_count"):
+            parts.append(f"{result['deactivated_count']} item(s) replaced")
+        msg = " · ".join(parts)
         print(f"[BOQ-CLONE] SUCCESS — {msg}", flush=True)
         return ApiSuccess(data=result, message=msg.strip())
     except Exception as exc:

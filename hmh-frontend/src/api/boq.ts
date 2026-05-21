@@ -229,17 +229,22 @@ export interface BOQTemplate {
   notes:         string | null;
 }
 
+export type BOQApplyMode = "CREATE" | "SAFE" | "FORCE";
+
 export interface BOQTemplatePreviewLot {
   lot_id:                   string;
   lot_number:               string;
   unit_type:                string | null;
+  is_freestanding:          boolean;
+  is_customized:            boolean;
   has_existing_boq:         boolean;
   existing_item_count:      number;
   new_item_count:           number;
   has_existing_milestones:  boolean;
   existing_milestone_count: number;
   new_milestone_count:      number;
-  action:                   "create" | "overwrite";
+  action:                   "create" | "overwrite" | "skip";
+  skip_reason:              string | null;
 }
 
 export interface BOQTemplatePreview {
@@ -248,17 +253,23 @@ export interface BOQTemplatePreview {
   template_section_count: number;
   template_item_count:    number;
   template_stage_count:   number;
+  mode:                   BOQApplyMode;
   lots:                   BOQTemplatePreviewLot[];
+  lots_to_apply:          number;
+  lots_to_skip:           number;
   lots_needing_overwrite: number;
   total_lots:             number;
 }
 
 export interface BOQCloneResult {
-  created_count:      number;
-  milestones_created: number;
-  deactivated_count:  number;
-  lot_ids:            string[];
+  created_count:       number;
+  milestones_created:  number;
+  deactivated_count:   number;
+  skipped_count:       number;
+  skipped_reasons:     Record<string, string>;
+  lot_ids:             string[];
   freestanding_master: boolean;
+  mode:                BOQApplyMode;
 }
 
 export const boqApi = {
@@ -442,10 +453,11 @@ export const boqApi = {
     template_boq_id: string;
     project_id:      string;
     lot_ids:         string[];
+    mode?:           BOQApplyMode;
   }): Promise<BOQTemplatePreview> => {
     const res = await client.post<{ data: BOQTemplatePreview }>(
       "/boq-templates/preview-clone",
-      body,
+      { mode: "CREATE", ...body },
     );
     return res.data.data;
   },
@@ -455,12 +467,13 @@ export const boqApi = {
     template_boq_id:     string;
     project_id:          string;
     lot_ids:             string[];
-    overwrite?:          boolean;
+    mode?:               BOQApplyMode;  // CREATE | SAFE | FORCE
+    overwrite?:          boolean;       // deprecated alias for mode="FORCE"
     generate_milestones?: boolean;
   }): Promise<BOQCloneResult> => {
     const res = await client.post<{ data: BOQCloneResult }>(
       "/boq-templates/clone-to-lots",
-      body,
+      { mode: "CREATE", ...body },
     );
     return res.data.data;
   },

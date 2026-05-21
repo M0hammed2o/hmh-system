@@ -122,16 +122,61 @@ def _seed_milestones(
     return created
 
 
+_APPLY_MODES = {"CREATE", "SAFE", "FORCE"}
+
+
+def _resolve_lot_action(
+    lot: Lot,
+    existing_item_count: int,
+    mode: str,
+) -> tuple[str, Optional[str]]:
+    """
+    Determine what action the template apply will take for this lot.
+
+    Returns: (action, skip_reason)
+      action ∈ {"create", "overwrite", "skip"}
+
+    Modes:
+      CREATE — only apply to lots with no existing BOQ items
+      SAFE   — skip lots where boq_customized_at IS NOT NULL (user manually edited)
+      FORCE  — overwrite all lots regardless of customization
+    """
+    if mode == "CREATE":
+        if existing_item_count > 0:
+            return "skip", "already has BOQ — use SAFE or FORCE to update"
+        return "create", None
+
+    if mode == "SAFE":
+        if lot.boq_customized_at is not None:
+            return "skip", "manually customized — use FORCE to overwrite"
+        if existing_item_count > 0:
+            return "overwrite", None
+        return "create", None
+
+    # FORCE — overwrite everything
+    if existing_item_count > 0:
+        return "overwrite", None
+    return "create", None
+
+
 def preview_clone(
     db: Session,
     template_boq_id: uuid.UUID,
     project_id: uuid.UUID,
     lot_ids: list[uuid.UUID],
+    mode: str = "CREATE",
 ) -> dict:
     """
-    Dry-run: return what WOULD be created without writing anything.
-    Used to show the user a preview before they confirm the apply.
+    Dry-run: return what WOULD happen without writing anything.
+
+    mode:
+      CREATE — only lots with no existing BOQ
+      SAFE   — skip lots where boq_customized_at IS NOT NULL
+      FORCE  — all lots (with overwrite where needed)
     """
+    if mode not in _APPLY_MODES:
+        mode = "CREATE"
+
     template = db.get(BOQHeader, template_boq_id)
     if not template or not template.is_template:
         raise NotFoundError(f"BOQ template {template_boq_id} not found.")
@@ -165,20 +210,22 @@ def preview_clone(
             )
             .scalar() or 0
         )
+        action, skip_reason = _resolve_lot_action(lot, existing_item_count, mode)
         lots_preview.append({
             "lot_id":                   str(lot.id),
             "lot_number":               lot.lot_number,
             "unit_type":                lot.unit_type,
+            "is_freestanding":          lot.site_id is None,
+            "is_customized":            lot.boq_customized_at is not None,
             "has_existing_boq":         existing_item_count > 0,
             "existing_item_count":      existing_item_count,
             "new_item_count":           item_count,
             "has_existing_milestones":  existing_milestone_count > 0,
             "existing_milestone_count": existing_milestone_count,
             "new_milestone_count":      len(stage_ids),
-            "action":                   "overwrite" if existing_item_count > 0 else "create",
+            "action":                   action,
+            "skip_reason":              skip_reason,
         })
-
-    lots_needing_overwrite = sum(1 for l in lots_preview if l["has_existing_boq"])
 
     return {
         "template_id":            str(template_boq_id),
@@ -186,8 +233,11 @@ def preview_clone(
         "template_section_count": len(sections),
         "template_item_count":    item_count,
         "template_stage_count":   len(stage_ids),
+        "mode":                   mode,
         "lots":                   lots_preview,
-        "lots_needing_overwrite": lots_needing_overwrite,
+        "lots_to_apply":          sum(1 for l in lots_preview if l["action"] != "skip"),
+        "lots_to_skip":           sum(1 for l in lots_preview if l["action"] == "skip"),
+        "lots_needing_overwrite": sum(1 for l in lots_preview if l["action"] == "overwrite"),
         "total_lots":             len(lots),
     }
 
@@ -199,15 +249,23 @@ def clone_template_to_lots(
     project_id: uuid.UUID,
     lot_ids: list[uuid.UUID],
     actor_id: Optional[uuid.UUID] = None,
-    overwrite: bool = False,
+    overwrite: bool = False,      # deprecated alias — use mode="FORCE" instead
+    mode: str = "CREATE",         # "CREATE" | "SAFE" | "FORCE"
     generate_milestones: bool = True,
     lot_type_id: Optional[uuid.UUID] = None,
 ) -> dict:
     """
     Clone a BOQ template into one BOQHeader per lot.
 
-    For each lot:
-    - If overwrite=True: deactivates existing lot-level BOQ items first
+    mode controls how existing lot BOQs are handled:
+      CREATE — only apply to lots with no existing items (default)
+      SAFE   — skip lots where boq_customized_at IS NOT NULL; reclone the rest
+      FORCE  — reclone all lots; deactivate existing items first
+
+    backward compat: overwrite=True is treated as mode="FORCE"
+
+    For each applied lot:
+    - Deactivates existing lot-level BOQ items (if mode != CREATE or overwrite=True)
     - Creates a new BOQHeader linked to the project
     - Clones all BOQSections + BOQItems (lot_id + project_id set on each)
     - Does NOT include planned_total (GENERATED column)
@@ -232,15 +290,57 @@ def clone_template_to_lots(
     if not lot_ids:
         raise ValidationError("At least one lot_id is required.")
 
+    if mode not in _APPLY_MODES:
+        mode = "CREATE"
+
+    # backward compat: overwrite=True → FORCE
+    if overwrite and mode == "CREATE":
+        mode = "FORCE"
+
     # Validate all lots belong to this project
-    lots = db.query(Lot).filter(Lot.id.in_(lot_ids), Lot.project_id == project_id).all()
-    if len(lots) != len(lot_ids):
+    all_lots = db.query(Lot).filter(Lot.id.in_(lot_ids), Lot.project_id == project_id).all()
+    if len(all_lots) != len(lot_ids):
         raise ValidationError("One or more lot IDs do not belong to this project.")
 
-    # If overwrite: deactivate existing lot-level BOQ items
+    # Filter lots based on mode (same logic as _resolve_lot_action)
+    lots_to_apply: list[Lot] = []
+    lots_skipped:  list[Lot] = []
+    lots_skipped_reasons: dict = {}
+
+    for lot in all_lots:
+        existing = (
+            db.query(func.count(BOQItem.id))
+            .filter(BOQItem.lot_id == lot.id, BOQItem.is_active == True)
+            .scalar() or 0
+        )
+        action, skip_reason = _resolve_lot_action(lot, existing, mode)
+        if action == "skip":
+            lots_skipped.append(lot)
+            lots_skipped_reasons[str(lot.id)] = skip_reason
+        else:
+            lots_to_apply.append(lot)
+
+    # If no lots to apply, return early with informative result
+    if not lots_to_apply:
+        return {
+            "created_count":       0,
+            "milestones_created":  0,
+            "deactivated_count":   0,
+            "skipped_count":       len(lots_skipped),
+            "skipped_reasons":     lots_skipped_reasons,
+            "lot_ids":             [],
+            "freestanding_master": False,
+            "mode":                mode,
+        }
+
+    # Deactivate existing items for lots we're going to apply (SAFE/FORCE modes)
     deactivated_count = 0
-    if overwrite:
-        deactivated_count = _deactivate_lot_boq_items(db, project_id, lot_ids)
+    lots_needing_deactivate = [l.id for l in lots_to_apply]
+    if mode in ("SAFE", "FORCE") and lots_needing_deactivate:
+        deactivated_count = _deactivate_lot_boq_items(db, project_id, lots_needing_deactivate)
+
+    # Work only with the filtered lots from here on
+    lots = lots_to_apply
 
     now = datetime.now(timezone.utc)
     created_headers: list[BOQHeader] = []
@@ -324,10 +424,10 @@ def clone_template_to_lots(
             )
             .first()
         )
-        if already_has and not overwrite:
+        if already_has and mode == "CREATE":
             continue
-        # If overwrite: deactivate site-level items for this site before recreating
-        if already_has and overwrite:
+        # SAFE/FORCE: deactivate site-level items for this site before recreating
+        if already_has:
             db.query(BOQItem).filter(
                 BOQItem.project_id == project_id,
                 BOQItem.site_id    == lot.site_id,
@@ -364,8 +464,8 @@ def clone_template_to_lots(
             )
             .first()
         )
-        if not already_has_project_master or overwrite:
-            if already_has_project_master and overwrite:
+        if not already_has_project_master or mode in ("SAFE", "FORCE"):
+            if already_has_project_master:
                 db.query(BOQItem).filter(
                     BOQItem.project_id  == project_id,
                     BOQItem.site_id.is_(None),
@@ -410,7 +510,7 @@ def clone_template_to_lots(
             after_value={
                 "lot_id": str(lot.id), "lot_number": lot.lot_number,
                 "cloned_from_template": str(template_boq_id),
-                "overwrite": overwrite,
+                "mode": mode,
             },
         )
 
@@ -420,14 +520,19 @@ def clone_template_to_lots(
 
     db.commit()
     print(
-        f"[BOQ-CLONE] Done — {len(created_headers)} lot header(s), "
-        f"{milestones_created} milestone(s) seeded, {deactivated_count} item(s) deactivated",
+        f"[BOQ-CLONE] Done — {len(created_headers)} lot(s) applied, "
+        f"{len(lots_skipped)} skipped, "
+        f"{milestones_created} milestone(s), {deactivated_count} item(s) replaced "
+        f"(mode={mode})",
         flush=True,
     )
     return {
         "created_count":       len(created_headers),
         "milestones_created":  milestones_created,
         "deactivated_count":   deactivated_count,
+        "skipped_count":       len(lots_skipped),
+        "skipped_reasons":     lots_skipped_reasons,
         "lot_ids":             [str(h.id) for h in created_headers],
         "freestanding_master": len(freestanding_lots) > 0,
+        "mode":                mode,
     }

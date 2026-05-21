@@ -138,6 +138,7 @@ def test_preview_clone_http(db: Session, client: TestClient, tmpl_setup: dict):
             "template_boq_id": tmpl_setup["template"]["id"],
             "project_id":      tmpl_setup["project"]["id"],
             "lot_ids":         lots,
+            "mode":            "CREATE",
         },
         headers=auth(tok),
     )
@@ -146,7 +147,9 @@ def test_preview_clone_http(db: Session, client: TestClient, tmpl_setup: dict):
     assert data["template_item_count"] == 2
     assert data["template_stage_count"] == 1
     assert len(data["lots"]) == 2
-    # All lots are "create" (no existing BOQ yet)
+    assert data.get("lots_to_apply") is not None
+    assert data.get("lots_to_skip") is not None
+    # All lots are "create" (no existing BOQ yet in CREATE mode)
     assert all(l["action"] == "create" for l in data["lots"])
 
 
@@ -332,3 +335,134 @@ def test_milestones_not_duplicated_on_reapply(db: Session, client: TestClient, t
     assert count == 1, (
         f"Expected exactly 1 milestone record (no duplicates on re-apply), got {count}."
     )
+
+
+# ── Phase 3H: mode tests ──────────────────────────────────────────────────────
+
+def test_create_mode_skips_existing_boq(db: Session, client: TestClient, tmpl_setup: dict):
+    """CREATE mode must skip lots that already have BOQ items."""
+    tok = login(client, tmpl_setup["office"]["email"], tmpl_setup["office"]["password"])
+    pid = tmpl_setup["project"]["id"]
+    lot_id = tmpl_setup["lot1"]["id"]
+
+    # First apply
+    client.post("/api/v1/boq-templates/clone-to-lots",
+        json={"template_boq_id": tmpl_setup["template"]["id"],
+              "project_id": pid, "lot_ids": [lot_id], "mode": "CREATE"},
+        headers=auth(tok))
+
+    # Second apply in CREATE mode — should skip
+    r = client.post("/api/v1/boq-templates/clone-to-lots",
+        json={"template_boq_id": tmpl_setup["template"]["id"],
+              "project_id": pid, "lot_ids": [lot_id], "mode": "CREATE"},
+        headers=auth(tok))
+    assert r.status_code == 201, r.text
+    result = r.json()["data"]
+    assert result["created_count"] == 0, "CREATE mode must skip lots with existing BOQ"
+    assert result["skipped_count"] == 1
+
+
+def test_safe_mode_skips_customized(db: Session, client: TestClient, tmpl_setup: dict):
+    """SAFE mode skips lots where boq_customized_at IS NOT NULL."""
+    from app.models.lot import Lot
+    from datetime import datetime, timezone
+    tok = login(client, tmpl_setup["office"]["email"], tmpl_setup["office"]["password"])
+    pid = tmpl_setup["project"]["id"]
+
+    # Apply first, then mark customized
+    client.post("/api/v1/boq-templates/clone-to-lots",
+        json={"template_boq_id": tmpl_setup["template"]["id"],
+              "project_id": pid, "lot_ids": [tmpl_setup["lot1"]["id"]], "mode": "FORCE"},
+        headers=auth(tok))
+
+    lot = db.get(Lot, uuid.UUID(tmpl_setup["lot1"]["id"]))
+    lot.boq_customized_at = datetime.now(timezone.utc)
+    db.flush()
+
+    r = client.post("/api/v1/boq-templates/clone-to-lots",
+        json={"template_boq_id": tmpl_setup["template"]["id"],
+              "project_id": pid, "lot_ids": [tmpl_setup["lot1"]["id"]], "mode": "SAFE"},
+        headers=auth(tok))
+    assert r.status_code == 201, r.text
+    result = r.json()["data"]
+    assert result["created_count"] == 0, "SAFE mode must skip customized lots"
+    assert result["skipped_count"] == 1
+
+
+def test_force_mode_overwrites_customized(db: Session, client: TestClient, tmpl_setup: dict):
+    """FORCE mode overwrites even customized lots."""
+    from app.models.lot import Lot
+    from datetime import datetime, timezone
+    tok = login(client, tmpl_setup["office"]["email"], tmpl_setup["office"]["password"])
+    pid = tmpl_setup["project"]["id"]
+
+    lot = db.get(Lot, uuid.UUID(tmpl_setup["lot1"]["id"]))
+    lot.boq_customized_at = datetime.now(timezone.utc)
+    db.flush()
+
+    r = client.post("/api/v1/boq-templates/clone-to-lots",
+        json={"template_boq_id": tmpl_setup["template"]["id"],
+              "project_id": pid, "lot_ids": [tmpl_setup["lot1"]["id"]], "mode": "FORCE"},
+        headers=auth(tok))
+    assert r.status_code == 201, r.text
+    result = r.json()["data"]
+    assert result["created_count"] == 1, "FORCE mode must apply regardless of customization"
+    assert result["skipped_count"] == 0
+
+
+def test_preview_shows_skip_in_create_mode(db: Session, client: TestClient, tmpl_setup: dict):
+    """Preview CREATE mode shows skip for lots with existing BOQ."""
+    tok = login(client, tmpl_setup["office"]["email"], tmpl_setup["office"]["password"])
+    pid = tmpl_setup["project"]["id"]
+
+    # Apply first
+    client.post("/api/v1/boq-templates/clone-to-lots",
+        json={"template_boq_id": tmpl_setup["template"]["id"],
+              "project_id": pid, "lot_ids": [tmpl_setup["lot1"]["id"]], "mode": "FORCE"},
+        headers=auth(tok))
+
+    # Preview in CREATE mode
+    r = client.post("/api/v1/boq-templates/preview-clone",
+        json={"template_boq_id": tmpl_setup["template"]["id"],
+              "project_id": pid, "lot_ids": [tmpl_setup["lot1"]["id"]], "mode": "CREATE"},
+        headers=auth(tok))
+    assert r.status_code == 200, r.text
+    data = r.json()["data"]
+    assert data["lots_to_skip"] == 1
+    assert any(l["action"] == "skip" for l in data["lots"])
+
+
+def test_freestanding_lot_in_all_modes(db: Session, client: TestClient, tmpl_setup: dict):
+    """Freestanding lots (site_id=None) work correctly in CREATE/SAFE/FORCE modes."""
+    tok = login(client, tmpl_setup["office"]["email"], tmpl_setup["office"]["password"])
+    pid = tmpl_setup["project"]["id"]
+
+    for m in ["CREATE", "SAFE", "FORCE"]:
+        r = client.post("/api/v1/boq-templates/clone-to-lots",
+            json={"template_boq_id": tmpl_setup["template"]["id"],
+                  "project_id": pid, "lot_ids": [tmpl_setup["lot_free"]["id"]],
+                  "mode": m},
+            headers=auth(tok))
+        assert r.status_code == 201, f"mode={m} failed: {r.text}"
+        result = r.json()["data"]
+        # In CREATE mode first iteration succeeds; subsequent iterations skip
+        # In FORCE mode always succeeds
+        # Either way, no 500 error and freestanding_master should be set
+        assert result.get("freestanding_master") is True or m != "CREATE", (
+            f"Expected freestanding_master=True in {m} mode, got: {result}"
+        )
+
+
+def test_result_includes_mode_and_skip_counts(db: Session, client: TestClient, tmpl_setup: dict):
+    """clone-to-lots result must include mode, skipped_count, skipped_reasons."""
+    tok = login(client, tmpl_setup["office"]["email"], tmpl_setup["office"]["password"])
+    r = client.post("/api/v1/boq-templates/clone-to-lots",
+        json={"template_boq_id": tmpl_setup["template"]["id"],
+              "project_id": tmpl_setup["project"]["id"],
+              "lot_ids": [tmpl_setup["lot1"]["id"]], "mode": "SAFE"},
+        headers=auth(tok))
+    assert r.status_code == 201, r.text
+    data = r.json()["data"]
+    assert "mode" in data
+    assert "skipped_count" in data
+    assert "skipped_reasons" in data
