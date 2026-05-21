@@ -3,8 +3,8 @@ import { useLocation, NavLink } from "react-router-dom";
 import {
   Menu, X, Moon, Sun, LogOut, HardHat,
   LayoutDashboard, Users, FolderKanban, FileSpreadsheet,
-  ShoppingCart, Truck, Package, CreditCard, Bell, Settings,
-  Copy, Building2, Mail, Layers, FileCheck2, Car, Droplet,
+  ShoppingCart, Truck, CreditCard, Bell, Settings,
+  Copy, Building2, Mail, FileCheck2, Car, Droplet,
   Smartphone, Clock, User, Flag, Warehouse,
 } from "lucide-react";
 import { TOKEN_KEY, REFRESH_TOKEN_KEY, ROLE_KEY } from "@/lib/constants";
@@ -67,11 +67,9 @@ const navGroups = [
     ],
   },
   {
-    label: "Stock & Materials",
+    label: "Warehouse",
     items: [
       { title: "Main Warehouse",  path: "/warehouse",       icon: Warehouse },
-      { title: "Stock",           path: "/stock",           icon: Package },
-      { title: "Site Materials",  path: "/site-materials",  icon: Layers },
     ],
   },
   {

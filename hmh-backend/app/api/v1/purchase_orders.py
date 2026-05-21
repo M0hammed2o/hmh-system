@@ -2,8 +2,10 @@
 
 import uuid
 from datetime import datetime, timezone
+from typing import Optional
 
 from fastapi import APIRouter
+from pydantic import BaseModel
 
 from app.dependencies import ALL_ROLES, CurrentUser, DbSession, OFFICE_AND_ABOVE
 from app.schemas.common import ApiSuccess
@@ -46,6 +48,112 @@ def create_purchase_order(
     return ApiSuccess(
         data=PurchaseOrderRead.model_validate(po),
         message="Purchase order created.",
+    )
+
+
+class CaptureExternalPOBody(BaseModel):
+    """
+    Capture a purchase order that was created outside the system
+    (phone order, WhatsApp, handwritten, emailed PDF, etc.)
+    """
+    supplier_id:            uuid.UUID
+    site_id:                Optional[uuid.UUID] = None
+    external_reference:     Optional[str] = None   # supplier's/buyer's PO number
+    delivery_destination:   str = "SITE_STORE"     # SITE_STORE | MAIN_WAREHOUSE
+    expected_delivery_date: Optional[str] = None
+    notes:                  Optional[str] = None
+    items: list[POItemCreate] = []
+
+
+@project_po_router.post(
+    "/capture",
+    response_model=ApiSuccess[PurchaseOrderRead],
+    status_code=201,
+    dependencies=[OFFICE_AND_ABOVE],
+)
+def capture_external_purchase_order(
+    project_id: uuid.UUID,
+    body: CaptureExternalPOBody,
+    db: DbSession,
+    current_user: CurrentUser,
+):
+    """
+    Record an externally-created PO (phone order, WhatsApp, handwritten form).
+    Creates the PO in APPROVED status with the provided external reference.
+    Supports direct delivery to Site Warehouse or Main Warehouse.
+    """
+    from datetime import date as _date
+    from app.models.enums import DeliveryDestination, RecordStatus
+    from app.models.project import Project
+    from app.models.purchase_order import PurchaseOrder, PurchaseOrderItem
+    from app.services.mr_service import _generate_po_number
+
+    project = db.get(Project, project_id)
+    if not project:
+        from app.core.exceptions import NotFoundError
+        raise NotFoundError(f"Project {project_id} not found.")
+
+    try:
+        dest = DeliveryDestination(body.delivery_destination)
+    except ValueError:
+        dest = DeliveryDestination.SITE_STORE
+
+    exp_date = None
+    if body.expected_delivery_date:
+        try:
+            exp_date = _date.fromisoformat(body.expected_delivery_date)
+        except ValueError:
+            pass
+
+    auto_number = _generate_po_number(db, project_id)
+    po_number   = body.external_reference.strip() if body.external_reference else auto_number
+
+    now = datetime.now(timezone.utc)
+    po = PurchaseOrder(
+        po_number             = po_number,
+        project_id            = project_id,
+        site_id               = body.site_id,
+        supplier_id           = body.supplier_id,
+        material_request_id   = None,
+        delivery_destination  = dest,
+        status                = RecordStatus.APPROVED,   # already placed externally
+        po_date               = now,
+        expected_delivery_date= exp_date,
+        created_by            = current_user.id,
+        notes                 = (body.notes or "") + (" [External/manual PO]" if body.external_reference else " [Manually captured PO]"),
+        subtotal_amount       = 0,
+        vat_amount            = 0,
+        total_amount          = 0,
+    )
+    db.add(po)
+    db.flush()
+
+    from decimal import Decimal, ROUND_HALF_UP
+    subtotal = Decimal("0")
+    for item_data in body.items:
+        rate = Decimal(str(item_data.rate or 0))
+        qty  = Decimal(str(item_data.quantity_ordered or 0))
+        line = (qty * rate).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP) if rate and qty else None
+        if line:
+            subtotal += line
+        db.add(PurchaseOrderItem(
+            purchase_order_id = po.id,
+            description       = item_data.description,
+            quantity_ordered  = float(qty),
+            unit              = item_data.unit,
+            rate              = float(rate),
+            line_total        = float(line) if line else None,
+            created_at        = now,
+        ))
+
+    po.subtotal_amount = float(subtotal)
+    po.total_amount    = float(subtotal)
+    db.commit()
+    db.refresh(po)
+
+    return ApiSuccess(
+        data=PurchaseOrderRead.model_validate(po),
+        message=f"External PO captured as {po.po_number}.",
     )
 
 

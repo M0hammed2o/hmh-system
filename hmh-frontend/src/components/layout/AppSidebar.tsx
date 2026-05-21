@@ -1,7 +1,7 @@
 import { NavLink, useLocation } from "react-router-dom";
 import {
   LayoutDashboard, Users, FolderKanban, FileSpreadsheet,
-  ShoppingCart, Truck, Package, CreditCard, Bell, Settings, LogOut, HardHat,
+  ShoppingCart, Truck, CreditCard, Bell, Settings, LogOut, HardHat,
   Droplet, Building2, Car, FileCheck2, Copy, Smartphone, MessageSquare, Mail, Clock, Flag, Warehouse,
 } from "lucide-react";
 import { HMHLogo } from "@/components/HMHLogo";
@@ -36,11 +36,9 @@ const navGroups = [
     ],
   },
   {
-    label: "Stock & Materials",
+    label: "Warehouse",
     items: [
-      { title: "Main Warehouse",  path: "/warehouse",      icon: Warehouse },
-      { title: "Stock",           path: "/stock",          icon: Package },
-      { title: "Site Materials",  path: "/site-materials", icon: Package },
+      { title: "Main Warehouse",     path: "/warehouse",      icon: Warehouse },
     ],
   },
   {

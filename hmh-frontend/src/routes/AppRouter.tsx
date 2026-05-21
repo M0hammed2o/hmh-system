@@ -72,8 +72,8 @@ export function AppRouter() {
           <Route path="boq-templates" element={<BOQTemplatesPage />} />
           <Route path="procurement" element={<ProcurementPage />} />
           <Route path="deliveries" element={<DeliveriesPage />} />
-          <Route path="stock" element={<StockPage />} />
-          <Route path="site-materials" element={<SiteMaterialsPage />} />
+          <Route path="stock" element={<Navigate to="/warehouse" replace />} />
+          <Route path="site-materials" element={<Navigate to="/warehouse" replace />} />
           <Route path="warehouse" element={<MainWarehousePage />} />
           <Route path="payments" element={<PaymentsPage />} />
           <Route path="reconciliation" element={<InvoiceReconciliationPage />} />

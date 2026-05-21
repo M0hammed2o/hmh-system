@@ -1,49 +1,18 @@
 import { useEffect, useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import {
-  FolderKanban, Users, Package, Bell, ShoppingCart, CreditCard,
-  Truck, FileSpreadsheet, Droplet, AlertTriangle, ChevronRight, X, Warehouse,
+  FolderKanban, Bell, ShoppingCart, CreditCard,
+  Truck, FileSpreadsheet, AlertTriangle, ChevronRight, X, Warehouse,
+  Package, HardHat, Flag, CheckCircle2, Clock, RefreshCw,
 } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { useAuth } from "@/hooks/useAuth";
-import { dashboardApi, type DashboardStats } from "@/api/dashboard";
+import { dashboardApi, type DashboardStats, type ProjectOperation } from "@/api/dashboard";
 import { alertsApi, type Alert } from "@/api/alerts";
 import { formatCurrency } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { useAuthContext } from "@/context/AuthContext";
-
-// ── Stat card ─────────────────────────────────────────────────────────────────
-
-interface StatCardProps {
-  title: string;
-  value: string | number;
-  icon: React.ElementType;
-  color: string;
-  to?: string;
-  warn?: boolean;
-}
-
-function StatCard({ title, value, icon: Icon, color, to, warn }: StatCardProps) {
-  const inner = (
-    <div className={cn(
-      "bg-card border rounded-xl p-4 sm:p-5 flex items-start gap-4 transition-colors",
-      warn ? "border-amber-500/40" : "border-border",
-      to && "hover:bg-muted/40 active:scale-[0.98]",
-    )}>
-      <div className={`flex items-center justify-center w-11 h-11 sm:w-10 sm:h-10 rounded-lg shrink-0 ${color}`}>
-        <Icon className="w-5 h-5" />
-      </div>
-      <div className="flex-1 min-w-0">
-        <p className="text-xs sm:text-sm text-muted-foreground leading-snug">{title}</p>
-        <p className="text-3xl sm:text-2xl font-bold mt-0.5 leading-none">{value}</p>
-      </div>
-      {to && <ChevronRight className="w-4 h-4 text-muted-foreground shrink-0 self-center hidden sm:block" />}
-    </div>
-  );
-  if (to) return <Link to={to}>{inner}</Link>;
-  return inner;
-}
 
 // ── Alert card ────────────────────────────────────────────────────────────────
 
@@ -82,17 +51,113 @@ function AlertCard({ alert, onDismiss }: { alert: Alert; onDismiss?: (id: string
   );
 }
 
+// ── Project operation card ─────────────────────────────────────────────────────
+
+function ProjectOpCard({ op }: { op: ProjectOperation }) {
+  const navigate = useNavigate();
+  const progressColor =
+    op.progress_pct >= 75 ? "bg-green-500" :
+    op.progress_pct >= 40 ? "bg-blue-500" :
+    op.progress_pct >  0  ? "bg-amber-500" :
+    "bg-muted-foreground/30";
+
+  return (
+    <div
+      className="bg-card border border-border rounded-2xl p-4 sm:p-5 space-y-4 hover:bg-muted/20 transition-colors cursor-pointer"
+      onClick={() => navigate(`/projects`)}
+    >
+      {/* Header */}
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <p className="font-semibold text-sm truncate">{op.project_name}</p>
+          {op.project_code && (
+            <p className="text-xs text-muted-foreground">{op.project_code}</p>
+          )}
+        </div>
+        <div className="flex items-center gap-1.5 shrink-0">
+          {op.open_alerts > 0 && (
+            <Link
+              to="/alerts"
+              onClick={e => e.stopPropagation()}
+              className="flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-destructive/10 text-destructive font-medium hover:bg-destructive/20"
+            >
+              <AlertTriangle className="w-3 h-3" />
+              {op.open_alerts}
+            </Link>
+          )}
+          {op.active_material_requests > 0 && (
+            <Link
+              to="/procurement"
+              onClick={e => e.stopPropagation()}
+              className="flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-400 font-medium hover:opacity-80"
+            >
+              <Package className="w-3 h-3" />
+              {op.active_material_requests}
+            </Link>
+          )}
+        </div>
+      </div>
+
+      {/* Progress bar */}
+      <div className="space-y-1">
+        <div className="flex justify-between text-xs text-muted-foreground">
+          <span>Progress</span>
+          <span className="font-medium text-foreground">{op.progress_pct}%</span>
+        </div>
+        <div className="h-1.5 bg-muted rounded-full overflow-hidden">
+          <div
+            className={cn("h-full rounded-full transition-all duration-700", progressColor)}
+            style={{ width: `${op.progress_pct}%` }}
+          />
+        </div>
+      </div>
+
+      {/* Stats grid */}
+      <div className="grid grid-cols-3 gap-2 text-center">
+        <div className="bg-muted/40 rounded-lg py-2 px-1">
+          <p className="text-lg font-bold leading-none">{op.total_lots}</p>
+          <p className="text-[10px] text-muted-foreground mt-0.5">Units</p>
+        </div>
+        <div className="bg-green-500/10 rounded-lg py-2 px-1">
+          <p className="text-lg font-bold leading-none text-green-600">{op.lots_completed}</p>
+          <p className="text-[10px] text-muted-foreground mt-0.5">Done</p>
+        </div>
+        <div className="bg-blue-500/10 rounded-lg py-2 px-1">
+          <p className="text-lg font-bold leading-none text-blue-600">{op.lots_in_progress}</p>
+          <p className="text-[10px] text-muted-foreground mt-0.5">Active</p>
+        </div>
+      </div>
+
+      {/* Milestones + spend */}
+      <div className="flex items-center justify-between text-xs border-t border-border/50 pt-3">
+        <div className="flex items-center gap-1 text-muted-foreground">
+          <Flag className="w-3 h-3" />
+          <span>
+            <span className="font-medium text-foreground">{op.milestones_completed}</span>
+            /{op.total_milestones} milestones
+          </span>
+        </div>
+        {op.total_paid > 0 && (
+          <span className="text-muted-foreground">
+            Paid: <span className="font-medium text-foreground">{formatCurrency(op.total_paid)}</span>
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── Module shortcuts ──────────────────────────────────────────────────────────
 
 const moduleLinks = [
-  { label: "Projects",        path: "/projects",   icon: FolderKanban,    color: "bg-primary/10 text-primary",         desc: "Construction projects" },
-  { label: "BOQ",             path: "/boq",         icon: FileSpreadsheet, color: "bg-warning/10 text-warning",          desc: "Bills of quantities" },
-  { label: "Procurement",     path: "/procurement", icon: ShoppingCart,    color: "bg-success/10 text-success",          desc: "Purchase orders" },
-  { label: "Deliveries",      path: "/deliveries",  icon: Truck,           color: "bg-primary/10 text-primary",         desc: "Incoming deliveries" },
-  { label: "Main Warehouse",  path: "/warehouse",   icon: Warehouse,       color: "bg-warning/10 text-warning",          desc: "Central stock & dispatch" },
-  { label: "Stock",           path: "/stock",       icon: Package,         color: "bg-muted text-muted-foreground",      desc: "Stock ledger" },
-  { label: "Payments",        path: "/payments",    icon: CreditCard,      color: "bg-success/10 text-success",          desc: "Payments" },
-  { label: "Alerts",          path: "/alerts",      icon: Bell,            color: "bg-destructive/10 text-destructive", desc: "System alerts" },
+  { label: "Procurement",       path: "/procurement", icon: ShoppingCart,    color: "bg-primary/10 text-primary",         desc: "Material requests & POs" },
+  { label: "Deliveries",        path: "/deliveries",  icon: Truck,           color: "bg-success/10 text-success",          desc: "Receive deliveries" },
+  { label: "Warehouse",         path: "/warehouse",   icon: Warehouse,       color: "bg-warning/10 text-warning",          desc: "Stock & dispatch" },
+  { label: "Milestones",        path: "/milestones",  icon: Flag,            color: "bg-primary/10 text-primary",          desc: "Progress & photos" },
+  { label: "BOQ",               path: "/boq",          icon: FileSpreadsheet, color: "bg-muted text-muted-foreground",      desc: "Bills of quantities" },
+  { label: "Payments",          path: "/payments",    icon: CreditCard,      color: "bg-success/10 text-success",          desc: "Invoices & payments" },
+  { label: "Alerts",            path: "/alerts",      icon: Bell,            color: "bg-destructive/10 text-destructive",  desc: "System alerts" },
+  { label: "Labour",            path: "/labour",      icon: HardHat,         color: "bg-muted text-muted-foreground",      desc: "Job cards" },
 ];
 
 // ── Page ──────────────────────────────────────────────────────────────────────
@@ -100,37 +165,39 @@ const moduleLinks = [
 export default function DashboardPage() {
   const navigate = useNavigate();
   const { user, loading: authLoading } = useAuth();
-  const [stats, setStats] = useState<DashboardStats | null>(null);
-  const [statsLoading, setStatsLoading] = useState(true);
-  const [alerts, setAlerts] = useState<Alert[]>([]);
+  const [stats,      setStats]      = useState<DashboardStats | null>(null);
+  const [operations, setOperations] = useState<ProjectOperation[]>([]);
+  const [alerts,     setAlerts]     = useState<Alert[]>([]);
+  const [opsLoading, setOpsLoading] = useState(true);
 
   const handleDismissAlert = async (id: string) => {
     try {
       await alertsApi.acknowledge(id);
       setAlerts(prev => prev.filter(a => a.id !== id));
-    } catch { /* silent — alert still removed from UI */ }
+    } catch { /* silent */ }
   };
 
-  useEffect(() => {
-    dashboardApi
-      .getStats()
-      .then(setStats)
-      .catch(() => setStats(null))
-      .finally(() => setStatsLoading(false));
+  const load = () => {
+    setOpsLoading(true);
+    Promise.all([
+      dashboardApi.getStats().catch(() => null),
+      dashboardApi.getProjectOperations().catch(() => []),
+      alertsApi.list({ status: "OPEN", limit: 5 }).catch(() => []),
+    ]).then(([s, ops, al]) => {
+      setStats(s);
+      setOperations(ops);
+      setAlerts(al);
+    }).finally(() => setOpsLoading(false));
+  };
 
-    alertsApi
-      .list({ status: "OPEN", limit: 5 })
-      .then(setAlerts)
-      .catch(() => setAlerts([]));
-  }, []);
+  useEffect(() => { load(); }, []);
 
   if (authLoading) {
     return (
       <div className="space-y-4 animate-fade-in">
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-          {[1, 2, 3, 4].map((i) => <Skeleton key={i} className="h-24 rounded-xl" />)}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          {[1, 2, 3].map((i) => <Skeleton key={i} className="h-52 rounded-2xl" />)}
         </div>
-        <Skeleton className="h-48 rounded-xl" />
       </div>
     );
   }
@@ -141,108 +208,79 @@ export default function DashboardPage() {
     <div className="space-y-5 animate-fade-in">
 
       {/* Welcome */}
-      <div>
-        <h2 className="text-xl font-semibold">
-          Welcome back{firstName ? `, ${firstName}` : ""}
-        </h2>
-        <p className="text-sm text-muted-foreground mt-0.5">
-          HMH Construction Management System
-        </p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-xl font-semibold">
+            Welcome back{firstName ? `, ${firstName}` : ""}
+          </h2>
+          <p className="text-sm text-muted-foreground mt-0.5">
+            HMH Construction OS
+          </p>
+        </div>
+        <div className="flex items-center gap-3">
+          {stats && (
+            <div className="hidden sm:flex items-center gap-4 text-xs text-muted-foreground">
+              <span><strong className="text-foreground">{stats.active_projects}</strong> active projects</span>
+              <span className={cn(stats.open_alerts > 0 && "text-destructive font-medium")}>
+                <strong>{stats.open_alerts}</strong> open alerts
+              </span>
+              <span><strong className="text-foreground">{formatCurrency(stats.total_paid_amount)}</strong> total paid</span>
+            </div>
+          )}
+          <button
+            onClick={load}
+            disabled={opsLoading}
+            className="p-1.5 rounded-md hover:bg-muted text-muted-foreground disabled:opacity-50"
+            title="Refresh"
+          >
+            <RefreshCw className={cn("w-4 h-4", opsLoading && "animate-spin")} />
+          </button>
+        </div>
       </div>
 
-      {/* ── Alert banner — mobile prominent, desktop subtle ── */}
+      {/* ── Alert banner ── */}
       {alerts.length > 0 && (
         <div className="space-y-2">
           <div className="flex items-center justify-between">
             <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
               Open Alerts ({alerts.length})
             </p>
-            <Link to="/alerts" className="text-xs text-primary hover:underline">
-              View all →
-            </Link>
+            <Link to="/alerts" className="text-xs text-primary hover:underline">View all →</Link>
           </div>
           {alerts.map((a) => <AlertCard key={a.id} alert={a} onDismiss={handleDismissAlert} />)}
         </div>
       )}
 
-      {/* ── Primary stat cards ── */}
-      {statsLoading ? (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-          {[1, 2, 3, 4].map((i) => <Skeleton key={i} className="h-24 rounded-xl" />)}
+      {/* ── Project operations ── */}
+      <div>
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-sm font-semibold">Active Projects</h3>
+          <Link to="/projects" className="text-xs text-primary hover:underline">All projects →</Link>
         </div>
-      ) : (
-        <>
-          {/* Row 1 — priority stats */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-            <StatCard
-              title="Active Projects"
-              value={stats?.active_projects ?? "—"}
-              icon={FolderKanban}
-              color="bg-primary/10 text-primary"
-              to="/projects"
-            />
-            <StatCard
-              title="Open Alerts"
-              value={stats?.open_alerts ?? "—"}
-              icon={Bell}
-              color="bg-destructive/10 text-destructive"
-              to="/alerts"
-              warn={(stats?.open_alerts ?? 0) > 0}
-            />
-            <StatCard
-              title="Pending Invoices"
-              value={stats?.pending_invoices ?? "—"}
-              icon={CreditCard}
-              color="bg-warning/10 text-warning"
-              to="/payments"
-              warn={(stats?.pending_invoices ?? 0) > 0}
-            />
-            <StatCard
-              title="Total Paid"
-              value={stats ? formatCurrency(stats.total_paid_amount) : "—"}
-              icon={CreditCard}
-              color="bg-success/10 text-success"
-            />
+        {opsLoading ? (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {[1, 2, 3].map(i => <Skeleton key={i} className="h-52 rounded-2xl" />)}
           </div>
-
-          {/* Row 2 — secondary stats */}
-          <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-            <div className="bg-card border border-border rounded-xl p-4 flex flex-col gap-1">
-              <p className="text-xs text-muted-foreground">Active Sites</p>
-              <p className="text-2xl font-bold">{stats?.active_sites ?? "—"}</p>
-            </div>
-            <div className="bg-card border border-border rounded-xl p-4 flex flex-col gap-1">
-              <p className="text-xs text-muted-foreground">Open POs</p>
-              <p className="text-2xl font-bold">{stats?.open_purchase_orders ?? "—"}</p>
-            </div>
-            <div className="bg-card border border-border rounded-xl p-4 flex flex-col gap-1">
-              <p className="text-xs text-muted-foreground">Pending Payments</p>
-              <p className="text-2xl font-bold">{stats?.pending_payments ?? "—"}</p>
-            </div>
-            <div className="bg-card border border-border rounded-xl p-4 flex items-center gap-3">
-              <div className="flex items-center justify-center w-9 h-9 rounded-lg shrink-0 bg-primary/10 text-primary">
-                <Droplet className="w-4 h-4" />
-              </div>
-              <div>
-                <p className="text-xs text-muted-foreground">Fuel Cost</p>
-                <p className="text-lg font-bold leading-tight">
-                  {stats ? formatCurrency(stats.fuel_total_cost) : "—"}
-                </p>
-              </div>
-            </div>
+        ) : operations.length === 0 ? (
+          <div className="bg-card border border-border rounded-2xl p-10 text-center text-sm text-muted-foreground">
+            No active projects. <Link to="/projects" className="text-primary hover:underline">Create one →</Link>
           </div>
-        </>
-      )}
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {operations.map(op => <ProjectOpCard key={op.project_id} op={op} />)}
+          </div>
+        )}
+      </div>
 
-      {/* ── Module shortcuts ── */}
-      <div className="bg-card border border-border rounded-xl p-4 sm:p-5">
-        <h2 className="text-sm font-semibold mb-3">Quick Access</h2>
-        <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-3">
+      {/* ── Quick Access ── */}
+      <div className="bg-card border border-border rounded-2xl p-4 sm:p-5">
+        <h3 className="text-sm font-semibold mb-3">Quick Access</h3>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-3">
           {moduleLinks.map((m) => (
             <button
               key={m.path}
               onClick={() => navigate(m.path)}
-              className="flex items-center gap-3 p-3 sm:p-3.5 rounded-lg border border-border hover:bg-muted active:scale-[0.97] transition-all text-left"
+              className="flex items-center gap-3 p-3 sm:p-3.5 rounded-xl border border-border hover:bg-muted active:scale-[0.97] transition-all text-left"
             >
               <div className={`flex items-center justify-center w-9 h-9 rounded-lg shrink-0 ${m.color}`}>
                 <m.icon className="w-4 h-4" />

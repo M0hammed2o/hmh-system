@@ -8,14 +8,16 @@ from sqlalchemy.orm import Session
 
 from app.models.alert import SystemAlert
 from app.models.delivery import Delivery
-from app.models.enums import AlertStatus, PaymentStatus, ProjectStatus, RecordStatus
+from app.models.enums import AlertStatus, LotStatus, PaymentStatus, ProjectStatus, RecordStatus, StageStatus
 from app.models.fuel import FuelLog
 from app.models.invoice import Invoice
 from app.models.lot import Lot
+from app.models.material_request import MaterialRequest
 from app.models.payment import Payment
 from app.models.project import Project
 from app.models.purchase_order import PurchaseOrder
 from app.models.site import Site
+from app.models.stage import ProjectStageStatus
 
 
 def get_stats(db: Session, project_id: Optional[uuid.UUID] = None) -> dict:
@@ -100,3 +102,133 @@ def get_stats(db: Session, project_id: Optional[uuid.UUID] = None) -> dict:
         "fuel_total_cost": fuel_total_cost,
         "fuel_total_litres": fuel_total_litres,
     }
+
+
+def get_project_operations(db: Session) -> list[dict]:
+    """
+    Per-project operational overview for the office dashboard.
+
+    Returns one record per active project with:
+      - lots (total, completed, in_progress)
+      - milestones (completed, total)
+      - active_material_requests
+      - open_alerts
+      - total_paid
+    All in 6 bulk queries to avoid N+1.
+    """
+    projects = (
+        db.query(Project)
+        .filter(Project.status == ProjectStatus.ACTIVE)
+        .order_by(Project.name)
+        .all()
+    )
+    if not projects:
+        return []
+
+    project_ids = [p.id for p in projects]
+
+    # Bulk Q1: lot counts per project by status
+    lot_rows = (
+        db.query(Lot.project_id, Lot.status, func.count(Lot.id).label("cnt"))
+        .filter(Lot.project_id.in_(project_ids))
+        .group_by(Lot.project_id, Lot.status)
+        .all()
+    )
+    lots_by_proj: dict = {}
+    for row in lot_rows:
+        pid = str(row.project_id)
+        lots_by_proj.setdefault(pid, {})
+        lots_by_proj[pid][row.status.value if hasattr(row.status, "value") else row.status] = row.cnt
+
+    # Bulk Q2: milestone counts per project by status
+    ms_rows = (
+        db.query(
+            ProjectStageStatus.project_id,
+            ProjectStageStatus.status,
+            func.count(ProjectStageStatus.id).label("cnt"),
+        )
+        .filter(ProjectStageStatus.project_id.in_(project_ids))
+        .group_by(ProjectStageStatus.project_id, ProjectStageStatus.status)
+        .all()
+    )
+    ms_by_proj: dict = {}
+    for row in ms_rows:
+        pid = str(row.project_id)
+        ms_by_proj.setdefault(pid, {})
+        ms_by_proj[pid][row.status.value if hasattr(row.status, "value") else row.status] = row.cnt
+
+    # Bulk Q3: active material requests per project
+    mr_rows = (
+        db.query(MaterialRequest.project_id, func.count(MaterialRequest.id).label("cnt"))
+        .filter(
+            MaterialRequest.project_id.in_(project_ids),
+            MaterialRequest.status.in_([
+                RecordStatus.DRAFT, RecordStatus.SUBMITTED, RecordStatus.PENDING_APPROVAL
+            ]),
+        )
+        .group_by(MaterialRequest.project_id)
+        .all()
+    )
+    mr_by_proj = {str(r.project_id): r.cnt for r in mr_rows}
+
+    # Bulk Q4: open alerts per project
+    alert_rows = (
+        db.query(SystemAlert.project_id, func.count(SystemAlert.id).label("cnt"))
+        .filter(
+            SystemAlert.project_id.in_(project_ids),
+            SystemAlert.status == AlertStatus.OPEN,
+        )
+        .group_by(SystemAlert.project_id)
+        .all()
+    )
+    alerts_by_proj = {str(r.project_id): r.cnt for r in alert_rows}
+
+    # Bulk Q5: total paid per project
+    paid_rows = (
+        db.query(Payment.project_id, func.coalesce(func.sum(Payment.amount_paid), 0).label("total"))
+        .filter(Payment.project_id.in_(project_ids), Payment.status == PaymentStatus.PAID)
+        .group_by(Payment.project_id)
+        .all()
+    )
+    paid_by_proj = {str(r.project_id): float(r.total) for r in paid_rows}
+
+    # Bulk Q6: site count per project
+    site_rows = (
+        db.query(Site.project_id, func.count(Site.id).label("cnt"))
+        .filter(Site.project_id.in_(project_ids), Site.is_active == True)  # noqa
+        .group_by(Site.project_id)
+        .all()
+    )
+    sites_by_proj = {str(r.project_id): r.cnt for r in site_rows}
+
+    result = []
+    for p in projects:
+        pid = str(p.id)
+        lots    = lots_by_proj.get(pid, {})
+        ms      = ms_by_proj.get(pid, {})
+
+        total_lots      = sum(lots.values())
+        lots_completed  = lots.get("COMPLETED", 0)
+        lots_progress   = lots.get("IN_PROGRESS", 0)
+
+        done_statuses   = {"COMPLETED", "CERTIFIED"}
+        ms_done         = sum(v for k, v in ms.items() if k in done_statuses)
+        ms_total        = sum(ms.values())
+        progress_pct    = round((ms_done / ms_total * 100) if ms_total > 0 else 0.0, 1)
+
+        result.append({
+            "project_id":               pid,
+            "project_name":             p.name,
+            "project_code":             p.code or "",
+            "site_count":               sites_by_proj.get(pid, 0),
+            "total_lots":               total_lots,
+            "lots_completed":           lots_completed,
+            "lots_in_progress":         lots_progress,
+            "milestones_completed":     ms_done,
+            "total_milestones":         ms_total,
+            "progress_pct":             progress_pct,
+            "active_material_requests": mr_by_proj.get(pid, 0),
+            "open_alerts":              alerts_by_proj.get(pid, 0),
+            "total_paid":               paid_by_proj.get(pid, 0.0),
+        })
+    return result

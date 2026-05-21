@@ -692,6 +692,166 @@ function PODetailModal({ po, onClose, onUpdated }: { po: PurchaseOrder; onClose:
   );
 }
 
+// ── Capture External PO Modal ─────────────────────────────────────────────────
+
+interface ExtPOItem { description: string; quantity: string; unit: string; rate: string; }
+const blankExtItem = (): ExtPOItem => ({ description: "", quantity: "1", unit: "", rate: "0" });
+
+function CaptureExternalPOModal({
+  projectId, suppliers, sites, onClose, onDone,
+}: {
+  projectId: string; suppliers: Supplier[]; sites: Site[];
+  onClose: () => void; onDone: () => void;
+}) {
+  const [supplierId,   setSupplierId]   = useState(suppliers[0]?.id ?? "");
+  const [siteId,       setSiteId]       = useState("");
+  const [extRef,       setExtRef]       = useState("");
+  const [destination,  setDestination]  = useState<"SITE_STORE" | "MAIN_WAREHOUSE">("SITE_STORE");
+  const [expDate,      setExpDate]      = useState("");
+  const [notes,        setNotes]        = useState("");
+  const [items,        setItems]        = useState<ExtPOItem[]>([blankExtItem()]);
+  const [loading,      setLoading]      = useState(false);
+  const [error,        setError]        = useState("");
+
+  const updateItem = (i: number, field: keyof ExtPOItem, val: string) =>
+    setItems(prev => prev.map((row, idx) => idx === i ? { ...row, [field]: val } : row));
+
+  const submit = async () => {
+    const validItems = items.filter(i => i.description.trim() && parseFloat(i.quantity) > 0);
+    if (!supplierId)          { setError("Select a supplier."); return; }
+    if (validItems.length === 0) { setError("Add at least one item."); return; }
+    setLoading(true); setError("");
+    try {
+      await client.post(`/projects/${projectId}/purchase-orders/capture`, {
+        supplier_id:            supplierId,
+        site_id:                siteId || null,
+        external_reference:     extRef.trim() || null,
+        delivery_destination:   destination,
+        expected_delivery_date: expDate || null,
+        notes:                  notes || null,
+        items: validItems.map(i => ({
+          description:       i.description.trim(),
+          quantity_ordered:  parseFloat(i.quantity),
+          unit:              i.unit.trim() || null,
+          rate:              parseFloat(i.rate) || 0,
+        })),
+      });
+      onDone();
+      onClose();
+    } catch (err: unknown) {
+      const d = (err as { response?: { data?: { detail?: string } } })?.response?.data;
+      setError(d?.detail ?? "Failed to capture PO.");
+    } finally { setLoading(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-foreground/40">
+      <div className="bg-card border border-border rounded-t-2xl sm:rounded-2xl w-full sm:max-w-lg max-h-[90vh] flex flex-col">
+        <div className="flex items-center justify-between px-5 pt-5 pb-3 border-b border-border shrink-0">
+          <div>
+            <h2 className="text-base font-semibold">Capture External Purchase Order</h2>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              Record a PO placed by phone, WhatsApp, email or handwritten form.
+            </p>
+          </div>
+          <button onClick={onClose}><X className="w-4 h-4 text-muted-foreground" /></button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-5 space-y-4">
+          {/* Supplier + Ref */}
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label>Supplier *</Label>
+              <select value={supplierId} onChange={e => setSupplierId(e.target.value)}
+                className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm" required>
+                {suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+              </select>
+            </div>
+            <div className="space-y-1.5">
+              <Label>External PO / Ref Number</Label>
+              <Input value={extRef} onChange={e => setExtRef(e.target.value)}
+                placeholder="Supplier's PO ref" />
+            </div>
+          </div>
+
+          {/* Destination + Site */}
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label>Delivery Destination</Label>
+              <select value={destination} onChange={e => setDestination(e.target.value as "SITE_STORE" | "MAIN_WAREHOUSE")}
+                className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm">
+                <option value="SITE_STORE">Site Warehouse</option>
+                <option value="MAIN_WAREHOUSE">Main Warehouse (bulk)</option>
+              </select>
+            </div>
+            {destination === "SITE_STORE" && (
+              <div className="space-y-1.5">
+                <Label>Site (optional)</Label>
+                <select value={siteId} onChange={e => setSiteId(e.target.value)}
+                  className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm">
+                  <option value="">— Any site —</option>
+                  {sites.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                </select>
+              </div>
+            )}
+          </div>
+
+          {/* Expected date + notes */}
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label>Expected Delivery</Label>
+              <Input type="date" value={expDate} onChange={e => setExpDate(e.target.value)} />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Notes</Label>
+              <Input value={notes} onChange={e => setNotes(e.target.value)} placeholder="Optional" />
+            </div>
+          </div>
+
+          {/* Items */}
+          <div className="space-y-2">
+            <Label>Items *</Label>
+            {items.map((item, i) => (
+              <div key={i} className="grid grid-cols-[1fr_80px_60px_80px_18px] gap-2 items-center">
+                <Input value={item.description}
+                  onChange={e => updateItem(i, "description", e.target.value)}
+                  placeholder="Description *" className="h-8 text-sm" />
+                <Input type="number" min="0.01" step="any" value={item.quantity}
+                  onChange={e => updateItem(i, "quantity", e.target.value)}
+                  className="h-8 text-sm" />
+                <Input value={item.unit} onChange={e => updateItem(i, "unit", e.target.value)}
+                  placeholder="Unit" className="h-8 text-sm" />
+                <Input type="number" min="0" step="0.01" value={item.rate}
+                  onChange={e => updateItem(i, "rate", e.target.value)}
+                  placeholder="Rate R" className="h-8 text-sm" />
+                {items.length > 1 && (
+                  <button type="button" onClick={() => setItems(p => p.filter((_, idx) => idx !== i))}
+                    className="text-muted-foreground hover:text-destructive">
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+            ))}
+            <button type="button" onClick={() => setItems(p => [...p, blankExtItem()])}
+              className="text-xs text-primary hover:underline flex items-center gap-1">
+              <Plus className="w-3 h-3" />Add item
+            </button>
+          </div>
+
+          {error && <p className="text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-lg px-3 py-2">{error}</p>}
+        </div>
+
+        <div className="px-5 pb-5 pt-3 border-t border-border shrink-0 flex gap-2">
+          <Button disabled={loading} onClick={submit} className="flex-1">
+            {loading ? "Capturing…" : "Capture External PO"}
+          </Button>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
 export default function ProcurementPage() {
@@ -704,6 +864,7 @@ export default function ProcurementPage() {
   const [pos, setPOs] = useState<PurchaseOrder[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
+  const [showCaptureExternal, setShowCaptureExternal] = useState(false);
   const [selectedMR, setSelectedMR] = useState<MaterialRequest | null>(null);
   const [selectedPO, setSelectedPO] = useState<PurchaseOrder | null>(null);
   const [mrFilter, setMrFilter] = useState("ALL");
@@ -758,6 +919,7 @@ export default function ProcurementPage() {
             {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
           </select>
           {tab === "mr" && <Button size="sm" onClick={() => setShowCreate(true)}><Plus className="w-4 h-4" />New MR</Button>}
+          {tab === "po" && <Button size="sm" variant="outline" onClick={() => setShowCaptureExternal(true)}><FileText className="w-4 h-4" />Capture External PO</Button>}
         </div>
       </div>
 
@@ -833,6 +995,15 @@ export default function ProcurementPage() {
       )}
 
       {showCreate && <CreateMRModal projectId={projectId} sites={sites} onClose={() => setShowCreate(false)} onCreated={() => { setShowCreate(false); loadData(); }} />}
+      {showCaptureExternal && (
+        <CaptureExternalPOModal
+          projectId={projectId}
+          suppliers={suppliers}
+          sites={sites}
+          onClose={() => setShowCaptureExternal(false)}
+          onDone={() => { setShowCaptureExternal(false); loadData(); }}
+        />
+      )}
       {selectedMR && <MRDetailModal mr={selectedMR} suppliers={suppliers} onClose={() => setSelectedMR(null)} onUpdated={() => { loadData(); setSelectedMR(null); }} />}
       {selectedPO && <PODetailModal po={selectedPO} onClose={() => setSelectedPO(null)} onUpdated={() => { loadData(); setSelectedPO(null); }} />}
     </div>

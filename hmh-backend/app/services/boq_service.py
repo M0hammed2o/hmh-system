@@ -963,7 +963,7 @@ def get_project_master_summary(db: Session, project_id: uuid.UUID) -> dict:
     )
 
     # ── Bulk-fetch all data in 3 queries instead of N×3 queries ─────────────
-    # Query 1: all site-level BOQ items for this project
+    # Query 1: all site-level BOQ items for this project (site_id may be NULL for freestanding)
     all_site_items = (
         db.query(BOQItem)
         .filter(
@@ -975,15 +975,15 @@ def get_project_master_summary(db: Session, project_id: uuid.UUID) -> dict:
     )
     site_items_by_site: dict = {}
     for item in all_site_items:
-        if item.site_id:
-            site_items_by_site.setdefault(item.site_id, []).append(item)
+        # Key is site_id (may be None for project-level freestanding items)
+        site_items_by_site.setdefault(item.site_id, []).append(item)
 
     # Query 2: all lots for this project (count + first-lot lookup)
     all_lots = db.query(Lot).filter(Lot.project_id == project_id).all()
     lots_by_site: dict = {}
     for lot in all_lots:
-        if lot.site_id:
-            lots_by_site.setdefault(lot.site_id, []).append(lot)
+        # Key is site_id (may be None for freestanding lots)
+        lots_by_site.setdefault(lot.site_id, []).append(lot)
 
     # Query 3: all lot-level BOQ items (only needed if site-level items missing)
     all_lot_items = (
@@ -1068,6 +1068,63 @@ def get_project_master_summary(db: Session, project_id: uuid.UUID) -> dict:
             **var,
         })
 
+    # ── Freestanding lots (lot.site_id IS NULL) ──────────────────────────────
+    # These lots are not attached to any site and were silently excluded above.
+    freestanding_lots = lots_by_site.get(None, [])
+    if freestanding_lots:
+        fl_site_level_items = site_items_by_site.get(None, [])
+        fl_lot_items_all    = [
+            item
+            for lot in freestanding_lots
+            for item in lot_items_by_lot.get(lot.id, [])
+        ]
+
+        if fl_site_level_items:
+            # Use project-level (site=NULL) template items for unit_total
+            unit_total = sum(_item_total_safe(i) for i in fl_site_level_items)
+        elif freestanding_lots:
+            # Fall back to first freestanding lot as representative
+            first_fl = freestanding_lots[0]
+            rep_items = lot_items_by_lot.get(first_fl.id, [])
+            unit_total = sum(_item_total_safe(i) for i in rep_items)
+        else:
+            unit_total = 0.0
+
+        site_total = (
+            sum(_item_total_safe(i) for i in fl_lot_items_all)
+            if fl_lot_items_all
+            else unit_total * len(freestanding_lots)
+        )
+        lot_count = len(freestanding_lots)
+        type_b    = _type_breakdown(fl_site_level_items or fl_lot_items_all)
+
+        fl_header_ids: set[str] = {
+            section_to_header[str(item.boq_section_id)]
+            for item in fl_site_level_items
+            if str(item.boq_section_id) in section_to_header
+        }
+
+        var = _variance(site_total, unit_total * max(lot_count, 1))
+        total_planned   += site_total
+        total_lot_count += lot_count
+
+        for k, v in type_b.items():
+            proj_types[k] = proj_types.get(k, 0.0) + v
+
+        sites_out.append({
+            "site_id":        None,
+            "site_name":      "Freestanding Units",
+            "is_freestanding": True,
+            "unit_total":     round(unit_total, 2),
+            "lot_count":      lot_count,
+            "site_total":     round(site_total, 2),
+            "item_count":     len(fl_site_level_items),
+            "has_boq":        len(fl_site_level_items) > 0 or site_total > 0,
+            "boq_header_ids": list(fl_header_ids),
+            **type_b,
+            **var,
+        })
+
     all_headers      = list_headers(db, project_id)
     legacy_lot_count = len([h for h in all_headers if " — Lot " in h.version_name or " – Lot " in h.version_name])
 
@@ -1076,6 +1133,7 @@ def get_project_master_summary(db: Session, project_id: uuid.UUID) -> dict:
         "total_planned":   round(total_planned, 2),
         "site_count":      len(all_sites),
         "total_lot_count": total_lot_count,
+        "freestanding_lot_count": len(freestanding_lots),
         "legacy_lot_count": legacy_lot_count,
         "sites":           sites_out,
         "material_total":  round(proj_types.get("material_total", proj_types.get("MATERIAL", 0)), 2),

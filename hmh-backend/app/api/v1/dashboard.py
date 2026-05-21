@@ -23,3 +23,14 @@ def get_dashboard_stats(
 ):
     stats = dashboard_service.get_stats(db, project_id)
     return ApiSuccess(data=stats)
+
+
+@router.get(
+    "/operations",
+    response_model=ApiSuccess[list[dict]],
+    dependencies=[ALL_ROLES],
+)
+def get_project_operations(db: DbSession):
+    """Per-project operational overview: lots, milestones, requests, alerts, spend."""
+    data = dashboard_service.get_project_operations(db)
+    return ApiSuccess(data=data)
