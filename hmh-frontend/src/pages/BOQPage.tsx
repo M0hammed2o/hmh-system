@@ -288,6 +288,8 @@ export default function BOQPage() {
   const [viewMode, setViewMode]                   = useState<ViewMode>("master");
   const [selectedSiteId, setSelectedSiteId]       = useState("");
   const [selectedLotId, setSelectedLotId]         = useState("");
+  // Phase 3G: freestanding lot mode — true when viewing lots with site_id=null
+  const [freestandingMode, setFreestandingMode]   = useState(false);
 
   const [projects, setProjects] = useState<Project[]>([]);
   const [sites,    setSites]    = useState<Site[]>([]);
@@ -344,6 +346,7 @@ export default function BOQPage() {
 
   const changeMode = (mode: ViewMode) => {
     setViewMode(mode); setError("");
+    if (mode !== "lot") setFreestandingMode(false);
     setMasterSummary(null); setSiteSummary(null); setSiteLots([]);
   };
 
@@ -443,20 +446,33 @@ export default function BOQPage() {
         </div>
         {selectedProjectId && viewMode !== "master" && (
           <div className="flex flex-wrap items-end gap-4">
-            <Sel label="Site" value={selectedSiteId} onChange={(v) => { setSelectedSiteId(v); setSelectedLotId(""); }} disabled={sites.length === 0}>
+            <Sel label="Site / Block" value={selectedSiteId} onChange={(v) => { setSelectedSiteId(v); setSelectedLotId(""); setFreestandingMode(false); }} disabled={sites.length === 0}>
               <option value="">— Select site —</option>
               {sites.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
             </Sel>
-            {viewMode === "lot" && selectedSiteId && (
-              <Sel label="Lot" value={selectedLotId} onChange={setSelectedLotId}
-                disabled={lots.filter((l) => l.site_id === selectedSiteId).length === 0}>
+            {viewMode === "lot" && (selectedSiteId || freestandingMode) && (
+              <Sel
+                label={freestandingMode ? "Lot / Unit" : "Lot"}
+                value={selectedLotId}
+                onChange={setSelectedLotId}
+                disabled={(() => {
+                  const avail = freestandingMode
+                    ? lots.filter(l => !l.site_id)
+                    : lots.filter(l => l.site_id === selectedSiteId);
+                  return avail.length === 0;
+                })()}
+              >
                 <option value="">— Select lot —</option>
-                {lots.filter((l) => l.site_id === selectedSiteId)
-                  .sort((a, b) => {
-                    const na = parseInt(a.lot_number), nb = parseInt(b.lot_number);
-                    return isNaN(na) || isNaN(nb) ? a.lot_number.localeCompare(b.lot_number) : na - nb;
-                  })
-                  .map((l) => <option key={l.id} value={l.id}>{l.lot_number}</option>)}
+                {(freestandingMode
+                  ? lots.filter(l => !l.site_id)
+                  : lots.filter(l => l.site_id === selectedSiteId)
+                )
+                  .sort((a, b) => a.lot_number.localeCompare(b.lot_number, undefined, { numeric: true, sensitivity: "base" }))
+                  .map(l => (
+                    <option key={l.id} value={l.id}>
+                      {l.lot_number}{l.unit_type ? ` · ${l.unit_type}` : ""}
+                    </option>
+                  ))}
               </Sel>
             )}
           </div>
@@ -483,29 +499,54 @@ export default function BOQPage() {
           />
 
           <div>
-            <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">Sites</h2>
+            <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">
+              {masterSummary.sites.every((s: { site_id: string | null }) => !s.site_id)
+                ? "Lots / Units"
+                : "Sites & Groupings"}
+            </h2>
             {masterSummary.sites.length === 0 ? (
-              <div className="bg-card border border-border rounded-xl p-10 text-center text-sm text-muted-foreground">No sites found.</div>
+              <div className="bg-card border border-border rounded-xl p-10 text-center text-sm text-muted-foreground">
+                No BOQ data yet. Create a BOQ template and apply it to lots.
+              </div>
             ) : (
               <div className="divide-y divide-border border border-border rounded-xl overflow-hidden">
                 <div className="grid grid-cols-[1fr_auto_auto_auto_auto_auto] gap-3 px-4 py-2.5 bg-muted/40 text-xs font-semibold text-muted-foreground uppercase">
-                  <span>Site</span><span className="text-center">Lots</span>
-                  <span className="text-right">Unit Total</span><span className="text-right">Site Total</span>
+                  <span>Group</span><span className="text-center">Lots</span>
+                  <span className="text-right">Unit Total</span><span className="text-right">Total</span>
                   <span className="text-right">Variance</span><span />
                 </div>
-                {masterSummary.sites.map((site) => (
-                  <div key={site.site_id} className="grid grid-cols-[1fr_auto_auto_auto_auto_auto] gap-3 px-4 py-3 bg-card items-center hover:bg-muted/20">
+                {masterSummary.sites.map((site: { site_id: string | null; site_name: string; lot_count: number; has_boq: boolean; unit_total: number; site_total: number; variance_pct: number | null; variance_amount: number | null; is_freestanding?: boolean }) => (
+                  <div key={site.site_id ?? "__freestanding__"} className="grid grid-cols-[1fr_auto_auto_auto_auto_auto] gap-3 px-4 py-3 bg-card items-center hover:bg-muted/20">
                     <div>
-                      <p className="text-sm font-medium">{site.site_name}</p>
+                      <p className="text-sm font-medium flex items-center gap-1.5">
+                        {site.site_name}
+                        {site.is_freestanding && (
+                          <span className="text-xs text-muted-foreground font-normal italic">(freestanding)</span>
+                        )}
+                      </p>
                       {!site.has_boq && <p className="text-xs text-amber-600 mt-0.5">No BOQ yet</p>}
                     </div>
                     <span className="text-sm text-center tabular-nums font-medium">{site.lot_count}</span>
                     <span className="text-sm text-right tabular-nums">{site.has_boq ? fmt(site.unit_total) : "—"}</span>
                     <span className="text-sm text-right tabular-nums font-semibold text-primary">{site.has_boq ? fmt(site.site_total) : "—"}</span>
                     <div className="text-right"><VariancePill pct={site.variance_pct} amount={site.variance_amount} /></div>
-                    <Button size="sm" variant="outline" onClick={() => { setSelectedSiteId(site.site_id); changeMode("site"); }}>
-                      View Site <ChevronRight className="w-3.5 h-3.5 ml-1" />
-                    </Button>
+                    {site.is_freestanding || !site.site_id ? (
+                      <Button size="sm" variant="outline" onClick={() => {
+                        setFreestandingMode(true);
+                        setSelectedSiteId("");
+                        changeMode("lot");
+                      }}>
+                        View Lots <ChevronRight className="w-3.5 h-3.5 ml-1" />
+                      </Button>
+                    ) : (
+                      <Button size="sm" variant="outline" onClick={() => {
+                        setFreestandingMode(false);
+                        setSelectedSiteId(site.site_id!);
+                        changeMode("site");
+                      }}>
+                        View Site <ChevronRight className="w-3.5 h-3.5 ml-1" />
+                      </Button>
+                    )}
                   </div>
                 ))}
                 <div className="grid grid-cols-[1fr_auto_auto_auto_auto_auto] gap-3 px-4 py-3 bg-muted/30 items-center">

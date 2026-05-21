@@ -522,7 +522,7 @@ export default function SiteDashboardPage() {
               <SiteRequestHistory requests={siteRequests} />
             )}
 
-            {/* ── Site Warehouse — stock on hand, transfer to unit ── */}
+            {/* ── Project Warehouse — stock on hand, transfer to unit ── */}
             {siteId && projectId && (
               <ProjectWarehouse projectId={projectId} siteId={siteId} />
             )}
@@ -770,7 +770,7 @@ function RequestMaterialModal({ projectId, siteId, lotId, onClose, onDone }: {
         </div>
 
         <div className="text-xs text-muted-foreground bg-muted/40 rounded-lg px-3 py-2">
-          Destination: <strong>Site Warehouse</strong> — office will arrange delivery or transfer.
+          Destination: <strong>Project Warehouse</strong> — office will arrange delivery or transfer.
         </div>
 
         {error && <p className="text-xs text-destructive">{error}</p>}

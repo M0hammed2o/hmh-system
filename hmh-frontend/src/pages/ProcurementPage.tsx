@@ -25,7 +25,7 @@ import { EmailDraftModal } from "@/components/EmailDraftModal";
 
 /** Human-readable labels for delivery_destination values. */
 const DEST_LABEL: Record<DeliveryDestination, string> = {
-  SITE_STORE:      "Site Warehouse",
+  SITE_STORE:      "Project Warehouse",
   MAIN_WAREHOUSE:  "Main Warehouse (bulk)",
   LOT:             "Direct to Lot",
 };
@@ -116,7 +116,7 @@ function CreateMRModal({ projectId, sites, onClose, onCreated }: {
             <div className="space-y-1.5">
               <Label>Delivery Destination</Label>
               <select value={destination} onChange={(e) => setDestination(e.target.value as DeliveryDestination)} className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm">
-                <option value="SITE_STORE">Site Warehouse (from supplier)</option>
+                <option value="SITE_STORE">Project Warehouse (from supplier)</option>
                 <option value="MAIN_WAREHOUSE">Main Warehouse (bulk purchase only)</option>
                 <option value="LOT">Direct to Lot</option>
               </select>
@@ -199,7 +199,7 @@ function MRDetailModal({ mr, suppliers, onClose, onUpdated }: {
     try {
       await warehouseApi.transferToSite(mr.project_id, item.item_id, mr.site_id, qty,
         `Fulfilment for ${mr.request_number}`);
-      setResult(`Transferred ${qty} ${item.unit ?? ""} of ${item.item_name} to site warehouse.`);
+      setResult(`Transferred ${qty} ${item.unit ?? ""} of ${item.item_name} to project warehouse.`);
       loadMainStock();   // refresh stock
       onUpdated();
     } catch (err: unknown) {
@@ -374,7 +374,7 @@ function MRDetailModal({ mr, suppliers, onClose, onUpdated }: {
                   ) : mainStock.length === 0 ? (
                     <p className="text-xs text-muted-foreground">
                       Main warehouse has no stock for this project.
-                      Use "Order from Supplier to Site Warehouse" below.
+                      Use "Order from Supplier to Project Warehouse" below if stock is not available.
                     </p>
                   ) : (
                     <div className="space-y-2">
@@ -426,7 +426,7 @@ function MRDetailModal({ mr, suppliers, onClose, onUpdated }: {
                 <p className="text-xs font-semibold">
                   {mr.delivery_destination === "MAIN_WAREHOUSE"
                     ? "Bulk Purchase to Main Warehouse"
-                    : "Order from Supplier to Site Warehouse"}
+                    : "Order from Supplier to Project Warehouse"}
                 </p>
               </div>
               <p className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
@@ -470,7 +470,7 @@ function MRDetailModal({ mr, suppliers, onClose, onUpdated }: {
                   <ShoppingCart className="w-3.5 h-3.5 mr-1" />
                   {mr.delivery_destination === "MAIN_WAREHOUSE"
                     ? "Bulk Purchase to Main Warehouse"
-                    : "Order from Supplier to Site Warehouse"}
+                    : "Order from Supplier to Project Warehouse"}
                 </Button>
               )}
             </WriteGuard>
@@ -780,7 +780,7 @@ function CaptureExternalPOModal({
               <Label>Delivery Destination</Label>
               <select value={destination} onChange={e => setDestination(e.target.value as "SITE_STORE" | "MAIN_WAREHOUSE")}
                 className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm">
-                <option value="SITE_STORE">Site Warehouse</option>
+                <option value="SITE_STORE">Project Warehouse</option>
                 <option value="MAIN_WAREHOUSE">Main Warehouse (bulk)</option>
               </select>
             </div>

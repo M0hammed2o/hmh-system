@@ -1309,16 +1309,17 @@ export default function ProjectDetailPage() {
             </div>
           </div>
 
-          {/* Unassigned lots admin banner — only shown when unassigned lots exist */}
-          {!lotsLoading && lots.some(l => !l.site_id) && sites.length > 0 && (
+          {/* Unassigned lots admin banner — only when project HAS sites but some lots are unassigned.
+               Freestanding projects (sites.length=0) intentionally have lots without site_id. */}
+          {!lotsLoading && lots.some(l => !l.site_id) && sites.length > 1 && (
             <div className="bg-amber-50 border border-amber-300 rounded-xl p-4 space-y-3">
               <div>
                 <p className="text-sm font-semibold text-amber-800">
-                  ⚠ {lots.filter(l => !l.site_id).length} lot{lots.filter(l => !l.site_id).length !== 1 ? "s" : ""} have no site assignment
+                  {lots.filter(l => !l.site_id).length} lot{lots.filter(l => !l.site_id).length !== 1 ? "s" : ""} are not assigned to a site
                 </p>
                 <p className="text-xs text-amber-700 mt-0.5">
-                  Lots without a site break BOQ generation — they may be incorrectly assigned to all sites.
-                  Assign them to the correct site below.
+                  This project has multiple sites. Assigning these lots to the correct site
+                  helps with BOQ generation and reporting.
                 </p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
@@ -1403,7 +1404,7 @@ export default function ProjectDetailPage() {
                       <td className="px-4 py-3 text-xs hidden md:table-cell">
                         {lot.site_id
                           ? <span className="text-muted-foreground">{sites.find((s) => s.id === lot.site_id)?.name ?? lot.site_id.slice(0, 8)}</span>
-                          : <span className="text-amber-600 font-medium">⚠ No site</span>
+                          : <span className="text-muted-foreground italic">Freestanding</span>
                         }
                       </td>
                       <td className="px-4 py-3">

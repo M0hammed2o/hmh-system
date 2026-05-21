@@ -1,16 +1,14 @@
 /**
- * Main Warehouse — office view of project-level (central) stock.
+ * Main Warehouse — company-wide central stock.
  *
- * Stock flow recap:
- *   Delivery (MAIN_WAREHOUSE dest) → Main Warehouse
- *   Main Warehouse → Site Warehouse  (transfer)
- *   Site Warehouse → Main Warehouse  (return)
+ * Stock flow:
+ *   Delivery → Main Warehouse → Project Warehouse → Lot/Unit → Milestone usage
  *
- * This page lets OFFICE_AND_ABOVE users:
- *   • See what's currently on hand in the project's main warehouse
- *   • Dispatch items to any site warehouse
- *   • Record returns from a site back to main
- *   • Browse the full movement history
+ * This page (admin/office only):
+ *   • See what's on hand in the company Main Warehouse
+ *   • Dispatch to Project Warehouse (per project)
+ *   • Receive returns from Project Warehouses
+ *   • Browse movement history
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";

@@ -603,8 +603,8 @@ export default function ProjectWarehousePage() {
                 </p>
               </div>
             ) : (
-              <>
-                <div className="grid grid-cols-[1fr_110px_80px_120px_auto] gap-0 border-b border-border bg-muted/20 px-4 py-2">
+              <div className="overflow-x-auto">
+                <div className="grid grid-cols-[1fr_110px_80px_120px_auto] gap-0 border-b border-border bg-muted/20 px-4 py-2 min-w-[420px]">
                   {["Item", "On Hand", "Unit", "Last Movement", ""].map((h, i) => (
                     <span key={i} className="text-xs font-semibold text-muted-foreground uppercase tracking-wide text-right first:text-left last:w-28">{h}</span>
                   ))}
@@ -635,7 +635,7 @@ export default function ProjectWarehousePage() {
                     </div>
                   </div>
                 ))}
-              </>
+              </div>
             )}
           </div>
 

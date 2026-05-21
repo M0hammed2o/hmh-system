@@ -251,6 +251,31 @@ export default function DashboardPage() {
         </div>
       )}
 
+      {/* ── Operational summary ── */}
+      {!opsLoading && operations.length > 0 && (() => {
+        const totalPendingMR  = operations.reduce((s, o) => s + o.active_material_requests, 0);
+        const totalAlerts     = operations.reduce((s, o) => s + o.open_alerts, 0);
+        if (totalPendingMR === 0 && totalAlerts === 0) return null;
+        return (
+          <div className="flex flex-wrap gap-2">
+            {totalPendingMR > 0 && (
+              <Link to="/procurement"
+                className="flex items-center gap-2 px-3 py-2 rounded-xl border border-amber-200 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-800/50 text-xs font-medium text-amber-700 dark:text-amber-400 hover:opacity-80 transition-opacity">
+                <Package className="w-3.5 h-3.5" />
+                {totalPendingMR} pending material request{totalPendingMR !== 1 ? "s" : ""} — needs review
+              </Link>
+            )}
+            {totalAlerts > 0 && (
+              <Link to="/alerts"
+                className="flex items-center gap-2 px-3 py-2 rounded-xl border border-destructive/20 bg-destructive/5 text-xs font-medium text-destructive hover:opacity-80 transition-opacity">
+                <AlertTriangle className="w-3.5 h-3.5" />
+                {totalAlerts} open alert{totalAlerts !== 1 ? "s" : ""} across projects
+              </Link>
+            )}
+          </div>
+        );
+      })()}
+
       {/* ── Project operations ── */}
       <div>
         <div className="flex items-center justify-between mb-3">
