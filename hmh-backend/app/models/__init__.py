@@ -7,6 +7,7 @@ from app.models.enums import *  # noqa: F401, F403 — re-export all enum types
 from app.models.user import User
 from app.models.project import Project
 from app.models.site import Site
+from app.models.lot_type import LotType
 from app.models.lot import Lot
 from app.models.stage import StageMaster, ProjectStageStatus
 from app.models.access import UserProjectAccess, UserSiteAccess
@@ -40,6 +41,7 @@ __all__ = [
     "User",
     "Project",
     "Site",
+    "LotType",
     "Lot",
     "StageMaster",
     "ProjectStageStatus",

@@ -196,6 +196,39 @@ def ensure_tables():
                     END IF;
                 END $$;
             """))
+
+        # migration 0016: lot_types table + new columns on lots and boq_items
+        # create_all creates the table (from ORM), but guard existing DBs
+        conn.execute(_t("""
+            DO $$
+            BEGIN
+                -- lots.lot_type_id
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'lots' AND column_name = 'lot_type_id'
+                ) THEN
+                    ALTER TABLE lots ADD COLUMN lot_type_id UUID;
+                    -- FK added conditionally below
+                END IF;
+
+                -- lots.boq_customized_at
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'lots' AND column_name = 'boq_customized_at'
+                ) THEN
+                    ALTER TABLE lots ADD COLUMN boq_customized_at TIMESTAMPTZ;
+                END IF;
+
+                -- boq_items.generated_from_lot_type_id
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'boq_items'
+                    AND column_name = 'generated_from_lot_type_id'
+                ) THEN
+                    ALTER TABLE boq_items ADD COLUMN generated_from_lot_type_id UUID;
+                END IF;
+            END $$;
+        """))
     yield
 
 

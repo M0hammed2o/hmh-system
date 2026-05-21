@@ -154,6 +154,15 @@ class BOQItem(TimestampMixin, Base):
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
+    # Phase 3D: records which LotType generated this item via propagation.
+    # NULL on items created before Phase 3D or without a lot type.
+    # Used in propagation to scope updates to "only items we generated".
+    generated_from_lot_type_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("lot_types.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
     section: Mapped["BOQSection"] = relationship("BOQSection", back_populates="items")
 
     def __repr__(self) -> str:
