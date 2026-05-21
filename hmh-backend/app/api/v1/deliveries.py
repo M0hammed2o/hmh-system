@@ -133,9 +133,13 @@ async def receive_delivery_with_document(
     Creates a DELIVERY_DISCREPANCY alert for short deliveries.
 
     destination: SITE_STORE (default) | MAIN_WAREHOUSE | LOT
-      SITE_STORE     → stock at (project, site, lot=NULL)  — Site Warehouse
-      MAIN_WAREHOUSE → stock at (project, site=NULL, lot=NULL) — Main Warehouse
-      LOT            → stock at (project, site, lot)       — requires lot_id
+      SITE_STORE     → stock at (project, site_id=NULL, lot=NULL) — Project Warehouse
+      MAIN_WAREHOUSE → stock at (project, site_id=NULL, lot=NULL) — Project Warehouse (same level)
+      LOT            → stock at (project, site_id=NULL, lot=Y)   — requires lot_id
+
+    Phase 3B note: SITE_STORE now writes to site_id=NULL (Project Warehouse).
+    The per-site stock level (site_id=X) is a legacy alias kept for backward
+    compatibility via /sites/{id}/warehouse/ endpoints.
     """
     import mimetypes
     from app.models.attachment import Attachment
@@ -330,17 +334,23 @@ async def receive_delivery_with_document(
                 poi.quantity_received = float(poi.quantity_received or 0) + qty_rec
 
         # ── Route stock to the correct warehouse based on destination ─────────
-        # MAIN_WAREHOUSE → project-level stock (site_id=NULL, lot_id=NULL)
-        # SITE_STORE     → site warehouse       (site_id=X,   lot_id=NULL)
-        # LOT            → lot stock            (site_id=X,   lot_id=Y)
-        if destination == "MAIN_WAREHOUSE":
+        # Phase 3B: SITE_STORE and MAIN_WAREHOUSE both land in the Project
+        # Warehouse (site_id=NULL, lot_id=NULL).  The Delivery record still
+        # stores the physical delivery site for traceability.
+        #
+        # SITE_STORE     → Project Warehouse (project, site=NULL, lot=NULL)
+        # MAIN_WAREHOUSE → Project Warehouse (project, site=NULL, lot=NULL)
+        # LOT            → Lot stock         (project, site=NULL, lot=Y)
+        if destination in ("MAIN_WAREHOUSE", "SITE_STORE"):
             effective_site_id  = None
             effective_lot_id   = None
-        elif lot_id and destination in ("LOT", "SITE_STORE"):
-            effective_site_id  = uuid.UUID(site_id)
+        elif lot_id:
+            # LOT destination — or SITE_STORE with an explicit lot_id
+            effective_site_id  = None
             effective_lot_id   = uuid.UUID(lot_id)
         else:
-            effective_site_id  = uuid.UUID(site_id)
+            # Fallback: project warehouse
+            effective_site_id  = None
             effective_lot_id   = None
 
         # Stock ledger entry — only when item_id is linked to the catalog.

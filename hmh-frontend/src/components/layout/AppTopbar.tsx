@@ -3,7 +3,7 @@ import { useLocation, NavLink } from "react-router-dom";
 import {
   Menu, X, Moon, Sun, LogOut, HardHat,
   LayoutDashboard, Users, FolderKanban, FileSpreadsheet,
-  ShoppingCart, Truck, CreditCard, Bell, Settings,
+  ShoppingCart, Truck, Package, CreditCard, Bell, Settings,
   Copy, Building2, Mail, FileCheck2, Car, Droplet,
   Smartphone, Clock, User, Flag, Warehouse,
 } from "lucide-react";
@@ -30,7 +30,8 @@ const pageTitles: Record<string, string> = {
   "/vehicles":        "Vehicles",
   "/fuel":            "Fuel",
   "/milestones":      "Milestones",
-  "/warehouse":       "Main Warehouse",
+  "/warehouse":         "Main Warehouse",
+  "/project-warehouse": "Project Warehouse",
   "/timeline":        "Timeline",
   "/audit":           "User Activity",
   "/alerts":          "Alerts",
@@ -69,7 +70,8 @@ const navGroups = [
   {
     label: "Warehouse",
     items: [
-      { title: "Main Warehouse",  path: "/warehouse",       icon: Warehouse },
+      { title: "Main Warehouse",    path: "/warehouse",          icon: Warehouse },
+      { title: "Project Warehouse", path: "/project-warehouse",  icon: Package   },
     ],
   },
   {

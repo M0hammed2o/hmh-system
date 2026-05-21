@@ -290,15 +290,17 @@ def receive_stock(
                     overrun_reason, actor_id=actor_id,
                 )
 
-        # Route stock to the correct warehouse:
-        #   MAIN_WAREHOUSE → project-level stock (site_id=NULL, lot_id=NULL)
-        #   SITE_STORE     → site warehouse       (site_id=X,    lot_id=NULL)
-        #   LOT            → lot stock            (site_id=X,    lot_id=Y)
-        effective_site_id = (
-            None if destination == DeliveryDestination.MAIN_WAREHOUSE
-            else delivery.site_id
-        )
-        effective_lot_id = lot_id if destination == DeliveryDestination.LOT else None
+        # Route stock to the correct warehouse (Phase 3B).
+        # SITE_STORE and MAIN_WAREHOUSE both land in the Project Warehouse
+        # (site_id=NULL, lot_id=NULL) — Project Warehouse belongs to the
+        # project, not to a specific site/block.
+        # The Delivery record still holds the physical site for traceability.
+        #
+        #   SITE_STORE     → Project Warehouse (site_id=NULL, lot_id=NULL)
+        #   MAIN_WAREHOUSE → Project Warehouse (site_id=NULL, lot_id=NULL)
+        #   LOT            → Lot stock         (site_id=NULL, lot_id=Y)
+        effective_site_id = None  # all warehouse entries are project-scoped
+        effective_lot_id  = lot_id if destination == DeliveryDestination.LOT else None
 
         ledger_entry = StockLedger(
             project_id=delivery.project_id,

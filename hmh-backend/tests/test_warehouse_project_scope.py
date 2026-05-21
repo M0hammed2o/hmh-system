@@ -208,3 +208,116 @@ def test_project_warehouse_history(db: Session, client: TestClient, wh_setup: di
     # The opening balance row should appear
     assert isinstance(data, list)
     assert len(data) >= 1
+
+
+# ── Phase 3B tests — delivery routing to project warehouse ────────────────────
+
+def test_site_store_delivery_routes_to_project_warehouse(
+    db: Session, client: TestClient, wh_setup: dict
+):
+    """
+    Phase 3B: SITE_STORE deliveries must write stock to site_id=NULL (project
+    warehouse) rather than site_id=X (legacy per-site store).
+    """
+    import json as _json
+    from tests.conftest import make_supplier
+
+    supplier  = make_supplier(db, "Test Cement Co")
+    tok       = login(client, wh_setup["office"]["email"], wh_setup["office"]["password"])
+
+    items_json = _json.dumps([{
+        "description":       "Cement 50kg",
+        "quantity_received": 20.0,
+        "item_id":           wh_setup["item"]["id"],
+    }])
+
+    r = client.post(
+        "/api/v1/deliveries/receive-with-document",
+        data={
+            "project_id":  wh_setup["project"]["id"],
+            "site_id":     wh_setup["site"]["id"],
+            "supplier_id": supplier["id"],
+            "destination": "SITE_STORE",
+            "items_json":  items_json,
+        },
+        headers={"Authorization": f"Bearer {tok}"},
+    )
+    assert r.status_code == 201, r.text
+    result = r.json()["data"]
+    assert result["stock_updated_count"] >= 1
+
+    # Verify stock landed in project warehouse (site_id IS NULL)
+    from sqlalchemy import text
+    count = db.execute(text(
+        "SELECT SUM(quantity_in) FROM stock_ledger "
+        "WHERE project_id = :pid AND site_id IS NULL "
+        "  AND item_id = :iid AND movement_type = 'DELIVERY_RECEIVED'"
+    ), {"pid": wh_setup["project"]["id"], "iid": wh_setup["item"]["id"]}).scalar()
+    assert float(count or 0) == 20.0, (
+        f"Expected 20 units in project warehouse (site_id IS NULL), got {count}. "
+        "Phase 3B delivery routing fix may not have been applied."
+    )
+
+
+def test_lot_delivery_routes_to_lot_stock(
+    db: Session, client: TestClient, wh_setup: dict
+):
+    """
+    Deliveries with destination=LOT must write to lot-level stock (lot_id=Y).
+    Lot deliveries should never bypass warehouse (site_id=NULL, lot_id=Y).
+    """
+    import json as _json
+    from tests.conftest import make_supplier
+
+    supplier = make_supplier(db, "Rebar Supplier")
+    tok      = login(client, wh_setup["office"]["email"], wh_setup["office"]["password"])
+
+    items_json = _json.dumps([{
+        "description":       "Rebar 12mm",
+        "quantity_received": 15.0,
+        "item_id":           wh_setup["item"]["id"],
+    }])
+
+    r = client.post(
+        "/api/v1/deliveries/receive-with-document",
+        data={
+            "project_id":  wh_setup["project"]["id"],
+            "site_id":     wh_setup["site"]["id"],
+            "supplier_id": supplier["id"],
+            "destination": "LOT",
+            "lot_id":      wh_setup["lot"]["id"],
+            "items_json":  items_json,
+        },
+        headers={"Authorization": f"Bearer {tok}"},
+    )
+    assert r.status_code == 201, r.text
+
+    from sqlalchemy import text
+    count = db.execute(text(
+        "SELECT SUM(quantity_in) FROM stock_ledger "
+        "WHERE project_id = :pid AND lot_id = :lid "
+        "  AND item_id = :iid AND movement_type = 'DELIVERY_RECEIVED'"
+    ), {
+        "pid": wh_setup["project"]["id"],
+        "lid": wh_setup["lot"]["id"],
+        "iid": wh_setup["item"]["id"],
+    }).scalar()
+    assert float(count or 0) == 15.0
+
+
+def test_legacy_site_warehouse_endpoint_still_works(
+    db: Session, client: TestClient, wh_setup: dict
+):
+    """
+    Phase 3B: Legacy /sites/{id}/warehouse/ endpoint must remain accessible.
+    Backward compatibility guarantee.
+    """
+    tok = login(client, wh_setup["office"]["email"], wh_setup["office"]["password"])
+
+    r = client.get(
+        f"/api/v1/sites/{wh_setup['site']['id']}/warehouse/",
+        headers=auth(tok),
+    )
+    # The endpoint must respond 200 (may return empty if no per-site stock)
+    assert r.status_code == 200, r.text
+    assert isinstance(r.json()["data"], list)

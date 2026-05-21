@@ -9,7 +9,7 @@ import {
 import { siteCaptureApi, type ExtractedItem } from "@/api/siteCapture";
 import { siteDashboardApi, type MaterialSummaryItem, type ActivityItem } from "@/api/siteDashboard";
 import { BOQAllocationTable } from "@/components/site/BOQAllocationTable";
-import { SiteWarehouse } from "@/components/site/SiteWarehouse";
+import { ProjectWarehouse } from "@/components/site/ProjectWarehouse";
 import { HMHLogo } from "@/components/HMHLogo";
 import { TOKEN_KEY, REFRESH_TOKEN_KEY, ROLE_KEY, SITE_ROLE_SET } from "@/lib/constants";
 import { Button } from "@/components/ui/button";
@@ -524,7 +524,7 @@ export default function SiteDashboardPage() {
 
             {/* ── Site Warehouse — stock on hand, transfer to unit ── */}
             {siteId && projectId && (
-              <SiteWarehouse siteId={siteId} projectId={projectId} />
+              <ProjectWarehouse projectId={projectId} siteId={siteId} />
             )}
 
             {/* ── Milestones / Stage timeline ── */}
