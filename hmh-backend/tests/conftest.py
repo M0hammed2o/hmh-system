@@ -181,6 +181,21 @@ def ensure_tables():
                 END IF;
             END $$;
         """))
+        # migration 0015: stock_ledger.site_id and usage_logs.site_id must be nullable
+        # (project-level warehouse entries have site_id=NULL)
+        for _tbl in ["stock_ledger", "usage_logs"]:
+            conn.execute(_t(f"""
+                DO $$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name = '{_tbl}'
+                        AND column_name = 'site_id' AND is_nullable = 'NO'
+                    ) THEN
+                        ALTER TABLE {_tbl} ALTER COLUMN site_id DROP NOT NULL;
+                    END IF;
+                END $$;
+            """))
     yield
 
 
@@ -370,14 +385,17 @@ def make_supplier(db: Session, name: str = None) -> dict:
     return {"id": str(s.id), "name": name}
 
 
-def make_stock(db: Session, project_id: str, site_id: str, item_id: str,
+def make_stock(db: Session, project_id: str, site_id, item_id: str,
                qty: float = 100.0, lot_id: str = None) -> None:
-    """Add opening balance to stock ledger."""
+    """Add opening balance to stock ledger.
+
+    site_id may be None for project-level (warehouse) entries.
+    """
     from app.models.stock import StockLedger
     from app.models.enums import MovementType
     db.add(StockLedger(
         project_id=uuid.UUID(project_id),
-        site_id=uuid.UUID(site_id),
+        site_id=uuid.UUID(site_id) if site_id else None,
         lot_id=uuid.UUID(lot_id) if lot_id else None,
         item_id=uuid.UUID(item_id),
         movement_type=MovementType.OPENING_BALANCE,

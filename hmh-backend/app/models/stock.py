@@ -24,10 +24,10 @@ class StockLedger(Base):
         ForeignKey("projects.id", ondelete="CASCADE"),
         nullable=False,
     )
-    site_id: Mapped[uuid.UUID] = mapped_column(
+    site_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("sites.id", ondelete="CASCADE"),
-        nullable=False,
+        ForeignKey("sites.id", ondelete="SET NULL"),
+        nullable=True,   # NULL = project-level warehouse (no specific site)
     )
     lot_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True),
@@ -83,10 +83,10 @@ class UsageLog(Base):
         nullable=False,
         index=True,
     )
-    site_id: Mapped[uuid.UUID] = mapped_column(
+    site_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("sites.id", ondelete="CASCADE"),
-        nullable=False,
+        ForeignKey("sites.id", ondelete="SET NULL"),
+        nullable=True,   # NULL = project-level; site is informational, not structural
         index=True,
     )
     lot_id: Mapped[Optional[uuid.UUID]] = mapped_column(
