@@ -11,6 +11,9 @@ export interface Lot {
   block_number: string | null;
   status: LotStatus;
   boq_template_id: string | null;
+  // Phase 3D.2
+  lot_type_id: string | null;
+  boq_customized_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -21,6 +24,7 @@ export interface LotCreate {
   unit_type?: string | null;
   block_number?: string | null;
   status?: LotStatus;
+  lot_type_id?: string | null;
 }
 
 export interface LotUpdate {
@@ -28,6 +32,7 @@ export interface LotUpdate {
   unit_type?: string | null;
   block_number?: string | null;
   status?: LotStatus;
+  lot_type_id?: string | null;
 }
 
 export const lotsApi = {

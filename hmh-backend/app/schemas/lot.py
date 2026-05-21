@@ -20,6 +20,9 @@ class LotRead(BaseModel):
     block_number: Optional[str] = None
     status: LotStatus
     boq_template_id: Optional[uuid.UUID] = None
+    # Phase 3D.2: Lot Type FK
+    lot_type_id: Optional[uuid.UUID] = None
+    boq_customized_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
 
@@ -30,6 +33,7 @@ class LotCreate(BaseModel):
     unit_type: Optional[str] = None
     block_number: Optional[str] = None
     status: LotStatus = LotStatus.AVAILABLE
+    lot_type_id: Optional[uuid.UUID] = None
 
     @field_validator("lot_number")
     @classmethod
@@ -44,3 +48,4 @@ class LotUpdate(BaseModel):
     unit_type: Optional[str] = None
     block_number: Optional[str] = None
     status: Optional[LotStatus] = None
+    lot_type_id: Optional[uuid.UUID] = None

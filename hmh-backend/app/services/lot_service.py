@@ -74,6 +74,7 @@ def create_lot(db: Session, project_id: uuid.UUID, data: LotCreate) -> Lot:
         unit_type=data.unit_type.strip() if data.unit_type else None,
         block_number=data.block_number.strip() if data.block_number else None,
         status=data.status,
+        lot_type_id=getattr(data, "lot_type_id", None),
     )
     db.add(lot)
     db.commit()
@@ -158,6 +159,8 @@ def update_lot(db: Session, lot_id: uuid.UUID, data: LotUpdate) -> Lot:
         lot.block_number = data.block_number.strip() if data.block_number else None
     if "status" in fields and data.status is not None:
         lot.status = data.status
+    if "lot_type_id" in fields:
+        lot.lot_type_id = data.lot_type_id
 
     db.commit()
     db.refresh(lot)

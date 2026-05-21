@@ -290,6 +290,10 @@ from app.api.v1.warehouse import router as warehouse_router, project_warehouse_r
 app.include_router(warehouse_router, prefix="/api/v1")
 app.include_router(project_warehouse_router, prefix="/api/v1")
 
+from app.api.v1.lot_types import project_lot_types_router, lot_types_router
+app.include_router(project_lot_types_router, prefix="/api/v1")
+app.include_router(lot_types_router, prefix="/api/v1")
+
 # ── Static file serving for uploaded documents ────────────────────────────────
 # Use settings.UPLOAD_DIR (absolute path from env) so the static mount and all
 # file-save calls (stages, deliveries, usage, gmail) reference the SAME directory.

@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import {
   ArrowLeft, Plus, MapPin, Calendar, Building2, Pencil, Layers, Wand2,
-  FileSpreadsheet, ChevronRight, Copy, Trash2,
+  FileSpreadsheet, ChevronRight, Copy, Trash2, Tag, X, Check,
 } from "lucide-react";
 import { SitesBulkCreateModal } from "@/components/SitesBulkCreateModal";
 import { LotsGeneratorModal } from "@/components/LotsGeneratorModal";
@@ -20,6 +20,8 @@ import { projectsApi, type Project, type ProjectUpdate, type ProjectStatus } fro
 import { sitesApi, type Site, type SiteCreate } from "@/api/sites";
 import { lotsApi, type Lot, type LotCreate, type LotStatus } from "@/api/lots";
 import { stagesApi, type ProjectStageStatus, type StageMaster, type StageStatus } from "@/api/stages";
+import { lotTypesApi, type LotType, type LotTypeCreate, type LotTypeUpdate } from "@/api/lotTypes";
+import { boqApi, type BOQTemplate } from "@/api/boq";
 import { formatDate } from "@/lib/format";
 
 // ── Status display maps ───────────────────────────────────────────────────────
@@ -69,10 +71,11 @@ const projectStatusLabel: Record<ProjectStatus, string> = {
 };
 
 const TABS = [
-  { key: "overview", label: "Overview" },
-  { key: "sites",    label: "Sites" },
-  { key: "lots",     label: "Lots" },
-  { key: "stages",   label: "Stages" },
+  { key: "overview",   label: "Overview"   },
+  { key: "sites",      label: "Sites"      },
+  { key: "lots",       label: "Lots"       },
+  { key: "lot-types",  label: "Lot Types"  },
+  { key: "stages",     label: "Stages"     },
 ];
 
 // ── Edit Project modal ────────────────────────────────────────────────────────
@@ -532,6 +535,344 @@ function AddLotModal({
   );
 }
 
+// ── Lot Types tab ─────────────────────────────────────────────────────────────
+
+function LotTypesTab({
+  projectId, lotTypes, lots, templates, loading,
+  showCreate, editingType, assigningType,
+  onShowCreate, onCloseCreate, onEditType, onCloseEdit, onAssignType, onCloseAssign, onRefresh,
+}: {
+  projectId:    string;
+  lotTypes:     LotType[];
+  lots:         import("@/api/lots").Lot[];
+  templates:    BOQTemplate[];
+  loading:      boolean;
+  showCreate:   boolean;
+  editingType:  LotType | null;
+  assigningType: LotType | null;
+  onShowCreate:  () => void;
+  onCloseCreate: () => void;
+  onEditType:    (t: LotType) => void;
+  onCloseEdit:   () => void;
+  onAssignType:  (t: LotType) => void;
+  onCloseAssign: () => void;
+  onRefresh:     () => void;
+}) {
+  return (
+    <div className="space-y-4">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <p className="text-sm text-muted-foreground">
+            Define unit types for bulk BOQ management and milestone propagation.
+          </p>
+        </div>
+        <Button size="sm" onClick={onShowCreate}>
+          <Plus className="w-4 h-4" />New Type
+        </Button>
+      </div>
+
+      {/* List */}
+      {loading ? (
+        <div className="space-y-2">
+          {[1, 2, 3].map(i => <Skeleton key={i} className="h-16 rounded-xl" />)}
+        </div>
+      ) : lotTypes.length === 0 ? (
+        <div className="bg-card border border-border rounded-xl p-10 text-center space-y-3">
+          <Tag className="w-8 h-8 text-muted-foreground mx-auto" />
+          <p className="text-sm text-muted-foreground">
+            No lot types yet. Create your first type to enable bulk BOQ management.
+          </p>
+          <Button size="sm" variant="outline" onClick={onShowCreate}>
+            <Plus className="w-4 h-4" />Create Lot Type
+          </Button>
+        </div>
+      ) : (
+        <div className="bg-card border border-border rounded-xl overflow-hidden">
+          {lotTypes.map((lt, i) => (
+            <div
+              key={lt.id}
+              className={cn(
+                "flex items-center gap-4 px-4 py-4 hover:bg-muted/30 transition-colors",
+                i < lotTypes.length - 1 && "border-b border-border",
+              )}
+            >
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="font-semibold text-sm">{lt.name}</span>
+                  {lt.code && (
+                    <span className="text-xs bg-muted text-muted-foreground px-1.5 py-0.5 rounded font-mono">
+                      {lt.code}
+                    </span>
+                  )}
+                  <span className="text-xs bg-primary/10 text-primary rounded-full px-2 py-0.5">
+                    {lt.lot_count} lot{lt.lot_count !== 1 ? "s" : ""}
+                  </span>
+                </div>
+                {lt.description && (
+                  <p className="text-xs text-muted-foreground mt-0.5 truncate">{lt.description}</p>
+                )}
+                {lt.default_template_name && (
+                  <p className="text-xs text-muted-foreground mt-0.5 flex items-center gap-1">
+                    <FileSpreadsheet className="w-3 h-3" />
+                    {lt.default_template_name}
+                  </p>
+                )}
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <Button size="sm" variant="outline" className="h-8 text-xs gap-1" onClick={() => onAssignType(lt)}>
+                  <Layers className="w-3.5 h-3.5" />Assign Lots
+                </Button>
+                <Button size="sm" variant="ghost" className="h-8 w-8 p-0" onClick={() => onEditType(lt)}>
+                  <Pencil className="w-3.5 h-3.5" />
+                </Button>
+                <button
+                  onClick={async () => {
+                    if (lt.lot_count > 0) {
+                      alert(`Cannot delete "${lt.name}": ${lt.lot_count} lot(s) are assigned. Unassign them first.`);
+                      return;
+                    }
+                    if (!window.confirm(`Delete lot type "${lt.name}"?`)) return;
+                    try {
+                      await lotTypesApi.delete(lt.id);
+                      onRefresh();
+                    } catch {
+                      alert("Failed to delete lot type.");
+                    }
+                  }}
+                  className="p-1.5 rounded text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
+                  title="Delete"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Create modal */}
+      {showCreate && (
+        <LotTypeFormModal
+          projectId={projectId}
+          templates={templates}
+          onClose={onCloseCreate}
+          onSaved={() => { onCloseCreate(); onRefresh(); }}
+        />
+      )}
+
+      {/* Edit modal */}
+      {editingType && (
+        <LotTypeFormModal
+          projectId={projectId}
+          templates={templates}
+          existing={editingType}
+          onClose={onCloseEdit}
+          onSaved={() => { onCloseEdit(); onRefresh(); }}
+        />
+      )}
+
+      {/* Assign lots modal */}
+      {assigningType && (
+        <AssignLotsModal
+          lotType={assigningType}
+          allLots={lots}
+          onClose={onCloseAssign}
+          onSaved={() => { onCloseAssign(); onRefresh(); }}
+        />
+      )}
+    </div>
+  );
+}
+
+// ── Lot Type Form Modal ───────────────────────────────────────────────────────
+
+function LotTypeFormModal({
+  projectId, templates, existing, onClose, onSaved,
+}: {
+  projectId:  string;
+  templates:  BOQTemplate[];
+  existing?:  LotType | null;
+  onClose:    () => void;
+  onSaved:    () => void;
+}) {
+  const [name,       setName]       = useState(existing?.name       ?? "");
+  const [code,       setCode]       = useState(existing?.code       ?? "");
+  const [desc,       setDesc]       = useState(existing?.description ?? "");
+  const [templateId, setTemplateId] = useState(existing?.default_template_id ?? "");
+  const [loading,    setLoading]    = useState(false);
+  const [error,      setError]      = useState("");
+
+  const submit = async () => {
+    if (!name.trim()) { setError("Name is required."); return; }
+    setLoading(true); setError("");
+    const body = {
+      name:                name.trim(),
+      code:                code.trim() || null,
+      description:         desc.trim() || null,
+      default_template_id: templateId || null,
+    };
+    try {
+      if (existing) {
+        await lotTypesApi.update(existing.id, body);
+      } else {
+        await lotTypesApi.create(projectId, body);
+      }
+      onSaved();
+    } catch (err: unknown) {
+      const d = (err as { response?: { data?: { detail?: string } } })?.response?.data;
+      setError(d?.detail ?? "Failed to save.");
+    } finally { setLoading(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-foreground/40">
+      <div className="bg-card border border-border rounded-2xl w-full max-w-md p-6 space-y-4">
+        <div className="flex items-center justify-between">
+          <h2 className="text-base font-semibold">{existing ? "Edit Lot Type" : "New Lot Type"}</h2>
+          <button onClick={onClose}><X className="w-4 h-4 text-muted-foreground" /></button>
+        </div>
+
+        <div className="space-y-3">
+          <div>
+            <Label>Name *</Label>
+            <input value={name} onChange={e => setName(e.target.value)} autoFocus
+              placeholder="e.g. Type A House, 3BR Unit, Corner Unit"
+              className="mt-1 w-full h-9 rounded-md border border-input bg-background px-3 text-sm" />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <Label>Code (optional)</Label>
+              <input value={code} onChange={e => setCode(e.target.value)}
+                placeholder="TYPE-A"
+                className="mt-1 w-full h-9 rounded-md border border-input bg-background px-3 text-sm" />
+            </div>
+            <div>
+              <Label>Default BOQ Template</Label>
+              <select value={templateId} onChange={e => setTemplateId(e.target.value)}
+                className="mt-1 w-full h-9 rounded-md border border-input bg-background px-3 text-sm">
+                <option value="">— None —</option>
+                {templates.map(t => (
+                  <option key={t.id} value={t.id}>{t.template_name || t.version_name}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+          <div>
+            <Label>Description</Label>
+            <textarea value={desc} onChange={e => setDesc(e.target.value)} rows={2}
+              placeholder="Optional description"
+              className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm resize-none" />
+          </div>
+        </div>
+
+        {error && <p className="text-sm text-destructive bg-destructive/10 rounded px-3 py-2">{error}</p>}
+
+        <div className="flex gap-2 pt-1">
+          <Button onClick={submit} disabled={loading} className="flex-1">
+            {loading ? "Saving…" : existing ? "Save Changes" : "Create Type"}
+          </Button>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Assign Lots Modal ─────────────────────────────────────────────────────────
+
+function AssignLotsModal({
+  lotType, allLots, onClose, onSaved,
+}: {
+  lotType:  LotType;
+  allLots:  import("@/api/lots").Lot[];
+  onClose:  () => void;
+  onSaved:  () => void;
+}) {
+  const alreadyAssigned = new Set(
+    allLots.filter(l => l.lot_type_id === lotType.id).map(l => l.id)
+  );
+  const [selected, setSelected]   = useState<Set<string>>(new Set(alreadyAssigned));
+  const [loading,  setLoading]    = useState(false);
+  const [error,    setError]      = useState("");
+
+  const toggleLot = (id: string) =>
+    setSelected(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+
+  const submit = async () => {
+    setLoading(true); setError("");
+    try {
+      const toAssign = Array.from(selected).filter(id => !alreadyAssigned.has(id));
+      const toRemove = Array.from(alreadyAssigned).filter(id => !selected.has(id));
+      if (toAssign.length) await lotTypesApi.assignLots(lotType.id, toAssign);
+      if (toRemove.length) await lotTypesApi.removeLots(lotType.id, toRemove);
+      onSaved();
+    } catch (err: unknown) {
+      const d = (err as { response?: { data?: { detail?: string } } })?.response?.data;
+      setError(d?.detail ?? "Failed to update assignment.");
+    } finally { setLoading(false); }
+  };
+
+  // Sort lots naturally: "12" < "12A" < "B-17" < "Unit 5A"
+  const sorted = [...allLots].sort((a, b) =>
+    a.lot_number.localeCompare(b.lot_number, undefined, { numeric: true, sensitivity: "base" })
+  );
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-foreground/40">
+      <div className="bg-card border border-border rounded-2xl w-full max-w-md flex flex-col max-h-[85vh]">
+        <div className="flex items-center justify-between px-5 pt-5 pb-3 border-b border-border">
+          <div>
+            <h2 className="text-base font-semibold">Assign Lots — {lotType.name}</h2>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              {selected.size} of {allLots.length} lots selected
+            </p>
+          </div>
+          <button onClick={onClose}><X className="w-4 h-4 text-muted-foreground" /></button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-2">
+          <div className="border border-border rounded-lg overflow-hidden">
+            {sorted.map((lot, i) => {
+              const isChecked  = selected.has(lot.id);
+              const otherType  = lot.lot_type_id && lot.lot_type_id !== lotType.id;
+              return (
+                <label key={lot.id}
+                  className={cn(
+                    "flex items-center gap-3 px-3 py-2.5 cursor-pointer hover:bg-muted/30 transition-colors",
+                    i < sorted.length - 1 && "border-b border-border/50",
+                    isChecked && "bg-primary/5",
+                  )}>
+                  <input type="checkbox" checked={isChecked} onChange={() => toggleLot(lot.id)}
+                    className="rounded shrink-0" />
+                  <span className="flex-1 text-sm min-w-0">
+                    <span className="font-medium font-mono">{lot.lot_number}</span>
+                    {lot.unit_type && <span className="text-muted-foreground ml-1.5">· {lot.unit_type}</span>}
+                    {!lot.site_id && <span className="text-muted-foreground ml-1 text-xs">(freestanding)</span>}
+                  </span>
+                  {isChecked && <Check className="w-3.5 h-3.5 text-primary shrink-0" />}
+                  {otherType && !isChecked && (
+                    <span className="text-[10px] text-amber-600 shrink-0">other type</span>
+                  )}
+                </label>
+              );
+            })}
+          </div>
+        </div>
+
+        {error && <p className="mx-5 text-sm text-destructive bg-destructive/10 rounded px-3 py-2">{error}</p>}
+
+        <div className="px-5 pb-5 pt-3 border-t border-border flex gap-2">
+          <Button onClick={submit} disabled={loading} className="flex-1">
+            {loading ? "Saving…" : "Apply Assignment"}
+          </Button>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function ProjectDetailPage() {
@@ -559,6 +900,15 @@ export default function ProjectDetailPage() {
   const [showAddLot, setShowAddLot] = useState(false);
   const [showGenerateLots, setShowGenerateLots] = useState(false);
   const [showApplyBOQ, setShowApplyBOQ] = useState(false);
+
+  // Lot Types state — Phase 3D.2
+  const [lotTypes, setLotTypes] = useState<LotType[]>([]);
+  const [lotTypesLoading, setLotTypesLoading] = useState(false);
+  const [showCreateType, setShowCreateType] = useState(false);
+  const [editingType, setEditingType] = useState<LotType | null>(null);
+  const [assigningType, setAssigningType] = useState<LotType | null>(null);
+  const [templates, setTemplates] = useState<BOQTemplate[]>([]);
+
   // Unassigned lots admin helper
   const [assigningSiteId, setAssigningSiteId] = useState("");
   const [assigningLots, setAssigningLots] = useState(false);
@@ -611,6 +961,25 @@ export default function ProjectDetailPage() {
       .finally(() => setLotsLoading(false));
   }, [tab, projectId]);
 
+  // ── Load lot types when Lot Types tab is active ─────────────────────────────
+  useEffect(() => {
+    if (tab !== "lot-types" || !projectId) return;
+    setLotTypesLoading(true);
+    Promise.all([
+      lotTypesApi.list(projectId),
+      boqApi.listTemplates(),
+      // also load lots so the assign modal has data
+      lotsApi.list(projectId),
+    ])
+      .then(([types, tmpl, ls]) => {
+        setLotTypes(types);
+        setTemplates(tmpl);
+        setLots(ls);
+      })
+      .catch(() => {})
+      .finally(() => setLotTypesLoading(false));
+  }, [tab, projectId]);
+
   // ── Load stages when Stages tab is active ───────────────────────────────────
   useEffect(() => {
     if (tab !== "stages" || !projectId) return;
@@ -655,8 +1024,9 @@ export default function ProjectDetailPage() {
   }
 
   const tabsWithCount = TABS.map((t) => {
-    if (t.key === "sites") return { ...t, count: sites.length };
-    if (t.key === "lots") return { ...t, count: lots.length || undefined };
+    if (t.key === "sites")     return { ...t, count: sites.length };
+    if (t.key === "lots")      return { ...t, count: lots.length || undefined };
+    if (t.key === "lot-types") return { ...t, count: lotTypes.length || undefined };
     return t;
   });
 
@@ -1067,6 +1437,33 @@ export default function ProjectDetailPage() {
             )}
           </div>
         </div>
+      )}
+
+      {/* ── LOT TYPES (Phase 3D.2) ───────────────────────────────────────── */}
+      {tab === "lot-types" && (
+        <LotTypesTab
+          projectId={projectId!}
+          lotTypes={lotTypes}
+          lots={lots}
+          templates={templates}
+          loading={lotTypesLoading}
+          showCreate={showCreateType}
+          editingType={editingType}
+          assigningType={assigningType}
+          onShowCreate={() => setShowCreateType(true)}
+          onCloseCreate={() => setShowCreateType(false)}
+          onEditType={setEditingType}
+          onCloseEdit={() => setEditingType(null)}
+          onAssignType={setAssigningType}
+          onCloseAssign={() => setAssigningType(null)}
+          onRefresh={() => {
+            setLotTypesLoading(true);
+            Promise.all([lotTypesApi.list(projectId!), lotsApi.list(projectId!)])
+              .then(([types, ls]) => { setLotTypes(types); setLots(ls); })
+              .catch(() => {})
+              .finally(() => setLotTypesLoading(false));
+          }}
+        />
       )}
 
       {/* ── STAGES (real data) ────────────────────────────────────────────── */}
