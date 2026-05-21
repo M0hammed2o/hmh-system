@@ -222,6 +222,45 @@ export interface LotBOQRow extends TypeBreakdown, Variance {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
+export interface BOQTemplate {
+  id:            string;
+  version_name:  string;
+  template_name: string | null;
+  notes:         string | null;
+}
+
+export interface BOQTemplatePreviewLot {
+  lot_id:                   string;
+  lot_number:               string;
+  unit_type:                string | null;
+  has_existing_boq:         boolean;
+  existing_item_count:      number;
+  new_item_count:           number;
+  has_existing_milestones:  boolean;
+  existing_milestone_count: number;
+  new_milestone_count:      number;
+  action:                   "create" | "overwrite";
+}
+
+export interface BOQTemplatePreview {
+  template_id:            string;
+  template_name:          string;
+  template_section_count: number;
+  template_item_count:    number;
+  template_stage_count:   number;
+  lots:                   BOQTemplatePreviewLot[];
+  lots_needing_overwrite: number;
+  total_lots:             number;
+}
+
+export interface BOQCloneResult {
+  created_count:      number;
+  milestones_created: number;
+  deactivated_count:  number;
+  lot_ids:            string[];
+  freestanding_master: boolean;
+}
+
 export const boqApi = {
   listHeaders: async (projectId: string): Promise<BOQHeader[]> => {
     const res = await client.get<{ data: BOQHeader[] }>(`/projects/${projectId}/boq/`);
@@ -386,6 +425,42 @@ export const boqApi = {
   resetLotToSiteBoq: async (lotId: string): Promise<{ created: number }> => {
     const res = await client.post<{ data: { created: number } }>(
       `/boq/items/lots/${lotId}/reset-to-site-boq`,
+    );
+    return res.data.data;
+  },
+
+  // ── Template operations ────────────────────────────────────────────────────
+
+  /** List all global reusable templates (GET /boq-templates/). */
+  listTemplates: async (): Promise<BOQTemplate[]> => {
+    const res = await client.get<{ data: BOQTemplate[] }>("/boq-templates/");
+    return res.data.data;
+  },
+
+  /** Dry-run preview — see what will change before applying. */
+  previewClone: async (body: {
+    template_boq_id: string;
+    project_id:      string;
+    lot_ids:         string[];
+  }): Promise<BOQTemplatePreview> => {
+    const res = await client.post<{ data: BOQTemplatePreview }>(
+      "/boq-templates/preview-clone",
+      body,
+    );
+    return res.data.data;
+  },
+
+  /** Apply a template to a set of lots. */
+  cloneToLots: async (body: {
+    template_boq_id:     string;
+    project_id:          string;
+    lot_ids:             string[];
+    overwrite?:          boolean;
+    generate_milestones?: boolean;
+  }): Promise<BOQCloneResult> => {
+    const res = await client.post<{ data: BOQCloneResult }>(
+      "/boq-templates/clone-to-lots",
+      body,
     );
     return res.data.data;
   },

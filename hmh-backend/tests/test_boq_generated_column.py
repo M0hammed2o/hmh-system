@@ -219,7 +219,8 @@ def test_boq_template_clone_does_not_insert_planned_total(db):
     )
     db.commit()
 
-    assert len(created_headers) == 1, "One header should be created for one lot"
+    # Phase 3C: clone_template_to_lots now returns a dict summary
+    assert created_headers["created_count"] == 1, "One lot header should be created"
 
     # Verify the cloned item exists and has correct data
     cloned_items = (

@@ -26,9 +26,17 @@ class BOQTemplateRead(BaseModel):
 
 
 class CloneToLotsRequest(BaseModel):
+    template_boq_id:     uuid.UUID
+    project_id:          uuid.UUID
+    lot_ids:             list[uuid.UUID]
+    overwrite:           bool = False   # deactivate existing lot BOQ items before cloning
+    generate_milestones: bool = True    # seed ProjectStageStatus for template stages
+
+
+class PreviewCloneRequest(BaseModel):
     template_boq_id: uuid.UUID
-    project_id: uuid.UUID
-    lot_ids: list[uuid.UUID]
+    project_id:      uuid.UUID
+    lot_ids:         list[uuid.UUID]
 
 
 @router.get("/", response_model=ApiSuccess[list[BOQTemplateRead]], dependencies=[ALL_ROLES])
@@ -71,6 +79,32 @@ def delete_template(template_id: uuid.UUID, db: DbSession):
 
 
 @router.post(
+    "/preview-clone",
+    response_model=ApiSuccess[dict],
+    dependencies=[OFFICE_AND_ABOVE],
+)
+def preview_clone(body: PreviewCloneRequest, db: DbSession):
+    """
+    Dry-run: show what WOULD happen if the template were applied to the
+    selected lots, without writing anything to the database.
+    """
+    if not body.lot_ids:
+        raise HTTPException(422, "Select at least one lot.")
+    try:
+        result = boq_template_service.preview_clone(
+            db,
+            template_boq_id=body.template_boq_id,
+            project_id=body.project_id,
+            lot_ids=body.lot_ids,
+        )
+        return ApiSuccess(data=result)
+    except Exception as exc:
+        tb = traceback.format_exc()
+        logger.error("preview_clone failed: %s\n%s", exc, tb)
+        raise HTTPException(400, detail=str(exc))
+
+
+@router.post(
     "/clone-to-lots",
     response_model=ApiSuccess[dict],
     status_code=201,
@@ -81,32 +115,35 @@ def clone_to_lots(body: CloneToLotsRequest, db: DbSession, current_user: Current
         f"[BOQ-CLONE] template_boq_id={body.template_boq_id}"
         f" project_id={body.project_id}"
         f" lot_ids={body.lot_ids}"
+        f" overwrite={body.overwrite}"
+        f" generate_milestones={body.generate_milestones}"
         f" actor={current_user.id}",
         flush=True,
     )
     if not body.lot_ids:
-        raise HTTPException(
-            status_code=422,
-            detail="No lots selected. Please select at least one lot to apply the template to.",
-        )
+        raise HTTPException(422, "No lots selected. Select at least one lot.")
     try:
-        headers = boq_template_service.clone_template_to_lots(
+        result = boq_template_service.clone_template_to_lots(
             db,
             template_boq_id=body.template_boq_id,
             project_id=body.project_id,
             lot_ids=body.lot_ids,
             actor_id=current_user.id,
+            overwrite=body.overwrite,
+            generate_milestones=body.generate_milestones,
         )
-        print(f"[BOQ-CLONE] SUCCESS — created {len(headers)} header(s)", flush=True)
-        return ApiSuccess(
-            data={"created_count": len(headers), "lot_ids": [str(h.id) for h in headers]},
-            message=f"BOQ cloned to {len(headers)} lots.",
+        msg = (
+            f"BOQ applied to {result['created_count']} lot(s). "
+            + (f"{result['milestones_created']} milestone(s) seeded. " if result.get("milestones_created") else "")
+            + (f"{result['deactivated_count']} existing item(s) replaced." if result.get("deactivated_count") else "")
         )
+        print(f"[BOQ-CLONE] SUCCESS — {msg}", flush=True)
+        return ApiSuccess(data=result, message=msg.strip())
     except Exception as exc:
         tb = traceback.format_exc()
         print(f"[BOQ-CLONE] FAILED: {exc!r}\n{tb}", flush=True)
         logger.error("clone_to_lots failed: %s\n%s", exc, tb)
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to clone template: {exc}",
+            detail=f"Failed to apply template: {exc}",
         )

@@ -282,19 +282,20 @@ def make_site(db: Session, project_id: str, name: str = "Test Site") -> dict:
     return {"id": str(s.id), "name": name}
 
 
-def make_lot(db: Session, project_id: str, site_id: str, lot_number: str = "1") -> dict:
+def make_lot(db: Session, project_id: str, site_id, lot_number: str = "1") -> dict:
+    """site_id may be None for freestanding lots."""
     from app.models.lot import Lot
     from app.models.enums import LotStatus
     l = Lot(
         project_id=uuid.UUID(project_id),
-        site_id=uuid.UUID(site_id),
+        site_id=uuid.UUID(site_id) if site_id else None,
         lot_number=lot_number,
         status=LotStatus.IN_PROGRESS,
         created_at=_now(), updated_at=_now(),
     )
     db.add(l)
     db.flush()
-    return {"id": str(l.id), "lot_number": lot_number}
+    return {"id": str(l.id), "lot_number": lot_number, "site_id": site_id}
 
 
 def make_item(db: Session, name: str = "Test Cement", unit: str = "bag", item_type: str = "MATERIAL") -> dict:
