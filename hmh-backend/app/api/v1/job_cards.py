@@ -24,6 +24,7 @@ class JobCardRead(BaseModel):
     project_id: uuid.UUID
     site_id: uuid.UUID
     lot_id: Optional[uuid.UUID] = None
+    stage_id: Optional[uuid.UUID] = None   # links to stage_master.id for milestone grouping
     work_description: str
     work_type: JobCardWorkType
     worker_name: Optional[str] = None
@@ -73,10 +74,11 @@ class RejectBody(BaseModel):
 @project_jc_router.get("/", response_model=ApiSuccess[list[JobCardRead]], dependencies=[ALL_ROLES])
 def list_job_cards(
     project_id: uuid.UUID, db: DbSession,
-    status: Optional[JobCardStatus] = Query(None),
-    lot_id: Optional[uuid.UUID] = Query(None),
+    status:  Optional[JobCardStatus] = Query(None),
+    lot_id:  Optional[uuid.UUID]     = Query(None),
+    site_id: Optional[uuid.UUID]     = Query(None),
 ):
-    jcs = job_card_service.list_job_cards(db, project_id, status=status, lot_id=lot_id)
+    jcs = job_card_service.list_job_cards(db, project_id, status=status, lot_id=lot_id, site_id=site_id)
     return ApiSuccess(data=[JobCardRead.model_validate(j) for j in jcs])
 
 

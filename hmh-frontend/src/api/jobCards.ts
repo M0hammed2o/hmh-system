@@ -12,6 +12,7 @@ export interface JobCard {
   project_id: string;
   site_id: string;
   lot_id: string | null;
+  stage_id: string | null;
   work_description: string;
   work_type: JobCardWorkType;
   worker_name: string | null;
@@ -54,10 +55,16 @@ export interface JobCardCreate {
 }
 
 export const jobCardsApi = {
-  list: async (projectId: string, status?: JobCardStatus, lotId?: string): Promise<JobCard[]> => {
+  list: async (
+    projectId: string,
+    status?:   JobCardStatus,
+    lotId?:    string,
+    siteId?:   string,
+  ): Promise<JobCard[]> => {
     const params: Record<string, string> = {};
-    if (status) params.status = status;
-    if (lotId) params.lot_id = lotId;
+    if (status) params.status  = status;
+    if (lotId)  params.lot_id  = lotId;
+    if (siteId) params.site_id = siteId;
     const res = await client.get<{ data: JobCard[] }>(`/projects/${projectId}/job-cards/`, { params });
     return res.data.data;
   },

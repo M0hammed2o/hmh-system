@@ -11,7 +11,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   CheckCircle2, Circle, Clock, AlertTriangle, Camera,
-  ChevronDown, ChevronUp, Plus, Trash2, X as XIcon,
+  ChevronDown, ChevronUp, Plus, X as XIcon,
   RefreshCw, Package, HardHat,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -22,6 +22,7 @@ import { sitesApi, type Site } from "@/api/sites";
 import { lotsApi, type Lot } from "@/api/lots";
 import { stagesApi, type StageMaster, type ProjectStageStatus, type MilestonePhoto, type StageStatus } from "@/api/stages";
 import { siteDashboardApi, type MaterialSummaryItem } from "@/api/siteDashboard";
+import { jobCardsApi, type JobCard } from "@/api/jobCards";
 import { cn } from "@/lib/utils";
 import { ROLE_KEY } from "@/lib/constants";
 
@@ -93,10 +94,12 @@ function PhotoStrip({
   const [lightbox,  setLightbox]  = useState<string | null>(null);
   const [deleting,  setDeleting]  = useState<string | null>(null);
 
-  const upload = async (file: File) => {
+  const upload = async (files: File[]) => {
     setUploading(true);
     try {
-      await stagesApi.uploadPhoto(projectId, statusId, file);
+      for (const f of files) {
+        await stagesApi.uploadPhoto(projectId, statusId, f);
+      }
       onRefresh();
     } catch { /* silently show old state */ }
     finally { setUploading(false); }
@@ -161,10 +164,11 @@ function PhotoStrip({
         ref={fileRef}
         type="file"
         accept="image/*"
+        multiple
         className="sr-only"
         onChange={e => {
-          const f = e.target.files?.[0];
-          if (f) upload(f);
+          const files = Array.from(e.target.files ?? []);
+          if (files.length > 0) upload(files);
           e.target.value = "";
         }}
       />
@@ -176,7 +180,10 @@ function PhotoStrip({
 
 // ── Material summary row ──────────────────────────────────────────────────────
 
-function MaterialSummaryTable({ items }: { items: MaterialSummaryItem[] }) {
+function MaterialSummaryTable({ items, lotSelected }: { items: MaterialSummaryItem[]; lotSelected: boolean }) {
+  if (!lotSelected) return (
+    <p className="text-xs text-muted-foreground py-2">Select a lot / unit to see the material budget.</p>
+  );
   if (items.length === 0) return (
     <p className="text-xs text-muted-foreground py-2">No BOQ items linked to this lot.</p>
   );
@@ -229,32 +236,27 @@ function MaterialSummaryTable({ items }: { items: MaterialSummaryItem[] }) {
 
 // ── Milestone card ────────────────────────────────────────────────────────────
 
-interface JobCardSummary {
-  id: string;
-  job_card_number: string;
-  work_description: string;
-  worker_name: string | null;
-  total_amount: number;
-  status: string;
-}
+// Use JobCard from @/api/jobCards — shorthand for what we display
+type JobCardSummary = Pick<JobCard, "id" | "job_card_number" | "work_description" | "worker_name" | "total_amount" | "status">;
 
 interface MilestoneCardProps {
-  projectId:  string;
-  siteId:     string;
-  lotId:      string;
-  master:     StageMaster;
-  status:     ProjectStageStatus | null;
-  photos:     MilestonePhoto[];
-  materials:  MaterialSummaryItem[];
-  jobCards:   JobCardSummary[];
-  canWrite:   boolean;
-  index:      number;
-  onRefresh:  () => void;
+  projectId:   string;
+  siteId:      string;
+  lotId:       string;
+  master:      StageMaster;
+  status:      ProjectStageStatus | null;
+  photos:      MilestonePhoto[];
+  materials:   MaterialSummaryItem[];
+  jobCards:    JobCardSummary[];
+  canWrite:    boolean;
+  lotSelected: boolean;
+  index:       number;
+  onRefresh:   () => void;
 }
 
 function MilestoneCard({
   projectId, siteId, lotId, master, status, photos, materials, jobCards,
-  canWrite, index, onRefresh,
+  canWrite, lotSelected, index, onRefresh,
 }: MilestoneCardProps) {
   const [expanded,   setExpanded]   = useState(false);
   const [completing, setCompleting] = useState(false);
@@ -408,13 +410,16 @@ function MilestoneCard({
             )}
           </div>
 
-          {/* Material summary */}
+          {/* Material summary — lot-level budget shared across all milestones */}
           <div>
-            <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2 flex items-center gap-1.5">
+            <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-1 flex items-center gap-1.5">
               <Package className="w-3.5 h-3.5" />
-              Material Summary
+              Lot Material Budget
             </h4>
-            <MaterialSummaryTable items={materials} />
+            <p className="text-[10px] text-muted-foreground mb-2">
+              All materials allocated to this unit — shared across all milestones.
+            </p>
+            <MaterialSummaryTable items={materials} lotSelected={lotSelected} />
           </div>
 
           {/* Labour */}
@@ -491,15 +496,16 @@ export default function MilestonesPage() {
     stagesApi.listMasters().then(setMasters).catch(() => {});
   }, []);
 
-  // Load sites when project changes
+  // Load sites when project changes — auto-select single site for freestanding-lot projects
   useEffect(() => {
     if (!projectId) { setSites([]); setLots([]); return; }
     sitesApi.list(projectId).then(s => {
       setSites(s);
-      setSiteId(s[0]?.id ?? "");
+      // Freestanding lot support: if only one site, silently select it
+      setSiteId(s.length >= 1 ? s[0].id : "");
     }).catch(() => {});
     lotsApi.list(projectId).then(l => setLots(l)).catch(() => {});
-  }, [projectId]);
+  }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Load lots when site changes
   useEffect(() => {
@@ -538,26 +544,23 @@ export default function MilestonesPage() {
         setMaterials([]);
       }
 
-      // Job cards per stage
-      if (projectId) {
-        try {
-          // Fetch all job cards for the project and group by stage_id
-          const { data: jcRes } = await import("@/api/client").then(m =>
-            m.default.get<{ data: (JobCardSummary & { stage_id: string | null })[] }>(
-              `/projects/${projectId}/job-cards/`,
-              { params: { site_id: siteId || undefined, limit: 200 } }
-            )
-          );
-          const grouped: Record<string, JobCardSummary[]> = {};
-          for (const jc of jcRes.data ?? []) {
-            if (jc.stage_id) {
-              if (!grouped[jc.stage_id]) grouped[jc.stage_id] = [];
-              grouped[jc.stage_id].push(jc);
-            }
+      // Job cards per stage — grouped by stage_id (now included in JobCard schema)
+      try {
+        const jcs = await jobCardsApi.list(
+          projectId,
+          undefined,               // all statuses
+          lotId   || undefined,
+          siteId  || undefined,
+        );
+        const grouped: Record<string, JobCardSummary[]> = {};
+        for (const jc of jcs) {
+          if (jc.stage_id) {
+            if (!grouped[jc.stage_id]) grouped[jc.stage_id] = [];
+            grouped[jc.stage_id].push(jc);
           }
-          setJobCards(grouped);
-        } catch { setJobCards({}); }
-      }
+        }
+        setJobCards(grouped);
+      } catch { setJobCards({}); }
     } catch {
       setError("Failed to load milestones.");
     } finally {
@@ -584,7 +587,7 @@ export default function MilestonesPage() {
         description="Track construction progress, upload photos, and monitor materials per lot."
       />
 
-      {/* Selectors */}
+      {/* Selectors — hide site when project has only one (freestanding lots) */}
       <div className="flex flex-wrap gap-3 items-center">
         <select
           value={projectId}
@@ -594,26 +597,31 @@ export default function MilestonesPage() {
           <option value="">— Select project —</option>
           {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
         </select>
-        <select
-          value={siteId}
-          onChange={e => setSiteId(e.target.value)}
-          className="h-9 rounded-md border border-input bg-background px-3 text-sm min-w-[160px]"
-          disabled={sites.length === 0}
-        >
-          <option value="">— Site —</option>
-          {sites.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-        </select>
+        {sites.length > 1 && (
+          <select
+            value={siteId}
+            onChange={e => setSiteId(e.target.value)}
+            className="h-9 rounded-md border border-input bg-background px-3 text-sm min-w-[160px]"
+          >
+            <option value="">— Site / Block —</option>
+            {sites.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
+        )}
         <select
           value={lotId}
           onChange={e => setLotId(e.target.value)}
           className="h-9 rounded-md border border-input bg-background px-3 text-sm min-w-[160px]"
           disabled={lots.length === 0}
         >
-          <option value="">— Lot / Unit —</option>
+          <option value="">— Select unit / lot —</option>
           {lots
             .filter(l => !siteId || !l.site_id || l.site_id === siteId)
-            .sort((a, b) => a.lot_number.localeCompare(b.lot_number, undefined, { numeric: true }))
-            .map(l => <option key={l.id} value={l.id}>Lot {l.lot_number}</option>)
+            .sort((a, b) => a.lot_number.localeCompare(b.lot_number, undefined, { numeric: true, sensitivity: "base" }))
+            .map(l => (
+              <option key={l.id} value={l.id}>
+                {l.lot_number}{l.unit_type ? ` · ${l.unit_type}` : ""}
+              </option>
+            ))
           }
         </select>
         <button
@@ -700,6 +708,7 @@ export default function MilestonesPage() {
               materials={materials}
               jobCards={jobCards[m.master.id] ?? []}
               canWrite={canWrite}
+              lotSelected={!!lotId}
               index={i}
               onRefresh={loadData}
             />

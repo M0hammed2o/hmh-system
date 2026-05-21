@@ -4,7 +4,7 @@ import {
   LogOut, RefreshCw, PackagePlus, Truck, Minus,
   ListChecks, Upload, PenLine, AlertTriangle, CheckCircle2,
   Clock, Circle, ChevronRight, Box, Bell, Camera, Image, X,
-  Plus, Trash2, ClipboardList,
+  Plus, Trash2, ClipboardList, Flag,
 } from "lucide-react";
 import { siteCaptureApi, type ExtractedItem } from "@/api/siteCapture";
 import { siteDashboardApi, type MaterialSummaryItem, type ActivityItem } from "@/api/siteDashboard";
@@ -468,10 +468,11 @@ export default function SiteDashboardPage() {
             {/* ── Quick actions ── */}
             <Section title="Quick Actions">
               <div className="grid grid-cols-3 gap-2">
-                <ActionBtn icon={PackagePlus} label="Request Material"   onClick={() => setModal("request")} />
+                <ActionBtn icon={PackagePlus} label="Request Materials"  onClick={() => setModal("request")} />
                 <ActionBtn icon={Truck}       label="Receive Delivery"   onClick={() => setModal("delivery")} />
                 <ActionBtn icon={Minus}       label="Record Usage"       onClick={() => setModal("usage")} />
-                <ActionBtn icon={ListChecks}  label="Update Stage"       onClick={() => setModal("stage")} />
+                <ActionBtn icon={ListChecks}  label="Update Milestone"   onClick={() => setModal("stage")} />
+                <ActionBtn icon={Flag}        label="View Milestones"    onClick={() => { window.location.href = "/milestones"; }} />
               </div>
             </Section>
 
@@ -516,9 +517,19 @@ export default function SiteDashboardPage() {
               </Section>
             )}
 
-            {/* ── Stage timeline ── */}
+            {/* ── My Requests — view status of submitted requests ── */}
+            {siteId && (
+              <SiteRequestHistory requests={siteRequests} />
+            )}
+
+            {/* ── Site Warehouse — stock on hand, transfer to unit ── */}
+            {siteId && projectId && (
+              <SiteWarehouse siteId={siteId} projectId={projectId} />
+            )}
+
+            {/* ── Milestones / Stage timeline ── */}
             {siteId && stageRows.length > 0 && (
-              <Section title="Stage Timeline">
+              <Section title="Milestones">
                 <div className="space-y-2">
                   {stageRows.map(s => (
                     <div key={s.id} className="flex items-center gap-3 p-3 bg-card border border-border rounded-xl">
@@ -554,16 +565,6 @@ export default function SiteDashboardPage() {
                   ))}
                 </div>
               </Section>
-            )}
-
-            {/* ── Site Warehouse ── */}
-            {siteId && projectId && (
-              <SiteWarehouse siteId={siteId} projectId={projectId} />
-            )}
-
-            {/* ── My Requests ── */}
-            {siteId && (
-              <SiteRequestHistory requests={siteRequests} />
             )}
 
             {/* ── Recent activity ── */}
