@@ -30,6 +30,32 @@ export interface ProjectOperation {
   total_paid:               number;
 }
 
+export interface OpsSummary {
+  financial: {
+    outstanding_invoice_count: number;
+    outstanding_total:         number;
+    overdue_count:             number;
+    overdue_total:             number;
+    partially_paid_count:      number;
+    overpaid_count:            number;
+    payments_this_month:       number;
+  };
+  milestones: {
+    blocked_count:       number;
+    in_progress_count:   number;
+    delayed_count:       number;
+    completed_this_week: number;
+  };
+  warehouse: {
+    projects_with_stock:   number;
+    recent_transfer_count: number;
+  };
+  fuel: {
+    total_cost_this_month: number;
+    flagged_entries_count: number;
+  };
+}
+
 export const dashboardApi = {
   getStats: async (projectId?: string): Promise<DashboardStats> => {
     const res = await client.get<{ data: DashboardStats }>("/dashboard/stats", {
@@ -40,6 +66,13 @@ export const dashboardApi = {
 
   getProjectOperations: async (): Promise<ProjectOperation[]> => {
     const res = await client.get<{ data: ProjectOperation[] }>("/dashboard/operations");
+    return res.data.data;
+  },
+
+  getOpsSummary: async (projectId?: string): Promise<OpsSummary> => {
+    const res = await client.get<{ data: OpsSummary }>("/dashboard/ops-summary", {
+      params: projectId ? { project_id: projectId } : {},
+    });
     return res.data.data;
   },
 };

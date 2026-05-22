@@ -34,3 +34,25 @@ def get_project_operations(db: DbSession):
     """Per-project operational overview: lots, milestones, requests, alerts, spend."""
     data = dashboard_service.get_project_operations(db)
     return ApiSuccess(data=data)
+
+
+@router.get(
+    "/ops-summary",
+    response_model=ApiSuccess[dict],
+    dependencies=[ALL_ROLES],
+)
+def get_ops_summary(
+    db: DbSession,
+    project_id: Optional[uuid.UUID] = Query(None),
+):
+    """
+    Operational command-center summary — all sections in one call.
+
+    Returns: { financial, milestones, warehouse, fuel }
+
+    Optionally scoped to a single project via ?project_id=.
+    All periods bounded (current month / last 7 days).
+    No N+1 queries — bulk counts only.
+    """
+    data = dashboard_service.get_ops_summary(db, project_id)
+    return ApiSuccess(data=data)

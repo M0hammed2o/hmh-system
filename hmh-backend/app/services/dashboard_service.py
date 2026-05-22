@@ -232,3 +232,144 @@ def get_project_operations(db: Session) -> list[dict]:
             "total_paid":               paid_by_proj.get(pid, 0.0),
         })
     return result
+
+
+def get_ops_summary(db: Session, project_id: Optional[uuid.UUID] = None) -> dict:
+    """
+    Operational command-center summary: what needs attention right now?
+
+    Returns 4 sections in 6 bulk queries — NO N+1 queries.
+    All counts only, all periods bounded (current month, last 7 days).
+
+    Sections:
+      financial  — invoices outstanding/overdue/partial/overpaid, payments this month
+      milestones — blocked, in-progress, delayed, completed this week
+      warehouse  — projects with warehouse stock, recent transfer count
+      fuel       — total cost this month, flagged (high consumption) entries
+    """
+    from datetime import date, timedelta
+    from sqlalchemy import and_
+
+    # Period bounds
+    today = date.today()
+    first_of_month = today.replace(day=1)
+    seven_days_ago = today - timedelta(days=7)
+
+    # ── Financial ───────────────────────────────────────────────────────────
+    inv_q = db.query(Invoice)
+    pay_q = db.query(Payment)
+    if project_id:
+        inv_q = inv_q.filter(Invoice.project_id == project_id)
+        pay_q = pay_q.filter(Payment.project_id == project_id)
+
+    unpaid_statuses = [
+        RecordStatus.MATCHED, RecordStatus.RECEIVED, RecordStatus.APPROVED,
+        RecordStatus.PARTIALLY_PAID,
+    ]
+
+    # Outstanding + overdue (one pass, two accumulators)
+    unpaid_invoices = inv_q.filter(Invoice.status.in_(unpaid_statuses)).all()
+    outstanding_count = len(unpaid_invoices)
+    outstanding_total = sum(float(i.total_amount or 0) for i in unpaid_invoices)
+    overdue_count     = sum(1 for i in unpaid_invoices if i.due_date and i.due_date < today)
+    overdue_total     = sum(float(i.total_amount or 0) for i in unpaid_invoices
+                            if i.due_date and i.due_date < today)
+
+    # Partial + overpaid counts
+    partial_count  = inv_q.filter(Invoice.status == RecordStatus.PARTIALLY_PAID).count()
+    overpaid_count = inv_q.filter(Invoice.status == RecordStatus.OVERPAID).count()
+
+    # Payments this month (PAID status only)
+    pay_this_month = float(
+        db.query(func.coalesce(func.sum(Payment.amount_paid), 0))
+        .filter(*([Payment.project_id == project_id] if project_id else []))
+        .filter(Payment.status == PaymentStatus.PAID)
+        .filter(Payment.payment_date >= first_of_month)
+        .scalar() or 0
+    )
+
+    # ── Milestones ───────────────────────────────────────────────────────────
+    ms_q = db.query(ProjectStageStatus)
+    if project_id:
+        ms_q = ms_q.filter(ProjectStageStatus.project_id == project_id)
+
+    blocked_count    = ms_q.filter(ProjectStageStatus.status == StageStatus.BLOCKED).count()
+    in_prog_count    = ms_q.filter(ProjectStageStatus.status == StageStatus.IN_PROGRESS).count()
+
+    # Delayed: IN_PROGRESS + started > 30 days ago + progress_pct < 50
+    from sqlalchemy import cast
+    from sqlalchemy.dialects.postgresql import TIMESTAMP
+    thirty_days_ago = today - timedelta(days=30)
+    delayed_count = ms_q.filter(
+        ProjectStageStatus.status     == StageStatus.IN_PROGRESS,
+        ProjectStageStatus.started_at <= str(thirty_days_ago),
+        ProjectStageStatus.progress_pct < 50,
+    ).count()
+
+    # Completed this week
+    completed_week = ms_q.filter(
+        ProjectStageStatus.status.in_([StageStatus.COMPLETED, StageStatus.CERTIFIED]),
+        ProjectStageStatus.completed_at >= str(seven_days_ago),
+    ).count()
+
+    # ── Warehouse ────────────────────────────────────────────────────────────
+    from app.models.stock import StockLedger
+    from app.models.enums import MovementType as _MT
+
+    # Projects that have any stock in project warehouse (site_id=NULL, lot_id=NULL)
+    wh_q = db.query(func.count(func.distinct(StockLedger.project_id))).filter(
+        StockLedger.site_id.is_(None),
+        StockLedger.lot_id.is_(None),
+    )
+    if project_id:
+        wh_q = wh_q.filter(StockLedger.project_id == project_id)
+    projects_with_stock = int(wh_q.scalar() or 0)
+
+    # Recent transfers (last 7 days)
+    transfer_q = db.query(func.count(StockLedger.id)).filter(
+        StockLedger.movement_type == _MT.TRANSFER_IN,
+        StockLedger.movement_date >= str(seven_days_ago),
+    )
+    if project_id:
+        transfer_q = transfer_q.filter(StockLedger.project_id == project_id)
+    recent_transfers = int(transfer_q.scalar() or 0)
+
+    # ── Fuel ─────────────────────────────────────────────────────────────────
+    fuel_q = db.query(FuelLog)
+    if project_id:
+        fuel_q = fuel_q.filter(FuelLog.project_id == project_id)
+
+    fuel_cost_month = float(
+        db.query(func.coalesce(func.sum(FuelLog.total_cost), 0))
+        .filter(*([FuelLog.project_id == project_id] if project_id else []))
+        .filter(FuelLog.fuel_date >= str(first_of_month))
+        .scalar() or 0
+    )
+    # Flagged: notes contain "⚠" (set by fuel service when l_per_100km > threshold)
+    flagged_fuel = fuel_q.filter(FuelLog.notes.like("%⚠%")).count()
+
+    return {
+        "financial": {
+            "outstanding_invoice_count": outstanding_count,
+            "outstanding_total":         round(outstanding_total, 2),
+            "overdue_count":             overdue_count,
+            "overdue_total":             round(overdue_total, 2),
+            "partially_paid_count":      partial_count,
+            "overpaid_count":            overpaid_count,
+            "payments_this_month":       round(pay_this_month, 2),
+        },
+        "milestones": {
+            "blocked_count":         blocked_count,
+            "in_progress_count":     in_prog_count,
+            "delayed_count":         delayed_count,
+            "completed_this_week":   completed_week,
+        },
+        "warehouse": {
+            "projects_with_stock":   projects_with_stock,
+            "recent_transfer_count": recent_transfers,
+        },
+        "fuel": {
+            "total_cost_this_month":  round(fuel_cost_month, 2),
+            "flagged_entries_count":  flagged_fuel,
+        },
+    }
