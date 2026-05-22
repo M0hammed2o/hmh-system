@@ -28,6 +28,10 @@ export interface ActivityItem {
   severity?: string | null;
 }
 
+export interface MaterialSummaryItemExtended extends MaterialSummaryItem {
+  shortfall_qty?: number;   // Phase 3J: max(0, planned - dispatched)
+}
+
 export const siteDashboardApi = {
   getMaterialSummary: async (
     siteId: string,
@@ -35,6 +39,21 @@ export const siteDashboardApi = {
   ): Promise<MaterialSummaryItem[]> => {
     const res = await client.get<{ data: MaterialSummaryItem[] }>(
       `/site-dashboard/${siteId}/lots/${lotId}/material-summary`,
+    );
+    return res.data.data;
+  },
+
+  /**
+   * Phase 3J: project-level material summary.
+   * Works for both site lots and freestanding lots (site_id=NULL).
+   * Uses Phase 3B warehouse model: delivered = TRANSFER_IN to lot.
+   */
+  getProjectLotMaterialSummary: async (
+    projectId: string,
+    lotId:     string,
+  ): Promise<MaterialSummaryItemExtended[]> => {
+    const res = await client.get<{ data: MaterialSummaryItemExtended[] }>(
+      `/projects/${projectId}/lots/${lotId}/material-summary`,
     );
     return res.data.data;
   },

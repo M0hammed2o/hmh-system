@@ -52,7 +52,7 @@ from app.api.v1.delivery_capture import router as delivery_capture_router
 from app.api.v1.summary import router as summary_router
 from app.api.v1.whatsapp_webhook import router as whatsapp_router
 from app.api.v1.job_cards import project_jc_router, jc_router
-from app.api.v1.site_dashboard import router as site_dashboard_router
+from app.api.v1.site_dashboard import router as site_dashboard_router, project_lot_router as site_dashboard_lot_router
 from app.api.v1.gmail import gmail_router, gmail_docs_router
 from app.api.v1.proof_packs import router as proof_packs_router
 from app.api.v1.site_capture import router as site_capture_router
@@ -272,6 +272,7 @@ app.include_router(whatsapp_router, prefix="/api/v1")
 app.include_router(project_jc_router, prefix="/api/v1")
 app.include_router(jc_router, prefix="/api/v1")
 app.include_router(site_dashboard_router, prefix="/api/v1")
+app.include_router(site_dashboard_lot_router, prefix="/api/v1")
 app.include_router(gmail_router, prefix="/api/v1")
 app.include_router(gmail_docs_router, prefix="/api/v1")
 app.include_router(proof_packs_router, prefix="/api/v1")

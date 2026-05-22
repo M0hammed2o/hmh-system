@@ -17,6 +17,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PageHeader } from "@/components/shared/PageHeader";
+import { AttachmentStrip } from "@/components/shared/AttachmentStrip";
 import { projectsApi, type Project } from "@/api/projects";
 import { sitesApi, type Site } from "@/api/sites";
 import { lotsApi, type Lot } from "@/api/lots";
@@ -25,7 +26,7 @@ import {
   type StageMaster, type ProjectStageStatus, type MilestonePhoto, type StageStatus,
   type MilestoneActivityEntry,
 } from "@/api/stages";
-import { siteDashboardApi, type MaterialSummaryItem } from "@/api/siteDashboard";
+import { siteDashboardApi, type MaterialSummaryItemExtended } from "@/api/siteDashboard";
 import { jobCardsApi, type JobCard } from "@/api/jobCards";
 import { cn } from "@/lib/utils";
 import { ROLE_KEY } from "@/lib/constants";
@@ -186,7 +187,7 @@ function PhotoStrip({
 
 // ── Material summary row ──────────────────────────────────────────────────────
 
-function MaterialSummaryTable({ items, lotSelected }: { items: MaterialSummaryItem[]; lotSelected: boolean }) {
+function MaterialSummaryTable({ items, lotSelected }: { items: MaterialSummaryItemExtended[]; lotSelected: boolean }) {
   if (!lotSelected) return (
     <p className="text-xs text-muted-foreground py-2">Select a lot / unit to see the material budget.</p>
   );
@@ -194,48 +195,75 @@ function MaterialSummaryTable({ items, lotSelected }: { items: MaterialSummaryIt
     <p className="text-xs text-muted-foreground py-2">No BOQ items linked to this lot.</p>
   );
 
+  // Mobile-friendly card layout — avoids horizontal overflow
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-xs min-w-[520px]">
-        <thead>
-          <tr className="border-b border-border">
-            <th className="text-left py-1.5 pr-3 text-muted-foreground font-medium">Material</th>
-            <th className="text-right py-1.5 px-2 text-muted-foreground font-medium">Required</th>
-            <th className="text-right py-1.5 px-2 text-muted-foreground font-medium">Delivered</th>
-            <th className="text-right py-1.5 px-2 text-muted-foreground font-medium">Used</th>
-            <th className="text-right py-1.5 px-2 text-muted-foreground font-medium">Remaining</th>
-            <th className="text-right py-1.5 pl-2 text-muted-foreground font-medium">Shortfall</th>
-          </tr>
-        </thead>
-        <tbody>
-          {items.map(item => {
-            const shortfall = Math.max(0, item.boq_allocated_qty - item.delivered_qty);
-            const isShort = shortfall > 0;
-            const isOver  = item.over_qty > 0;
-            return (
-              <tr key={item.boq_item_id} className="border-b border-border/40 last:border-0">
-                <td className="py-1.5 pr-3">
-                  <span className={cn("font-medium", isOver && "text-destructive")}>
-                    {item.description}
-                  </span>
-                  {item.unit && <span className="text-muted-foreground ml-1">({item.unit})</span>}
-                </td>
-                <td className="text-right py-1.5 px-2 tabular-nums">{fmt(item.boq_allocated_qty)}</td>
-                <td className="text-right py-1.5 px-2 tabular-nums">{fmt(item.delivered_qty)}</td>
-                <td className="text-right py-1.5 px-2 tabular-nums">{fmt(item.used_qty)}</td>
-                <td className={cn("text-right py-1.5 px-2 tabular-nums font-medium",
+    <div className="space-y-2">
+      {items.map(item => {
+        const shortfall = item.shortfall_qty ?? Math.max(0, item.boq_allocated_qty - item.delivered_qty);
+        const isShort   = shortfall > 0;
+        const isOver    = item.over_qty > 0;
+        return (
+          <div key={item.boq_item_id}
+            className={cn(
+              "rounded-lg border px-3 py-2.5 space-y-1.5",
+              isOver  ? "border-destructive/30 bg-destructive/5" :
+              isShort ? "border-amber-200 bg-amber-50/50 dark:border-amber-800/50 dark:bg-amber-950/10" :
+              "border-border bg-muted/20"
+            )}>
+            <div className="flex items-start justify-between gap-2">
+              <span className={cn("text-xs font-semibold", isOver && "text-destructive")}>
+                {item.description}
+                {item.unit && <span className="text-muted-foreground font-normal ml-1">({item.unit})</span>}
+              </span>
+              {isShort && (
+                <span className="text-[10px] font-semibold text-amber-700 dark:text-amber-400 shrink-0">
+                  -{fmt(shortfall)} short
+                </span>
+              )}
+              {isOver && (
+                <span className="text-[10px] font-semibold text-destructive shrink-0">
+                  +{fmt(item.over_qty)} over
+                </span>
+              )}
+            </div>
+            {/* Progress bar: dispatched / planned */}
+            {item.boq_allocated_qty > 0 && (
+              <div>
+                <div className="h-1 bg-muted rounded-full overflow-hidden">
+                  <div
+                    className={cn(
+                      "h-full rounded-full",
+                      isOver ? "bg-destructive" : isShort ? "bg-amber-500" : "bg-green-500"
+                    )}
+                    style={{ width: `${Math.min(100, (item.delivered_qty / item.boq_allocated_qty) * 100)}%` }}
+                  />
+                </div>
+              </div>
+            )}
+            <div className="grid grid-cols-4 gap-1 text-[10px]">
+              <div>
+                <p className="text-muted-foreground">Planned</p>
+                <p className="font-semibold tabular-nums">{fmt(item.boq_allocated_qty)}</p>
+              </div>
+              <div>
+                <p className="text-muted-foreground">Dispatched</p>
+                <p className="font-semibold tabular-nums">{fmt(item.delivered_qty)}</p>
+              </div>
+              <div>
+                <p className="text-muted-foreground">Used</p>
+                <p className="font-semibold tabular-nums">{fmt(item.used_qty)}</p>
+              </div>
+              <div>
+                <p className="text-muted-foreground">Remaining</p>
+                <p className={cn("font-semibold tabular-nums",
                   item.remaining_qty < 0 ? "text-destructive" : "text-green-600")}>
                   {fmt(item.remaining_qty)}
-                </td>
-                <td className={cn("text-right py-1.5 pl-2 tabular-nums font-semibold",
-                  isShort ? "text-amber-600" : "text-muted-foreground")}>
-                  {isShort ? fmt(shortfall) : "—"}
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
+                </p>
+              </div>
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -251,8 +279,8 @@ interface MilestoneCardProps {
   lotId:       string;
   master:      StageMaster;
   status:      ProjectStageStatus | null;
-  photos:      MilestonePhoto[];
-  materials:   MaterialSummaryItem[];
+  photos?:     MilestonePhoto[];   // deprecated — AttachmentStrip self-loads
+  materials:   MaterialSummaryItemExtended[];
   jobCards:    JobCardSummary[];
   canWrite:    boolean;
   lotSelected: boolean;
@@ -513,19 +541,21 @@ function MilestoneCard({
             ) : null;
           })()}
 
-          {/* Progress photos */}
+          {/* Progress photos — unified AttachmentStrip (Phase 3J finalization) */}
           <div>
             <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2 flex items-center gap-1.5">
               <Camera className="w-3.5 h-3.5" />
               Progress Photos
             </h4>
             {status ? (
-              <PhotoStrip
-                projectId={projectId}
-                statusId={status.id}
-                photos={photos}
+              <AttachmentStrip
+                entityType="STAGE_STATUS"
+                entityId={status.id}
+                attachmentType="PROGRESS_PHOTO"
+                accept="image/*"
                 canWrite={canWrite}
-                onRefresh={onRefresh}
+                showTypeSelector={false}
+                label=""
               />
             ) : (
               <p className="text-xs text-muted-foreground">Start the milestone to upload photos.</p>
@@ -757,7 +787,7 @@ export default function MilestonesPage() {
 
   const [statuses,  setStatuses]  = useState<ProjectStageStatus[]>([]);
   const [photos,    setPhotos]    = useState<Record<string, MilestonePhoto[]>>({});
-  const [materials, setMaterials] = useState<MaterialSummaryItem[]>([]);
+  const [materials, setMaterials] = useState<MaterialSummaryItemExtended[]>([]);
   const [jobCards,  setJobCards]  = useState<Record<string, JobCardSummary[]>>({});
   const [loading,   setLoading]   = useState(false);
   const [error,     setError]     = useState("");
@@ -806,10 +836,10 @@ export default function MilestonesPage() {
       }));
       setPhotos(photoMap);
 
-      // Material summary (needs siteId + lotId)
-      if (siteId && lotId) {
+      // Material summary — uses new project-lot endpoint (works for freestanding lots too)
+      if (projectId && lotId) {
         try {
-          const mat = await siteDashboardApi.getMaterialSummary(siteId, lotId);
+          const mat = await siteDashboardApi.getProjectLotMaterialSummary(projectId, lotId);
           setMaterials(mat);
         } catch { setMaterials([]); }
       } else {

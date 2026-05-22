@@ -346,14 +346,48 @@ def get_milestone_activity(
         })
 
     for p in photo_rows:
+        actor_name = None
+        if p.uploaded_by:
+            from app.models.user import User as _User
+            u2 = db.get(_User, p.uploaded_by)
+            actor_name = u2.full_name if u2 else None
         activity.append({
             "type":        "photo",
             "timestamp":   p.uploaded_at.isoformat(),
-            "actor":       None,
+            "actor":       actor_name,
             "description": f"Photo uploaded: {p.file_name}",
             "url":         _pub(p.stored_path),
             "photo_id":    str(p.id),
         })
+
+    # Phase 3J: warehouse dispatch events for the lot this status belongs to
+    if pss.lot_id:
+        from app.models.stock import StockLedger
+        from app.models.enums import MovementType as _MT
+        from app.models.item import Item as _Item
+
+        dispatch_rows = (
+            db.query(StockLedger)
+            .filter(
+                StockLedger.lot_id        == pss.lot_id,
+                StockLedger.movement_type == _MT.TRANSFER_IN,
+            )
+            .order_by(StockLedger.movement_date.desc())
+            .limit(10)
+            .all()
+        )
+        for d in dispatch_rows:
+            item_name = None
+            if d.item_id:
+                it = db.get(_Item, d.item_id)
+                item_name = it.name if it else None
+            desc = f"{float(d.quantity_in):.3g} {d.unit or ''} {item_name or 'material'} dispatched to lot".strip()
+            activity.append({
+                "type":        "dispatch",
+                "timestamp":   d.movement_date.isoformat() if d.movement_date else d.created_at.isoformat(),
+                "actor":       None,
+                "description": desc,
+            })
 
     activity.sort(key=lambda x: x["timestamp"], reverse=True)
     return ApiSuccess(data=activity[:limit])

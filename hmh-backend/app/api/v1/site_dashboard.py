@@ -18,6 +18,7 @@ from app.models.stock import StockLedger
 from app.schemas.common import ApiSuccess
 
 router = APIRouter(prefix="/site-dashboard", tags=["site-dashboard"])
+project_lot_router = APIRouter(prefix="/projects/{project_id}/lots", tags=["site-dashboard"])
 
 
 # ── Material summary ──────────────────────────────────────────────────────────
@@ -390,3 +391,183 @@ async def replace_evidence_photo(
 
     db.commit()
     return ApiSuccess(data={"photo_url": url_path}, message="Photo replaced.")
+
+
+# ── Project-level lot material summary (Phase 3J finalization) ───────────────
+# Works for both site-based lots and freestanding lots (site_id=None).
+# Uses the Phase 3B warehouse model: deliveries go to project warehouse,
+# then items are TRANSFERRED to lots.
+
+@project_lot_router.get(
+    "/{lot_id}/material-summary",
+    dependencies=[ALL_ROLES],
+)
+def project_lot_material_summary(project_id: uuid.UUID, lot_id: uuid.UUID, db: DbSession):
+    """
+    Per-item material summary for a lot, compatible with Phase 3B warehouse model.
+
+    Phase 3B routes deliveries to the Project Warehouse (site_id=NULL, lot_id=NULL).
+    Stock reaches lots only via TRANSFER_IN movements.
+
+    Column mapping:
+      boq_allocated_qty  = BOQ planned quantity
+      delivered_qty      = stock dispatched from Project Warehouse to this lot (TRANSFER_IN)
+      used_qty           = recorded usage at lot level (quantity_out in stock_ledger)
+      remaining_qty      = delivered_qty - used_qty
+      over_qty           = max(0, used - allocated)
+      shortfall_qty      = max(0, boq - delivered)
+
+    Falls back to project-level master BOQ for freestanding lots (site_id=None).
+    """
+    from app.models.lot import Lot
+    from app.models.item import Item
+
+    lot = db.get(Lot, lot_id)
+    if not lot or lot.project_id != project_id:
+        from fastapi import HTTPException
+        raise HTTPException(404, "Lot not found in this project.")
+
+    # ── 1. Fetch BOQ items for this lot ──────────────────────────────────────
+    boq_items = (
+        db.query(BOQItem)
+        .filter(BOQItem.lot_id == lot_id, BOQItem.is_active == True)
+        .all()
+    )
+
+    # ── 2. Fall back: freestanding lot → use project-level master (site_id=NULL, lot_id=NULL)
+    #                 site lot          → use site master (site_id=X, lot_id=NULL)
+    fallback = False
+    if not boq_items:
+        if lot.site_id:
+            # Site lot — use site template
+            boq_items = (
+                db.query(BOQItem)
+                .filter(
+                    BOQItem.project_id == project_id,
+                    BOQItem.site_id    == lot.site_id,
+                    BOQItem.lot_id.is_(None),
+                    BOQItem.is_active  == True,
+                )
+                .all()
+            )
+        else:
+            # Freestanding lot — use project-level master
+            boq_items = (
+                db.query(BOQItem)
+                .filter(
+                    BOQItem.project_id  == project_id,
+                    BOQItem.site_id.is_(None),
+                    BOQItem.lot_id.is_(None),
+                    BOQItem.is_active   == True,
+                )
+                .all()
+            )
+        fallback = bool(boq_items)
+
+    # ── 3. De-duplicate by description+unit ──────────────────────────────────
+    seen_keys: set = set()
+    unique_items = []
+    for bi in sorted(boq_items, key=lambda x: float(x.planned_quantity or 0), reverse=True):
+        key = ((bi.raw_description or "").lower().strip(), bi.unit or "")
+        if key not in seen_keys:
+            seen_keys.add(key)
+            unique_items.append(bi)
+    boq_items = unique_items
+
+    # ── 4. Build summary rows ─────────────────────────────────────────────────
+    result = []
+    for bi in boq_items:
+        allocated = float(bi.planned_quantity or 0)
+
+        if bi.item_id:
+            # Phase 3B: "delivered to lot" = TRANSFER_IN at lot level
+            delivered = float(
+                db.query(func.coalesce(func.sum(StockLedger.quantity_in), 0))
+                .filter(
+                    StockLedger.project_id    == project_id,
+                    StockLedger.lot_id        == lot_id,
+                    StockLedger.item_id       == bi.item_id,
+                    StockLedger.movement_type == MovementType.TRANSFER_IN,
+                )
+                .scalar() or 0
+            )
+            used = float(
+                db.query(func.coalesce(func.sum(StockLedger.quantity_out), 0))
+                .filter(
+                    StockLedger.project_id == project_id,
+                    StockLedger.lot_id     == lot_id,
+                    StockLedger.item_id    == bi.item_id,
+                )
+                .scalar() or 0
+            )
+        else:
+            # No catalog link — match by boq_item_id
+            delivered = float(
+                db.query(func.coalesce(func.sum(StockLedger.quantity_in), 0))
+                .filter(
+                    StockLedger.project_id    == project_id,
+                    StockLedger.lot_id        == lot_id,
+                    StockLedger.boq_item_id   == bi.id,
+                    StockLedger.movement_type == MovementType.TRANSFER_IN,
+                )
+                .scalar() or 0
+            )
+            used = float(
+                db.query(func.coalesce(func.sum(StockLedger.quantity_out), 0))
+                .filter(
+                    StockLedger.project_id  == project_id,
+                    StockLedger.lot_id      == lot_id,
+                    StockLedger.boq_item_id == bi.id,
+                )
+                .scalar() or 0
+            )
+
+        remaining    = max(0.0, delivered - used)
+        over         = max(0.0, used - allocated)
+        shortfall    = max(0.0, allocated - delivered)
+        is_short     = shortfall > 0 and allocated > 0
+        is_over      = allocated > 0 and used > allocated
+
+        if is_over:
+            status = "OVER_BOQ"
+        elif is_short and delivered == 0:
+            status = "STOCK_ISSUE"
+        elif is_short:
+            status = "LOW"
+        else:
+            status = "OK"
+
+        description = bi.raw_description
+        unit        = bi.unit
+        if bi.item_id:
+            cat_item = db.get(Item, bi.item_id)
+            if cat_item:
+                description = cat_item.name
+                unit        = cat_item.default_unit or bi.unit
+
+        supplier_id = str(bi.supplier_id) if bi.supplier_id else None
+        supplier_name = None
+        if bi.supplier_id:
+            from app.models.supplier import Supplier as _Sup
+            sup = db.get(_Sup, bi.supplier_id)
+            if sup:
+                supplier_name = sup.name
+
+        result.append({
+            "boq_item_id":       str(bi.id),
+            "item_id":           str(bi.item_id) if bi.item_id else None,
+            "description":       description,
+            "unit":              unit,
+            "boq_allocated_qty": round(allocated, 3),
+            "delivered_qty":     round(delivered, 3),   # dispatched to this lot
+            "used_qty":          round(used, 3),
+            "remaining_qty":     round(remaining, 3),
+            "over_qty":          round(over, 3),
+            "shortfall_qty":     round(shortfall, 3),
+            "status":            status,
+            "from_site_template": fallback,
+            "supplier_id":       supplier_id,
+            "supplier_name":     supplier_name,
+        })
+
+    return ApiSuccess(data=result)

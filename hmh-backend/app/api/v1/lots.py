@@ -374,3 +374,70 @@ def generate_lots(
         },
         message=f"{len(created_lots)} lots generated.",
     )
+
+
+@lots_router.get(
+    "/{lot_id}/progress",
+    response_model=ApiSuccess[dict],
+    dependencies=[ALL_ROLES],
+)
+def get_lot_progress(lot_id: uuid.UUID, db: DbSession):
+    """
+    Return milestone completion progress for a lot.
+
+    Returns:
+      total_milestones      — total ProjectStageStatus records for this lot
+      completed_milestones  — completed/certified records
+      blocked_milestones    — blocked records
+      in_progress_milestones — in-progress/awaiting records
+      progress_pct          — weighted % from progress_pct fields
+      completion_pct        — simple % (completed / total * 100)
+    """
+    from app.models.stage import ProjectStageStatus
+    from app.models.enums import StageStatus
+    from sqlalchemy import func
+
+    lot = lot_service.get_lot(db, lot_id)
+
+    statuses = (
+        db.query(ProjectStageStatus)
+        .filter(ProjectStageStatus.lot_id == lot_id)
+        .all()
+    )
+
+    total     = len(statuses)
+    if total == 0:
+        return ApiSuccess(data={
+            "lot_id": str(lot_id),
+            "total_milestones": 0,
+            "completed_milestones": 0,
+            "blocked_milestones": 0,
+            "in_progress_milestones": 0,
+            "progress_pct": 0.0,
+            "completion_pct": 0.0,
+        })
+
+    done_statuses    = {StageStatus.COMPLETED, StageStatus.CERTIFIED}
+    active_statuses  = {StageStatus.IN_PROGRESS, StageStatus.AWAITING_INSPECTION}
+    blocked_statuses = {StageStatus.BLOCKED}
+
+    completed    = sum(1 for s in statuses if s.status in done_statuses)
+    blocked      = sum(1 for s in statuses if s.status in blocked_statuses)
+    in_progress  = sum(1 for s in statuses if s.status in active_statuses)
+
+    # Weighted progress: sum of individual progress_pct values (0–100 each)
+    total_pct = sum(s.progress_pct or 0 for s in statuses)
+    progress_pct = round(total_pct / total, 1)
+
+    completion_pct = round(completed / total * 100, 1)
+
+    return ApiSuccess(data={
+        "lot_id":                 str(lot_id),
+        "lot_number":             lot.lot_number,
+        "total_milestones":       total,
+        "completed_milestones":   completed,
+        "blocked_milestones":     blocked,
+        "in_progress_milestones": in_progress,
+        "progress_pct":           progress_pct,     # weighted by individual progress_pct
+        "completion_pct":         completion_pct,   # simple completed/total %
+    })
