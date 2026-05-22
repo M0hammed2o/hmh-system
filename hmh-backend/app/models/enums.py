@@ -192,15 +192,25 @@ class AttachmentEntity(str, enum.Enum):
     FUEL_LOG         = "FUEL_LOG"          # extra fuel evidence photos
     MATERIAL_REQUEST = "MATERIAL_REQUEST"  # Phase 3I: MR documents
     SUPPLIER         = "SUPPLIER"          # Phase 3I: supplier documents
+    LOT              = "LOT"               # Phase 3K: lot/unit documents
+    PROJECT          = "PROJECT"           # Phase 3K: project-level documents
 
 
 class AttachmentType(str, enum.Enum):
-    PHOTO = "PHOTO"
-    PDF = "PDF"
-    DELIVERY_NOTE = "DELIVERY_NOTE"
-    INVOICE_COPY = "INVOICE_COPY"
-    PROOF = "PROOF"
-    CERTIFICATE = "CERTIFICATE"
+    # Generic types
+    PHOTO          = "PHOTO"
+    PDF            = "PDF"
+    # Procurement
+    DELIVERY_NOTE  = "DELIVERY_NOTE"
+    INVOICE_COPY   = "INVOICE_COPY"
+    PROOF          = "PROOF"
+    CERTIFICATE    = "CERTIFICATE"
+    QUOTATION      = "QUOTATION"        # Phase 3K: supplier quotation
+    PO_DOCUMENT    = "PO_DOCUMENT"      # Phase 3K: purchase order document
+    # Site/progress
+    PROGRESS_PHOTO = "PROGRESS_PHOTO"   # Phase 3K: construction progress shot
+    PROOF_OF_WORK  = "PROOF_OF_WORK"    # Phase 3K: work completion evidence
+    FUEL_SLIP      = "FUEL_SLIP"        # Phase 3K: fuel receipt/pump photo
 
 
 class EmailStatus(str, enum.Enum):

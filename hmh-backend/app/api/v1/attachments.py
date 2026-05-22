@@ -42,10 +42,9 @@ async def upload_attachment(
         attachment_type=attachment_type,
         uploaded_by_id=current_user.id,
     )
-    return ApiSuccess(
-        data=AttachmentRead.model_validate(record),
-        message="File uploaded successfully.",
-    )
+    read = AttachmentRead.model_validate(record)
+    read.uploaded_by_name = current_user.full_name if hasattr(current_user, "full_name") else None
+    return ApiSuccess(data=read, message="File uploaded successfully.")
 
 
 @router.get(
@@ -59,7 +58,23 @@ def list_attachments(
     entity_id: uuid.UUID = Query(...),
 ):
     records = attachment_service.list_attachments(db, entity_type, entity_id)
-    return ApiSuccess(data=[AttachmentRead.model_validate(r) for r in records])
+
+    # Bulk-fetch user names for uploaded_by resolution
+    from app.models.user import User
+    uploader_ids = {r.uploaded_by for r in records if r.uploaded_by}
+    name_map: dict = {}
+    if uploader_ids:
+        users = db.query(User).filter(User.id.in_(uploader_ids)).all()
+        name_map = {str(u.id): u.full_name for u in users}
+
+    result = []
+    for r in records:
+        read = AttachmentRead.model_validate(r)
+        if r.uploaded_by:
+            read.uploaded_by_name = name_map.get(str(r.uploaded_by))
+        result.append(read)
+
+    return ApiSuccess(data=result)
 
 
 @router.get(

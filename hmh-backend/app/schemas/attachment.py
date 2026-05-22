@@ -23,6 +23,8 @@ class AttachmentRead(BaseModel):
     uploaded_by: Optional[uuid.UUID] = None
     uploaded_at: datetime
     is_active: bool
+    # Populated at API layer via user join — not a DB column
+    uploaded_by_name: Optional[str] = None
 
     @computed_field  # type: ignore[misc]
     @property

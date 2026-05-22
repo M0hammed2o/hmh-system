@@ -11,7 +11,9 @@ export type AttachmentEntity =
   | "PAYMENT"
   | "FUEL_LOG"
   | "MATERIAL_REQUEST"
-  | "SUPPLIER";
+  | "SUPPLIER"
+  | "LOT"       // Phase 3K
+  | "PROJECT";  // Phase 3K
 
 export type AttachmentType =
   | "PHOTO"
@@ -19,7 +21,28 @@ export type AttachmentType =
   | "DELIVERY_NOTE"
   | "INVOICE_COPY"
   | "PROOF"
-  | "CERTIFICATE";
+  | "CERTIFICATE"
+  // Phase 3K additions
+  | "PROGRESS_PHOTO"
+  | "PROOF_OF_WORK"
+  | "FUEL_SLIP"
+  | "QUOTATION"
+  | "PO_DOCUMENT";
+
+/** Human-readable labels for attachment type selector. */
+export const ATTACHMENT_TYPE_LABELS: Record<AttachmentType, string> = {
+  PHOTO:          "Photo",
+  PDF:            "PDF Document",
+  DELIVERY_NOTE:  "Delivery Note",
+  INVOICE_COPY:   "Invoice",
+  PROOF:          "Proof",
+  CERTIFICATE:    "Certificate",
+  PROGRESS_PHOTO: "Progress Photo",
+  PROOF_OF_WORK:  "Proof of Work",
+  FUEL_SLIP:      "Fuel Slip / Receipt",
+  QUOTATION:      "Quotation",
+  PO_DOCUMENT:    "PO Document",
+};
 
 export interface Attachment {
   id: string;
@@ -32,6 +55,7 @@ export interface Attachment {
   file_size_display: string;
   attachment_type: AttachmentType;
   uploaded_by: string | null;
+  uploaded_by_name: string | null;   // Phase 3K: populated at API layer
   uploaded_at: string;
   is_active: boolean;
   is_image: boolean;

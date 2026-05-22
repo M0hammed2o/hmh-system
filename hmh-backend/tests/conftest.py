@@ -116,11 +116,19 @@ def ensure_tables():
             EXCEPTION WHEN others THEN NULL;
             END$$;
         """))
-        # attachment_entity_enum: add values from migrations 0013-0018
-        for _val in ["STAGE_STATUS", "PAYMENT", "FUEL_LOG", "MATERIAL_REQUEST", "SUPPLIER"]:
+        # attachment_entity_enum: add values from migrations 0013-0019
+        for _val in ["STAGE_STATUS", "PAYMENT", "FUEL_LOG", "MATERIAL_REQUEST", "SUPPLIER", "LOT", "PROJECT"]:
             conn.execute(_t(f"""
                 DO $$ BEGIN
                     ALTER TYPE attachment_entity_enum ADD VALUE IF NOT EXISTS '{_val}';
+                EXCEPTION WHEN others THEN NULL;
+                END $$;
+            """))
+        # attachment_type_enum: add values from migration 0019
+        for _val in ["PROGRESS_PHOTO", "PROOF_OF_WORK", "FUEL_SLIP", "QUOTATION", "PO_DOCUMENT"]:
+            conn.execute(_t(f"""
+                DO $$ BEGIN
+                    ALTER TYPE attachment_type_enum ADD VALUE IF NOT EXISTS '{_val}';
                 EXCEPTION WHEN others THEN NULL;
                 END $$;
             """))
