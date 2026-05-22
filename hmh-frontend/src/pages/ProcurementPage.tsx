@@ -19,9 +19,12 @@ import {
   type MRQuote, type PurchaseOrder, type MRPriority, type DeliveryDestination,
 } from "@/api/procurement";
 import { warehouseApi, type WarehouseStockItem } from "@/api/warehouse";
+import { AttachmentStrip } from "@/components/shared/AttachmentStrip";
 import { cn } from "@/lib/utils";
 import client from "@/api/client";
 import { EmailDraftModal } from "@/components/EmailDraftModal";
+import { formatDate } from "@/lib/format";
+import type { ProcurementActivityEntry } from "@/api/procurement";
 
 /** Human-readable labels for delivery_destination values. */
 const DEST_LABEL: Record<DeliveryDestination, string> = {
@@ -54,6 +57,32 @@ const PRIORITY_COLOR: Record<MRPriority, string> = {
 
 interface Site { id: string; name: string; }
 interface Supplier { id: string; name: string; email: string | null; }
+
+// ── Shared: Procurement Activity Row ────────────────────────────────────────
+
+function ProcurementActivityRow({ entry }: { entry: ProcurementActivityEntry }) {
+  return (
+    <div className="flex items-start gap-3 px-3 py-2.5 border-b border-border/40 last:border-0 hover:bg-muted/20">
+      <div className="min-w-0 flex-1">
+        <p className="text-xs font-medium">{entry.description}</p>
+        <p className="text-[10px] text-muted-foreground">
+          {entry.actor ?? "System"} · {formatDate(entry.timestamp)}
+        </p>
+      </div>
+      {entry.url && entry.is_image && (
+        <a href={entry.url} target="_blank" rel="noopener noreferrer" className="shrink-0">
+          <img src={entry.url} alt="doc" className="w-10 h-10 rounded object-cover border border-border" />
+        </a>
+      )}
+      {entry.url && !entry.is_image && (
+        <a href={entry.url} target="_blank" rel="noopener noreferrer"
+          className="text-[10px] text-primary hover:underline shrink-0">
+          View
+        </a>
+      )}
+    </div>
+  );
+}
 
 // ── Create MR Modal ───────────────────────────────────────────────────────────
 
@@ -171,6 +200,21 @@ function MRDetailModal({ mr, suppliers, onClose, onUpdated }: {
   );
   const [quotes, setQuotes] = useState<MRQuote[]>([]);
   const [showMREmail, setShowMREmail] = useState(false);
+
+  // Phase 3I: activity timeline
+  const [showMRActivity,  setShowMRActivity]  = useState(false);
+  const [mrActivity,      setMrActivity]      = useState<ProcurementActivityEntry[]>([]);
+  const [mrActLoading,    setMrActLoading]    = useState(false);
+
+  const toggleMRActivity = async () => {
+    setShowMRActivity(p => !p);
+    if (!showMRActivity && mrActivity.length === 0) {
+      setMrActLoading(true);
+      try { setMrActivity(await procurementApi.getMRActivity(mr.id)); }
+      catch { /* silent */ }
+      finally { setMrActLoading(false); }
+    }
+  };
 
   // ── "Fulfil from Main Warehouse" section ────────────────────────────────
   const [showMainStock, setShowMainStock]           = useState(false);
@@ -480,6 +524,42 @@ function MRDetailModal({ mr, suppliers, onClose, onUpdated }: {
               </Button>
             )}
           </div>
+
+          {/* Phase 3I: Documents attached to this MR */}
+          <div>
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Documents</p>
+            <AttachmentStrip
+              entityType="MATERIAL_REQUEST"
+              entityId={mr.id}
+              label=""
+              accept="image/*,application/pdf"
+              compact
+            />
+          </div>
+
+          {/* Phase 3I: Activity timeline */}
+          <div className="border border-border rounded-xl overflow-hidden">
+            <button
+              className="w-full flex items-center justify-between px-3 py-2.5 hover:bg-muted/30 transition-colors text-left"
+              onClick={toggleMRActivity}
+            >
+              <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                Activity
+              </span>
+              <span className="text-xs text-muted-foreground">
+                {mrActLoading ? "Loading…" : showMRActivity ? "Hide ▲" : "Show ▼"}
+              </span>
+            </button>
+            {showMRActivity && (
+              <div className="border-t border-border max-h-52 overflow-y-auto">
+                {mrActivity.length === 0 ? (
+                  <p className="text-xs text-muted-foreground text-center py-4">No activity recorded yet.</p>
+                ) : mrActivity.map((a, i) => (
+                  <ProcurementActivityRow key={i} entry={a} />
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </div>
@@ -510,6 +590,20 @@ function PODetailModal({ po, onClose, onUpdated }: { po: PurchaseOrder; onClose:
   const [showDraft, setShowDraft] = useState(false);
   const [draftSubject, setDraftSubject] = useState("");
   const [draftTo, setDraftTo] = useState("");
+  // Phase 3I: activity
+  const [showPOActivity, setShowPOActivity] = useState(false);
+  const [poActivity,     setPoActivity]     = useState<ProcurementActivityEntry[]>([]);
+  const [poActLoading,   setPoActLoading]   = useState(false);
+
+  const togglePOActivity = async () => {
+    setShowPOActivity(p => !p);
+    if (!showPOActivity && poActivity.length === 0) {
+      setPoActLoading(true);
+      try { setPoActivity(await procurementApi.getPOActivity(po.id)); }
+      catch { /* silent */ }
+      finally { setPoActLoading(false); }
+    }
+  };
 
   useEffect(() => { procurementApi.getEmailLog(po.id).then(setEmailLog).catch(() => {}); }, [po.id]);
 
@@ -676,6 +770,40 @@ function PODetailModal({ po, onClose, onUpdated }: { po: PurchaseOrder; onClose:
               </Button>
             )}
             {po.sent_at && <span className="text-xs text-green-600 flex items-center gap-1"><MailCheck className="w-3.5 h-3.5" />Order Placed — Sent {new Date(po.sent_at).toLocaleDateString()}</span>}
+          </div>
+
+          {/* Phase 3I: Documents attached to this PO */}
+          <div>
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Documents</p>
+            <AttachmentStrip
+              entityType="PURCHASE_ORDER"
+              entityId={po.id}
+              label=""
+              accept="image/*,application/pdf"
+              compact
+            />
+          </div>
+
+          {/* Phase 3I: Activity timeline */}
+          <div className="border border-border rounded-xl overflow-hidden">
+            <button
+              className="w-full flex items-center justify-between px-3 py-2.5 hover:bg-muted/30 transition-colors text-left"
+              onClick={togglePOActivity}
+            >
+              <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Activity</span>
+              <span className="text-xs text-muted-foreground">
+                {poActLoading ? "Loading…" : showPOActivity ? "Hide ▲" : "Show ▼"}
+              </span>
+            </button>
+            {showPOActivity && (
+              <div className="border-t border-border max-h-52 overflow-y-auto">
+                {poActivity.length === 0 ? (
+                  <p className="text-xs text-muted-foreground text-center py-4">No activity recorded yet.</p>
+                ) : poActivity.map((a, i) => (
+                  <ProcurementActivityRow key={i} entry={a} />
+                ))}
+              </div>
+            )}
           </div>
         </div>
       </div>

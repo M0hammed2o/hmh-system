@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 from pydantic import BaseModel
 
 from app.dependencies import ALL_ROLES, CurrentUser, DbSession, OFFICE_AND_ABOVE
@@ -345,6 +345,70 @@ def get_po_outstanding(po_id: uuid.UUID, db: DbSession):
     from app.services.delivery_service import get_po_outstanding as _get
     result = _get(db, po_id)
     return ApiSuccess(data=result)
+
+
+@po_router.get("/{po_id}/activity", response_model=ApiSuccess[list[dict]], dependencies=[ALL_ROLES])
+def get_po_activity(po_id: uuid.UUID, db: DbSession, limit: int = Query(30, le=100)):
+    """Return a human-readable activity timeline for this purchase order."""
+    from app.models.audit import AuditEvent
+    from app.models.attachment import Attachment
+    from app.models.enums import AttachmentEntity
+    from app.models.purchase_order import PurchaseOrder
+    from app.core.storage import public_url as _pub
+
+    po = db.get(PurchaseOrder, po_id)
+    if not po:
+        from fastapi import HTTPException
+        raise HTTPException(404, "Purchase order not found.")
+
+    audit_rows = (
+        db.query(AuditEvent)
+        .filter(AuditEvent.entity_id == po_id)
+        .order_by(AuditEvent.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+    attachments = (
+        db.query(Attachment)
+        .filter(
+            Attachment.entity_type == AttachmentEntity.PURCHASE_ORDER,
+            Attachment.entity_id   == po_id,
+        )
+        .order_by(Attachment.uploaded_at.desc())
+        .all()
+    )
+
+    activity = []
+    for a in audit_rows:
+        actor = None
+        if a.actor_id:
+            from app.models.user import User
+            u = db.get(User, a.actor_id)
+            actor = u.full_name if u else None
+        after = a.after_value or {}
+        if a.action == "CREATE":
+            desc = f"PO {after.get('po_number', '')} created"
+        elif a.action == "APPROVE":
+            desc = "Purchase order approved"
+        elif "status" in after:
+            desc = f"Status → {after['status'].replace('_', ' ').title()}"
+        else:
+            desc = a.action.replace("_", " ").title()
+        activity.append({
+            "type": "status", "timestamp": a.created_at.isoformat(),
+            "actor": actor or "System", "description": desc,
+        })
+
+    for att in attachments:
+        activity.append({
+            "type": "document", "timestamp": att.uploaded_at.isoformat(),
+            "actor": None, "description": f"Document: {att.file_name}",
+            "url": _pub(att.stored_path), "attachment_id": str(att.id),
+            "is_image": att.mime_type.startswith("image/") if att.mime_type else False,
+        })
+
+    activity.sort(key=lambda x: x["timestamp"], reverse=True)
+    return ApiSuccess(data=activity[:limit])
 
 
 @po_router.get("/{po_id}/email-log", response_model=ApiSuccess[list[dict]], dependencies=[OFFICE_AND_ABOVE])

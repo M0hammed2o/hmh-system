@@ -9,7 +9,9 @@ export type AttachmentEntity =
   | "CERTIFICATION"
   | "STAGE_STATUS"
   | "PAYMENT"
-  | "FUEL_LOG";
+  | "FUEL_LOG"
+  | "MATERIAL_REQUEST"
+  | "SUPPLIER";
 
 export type AttachmentType =
   | "PHOTO"

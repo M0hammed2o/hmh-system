@@ -2,7 +2,18 @@ import client from "./client";
 
 export type MRStatus =
   | "DRAFT" | "SUBMITTED" | "PENDING_APPROVAL" | "APPROVED" | "REJECTED"
-  | "CONVERTED_TO_PO" | "ORDERED" | "PARTIALLY_RECEIVED" | "RECEIVED" | "CLOSED" | "CANCELLED";
+  | "CONVERTED_TO_PO" | "ORDERED" | "PARTIALLY_RECEIVED" | "RECEIVED"
+  | "INVOICED" | "CLOSED" | "CANCELLED";   // INVOICED added Phase 3I
+
+export interface ProcurementActivityEntry {
+  type:          "status" | "document";
+  timestamp:     string;
+  actor:         string | null;
+  description:   string;
+  url?:          string;
+  attachment_id?: string;
+  is_image?:     boolean;
+}
 
 export type MRPriority = "URGENT" | "HIGH" | "NORMAL" | "LOW";
 export type DeliveryDestination = "MAIN_WAREHOUSE" | "SITE_STORE" | "LOT";
@@ -223,6 +234,22 @@ export const procurementApi = {
 
   markSent: async (poId: string): Promise<PurchaseOrder> => {
     const res = await client.post<{ data: PurchaseOrder }>(`/purchase-orders/${poId}/mark-sent`);
+    return res.data.data;
+  },
+
+  // ── Activity timelines ──────────────────────────────────────────────────
+
+  getMRActivity: async (mrId: string): Promise<ProcurementActivityEntry[]> => {
+    const res = await client.get<{ data: ProcurementActivityEntry[] }>(
+      `/material-requests/${mrId}/activity`
+    );
+    return res.data.data;
+  },
+
+  getPOActivity: async (poId: string): Promise<ProcurementActivityEntry[]> => {
+    const res = await client.get<{ data: ProcurementActivityEntry[] }>(
+      `/purchase-orders/${poId}/activity`
+    );
     return res.data.data;
   },
 };

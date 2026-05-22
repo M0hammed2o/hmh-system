@@ -315,3 +315,65 @@ def add_quote(mr_id: uuid.UUID, body: QuoteCreate, db: DbSession, current_user: 
 def select_quote(mr_id: uuid.UUID, quote_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
     quote = mr_service.select_quote(db, mr_id, quote_id, current_user.id)
     return ApiSuccess(data=QuoteRead.model_validate(quote), message="Quote selected.")
+
+
+@mr_router.get("/{mr_id}/activity", response_model=ApiSuccess[list[dict]], dependencies=[ALL_ROLES])
+def get_mr_activity(mr_id: uuid.UUID, db: DbSession, limit: int = Query(30, le=100)):
+    """Return a human-readable activity timeline for this material request."""
+    from app.models.audit import AuditEvent
+    from app.models.attachment import Attachment
+    from app.models.enums import AttachmentEntity
+    from app.core.storage import public_url as _pub
+
+    mr = mr_service.get_request(db, mr_id)  # 404 if not found
+
+    audit_rows = (
+        db.query(AuditEvent)
+        .filter(AuditEvent.entity_id == mr_id)
+        .order_by(AuditEvent.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+    attachments = (
+        db.query(Attachment)
+        .filter(
+            Attachment.entity_type == AttachmentEntity.MATERIAL_REQUEST,
+            Attachment.entity_id   == mr_id,
+        )
+        .order_by(Attachment.uploaded_at.desc())
+        .all()
+    )
+
+    activity = []
+    for a in audit_rows:
+        actor = None
+        if a.actor_id:
+            from app.models.user import User
+            u = db.get(User, a.actor_id)
+            actor = u.full_name if u else None
+        after = a.after_value or {}
+        status = after.get("status", "")
+        if status:
+            desc = f"Status changed to {status.replace('_', ' ').title()}"
+        elif a.action == "CREATE":
+            desc = "Material request created"
+        elif a.action == "APPROVE":
+            desc = "Request approved"
+        elif a.action == "REJECT":
+            desc = f"Request rejected: {after.get('reason', '')}"
+        else:
+            desc = a.action.replace("_", " ").title()
+        activity.append({
+            "type": "status", "timestamp": a.created_at.isoformat(),
+            "actor": actor or "System", "description": desc,
+        })
+    for att in attachments:
+        activity.append({
+            "type": "document", "timestamp": att.uploaded_at.isoformat(),
+            "actor": None, "description": f"Document: {att.file_name}",
+            "url": _pub(att.stored_path), "attachment_id": str(att.id),
+            "is_image": att.mime_type.startswith("image/") if att.mime_type else False,
+        })
+
+    activity.sort(key=lambda x: x["timestamp"], reverse=True)
+    return ApiSuccess(data=activity[:limit])

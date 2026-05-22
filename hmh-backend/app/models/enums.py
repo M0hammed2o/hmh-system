@@ -34,6 +34,7 @@ class RecordStatus(str, enum.Enum):
     PARTIALLY_RECEIVED = "PARTIALLY_RECEIVED"
     RECEIVED = "RECEIVED"
     MATCHED = "MATCHED"
+    INVOICED = "INVOICED"    # Phase 3I: PO has a linked invoice
     PAID = "PAID"
     CANCELLED = "CANCELLED"
     CLOSED = "CLOSED"
@@ -180,15 +181,17 @@ class BoqStatus(str, enum.Enum):
 
 
 class AttachmentEntity(str, enum.Enum):
-    BOQ_HEADER = "BOQ_HEADER"
-    PURCHASE_ORDER = "PURCHASE_ORDER"
-    DELIVERY = "DELIVERY"
-    INVOICE = "INVOICE"
-    USAGE_LOG = "USAGE_LOG"
-    CERTIFICATION = "CERTIFICATION"
-    STAGE_STATUS = "STAGE_STATUS"   # milestone progress photos
-    PAYMENT = "PAYMENT"             # proof of payment
-    FUEL_LOG = "FUEL_LOG"           # extra fuel evidence photos
+    BOQ_HEADER       = "BOQ_HEADER"
+    PURCHASE_ORDER   = "PURCHASE_ORDER"
+    DELIVERY         = "DELIVERY"
+    INVOICE          = "INVOICE"
+    USAGE_LOG        = "USAGE_LOG"
+    CERTIFICATION    = "CERTIFICATION"
+    STAGE_STATUS     = "STAGE_STATUS"      # milestone progress photos
+    PAYMENT          = "PAYMENT"           # proof of payment
+    FUEL_LOG         = "FUEL_LOG"          # extra fuel evidence photos
+    MATERIAL_REQUEST = "MATERIAL_REQUEST"  # Phase 3I: MR documents
+    SUPPLIER         = "SUPPLIER"          # Phase 3I: supplier documents
 
 
 class AttachmentType(str, enum.Enum):

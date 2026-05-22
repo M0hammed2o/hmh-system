@@ -116,14 +116,21 @@ def ensure_tables():
             EXCEPTION WHEN others THEN NULL;
             END$$;
         """))
-        # attachment_entity_enum: add STAGE_STATUS, PAYMENT, FUEL_LOG (migrations 0013-0014)
-        for _val in ["STAGE_STATUS", "PAYMENT", "FUEL_LOG"]:
+        # attachment_entity_enum: add values from migrations 0013-0018
+        for _val in ["STAGE_STATUS", "PAYMENT", "FUEL_LOG", "MATERIAL_REQUEST", "SUPPLIER"]:
             conn.execute(_t(f"""
                 DO $$ BEGIN
                     ALTER TYPE attachment_entity_enum ADD VALUE IF NOT EXISTS '{_val}';
                 EXCEPTION WHEN others THEN NULL;
                 END $$;
             """))
+        # record_status_enum: add INVOICED (migration 0018)
+        conn.execute(_t("""
+            DO $$ BEGIN
+                ALTER TYPE record_status_enum ADD VALUE IF NOT EXISTS 'INVOICED';
+            EXCEPTION WHEN others THEN NULL;
+            END $$;
+        """))
         # fuel_logs.log_date must be nullable (migration 0010)
         conn.execute(_t("""
             DO $$

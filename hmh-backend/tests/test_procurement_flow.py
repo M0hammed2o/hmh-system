@@ -288,3 +288,152 @@ def test_approve_payment_blocked_when_unmatched(db: Session, client: TestClient,
     r = client.post(f"/api/v1/invoices/{inv_id}/approve-payment", headers=auth(tok))
     assert r.status_code == 200
     assert r.json()["data"]["status"] == "APPROVED"
+
+
+# ── Phase 3I tests ────────────────────────────────────────────────────────────
+
+def test_mr_attachment_upload_and_list(db, client: TestClient, setup: dict):
+    """MATERIAL_REQUEST entity type now works for attachments."""
+    tok = login(client, setup["office"]["email"], setup["office"]["password"])
+    pid = setup["project"]["id"]
+    sid = setup["site"]["id"]
+
+    # Create an MR
+    r = client.post(f"/api/v1/projects/{pid}/material-requests/",
+        json={"site_id": sid, "items": [{"description": "Test item", "requested_quantity": 5}]},
+        headers=auth(tok))
+    assert r.status_code == 201, r.text
+    mr_id = r.json()["data"]["id"]
+
+    # Upload a dummy attachment via the generic /attachments/upload endpoint
+    import io
+    fake_image = io.BytesIO(b"fake image data")
+    r2 = client.post("/api/v1/attachments/upload",
+        data={"entity_type": "MATERIAL_REQUEST", "entity_id": mr_id, "attachment_type": "PHOTO"},
+        files={"file": ("test.jpg", fake_image, "image/jpeg")},
+        headers=auth(tok))
+    assert r2.status_code == 201, f"Attachment upload failed: {r2.text}"
+    att_id = r2.json()["data"]["id"]
+
+    # List attachments for this MR
+    r3 = client.get(f"/api/v1/attachments/?entity_type=MATERIAL_REQUEST&entity_id={mr_id}",
+        headers=auth(tok))
+    assert r3.status_code == 200
+    atts = r3.json()["data"]
+    assert any(a["id"] == att_id for a in atts)
+
+
+def test_po_attachment_upload(db, client: TestClient, setup: dict):
+    """PURCHASE_ORDER entity type works for attachments."""
+    import io
+    tok = login(client, setup["office"]["email"], setup["office"]["password"])
+    pid = setup["project"]["id"]
+    sid = setup["site"]["id"]
+
+    # Create MR → approve → PO
+    r = client.post(f"/api/v1/projects/{pid}/material-requests/",
+        json={"site_id": sid, "items": [{"description": "Cement", "requested_quantity": 10}]},
+        headers=auth(tok))
+    mr_id = r.json()["data"]["id"]
+    client.post(f"/api/v1/material-requests/{mr_id}/submit", headers=auth(tok))
+    client.post(f"/api/v1/material-requests/{mr_id}/approve", json={}, headers=auth(tok))
+
+    from tests.conftest import make_supplier as _ms
+    sup = _ms(db)
+    r2 = client.post(f"/api/v1/material-requests/{mr_id}/convert-to-po",
+        json={"supplier_id": sup["id"], "items": [{"description": "Cement", "quantity": 10, "rate": 50.0}]},
+        headers=auth(tok))
+    assert r2.status_code == 201, r2.text
+    po_id = r2.json()["data"]["po_id"]
+
+    # Upload attachment to PO
+    fake_pdf = io.BytesIO(b"%PDF fake content")
+    r3 = client.post("/api/v1/attachments/upload",
+        data={"entity_type": "PURCHASE_ORDER", "entity_id": po_id, "attachment_type": "PDF"},
+        files={"file": ("po.pdf", fake_pdf, "application/pdf")},
+        headers=auth(tok))
+    assert r3.status_code == 201, f"PO attachment failed: {r3.text}"
+
+
+def test_mr_activity_endpoint(db, client: TestClient, setup: dict):
+    """GET /material-requests/{id}/activity returns timeline."""
+    tok = login(client, setup["office"]["email"], setup["office"]["password"])
+    pid = setup["project"]["id"]
+    sid = setup["site"]["id"]
+
+    r = client.post(f"/api/v1/projects/{pid}/material-requests/",
+        json={"site_id": sid, "items": [{"description": "Steel", "requested_quantity": 3}]},
+        headers=auth(tok))
+    mr_id = r.json()["data"]["id"]
+
+    r2 = client.get(f"/api/v1/material-requests/{mr_id}/activity", headers=auth(tok))
+    assert r2.status_code == 200, r2.text
+    assert isinstance(r2.json()["data"], list)
+
+
+def test_po_activity_endpoint(db, client: TestClient, setup: dict):
+    """GET /purchase-orders/{id}/activity returns timeline."""
+    tok = login(client, setup["office"]["email"], setup["office"]["password"])
+    pid = setup["project"]["id"]
+    sid = setup["site"]["id"]
+
+    r = client.post(f"/api/v1/projects/{pid}/material-requests/",
+        json={"site_id": sid, "items": [{"description": "Rebar", "requested_quantity": 20}]},
+        headers=auth(tok))
+    mr_id = r.json()["data"]["id"]
+    client.post(f"/api/v1/material-requests/{mr_id}/submit", headers=auth(tok))
+    client.post(f"/api/v1/material-requests/{mr_id}/approve", json={}, headers=auth(tok))
+
+    from tests.conftest import make_supplier as _ms
+    sup = _ms(db)
+    r2 = client.post(f"/api/v1/material-requests/{mr_id}/convert-to-po",
+        json={"supplier_id": sup["id"], "items": [{"description": "Rebar", "quantity": 20, "rate": 10.0}]},
+        headers=auth(tok))
+    po_id = r2.json()["data"]["po_id"]
+
+    r3 = client.get(f"/api/v1/purchase-orders/{po_id}/activity", headers=auth(tok))
+    assert r3.status_code == 200, r3.text
+    assert isinstance(r3.json()["data"], list)
+
+
+def test_site_user_cannot_access_pricing_via_mr(db, client: TestClient, setup: dict):
+    """
+    MaterialRequest list/get endpoints do NOT include pricing fields.
+    Site users should never see rates or totals.
+    """
+    tok = login(client, setup["site_mgr"]["email"], setup["site_mgr"]["password"])
+    pid = setup["project"]["id"]
+
+    r = client.get(f"/api/v1/projects/{pid}/material-requests/", headers=auth(tok))
+    assert r.status_code == 200, r.text
+    data = r.json()["data"]
+    for mr in data:
+        # No pricing fields should be present
+        assert "rate" not in mr, "rate must not be in MR response"
+        assert "unit_price" not in mr, "unit_price must not be in MR response"
+        assert "total_amount" not in mr, "total_amount must not be in MR response"
+        for item in mr.get("items", []):
+            assert "rate" not in item, "rate must not be in MR item response"
+            assert "unit_price" not in item
+
+
+def test_freestanding_lot_mr_creation(db, client: TestClient, setup: dict):
+    """Material requests work for projects with freestanding lots (site_id=None)."""
+    from tests.conftest import make_lot as _ml
+    tok = login(client, setup["office"]["email"], setup["office"]["password"])
+    pid = setup["project"]["id"]
+    sid = setup["site"]["id"]
+
+    # Freestanding lot
+    free_lot = _ml(db, pid, None, "FREESTANDING-1")
+
+    r = client.post(f"/api/v1/projects/{pid}/material-requests/",
+        json={
+            "site_id":  sid,
+            "lot_id":   free_lot["id"],
+            "items": [{"description": "Cement bags", "requested_quantity": 10}],
+        },
+        headers=auth(tok))
+    assert r.status_code == 201, r.text
+    mr = r.json()["data"]
+    assert mr["lot_id"] == free_lot["id"]
