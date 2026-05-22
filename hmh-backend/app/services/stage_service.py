@@ -136,6 +136,12 @@ def upsert_stage_status(
     if "notes" in fields:
         pss.notes = data.notes
 
+    # Phase 3J: progress + blocked_reason
+    if "progress_pct" in fields and data.progress_pct is not None:
+        pss.progress_pct = max(0, min(100, data.progress_pct))
+    if "blocked_reason" in fields:
+        pss.blocked_reason = data.blocked_reason
+
     # Append delay reason to notes if provided
     if "delay_reason" in fields and data.delay_reason:
         existing = pss.notes or ""

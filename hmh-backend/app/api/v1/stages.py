@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
+from pydantic import BaseModel
 
 from app.core.config import settings
 from app.core.storage import save_upload
@@ -138,6 +139,19 @@ async def upsert_stage_status_with_evidence(
 
 # ── Milestone: manual completion ──────────────────────────────────────────────
 
+class CompleteMilestoneBody(BaseModel):
+    completion_notes:  Optional[str] = None
+    completed_by_name: Optional[str] = None  # auto-filled from current_user if omitted
+
+
+class BlockMilestoneBody(BaseModel):
+    blocked_reason: str
+
+
+class SetProgressBody(BaseModel):
+    progress_pct: int   # 0–100
+
+
 @project_stages_router.post(
     "/{status_id}/complete",
     response_model=ApiSuccess[ProjectStageStatusRead],
@@ -148,20 +162,218 @@ def complete_milestone(
     status_id:  uuid.UUID,
     db: DbSession,
     current_user: CurrentUser,
+    body: Optional[CompleteMilestoneBody] = None,
 ):
-    """Manually mark a milestone as COMPLETED."""
+    """
+    Manually mark a milestone as COMPLETED.
+    Optionally captures completion notes and who completed it.
+    Milestones are NEVER auto-completed.
+    """
     from app.models.stage import ProjectStageStatus
     from app.models.enums import StageStatus
     pss = db.get(ProjectStageStatus, status_id)
     if not pss or pss.project_id != project_id:
         raise HTTPException(404, "Stage status not found.")
-    pss.status = StageStatus.COMPLETED
-    pss.completed_at = datetime.now(timezone.utc)
+    now = datetime.now(timezone.utc)
+    pss.status      = StageStatus.COMPLETED
+    pss.completed_at = now
     pss.updated_by   = current_user.id
+    pss.progress_pct = 100
+    if body:
+        if body.completion_notes is not None:
+            pss.completion_notes  = body.completion_notes
+        if body.completed_by_name is not None:
+            pss.completed_by_name = body.completed_by_name
+    # Clear blocked state on completion
+    pss.blocked_reason = None
     db.commit()
     db.refresh(pss)
     db.refresh(pss, ["stage"])
     return ApiSuccess(data=stage_service._enrich(pss), message="Milestone marked as completed.")
+
+
+@project_stages_router.post(
+    "/{status_id}/block",
+    response_model=ApiSuccess[ProjectStageStatusRead],
+    dependencies=[WRITE_ROLES],
+)
+def block_milestone(
+    project_id: uuid.UUID,
+    status_id:  uuid.UUID,
+    body: BlockMilestoneBody,
+    db: DbSession,
+    current_user: CurrentUser,
+):
+    """Mark a milestone as BLOCKED with a required reason."""
+    from app.models.stage import ProjectStageStatus
+    from app.models.enums import StageStatus
+    if not body.blocked_reason.strip():
+        raise HTTPException(422, "blocked_reason is required.")
+    pss = db.get(ProjectStageStatus, status_id)
+    if not pss or pss.project_id != project_id:
+        raise HTTPException(404, "Stage status not found.")
+    if pss.status in (StageStatus.COMPLETED, StageStatus.CERTIFIED):
+        raise HTTPException(422, "Cannot block a completed/certified milestone.")
+    pss.status         = StageStatus.BLOCKED
+    pss.blocked_reason = body.blocked_reason.strip()
+    pss.updated_by     = current_user.id
+    db.commit()
+    db.refresh(pss)
+    db.refresh(pss, ["stage"])
+    return ApiSuccess(data=stage_service._enrich(pss), message="Milestone blocked.")
+
+
+@project_stages_router.post(
+    "/{status_id}/unblock",
+    response_model=ApiSuccess[ProjectStageStatusRead],
+    dependencies=[WRITE_ROLES],
+)
+def unblock_milestone(
+    project_id: uuid.UUID,
+    status_id:  uuid.UUID,
+    db: DbSession,
+    current_user: CurrentUser,
+):
+    """Resume a blocked milestone — sets status back to IN_PROGRESS."""
+    from app.models.stage import ProjectStageStatus
+    from app.models.enums import StageStatus
+    pss = db.get(ProjectStageStatus, status_id)
+    if not pss or pss.project_id != project_id:
+        raise HTTPException(404, "Stage status not found.")
+    if pss.status != StageStatus.BLOCKED:
+        raise HTTPException(422, "Milestone is not blocked.")
+    pss.status         = StageStatus.IN_PROGRESS
+    pss.blocked_reason = None
+    pss.updated_by     = current_user.id
+    db.commit()
+    db.refresh(pss)
+    db.refresh(pss, ["stage"])
+    return ApiSuccess(data=stage_service._enrich(pss), message="Milestone unblocked.")
+
+
+@project_stages_router.patch(
+    "/{status_id}/progress",
+    response_model=ApiSuccess[ProjectStageStatusRead],
+    dependencies=[WRITE_ROLES],
+)
+def set_milestone_progress(
+    project_id: uuid.UUID,
+    status_id:  uuid.UUID,
+    body: SetProgressBody,
+    db: DbSession,
+    current_user: CurrentUser,
+):
+    """Set manual progress percentage (0–100)."""
+    from app.models.stage import ProjectStageStatus
+    from app.models.enums import StageStatus
+    pss = db.get(ProjectStageStatus, status_id)
+    if not pss or pss.project_id != project_id:
+        raise HTTPException(404, "Stage status not found.")
+    pct = max(0, min(100, body.progress_pct))
+    pss.progress_pct = pct
+    pss.updated_by   = current_user.id
+    # Auto-start if not started
+    if pss.status == StageStatus.NOT_STARTED and pct > 0:
+        pss.status     = StageStatus.IN_PROGRESS
+        pss.started_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(pss)
+    db.refresh(pss, ["stage"])
+    return ApiSuccess(data=stage_service._enrich(pss), message=f"Progress set to {pct}%.")
+
+
+@project_stages_router.get(
+    "/{status_id}/activity",
+    response_model=ApiSuccess[list[dict]],
+    dependencies=[ALL_ROLES],
+)
+def get_milestone_activity(
+    project_id: uuid.UUID,
+    status_id:  uuid.UUID,
+    db: DbSession,
+    limit: int = Query(30, le=100),
+):
+    """
+    Return a human-readable activity feed for this milestone.
+    Combines audit events with photo upload events.
+    """
+    from app.models.stage import ProjectStageStatus
+    from app.models.audit import AuditEvent
+    from sqlalchemy import text
+
+    pss = db.get(ProjectStageStatus, status_id)
+    if not pss or pss.project_id != project_id:
+        raise HTTPException(404, "Stage status not found.")
+
+    # Audit events for this stage status
+    audit_rows = (
+        db.query(AuditEvent)
+        .filter(AuditEvent.entity_id == status_id)
+        .order_by(AuditEvent.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+
+    # Photo attachments (latest uploads)
+    photo_rows = (
+        db.query(Attachment)
+        .filter(
+            Attachment.entity_type == AttachmentEntity.STAGE_STATUS,
+            Attachment.entity_id   == status_id,
+        )
+        .order_by(Attachment.uploaded_at.desc())
+        .limit(10)
+        .all()
+    )
+
+    from app.core.storage import public_url as _pub
+    activity = []
+
+    for a in audit_rows:
+        actor = None
+        if a.actor_id:
+            from app.models.user import User
+            u = db.get(User, a.actor_id)
+            actor = u.full_name if u else None
+        after = a.after_value or {}
+        description = _audit_description(a.action, after)
+        activity.append({
+            "type":        "audit",
+            "timestamp":   a.created_at.isoformat(),
+            "actor":       actor or "System",
+            "description": description,
+            "action":      a.action,
+        })
+
+    for p in photo_rows:
+        activity.append({
+            "type":        "photo",
+            "timestamp":   p.uploaded_at.isoformat(),
+            "actor":       None,
+            "description": f"Photo uploaded: {p.file_name}",
+            "url":         _pub(p.stored_path),
+            "photo_id":    str(p.id),
+        })
+
+    activity.sort(key=lambda x: x["timestamp"], reverse=True)
+    return ApiSuccess(data=activity[:limit])
+
+
+def _audit_description(action: str, after: dict) -> str:
+    """Convert an audit action into human-readable text."""
+    status = after.get("status", "").replace("_", " ").title()
+    if action == "CREATE":
+        return "Milestone started"
+    if action == "UPDATE":
+        if status:
+            return f"Status → {status}"
+        pct = after.get("progress_pct")
+        if pct is not None:
+            return f"Progress set to {pct}%"
+        return "Milestone updated"
+    if action == "APPROVE":
+        return "Milestone approved"
+    return action.replace("_", " ").title()
 
 
 # ── Milestone photos ──────────────────────────────────────────────────────────

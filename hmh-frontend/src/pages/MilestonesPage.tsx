@@ -12,7 +12,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   CheckCircle2, Circle, Clock, AlertTriangle, Camera,
   ChevronDown, ChevronUp, Plus, X as XIcon,
-  RefreshCw, Package, HardHat,
+  RefreshCw, Package, HardHat, Ban, PlayCircle, History,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -20,11 +20,16 @@ import { PageHeader } from "@/components/shared/PageHeader";
 import { projectsApi, type Project } from "@/api/projects";
 import { sitesApi, type Site } from "@/api/sites";
 import { lotsApi, type Lot } from "@/api/lots";
-import { stagesApi, type StageMaster, type ProjectStageStatus, type MilestonePhoto, type StageStatus } from "@/api/stages";
+import {
+  stagesApi,
+  type StageMaster, type ProjectStageStatus, type MilestonePhoto, type StageStatus,
+  type MilestoneActivityEntry,
+} from "@/api/stages";
 import { siteDashboardApi, type MaterialSummaryItem } from "@/api/siteDashboard";
 import { jobCardsApi, type JobCard } from "@/api/jobCards";
 import { cn } from "@/lib/utils";
 import { ROLE_KEY } from "@/lib/constants";
+import { formatDate } from "@/lib/format";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -39,11 +44,12 @@ function fmtDate(iso: string | null | undefined): string {
 }
 
 const STATUS_META: Record<StageStatus, { label: string; icon: React.ReactNode; color: string; bg: string }> = {
-  NOT_STARTED:         { label: "Not started",   icon: <Circle className="w-4 h-4" />,          color: "text-muted-foreground", bg: "bg-muted/40" },
-  IN_PROGRESS:         { label: "In progress",   icon: <Clock className="w-4 h-4" />,             color: "text-blue-600",         bg: "bg-blue-50 dark:bg-blue-950/30" },
-  AWAITING_INSPECTION: { label: "Awaiting check",icon: <AlertTriangle className="w-4 h-4" />,     color: "text-amber-600",        bg: "bg-amber-50 dark:bg-amber-950/30" },
-  COMPLETED:           { label: "Completed",     icon: <CheckCircle2 className="w-4 h-4" />,      color: "text-green-600",        bg: "bg-green-50 dark:bg-green-950/30" },
-  CERTIFIED:           { label: "Certified",     icon: <CheckCircle2 className="w-4 h-4" />,      color: "text-emerald-600",      bg: "bg-emerald-50 dark:bg-emerald-950/30" },
+  NOT_STARTED:         { label: "Not started",    icon: <Circle className="w-4 h-4" />,          color: "text-muted-foreground", bg: "bg-muted/40" },
+  IN_PROGRESS:         { label: "In progress",    icon: <Clock className="w-4 h-4" />,             color: "text-blue-600",         bg: "bg-blue-50 dark:bg-blue-950/30" },
+  BLOCKED:             { label: "Blocked",         icon: <Ban className="w-4 h-4" />,               color: "text-destructive",      bg: "bg-destructive/10" },
+  AWAITING_INSPECTION: { label: "Awaiting check", icon: <AlertTriangle className="w-4 h-4" />,    color: "text-amber-600",        bg: "bg-amber-50 dark:bg-amber-950/30" },
+  COMPLETED:           { label: "Completed",       icon: <CheckCircle2 className="w-4 h-4" />,    color: "text-green-600",        bg: "bg-green-50 dark:bg-green-950/30" },
+  CERTIFIED:           { label: "Certified",       icon: <CheckCircle2 className="w-4 h-4" />,    color: "text-emerald-600",      bg: "bg-emerald-50 dark:bg-emerald-950/30" },
 };
 
 // ── Lightbox ──────────────────────────────────────────────────────────────────
@@ -258,21 +264,26 @@ function MilestoneCard({
   projectId, siteId, lotId, master, status, photos, materials, jobCards,
   canWrite, lotSelected, index, onRefresh,
 }: MilestoneCardProps) {
-  const [expanded,   setExpanded]   = useState(false);
-  const [completing, setCompleting] = useState(false);
-  const [starting,   setStarting]   = useState(false);
+  const [expanded,       setExpanded]       = useState(false);
+  const [starting,       setStarting]       = useState(false);
+  const [showComplete,   setShowComplete]   = useState(false);
+  const [showBlock,      setShowBlock]      = useState(false);
+  const [showActivity,   setShowActivity]   = useState(false);
+  const [activity,       setActivity]       = useState<MilestoneActivityEntry[]>([]);
+  const [actLoading,     setActLoading]     = useState(false);
+  const [progressBusy,   setProgressBusy]   = useState(false);
 
-  const meta = STATUS_META[status?.status ?? "NOT_STARTED"];
-  const isDone  = status?.status === "COMPLETED" || status?.status === "CERTIFIED";
-  const isActive = status?.status === "IN_PROGRESS" || status?.status === "AWAITING_INSPECTION";
+  const meta   = STATUS_META[status?.status ?? "NOT_STARTED"];
+  const isDone = status?.status === "COMPLETED" || status?.status === "CERTIFIED";
+  const isBlocked = status?.status === "BLOCKED";
 
   const startMilestone = async () => {
     setStarting(true);
     try {
       await stagesApi.upsert(projectId, {
         stage_id: master.id,
-        site_id:  siteId  || null,
-        lot_id:   lotId   || null,
+        site_id:  siteId || null,
+        lot_id:   lotId  || null,
         status:   "IN_PROGRESS",
       });
       onRefresh();
@@ -280,24 +291,42 @@ function MilestoneCard({
     finally { setStarting(false); }
   };
 
-  const completeMilestone = async () => {
+  const handleSetProgress = async (pct: number) => {
     if (!status) return;
-    setCompleting(true);
-    try {
-      await stagesApi.complete(projectId, status.id);
-      onRefresh();
-    } catch { /* ignore */ }
-    finally { setCompleting(false); }
+    setProgressBusy(true);
+    try { await stagesApi.setProgress(projectId, status.id, pct); onRefresh(); }
+    catch { /* ignore */ }
+    finally { setProgressBusy(false); }
+  };
+
+  const handleUnblock = async () => {
+    if (!status) return;
+    try { await stagesApi.unblock(projectId, status.id); onRefresh(); }
+    catch { /* ignore */ }
+  };
+
+  const toggleActivity = async () => {
+    if (!status) return;
+    setShowActivity(p => !p);
+    if (!showActivity && activity.length === 0) {
+      setActLoading(true);
+      try { setActivity(await stagesApi.getActivity(projectId, status.id)); }
+      catch { /* silent */ }
+      finally { setActLoading(false); }
+    }
   };
 
   const totalLabour = jobCards.reduce((s, j) => s + (j.total_amount || 0), 0);
 
   return (
+    <>
     <div className={cn(
       "rounded-2xl border overflow-hidden transition-colors",
-      isDone  ? "border-green-200 bg-green-50/40 dark:border-green-900/50 dark:bg-green-950/10"
-              : isActive ? "border-blue-200 bg-blue-50/30 dark:border-blue-900/50 dark:bg-blue-950/10"
-              : "border-border bg-card"
+      isDone    ? "border-green-200 bg-green-50/40 dark:border-green-900/50 dark:bg-green-950/10"
+      : isBlocked ? "border-destructive/30 bg-destructive/5"
+      : status?.status === "IN_PROGRESS" || status?.status === "AWAITING_INSPECTION"
+                ? "border-blue-200 bg-blue-50/30 dark:border-blue-900/50 dark:bg-blue-950/10"
+      : "border-border bg-card"
     )}>
       {/* Card header — always visible */}
       <button
@@ -333,7 +362,22 @@ function MilestoneCard({
             <p className="text-xs text-muted-foreground mt-0.5">
               Started {fmtDate(status.started_at)}
               {status.completed_at && ` · Completed ${fmtDate(status.completed_at)}`}
+              {status.completed_by_name && ` · by ${status.completed_by_name}`}
             </p>
+          )}
+          {isBlocked && status?.blocked_reason && (
+            <p className="text-xs text-destructive mt-0.5 flex items-center gap-1">
+              <Ban className="w-3 h-3 shrink-0" />
+              {status.blocked_reason}
+            </p>
+          )}
+          {status && !isDone && !isBlocked && (status.progress_pct ?? 0) > 0 && (
+            <div className="mt-1 flex items-center gap-2">
+              <div className="h-1 bg-muted rounded-full overflow-hidden flex-1 max-w-[100px]">
+                <div className="h-full bg-blue-500 rounded-full" style={{ width: `${status.progress_pct}%` }} />
+              </div>
+              <span className="text-[10px] text-muted-foreground">{status.progress_pct}%</span>
+            </div>
           )}
         </div>
 
@@ -354,19 +398,17 @@ function MilestoneCard({
                   {starting ? "Starting…" : "Mark In Progress"}
                 </Button>
               )}
-              {status && !isDone && (
-                <Button size="sm" onClick={completeMilestone} disabled={completing}
+              {status && !isDone && !isBlocked && (
+                <Button size="sm" onClick={() => setShowComplete(true)}
                         className="gap-1.5 bg-green-600 hover:bg-green-700 text-white">
                   <CheckCircle2 className="w-3.5 h-3.5" />
-                  {completing ? "Saving…" : "Mark Complete"}
+                  Mark Complete
                 </Button>
               )}
-              {status && status.status !== "AWAITING_INSPECTION" && !isDone && (
+              {status && status.status !== "AWAITING_INSPECTION" && !isDone && !isBlocked && (
                 <Button size="sm" variant="outline"
                   onClick={() => stagesApi.upsert(projectId, {
-                    stage_id: master.id,
-                    site_id: siteId || null,
-                    lot_id:  lotId  || null,
+                    stage_id: master.id, site_id: siteId || null, lot_id: lotId || null,
                     status: "AWAITING_INSPECTION",
                   }).then(onRefresh)}
                   className="gap-1.5"
@@ -375,6 +417,86 @@ function MilestoneCard({
                   Awaiting Inspection
                 </Button>
               )}
+              {status && !isDone && !isBlocked && (
+                <Button size="sm" variant="outline" onClick={() => setShowBlock(true)}
+                  className="gap-1.5 text-destructive border-destructive/30 hover:bg-destructive/10">
+                  <Ban className="w-3.5 h-3.5" />Block
+                </Button>
+              )}
+              {isBlocked && (
+                <Button size="sm" variant="outline" onClick={handleUnblock} className="gap-1.5">
+                  <PlayCircle className="w-3.5 h-3.5" />Resume
+                </Button>
+              )}
+              {status && (
+                <Button size="sm" variant="ghost" onClick={toggleActivity} className="gap-1.5 text-muted-foreground ml-auto">
+                  <History className="w-3.5 h-3.5" />Activity
+                </Button>
+              )}
+            </div>
+          )}
+
+          {/* Progress slider (for active/in-progress milestones) */}
+          {status && !isDone && canWrite && (
+            <div className="space-y-1">
+              <div className="flex items-center justify-between text-xs text-muted-foreground">
+                <span>Progress</span>
+                <span className="font-medium text-foreground">{status.progress_pct ?? 0}%</span>
+              </div>
+              <input
+                type="range" min={0} max={100} step={5}
+                value={status.progress_pct ?? 0}
+                disabled={progressBusy}
+                onChange={e => handleSetProgress(parseInt(e.target.value))}
+                className="w-full accent-primary cursor-pointer disabled:opacity-50"
+              />
+              <div className="flex justify-between text-[10px] text-muted-foreground">
+                <span>0%</span><span>50%</span><span>100%</span>
+              </div>
+            </div>
+          )}
+
+          {/* Completion info */}
+          {isDone && (status?.completion_notes || status?.completed_by_name) && (
+            <div className="bg-green-50/60 dark:bg-green-950/20 border border-green-200/50 rounded-xl px-4 py-3 space-y-1">
+              {status.completed_by_name && (
+                <p className="text-xs text-green-700 dark:text-green-400">
+                  Completed by <strong>{status.completed_by_name}</strong>
+                  {status.completed_at && ` on ${fmtDate(status.completed_at)}`}
+                </p>
+              )}
+              {status.completion_notes && (
+                <p className="text-sm text-green-800 dark:text-green-300 italic">"{status.completion_notes}"</p>
+              )}
+            </div>
+          )}
+
+          {/* Activity feed */}
+          {showActivity && (
+            <div className="border border-border rounded-xl overflow-hidden">
+              <div className="px-4 py-2.5 bg-muted/30 border-b border-border text-xs font-semibold text-muted-foreground uppercase tracking-wide flex items-center justify-between">
+                Activity
+                {actLoading && <RefreshCw className="w-3 h-3 animate-spin" />}
+              </div>
+              <div className="max-h-52 overflow-y-auto">
+                {activity.length === 0 && !actLoading ? (
+                  <p className="text-xs text-muted-foreground text-center py-4">No activity recorded yet.</p>
+                ) : activity.map((a, i) => (
+                  <div key={i} className="flex items-start gap-3 px-4 py-2.5 border-b border-border/40 last:border-0">
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs font-medium">{a.description}</p>
+                      <p className="text-[10px] text-muted-foreground">
+                        {a.actor ?? "System"} · {formatDate(a.timestamp)}
+                      </p>
+                    </div>
+                    {a.url && (
+                      <a href={a.url} target="_blank" rel="noopener noreferrer">
+                        <img src={a.url} alt="photo" className="w-10 h-10 rounded object-cover border border-border shrink-0" />
+                      </a>
+                    )}
+                  </div>
+                ))}
+              </div>
             </div>
           )}
 
@@ -465,6 +587,156 @@ function MilestoneCard({
           </div>
         </div>
       )}
+    </div>
+
+    {/* Completion modal */}
+    {showComplete && status && (
+      <CompletionModal
+        projectId={projectId}
+        statusId={status.id}
+        stageName={master.name}
+        hasPhotos={photos.length > 0}
+        onClose={() => setShowComplete(false)}
+        onDone={() => { setShowComplete(false); onRefresh(); }}
+      />
+    )}
+
+    {/* Block modal */}
+    {showBlock && status && (
+      <BlockModal
+        projectId={projectId}
+        statusId={status.id}
+        stageName={master.name}
+        onClose={() => setShowBlock(false)}
+        onDone={() => { setShowBlock(false); onRefresh(); }}
+      />
+    )}
+    </>
+  );
+}
+
+// ── Completion Modal ──────────────────────────────────────────────────────────
+
+function CompletionModal({
+  projectId, statusId, stageName, hasPhotos, onClose, onDone,
+}: {
+  projectId: string; statusId: string; stageName: string;
+  hasPhotos: boolean; onClose: () => void; onDone: () => void;
+}) {
+  const [notes,   setNotes]   = useState("");
+  const [name,    setName]    = useState("");
+  const [saving,  setSaving]  = useState(false);
+  const [error,   setError]   = useState("");
+
+  const submit = async () => {
+    setSaving(true); setError("");
+    try {
+      await stagesApi.complete(projectId, statusId, {
+        completion_notes:  notes || undefined,
+        completed_by_name: name  || undefined,
+      });
+      onDone();
+    } catch (err: unknown) {
+      const d = (err as { response?: { data?: { detail?: string } } })?.response?.data;
+      setError(d?.detail ?? "Failed to complete milestone.");
+    } finally { setSaving(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
+      <div className="bg-card border border-border rounded-2xl w-full max-w-sm p-6 space-y-4" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between">
+          <h3 className="font-semibold text-base">Complete Milestone</h3>
+          <button onClick={onClose}><XIcon className="w-4 h-4 text-muted-foreground" /></button>
+        </div>
+
+        <p className="text-sm text-muted-foreground">{stageName}</p>
+
+        {!hasPhotos && (
+          <div className="flex items-start gap-2 bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800/50 rounded-xl px-3 py-2.5">
+            <Camera className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+            <p className="text-xs text-amber-700 dark:text-amber-400">
+              No progress photos uploaded. Consider adding a photo before marking complete.
+            </p>
+          </div>
+        )}
+
+        <div className="space-y-3">
+          <div>
+            <label className="text-xs text-muted-foreground block mb-1">Completed by</label>
+            <input type="text" value={name} onChange={e => setName(e.target.value)} autoFocus
+              placeholder="Your name or team"
+              className="w-full h-10 rounded-md border border-input bg-background px-3 text-sm" />
+          </div>
+          <div>
+            <label className="text-xs text-muted-foreground block mb-1">Completion notes (optional)</label>
+            <textarea value={notes} onChange={e => setNotes(e.target.value)} rows={3}
+              placeholder="Any notes about the completion…"
+              className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm resize-none" />
+          </div>
+        </div>
+
+        {error && <p className="text-xs text-destructive bg-destructive/10 rounded-lg px-3 py-2">{error}</p>}
+
+        <div className="flex gap-2 pt-1">
+          <Button onClick={submit} disabled={saving} className="flex-1 bg-green-600 hover:bg-green-700">
+            {saving ? "Saving…" : "Mark Complete"}
+          </Button>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Block Modal ───────────────────────────────────────────────────────────────
+
+function BlockModal({
+  projectId, statusId, stageName, onClose, onDone,
+}: {
+  projectId: string; statusId: string; stageName: string;
+  onClose: () => void; onDone: () => void;
+}) {
+  const [reason, setReason] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error,  setError]  = useState("");
+
+  const submit = async () => {
+    if (!reason.trim()) { setError("A reason is required."); return; }
+    setSaving(true); setError("");
+    try {
+      await stagesApi.block(projectId, statusId, reason.trim());
+      onDone();
+    } catch (err: unknown) {
+      const d = (err as { response?: { data?: { detail?: string } } })?.response?.data;
+      setError(d?.detail ?? "Failed to block milestone.");
+    } finally { setSaving(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
+      <div className="bg-card border border-border rounded-2xl w-full max-w-sm p-6 space-y-4" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between">
+          <h3 className="font-semibold text-base flex items-center gap-1.5">
+            <Ban className="w-4 h-4 text-destructive" />Block Milestone
+          </h3>
+          <button onClick={onClose}><XIcon className="w-4 h-4 text-muted-foreground" /></button>
+        </div>
+        <p className="text-sm text-muted-foreground">{stageName}</p>
+        <div>
+          <label className="text-xs text-muted-foreground block mb-1">Reason for blocking *</label>
+          <textarea value={reason} onChange={e => setReason(e.target.value)} rows={3} autoFocus
+            placeholder="e.g. Waiting for material delivery, Inspection pending…"
+            className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm resize-none" />
+        </div>
+        {error && <p className="text-xs text-destructive bg-destructive/10 rounded-lg px-3 py-2">{error}</p>}
+        <div className="flex gap-2 pt-1">
+          <Button onClick={submit} disabled={saving} className="flex-1 bg-destructive hover:bg-destructive/90">
+            {saving ? "Blocking…" : "Mark as Blocked"}
+          </Button>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+        </div>
+      </div>
     </div>
   );
 }

@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import (
-    Boolean, DateTime, Enum, ForeignKey, Integer, String, Text, UniqueConstraint,
+    Boolean, DateTime, Enum, ForeignKey, Integer, SmallInteger, String, Text, UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -94,6 +94,13 @@ class ProjectStageStatus(TimestampMixin, Base):
     certification_required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     ready_for_labour_payment: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # Phase 3J: milestone completion + progress fields
+    completion_notes:  Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    completed_by_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    progress_pct:      Mapped[int]           = mapped_column(SmallInteger, nullable=False, default=0)
+    blocked_reason:    Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
     updated_by: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="SET NULL"),

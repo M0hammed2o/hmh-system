@@ -35,6 +35,11 @@ class ProjectStageStatusRead(BaseModel):
     certification_required: bool
     ready_for_labour_payment: bool
     notes: Optional[str] = None
+    # Phase 3J fields
+    completion_notes:  Optional[str] = None
+    completed_by_name: Optional[str] = None
+    progress_pct:      int            = 0
+    blocked_reason:    Optional[str]  = None
     updated_by: Optional[uuid.UUID] = None
     created_at: datetime
     updated_at: datetime
@@ -55,3 +60,6 @@ class StageStatusUpsert(BaseModel):
     ready_for_labour_payment: Optional[bool] = None
     notes: Optional[str] = None
     delay_reason: Optional[str] = None  # appended to notes if provided
+    # Phase 3J
+    progress_pct:   Optional[int] = None
+    blocked_reason: Optional[str] = None

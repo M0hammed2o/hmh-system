@@ -3,8 +3,9 @@ import client from "./client";
 export type StageStatus =
   | "NOT_STARTED"
   | "IN_PROGRESS"
-  | "COMPLETED"
+  | "BLOCKED"
   | "AWAITING_INSPECTION"
+  | "COMPLETED"
   | "CERTIFIED";
 
 export interface MilestonePhoto {
@@ -37,12 +38,27 @@ export interface ProjectStageStatus {
   certification_required: boolean;
   ready_for_labour_payment: boolean;
   notes: string | null;
+  // Phase 3J fields
+  completion_notes:  string | null;
+  completed_by_name: string | null;
+  progress_pct:      number;
+  blocked_reason:    string | null;
   updated_by: string | null;
   created_at: string;
   updated_at: string;
   // Enriched fields
   stage_name: string | null;
   sequence_order: number | null;
+}
+
+export interface MilestoneActivityEntry {
+  type:        "audit" | "photo";
+  timestamp:   string;
+  actor:       string | null;
+  description: string;
+  url?:        string;
+  photo_id?:   string;
+  action?:     string;
 }
 
 export interface StageStatusUpsert {
@@ -97,9 +113,44 @@ export const stagesApi = {
     return res.data.data;
   },
 
-  complete: async (projectId: string, statusId: string): Promise<ProjectStageStatus> => {
+  complete: async (
+    projectId: string,
+    statusId:  string,
+    body?: { completion_notes?: string; completed_by_name?: string }
+  ): Promise<ProjectStageStatus> => {
     const res = await client.post<{ data: ProjectStageStatus }>(
-      `/projects/${projectId}/stage-statuses/${statusId}/complete`
+      `/projects/${projectId}/stage-statuses/${statusId}/complete`,
+      body ?? {}
+    );
+    return res.data.data;
+  },
+
+  block: async (projectId: string, statusId: string, blockedReason: string): Promise<ProjectStageStatus> => {
+    const res = await client.post<{ data: ProjectStageStatus }>(
+      `/projects/${projectId}/stage-statuses/${statusId}/block`,
+      { blocked_reason: blockedReason }
+    );
+    return res.data.data;
+  },
+
+  unblock: async (projectId: string, statusId: string): Promise<ProjectStageStatus> => {
+    const res = await client.post<{ data: ProjectStageStatus }>(
+      `/projects/${projectId}/stage-statuses/${statusId}/unblock`
+    );
+    return res.data.data;
+  },
+
+  setProgress: async (projectId: string, statusId: string, pct: number): Promise<ProjectStageStatus> => {
+    const res = await client.patch<{ data: ProjectStageStatus }>(
+      `/projects/${projectId}/stage-statuses/${statusId}/progress`,
+      { progress_pct: pct }
+    );
+    return res.data.data;
+  },
+
+  getActivity: async (projectId: string, statusId: string): Promise<MilestoneActivityEntry[]> => {
+    const res = await client.get<{ data: MilestoneActivityEntry[] }>(
+      `/projects/${projectId}/stage-statuses/${statusId}/activity`
     );
     return res.data.data;
   },

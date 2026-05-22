@@ -165,3 +165,168 @@ def test_seed_stages_endpoint(db: Session, client: TestClient, stage_setup: dict
     assert r.status_code in (200, 201), r.text
     stages = r.json()["data"]
     assert len(stages) >= 10
+
+
+# ── Phase 3J tests ────────────────────────────────────────────────────────────
+
+def test_complete_milestone_with_notes(db: Session, client: TestClient, stage_setup: dict):
+    """Completing a milestone with notes + completed_by_name stores them."""
+    tok = login(client, stage_setup["office"]["email"], stage_setup["office"]["password"])
+    project_id = stage_setup["project"]["id"]
+    stage_id   = stage_setup["stage_id"]
+
+    # Create the status first
+    r = client.post(
+        f"/api/v1/projects/{project_id}/stage-statuses/",
+        json={"stage_id": stage_id, "status": "IN_PROGRESS"},
+        headers=auth(tok),
+    )
+    status_id = r.json()["data"]["id"]
+
+    # Complete with notes
+    r = client.post(
+        f"/api/v1/projects/{project_id}/stage-statuses/{status_id}/complete",
+        json={"completion_notes": "Slab poured successfully.", "completed_by_name": "Sipho"},
+        headers=auth(tok),
+    )
+    assert r.status_code == 200, r.text
+    data = r.json()["data"]
+    assert data["status"] == "COMPLETED"
+    assert data["completion_notes"] == "Slab poured successfully."
+    assert data["completed_by_name"] == "Sipho"
+    assert data["progress_pct"] == 100
+
+
+def test_block_and_unblock_milestone(db: Session, client: TestClient, stage_setup: dict):
+    """Milestone can be blocked with a reason and then unblocked."""
+    tok = login(client, stage_setup["office"]["email"], stage_setup["office"]["password"])
+    pid = stage_setup["project"]["id"]
+    sid = stage_setup["stage_id"]
+
+    # Create + start
+    r = client.post(f"/api/v1/projects/{pid}/stage-statuses/",
+        json={"stage_id": sid, "status": "IN_PROGRESS"}, headers=auth(tok))
+    status_id = r.json()["data"]["id"]
+
+    # Block
+    r = client.post(
+        f"/api/v1/projects/{pid}/stage-statuses/{status_id}/block",
+        json={"blocked_reason": "Waiting for concrete delivery."},
+        headers=auth(tok),
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["data"]["status"] == "BLOCKED"
+    assert r.json()["data"]["blocked_reason"] == "Waiting for concrete delivery."
+
+    # Unblock
+    r = client.post(
+        f"/api/v1/projects/{pid}/stage-statuses/{status_id}/unblock",
+        headers=auth(tok),
+    )
+    assert r.status_code == 200, r.text
+    data = r.json()["data"]
+    assert data["status"] == "IN_PROGRESS"
+    assert data["blocked_reason"] is None
+
+
+def test_block_requires_reason(db: Session, client: TestClient, stage_setup: dict):
+    """Blocking without a reason returns 422."""
+    tok = login(client, stage_setup["office"]["email"], stage_setup["office"]["password"])
+    pid = stage_setup["project"]["id"]
+    sid = stage_setup["stage_id"]
+
+    r1 = client.post(f"/api/v1/projects/{pid}/stage-statuses/",
+        json={"stage_id": sid, "status": "IN_PROGRESS"}, headers=auth(tok))
+    status_id = r1.json()["data"]["id"]
+
+    r = client.post(
+        f"/api/v1/projects/{pid}/stage-statuses/{status_id}/block",
+        json={"blocked_reason": ""},   # empty reason
+        headers=auth(tok),
+    )
+    assert r.status_code in (422, 400), r.text
+
+
+def test_set_progress(db: Session, client: TestClient, stage_setup: dict):
+    """PATCH progress sets pct and auto-starts milestone."""
+    tok = login(client, stage_setup["office"]["email"], stage_setup["office"]["password"])
+    pid = stage_setup["project"]["id"]
+    sid = stage_setup["stage_id"]
+
+    # Create NOT_STARTED
+    r = client.post(f"/api/v1/projects/{pid}/stage-statuses/",
+        json={"stage_id": sid}, headers=auth(tok))
+    status_id = r.json()["data"]["id"]
+    assert r.json()["data"]["status"] == "NOT_STARTED"
+
+    # Set progress to 60%
+    r = client.patch(
+        f"/api/v1/projects/{pid}/stage-statuses/{status_id}/progress",
+        json={"progress_pct": 60},
+        headers=auth(tok),
+    )
+    assert r.status_code == 200, r.text
+    data = r.json()["data"]
+    assert data["progress_pct"] == 60
+    # Setting progress > 0 on NOT_STARTED auto-starts
+    assert data["status"] == "IN_PROGRESS"
+
+
+def test_activity_endpoint(db: Session, client: TestClient, stage_setup: dict):
+    """GET activity returns a list for a valid stage status."""
+    tok = login(client, stage_setup["office"]["email"], stage_setup["office"]["password"])
+    pid = stage_setup["project"]["id"]
+    sid = stage_setup["stage_id"]
+
+    r = client.post(f"/api/v1/projects/{pid}/stage-statuses/",
+        json={"stage_id": sid, "status": "IN_PROGRESS"}, headers=auth(tok))
+    status_id = r.json()["data"]["id"]
+
+    r = client.get(
+        f"/api/v1/projects/{pid}/stage-statuses/{status_id}/activity",
+        headers=auth(tok),
+    )
+    assert r.status_code == 200, r.text
+    assert isinstance(r.json()["data"], list)
+
+
+def test_complete_milestone_sets_progress_100(db: Session, client: TestClient, stage_setup: dict):
+    """Completing a milestone always sets progress_pct to 100."""
+    tok = login(client, stage_setup["office"]["email"], stage_setup["office"]["password"])
+    pid = stage_setup["project"]["id"]
+    sid = stage_setup["stage_id"]
+
+    r = client.post(f"/api/v1/projects/{pid}/stage-statuses/",
+        json={"stage_id": sid, "status": "IN_PROGRESS"}, headers=auth(tok))
+    status_id = r.json()["data"]["id"]
+
+    r = client.post(f"/api/v1/projects/{pid}/stage-statuses/{status_id}/complete",
+        json={}, headers=auth(tok))
+    assert r.json()["data"]["progress_pct"] == 100
+
+
+def test_read_only_cannot_complete_or_block(db: Session, client: TestClient, stage_setup: dict):
+    """READ_ONLY role must be blocked from complete, block, unblock, progress."""
+    from tests.conftest import make_user as _mu
+    ro = _mu(db, role="READ_ONLY")
+    tok = login(client, ro["email"], ro["password"])
+
+    pid = stage_setup["project"]["id"]
+    sid = stage_setup["stage_id"]
+
+    # Create a status as office first
+    office_tok = login(client, stage_setup["office"]["email"], stage_setup["office"]["password"])
+    r = client.post(f"/api/v1/projects/{pid}/stage-statuses/",
+        json={"stage_id": sid, "status": "IN_PROGRESS"}, headers=auth(office_tok))
+    status_id = r.json()["data"]["id"]
+
+    for endpoint in [
+        ("POST", f"/api/v1/projects/{pid}/stage-statuses/{status_id}/complete"),
+        ("POST", f"/api/v1/projects/{pid}/stage-statuses/{status_id}/block"),
+        ("PATCH", f"/api/v1/projects/{pid}/stage-statuses/{status_id}/progress"),
+    ]:
+        method, url = endpoint
+        resp = client.request(method, url,
+            json={"blocked_reason": "x", "progress_pct": 50},
+            headers=auth(tok))
+        assert resp.status_code == 403, f"{method} {url} should be 403 for READ_ONLY"

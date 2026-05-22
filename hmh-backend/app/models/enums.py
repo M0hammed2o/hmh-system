@@ -53,11 +53,12 @@ class MRPriority(str, enum.Enum):
 
 
 class StageStatus(str, enum.Enum):
-    NOT_STARTED = "NOT_STARTED"
-    IN_PROGRESS = "IN_PROGRESS"
-    COMPLETED = "COMPLETED"
+    NOT_STARTED         = "NOT_STARTED"
+    IN_PROGRESS         = "IN_PROGRESS"
+    BLOCKED             = "BLOCKED"           # Phase 3J
     AWAITING_INSPECTION = "AWAITING_INSPECTION"
-    CERTIFIED = "CERTIFIED"
+    COMPLETED           = "COMPLETED"
+    CERTIFIED           = "CERTIFIED"
 
 
 class LotStatus(str, enum.Enum):

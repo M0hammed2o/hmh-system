@@ -116,6 +116,14 @@ def ensure_tables():
             EXCEPTION WHEN others THEN NULL;
             END$$;
         """))
+        # attachment_entity_enum: add STAGE_STATUS, PAYMENT, FUEL_LOG (migrations 0013-0014)
+        for _val in ["STAGE_STATUS", "PAYMENT", "FUEL_LOG"]:
+            conn.execute(_t(f"""
+                DO $$ BEGIN
+                    ALTER TYPE attachment_entity_enum ADD VALUE IF NOT EXISTS '{_val}';
+                EXCEPTION WHEN others THEN NULL;
+                END $$;
+            """))
         # fuel_logs.log_date must be nullable (migration 0010)
         conn.execute(_t("""
             DO $$
@@ -196,6 +204,39 @@ def ensure_tables():
                     END IF;
                 END $$;
             """))
+
+        # migration 0017: milestone completion fields on project_stage_status
+        conn.execute(_t("""
+            DO $$
+            BEGIN
+                ALTER TYPE stage_status_enum ADD VALUE IF NOT EXISTS 'BLOCKED';
+            EXCEPTION WHEN others THEN NULL;
+            END$$;
+        """))
+        for _col, _type in [
+            ("completion_notes",  "TEXT"),
+            ("completed_by_name", "VARCHAR(255)"),
+            ("blocked_reason",    "TEXT"),
+        ]:
+            conn.execute(_t(f"""
+                DO $$ BEGIN
+                    IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                        WHERE table_name='project_stage_status'
+                        AND column_name='{_col}')
+                    THEN ALTER TABLE project_stage_status ADD COLUMN {_col} {_type};
+                    END IF;
+                END $$;
+            """))
+        conn.execute(_t("""
+            DO $$ BEGIN
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                    WHERE table_name='project_stage_status'
+                    AND column_name='progress_pct')
+                THEN ALTER TABLE project_stage_status
+                    ADD COLUMN progress_pct SMALLINT NOT NULL DEFAULT 0;
+                END IF;
+            END $$;
+        """))
 
         # migration 0016: lot_types table + new columns on lots and boq_items
         # create_all creates the table (from ORM), but guard existing DBs
