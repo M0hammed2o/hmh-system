@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { WriteGuard } from "@/components/shared/WriteGuard";
 import { Plus, CreditCard, CheckCircle2, Clock, FileText, AlertTriangle, Hammer, Camera, ChevronDown, ChevronUp } from "lucide-react";
 import { AttachmentStrip } from "@/components/shared/AttachmentStrip";
@@ -13,7 +13,12 @@ import { StatCard } from "@/components/shared/StatCard";
 import { Modal } from "@/components/shared/Modal";
 import { projectsApi, type Project } from "@/api/projects";
 import { invoicesApi, type Invoice, type InvoiceCreate, type EnrichedInvoice } from "@/api/invoices";
-import { paymentsApi, type Payment, type PaymentCreate, type PaymentStatus } from "@/api/payments";
+import {
+  paymentsApi,
+  type Payment, type PaymentCreate, type PaymentStatus,
+  type InvoiceReconciliation, type PaymentReport,
+  PAYMENT_METHODS,
+} from "@/api/payments";
 import { suppliersApi, type Supplier } from "@/api/suppliers";
 import { jobCardsApi, type JobCard } from "@/api/jobCards";
 import { formatCurrency, formatDate } from "@/lib/format";
@@ -46,16 +51,19 @@ const paymentStatusVariant: Record<PaymentStatus, "success" | "secondary" | "def
   CANCELLED: "outline",
 };
 
-const invoiceStatusVariant: Record<RecordStatus, "secondary" | "default" | "success" | "destructive" | "outline"> = {
-  DRAFT:      "outline",
-  SUBMITTED:  "secondary",
-  APPROVED:   "default",
-  REJECTED:   "destructive",
-  SENT:       "default",
-  RECEIVED:   "default",
-  MATCHED:    "default",
-  PAID:       "success",
-  CANCELLED:  "outline",
+const invoiceStatusVariant: Record<string, "secondary" | "default" | "success" | "destructive" | "outline"> = {
+  DRAFT:          "outline",
+  SUBMITTED:      "secondary",
+  APPROVED:       "default",
+  REJECTED:       "destructive",
+  SENT:           "default",
+  RECEIVED:       "default",
+  MATCHED:        "default",
+  INVOICED:       "secondary",
+  PARTIALLY_PAID: "secondary",   // Phase 3L
+  OVERPAID:       "destructive", // Phase 3L
+  PAID:           "success",
+  CANCELLED:      "outline",
 };
 
 const PAGE_TABS = [
@@ -270,13 +278,24 @@ function CapturePaymentModal({
             </select>
           </div>
           <div className="space-y-2">
-            <Label>Payment Reference</Label>
-            <Input
-              value={form.payment_reference ?? ""}
-              onChange={(e) => setForm({ ...form, payment_reference: e.target.value || null })}
-              placeholder="e.g. EFT-20240601"
-            />
+            <Label>Payment Method</Label>
+            <select
+              value={(form as { payment_method?: string }).payment_method ?? ""}
+              onChange={(e) => setForm({ ...form, payment_method: e.target.value || null } as PaymentCreate)}
+              className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+            >
+              <option value="">— Select method —</option>
+              {PAYMENT_METHODS.map(m => <option key={m} value={m}>{m}</option>)}
+            </select>
           </div>
+        </div>
+        <div className="space-y-2">
+          <Label>Payment Reference</Label>
+          <Input
+            value={form.payment_reference ?? ""}
+            onChange={(e) => setForm({ ...form, payment_reference: e.target.value || null })}
+            placeholder="e.g. EFT-20240601"
+          />
         </div>
         <div className="space-y-2">
           <Label>Payment Date</Label>
@@ -311,6 +330,17 @@ export default function PaymentsPage() {
   const [jcPaying, setJcPaying] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
+  // Phase 3L: reconciliation panel
+  const [reconciliation, setReconciliation] = useState<InvoiceReconciliation | null>(null);
+  const [reconcLoading, setReconcLoading]     = useState(false);
+
+  const showReconciliation = async (invoiceId: string) => {
+    if (reconciliation?.invoice_id === invoiceId) { setReconciliation(null); return; }
+    setReconcLoading(true);
+    try { setReconciliation(await paymentsApi.getInvoiceReconciliation(invoiceId)); }
+    catch { /* silent */ }
+    finally { setReconcLoading(false); }
+  };
   const [showCaptureInvoice, setShowCaptureInvoice] = useState(false);
   const [showCapturePayment, setShowCapturePayment] = useState(false);
   const [expandedPaymentId, setExpandedPaymentId] = useState<string | null>(null);
@@ -572,7 +602,8 @@ export default function PaymentsPage() {
                   </thead>
                   <tbody>
                     {enrichedInvoices.map((inv) => (
-                      <tr key={inv.invoice_id} className={`border-b border-border last:border-0 transition-colors ${inv.is_overdue ? "bg-destructive/5 hover:bg-destructive/10" : "hover:bg-muted/30"}`}>
+                      <React.Fragment key={inv.invoice_id}>
+                      <tr className={`border-b border-border last:border-0 transition-colors ${inv.is_overdue ? "bg-destructive/5 hover:bg-destructive/10" : "hover:bg-muted/30"}`}>
                         <td className="px-4 py-3 font-mono text-xs font-medium">{inv.invoice_number}</td>
                         <td className="px-4 py-3 text-muted-foreground text-xs">{inv.supplier_name ?? "—"}</td>
                         <td className="px-4 py-3 font-mono text-xs text-muted-foreground hidden md:table-cell">{inv.po_number ?? "—"}</td>
@@ -605,7 +636,64 @@ export default function PaymentsPage() {
                             {inv.match_status?.replace(/_/g, " ") ?? "—"}
                           </span>
                         </td>
+                        <td className="px-2 py-3">
+                          <button
+                            onClick={() => showReconciliation(inv.invoice_id)}
+                            className="text-xs text-primary hover:underline whitespace-nowrap"
+                            disabled={reconcLoading}
+                          >
+                            {reconciliation?.invoice_id === inv.invoice_id ? "Hide" : "Reconcile"}
+                          </button>
+                        </td>
                       </tr>
+                      {/* Reconciliation panel inline */}
+                      {reconciliation?.invoice_id === inv.invoice_id && (
+                        <tr key={`${inv.invoice_id}-recon`}>
+                          <td colSpan={8} className="px-4 py-3 bg-muted/20 border-b border-border">
+                            <div className="space-y-2">
+                              <div className="flex items-center gap-4 text-xs flex-wrap">
+                                <span>Total: <strong>{formatCurrency(reconciliation.total_amount)}</strong></span>
+                                <span className="text-green-600">Paid: <strong>{formatCurrency(reconciliation.total_paid)}</strong></span>
+                                {reconciliation.outstanding > 0 && (
+                                  <span className="text-amber-600 font-medium">Outstanding: {formatCurrency(reconciliation.outstanding)}</span>
+                                )}
+                                {reconciliation.is_overpaid && (
+                                  <span className="text-destructive font-semibold">⚠ Overpaid by {formatCurrency(reconciliation.total_paid - reconciliation.total_amount)}</span>
+                                )}
+                              </div>
+                              {reconciliation.payments.length === 0 ? (
+                                <p className="text-xs text-muted-foreground">No payments recorded yet.</p>
+                              ) : (
+                                <div className="overflow-x-auto">
+                                  <table className="w-full text-xs min-w-[480px]">
+                                    <thead>
+                                      <tr className="border-b border-border">
+                                        <th className="text-left py-1 pr-3 font-medium text-muted-foreground">Date</th>
+                                        <th className="text-right py-1 px-2 font-medium text-muted-foreground">Amount</th>
+                                        <th className="text-left py-1 px-2 font-medium text-muted-foreground">Method</th>
+                                        <th className="text-left py-1 px-2 font-medium text-muted-foreground">Reference</th>
+                                        <th className="text-left py-1 pl-2 font-medium text-muted-foreground">Captured by</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {reconciliation.payments.map((p, i) => (
+                                        <tr key={p.id} className="border-b border-border/40 last:border-0">
+                                          <td className="py-1 pr-3 text-muted-foreground">{p.payment_date ? formatDate(p.payment_date) : "—"}</td>
+                                          <td className="py-1 px-2 text-right font-semibold tabular-nums">{formatCurrency(p.amount_paid)}</td>
+                                          <td className="py-1 px-2 text-muted-foreground">{p.payment_method ?? "—"}</td>
+                                          <td className="py-1 px-2 font-mono text-muted-foreground">{p.payment_reference ?? "—"}</td>
+                                          <td className="py-1 pl-2 text-muted-foreground">{p.captured_by_name ?? "—"}</td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                      </React.Fragment>
                     ))}
                   </tbody>
                 </table>

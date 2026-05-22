@@ -159,6 +159,21 @@ def update_invoice(invoice_id: uuid.UUID, body: InvoiceUpdate, db: DbSession):
 
 
 @invoice_router.get(
+    "/{invoice_id}/reconciliation",
+    response_model=ApiSuccess[dict],
+    dependencies=[OFFICE_AND_ABOVE],
+)
+def get_invoice_reconciliation(invoice_id: uuid.UUID, db: DbSession):
+    """
+    Full reconciliation view: invoice totals, all payments, balance, status.
+    Office-only — site users must not see pricing or payment amounts.
+    """
+    from app.services import payment_service
+    data = payment_service.get_invoice_reconciliation(db, invoice_id)
+    return ApiSuccess(data=data)
+
+
+@invoice_router.get(
     "/{invoice_id}/proof",
     response_model=ApiSuccess[dict],
     dependencies=[ALL_ROLES],

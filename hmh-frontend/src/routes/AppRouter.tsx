@@ -32,6 +32,7 @@ import GmailInboxPage from "@/pages/GmailInboxPage";
 import TimelinePage from "@/pages/TimelinePage";
 import MilestonesPage from "@/pages/MilestonesPage";
 import MainWarehousePage from "@/pages/MainWarehousePage";
+import PaymentReportsPage from "@/pages/PaymentReportsPage";
 import ProjectWarehousePage from "@/pages/ProjectWarehousePage";
 import AuditPage from "@/pages/AuditPage";
 
@@ -78,6 +79,7 @@ export function AppRouter() {
           <Route path="warehouse" element={<MainWarehousePage />} />
           <Route path="project-warehouse" element={<ProjectWarehousePage />} />
           <Route path="payments" element={<PaymentsPage />} />
+          <Route path="payment-reports" element={<PaymentReportsPage />} />
           <Route path="reconciliation" element={<InvoiceReconciliationPage />} />
           <Route path="alerts" element={<AlertsPage />} />
           <Route path="labour" element={<LabourPage />} />

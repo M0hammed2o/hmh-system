@@ -34,7 +34,9 @@ class RecordStatus(str, enum.Enum):
     PARTIALLY_RECEIVED = "PARTIALLY_RECEIVED"
     RECEIVED = "RECEIVED"
     MATCHED = "MATCHED"
-    INVOICED = "INVOICED"    # Phase 3I: PO has a linked invoice
+    INVOICED        = "INVOICED"        # Phase 3I: PO has a linked invoice
+    PARTIALLY_PAID  = "PARTIALLY_PAID"  # Phase 3L: invoice partially settled
+    OVERPAID        = "OVERPAID"        # Phase 3L: payments exceed invoice total
     PAID = "PAID"
     CANCELLED = "CANCELLED"
     CLOSED = "CLOSED"

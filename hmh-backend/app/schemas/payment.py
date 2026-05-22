@@ -24,6 +24,9 @@ class PaymentRead(BaseModel):
     approved_by: Optional[uuid.UUID] = None
     captured_by: Optional[uuid.UUID] = None
     notes: Optional[str] = None
+    # Phase 3L
+    payment_method: Optional[str] = None
+    lot_id:         Optional[uuid.UUID] = None
     created_at: datetime
     updated_at: datetime
 
@@ -36,6 +39,9 @@ class PaymentCreate(BaseModel):
     payment_reference: Optional[str] = None
     payment_date: Optional[date] = None
     notes: Optional[str] = None
+    # Phase 3L
+    payment_method: Optional[str] = None   # EFT, CASH, CHEQUE, BANK_TRANSFER, etc.
+    lot_id:         Optional[uuid.UUID] = None
 
 
 class PaymentUpdate(BaseModel):
@@ -43,3 +49,4 @@ class PaymentUpdate(BaseModel):
     payment_reference: Optional[str] = None
     payment_date: Optional[date] = None
     notes: Optional[str] = None
+    payment_method: Optional[str] = None

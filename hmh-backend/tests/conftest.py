@@ -132,11 +132,25 @@ def ensure_tables():
                 EXCEPTION WHEN others THEN NULL;
                 END $$;
             """))
-        # record_status_enum: add INVOICED (migration 0018)
+        # record_status_enum: add INVOICED (0018), PARTIALLY_PAID, OVERPAID (0020)
+        for _val in ["INVOICED", "PARTIALLY_PAID", "OVERPAID"]:
+            conn.execute(_t(f"""
+                DO $$ BEGIN
+                    ALTER TYPE record_status_enum ADD VALUE IF NOT EXISTS '{_val}';
+                EXCEPTION WHEN others THEN NULL;
+                END $$;
+            """))
+        # payments.payment_method and payments.lot_id (migration 0020)
         conn.execute(_t("""
             DO $$ BEGIN
-                ALTER TYPE record_status_enum ADD VALUE IF NOT EXISTS 'INVOICED';
-            EXCEPTION WHEN others THEN NULL;
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                    WHERE table_name='payments' AND column_name='payment_method')
+                THEN ALTER TABLE payments ADD COLUMN payment_method VARCHAR(50);
+                END IF;
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                    WHERE table_name='payments' AND column_name='lot_id')
+                THEN ALTER TABLE payments ADD COLUMN lot_id UUID;
+                END IF;
             END $$;
         """))
         # fuel_logs.log_date must be nullable (migration 0010)

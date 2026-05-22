@@ -6,7 +6,7 @@ from typing import Optional
 
 from sqlalchemy import Date, DateTime, Enum, ForeignKey, Numeric, String, Text
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
 from app.models.base import TimestampMixin
@@ -63,6 +63,14 @@ class Payment(TimestampMixin, Base):
         nullable=True,
     )
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # Phase 3L: payment method and optional lot link
+    payment_method: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    lot_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("lots.id", ondelete="SET NULL"),
+        nullable=True,
+    )
 
     def __repr__(self) -> str:
         return f"<Payment {self.payment_reference or self.id} amount={self.amount_paid}>"

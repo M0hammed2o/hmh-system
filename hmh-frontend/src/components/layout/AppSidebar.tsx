@@ -51,8 +51,9 @@ const navGroups = [
   {
     label: "Finance",
     items: [
-      { title: "Payments",        path: "/payments",       icon: CreditCard },
-      { title: "Reconciliation",  path: "/reconciliation", icon: FileCheck2 },
+      { title: "Payments",         path: "/payments",         icon: CreditCard },
+      { title: "Payment Reports",  path: "/payment-reports",  icon: FileCheck2 },
+      { title: "Reconciliation",   path: "/reconciliation",   icon: FileCheck2 },
     ],
   },
   {

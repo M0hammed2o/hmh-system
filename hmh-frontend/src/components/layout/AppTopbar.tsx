@@ -25,8 +25,9 @@ const pageTitles: Record<string, string> = {
   "/stock":           "Stock",
   "/site-materials":  "Site Materials",
   "/labour":          "Job Cards",
-  "/payments":        "Payments",
-  "/reconciliation":  "Reconciliation",
+  "/payments":         "Payments",
+  "/payment-reports":  "Payment Reports",
+  "/reconciliation":   "Reconciliation",
   "/vehicles":        "Vehicles",
   "/fuel":            "Fuel",
   "/milestones":      "Milestones",
@@ -83,8 +84,9 @@ const navGroups = [
   {
     label: "Finance",
     items: [
-      { title: "Payments",        path: "/payments",        icon: CreditCard },
-      { title: "Reconciliation",  path: "/reconciliation",  icon: FileCheck2 },
+      { title: "Payments",         path: "/payments",         icon: CreditCard },
+      { title: "Payment Reports",  path: "/payment-reports",  icon: FileCheck2 },
+      { title: "Reconciliation",   path: "/reconciliation",   icon: FileCheck2 },
     ],
   },
   {
