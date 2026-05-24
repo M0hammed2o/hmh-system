@@ -2,13 +2,16 @@
 
 from fastapi import APIRouter
 
-from app.dependencies import OFFICE_AND_ABOVE, DbSession
+from app.core.logging_config import get_logger
+from app.dependencies import CurrentUser, OWNER_ONLY, DbSession
 from app.schemas.common import ApiSuccess
+
+_log = get_logger(__name__)
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
 
-@router.get("/storage-status", response_model=ApiSuccess[dict], dependencies=[OFFICE_AND_ABOVE])
+@router.get("/storage-status", response_model=ApiSuccess[dict], dependencies=[OWNER_ONLY])
 def storage_status():
     """Check whether Supabase Storage is configured and reachable."""
     from app.core.storage import verify_supabase_connection, storage_mode
@@ -26,8 +29,8 @@ def storage_status():
     return ApiSuccess(data=result, message=f"Storage mode: {result['mode']}")
 
 
-@router.post("/clear-demo-data", response_model=ApiSuccess[dict], dependencies=[OFFICE_AND_ABOVE])
-def clear_demo_data(db: DbSession):
+@router.post("/clear-demo-data", response_model=ApiSuccess[dict], dependencies=[OWNER_ONLY])
+def clear_demo_data(db: DbSession, current_user: CurrentUser):
     """
     Delete all project/business data while preserving user accounts, roles,
     supplier catalogue, item catalogue, and stage master definitions.
@@ -115,13 +118,22 @@ def clear_demo_data(db: DbSession):
             counts[table_name] = result.rowcount if result.rowcount >= 0 else 0
         except Exception as exc:
             # Log but continue — a missing table or already-empty table is fine
-            import logging
-            logging.getLogger(__name__).warning("clear-demo-data: %s → %s", stmt, exc)
+            _log.warning("clear-demo-data: %s → %s", stmt, exc)
 
     db.commit()
 
     total_deleted = sum(counts.values())
-    print(f"[ADMIN] clear-demo-data complete. {total_deleted} rows removed.", flush=True)
+    _log.info("admin clear_demo_data actor=%s total_deleted=%d", current_user.id, total_deleted)
+
+    # Record in the audit trail (written after commit so it survives the wipe)
+    from app.models.audit import AuditEvent
+    db.add(AuditEvent(
+        actor_id=current_user.id,
+        action="CLEAR_DEMO_DATA",
+        entity_type="system",
+        notes=f"Cleared demo data: {total_deleted} rows removed across {len(counts)} tables.",
+    ))
+    db.commit()
 
     return ApiSuccess(
         data={"rows_deleted": total_deleted, "tables": counts},
