@@ -6,7 +6,11 @@ from fastapi import APIRouter, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 from typing import Literal
 
-from app.dependencies import ALL_ROLES, CurrentUser, DbSession, OFFICE_AND_ABOVE
+from app.core.logging_config import get_logger
+from app.core.upload_validation import SPREADSHEET_MIMES, validate_upload
+from app.dependencies import ALL_ROLES, CurrentUser, DbSession, OFFICE_AND_ABOVE, check_project_access
+
+_boq_log = get_logger(__name__)
 from app.schemas.boq import (
     BOQHeaderCreate, BOQHeaderRead, BOQHeaderUpdate,
     BOQItemCreate, BOQItemRead, BOQItemUpdate,
@@ -33,7 +37,8 @@ boq_item_router = APIRouter(prefix="/boq/items", tags=["boq"])
     response_model=ApiSuccess[list[BOQHeaderRead]],
     dependencies=[ALL_ROLES],
 )
-def list_boq_headers(project_id: uuid.UUID, db: DbSession):
+def list_boq_headers(project_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
+    check_project_access(db, current_user, project_id)
     headers = boq_service.list_headers(db, project_id)
     return ApiSuccess(data=[BOQHeaderRead.model_validate(h) for h in headers])
 
@@ -50,6 +55,7 @@ def create_boq_header(
     db: DbSession,
     current_user: CurrentUser,
 ):
+    check_project_access(db, current_user, project_id)
     header = boq_service.create_header(db, project_id, body, current_user.id)
     return ApiSuccess(data=BOQHeaderRead.model_validate(header), message="BOQ header created.")
 
@@ -59,7 +65,8 @@ def create_boq_header(
     response_model=ApiSuccess[BOQHeaderRead],
     dependencies=[ALL_ROLES],
 )
-def get_boq_header(project_id: uuid.UUID, header_id: uuid.UUID, db: DbSession):
+def get_boq_header(project_id: uuid.UUID, header_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
+    check_project_access(db, current_user, project_id)
     header = boq_service.get_header(db, header_id)
     return ApiSuccess(data=BOQHeaderRead.model_validate(header))
 
@@ -70,8 +77,9 @@ def get_boq_header(project_id: uuid.UUID, header_id: uuid.UUID, db: DbSession):
     dependencies=[OFFICE_AND_ABOVE],
 )
 def update_boq_header(
-    project_id: uuid.UUID, header_id: uuid.UUID, body: BOQHeaderUpdate, db: DbSession
+    project_id: uuid.UUID, header_id: uuid.UUID, body: BOQHeaderUpdate, db: DbSession, current_user: CurrentUser
 ):
+    check_project_access(db, current_user, project_id)
     header = boq_service.update_header(db, header_id, body)
     return ApiSuccess(data=BOQHeaderRead.model_validate(header), message="BOQ header updated.")
 
@@ -89,8 +97,10 @@ async def import_boq_csv(
     file: UploadFile,
     version_name: str = Form(...),
 ):
+    check_project_access(db, current_user, project_id)
     if not file.filename or not file.filename.lower().endswith(".csv"):
         raise HTTPException(status_code=400, detail="Only CSV files are supported.")
+    validate_upload(file, SPREADSHEET_MIMES)
     raw = await file.read()
     try:
         csv_text = raw.decode("utf-8-sig")  # strip BOM if present
@@ -343,8 +353,9 @@ def delete_section(
     response_model=ApiSuccess[dict],
     dependencies=[ALL_ROLES],
 )
-def get_full_boq(project_id: uuid.UUID, header_id: uuid.UUID, db: DbSession):
+def get_full_boq(project_id: uuid.UUID, header_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
     """Return full nested BOQ with section totals and grand total."""
+    check_project_access(db, current_user, project_id)
     full = boq_service.get_full_boq(db, header_id)
     return ApiSuccess(data={
         "header": BOQHeaderRead.model_validate(full["header"]).model_dump(),
@@ -371,7 +382,8 @@ class _MarkTemplateBody(BaseModel):
     response_model=ApiSuccess[BOQHeaderRead],
     dependencies=[OFFICE_AND_ABOVE],
 )
-def mark_as_template(project_id: uuid.UUID, header_id: uuid.UUID, db: DbSession, body: _MarkTemplateBody):
+def mark_as_template(project_id: uuid.UUID, header_id: uuid.UUID, db: DbSession, current_user: CurrentUser, body: _MarkTemplateBody):
+    check_project_access(db, current_user, project_id)
     header = boq_service.mark_as_template(db, header_id, body.template_name)
     return ApiSuccess(data=BOQHeaderRead.model_validate(header), message="BOQ marked as template.")
 
@@ -386,6 +398,7 @@ def mark_as_template(project_id: uuid.UUID, header_id: uuid.UUID, db: DbSession,
 )
 def seed_standard_template(project_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
     """Create the Standard Residential Unit BOQ template for this project."""
+    check_project_access(db, current_user, project_id)
     header = boq_service.seed_standard_residential_template(db, project_id, current_user.id)
     return ApiSuccess(data=BOQHeaderRead.model_validate(header), message="Standard template created.")
 
@@ -642,12 +655,8 @@ def generate_site_lot_boqs(site_id: uuid.UUID, db: DbSession):
         if unassigned_lot_ids:
             lot_ids       = unassigned_lot_ids
             used_fallback = True
-            print(
-                f"[BOQ][WARNING] Site {site_id} has no lots with matching site_id. "
-                f"Falling back to {len(unassigned_lot_ids)} unassigned project lot(s). "
-                "Fix this by assigning those lots to a site via PATCH /lots/assign-site.",
-                flush=True,
-            )
+            _boq_log.warning("boq site=%s no lots with matching site_id — fallback to %d unassigned lots",
+                              site_id, len(unassigned_lot_ids))
         else:
             lot_ids = []
 

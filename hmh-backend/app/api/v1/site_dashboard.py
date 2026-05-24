@@ -11,7 +11,11 @@ import uuid
 from fastapi import APIRouter, File, Form, UploadFile
 from sqlalchemy import func
 
-from app.dependencies import ALL_ROLES, OFFICE_AND_ABOVE, DbSession
+from app.core.logging_config import get_logger
+from app.core.upload_validation import PHOTO_MIMES, validate_upload
+from app.dependencies import ALL_ROLES, CurrentUser, OFFICE_AND_ABOVE, DbSession, check_project_access
+
+_log = get_logger(__name__)
 from app.models.boq import BOQItem
 from app.models.enums import MovementType
 from app.models.stock import StockLedger
@@ -24,7 +28,7 @@ project_lot_router = APIRouter(prefix="/projects/{project_id}/lots", tags=["site
 # ── Material summary ──────────────────────────────────────────────────────────
 
 @router.get("/{site_id}/lots/{lot_id}/material-summary", dependencies=[ALL_ROLES])
-def lot_material_summary(site_id: uuid.UUID, lot_id: uuid.UUID, db: DbSession):
+def lot_material_summary(site_id: uuid.UUID, lot_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
     """
     Per-item BOQ summary: allocated vs delivered vs used vs remaining.
 
@@ -41,7 +45,10 @@ def lot_material_summary(site_id: uuid.UUID, lot_id: uuid.UUID, db: DbSession):
       - If item_id is NULL → match StockLedger by boq_item_id + lot_id
     """
     from app.models.lot import Lot
-    from app.models.item import Item
+    from app.models.site import Site as _Site
+    _site = db.get(_Site, site_id)
+    if _site:
+        check_project_access(db, current_user, _site.project_id)
 
     # ── 1. Fetch BOQ items ────────────────────────────────────────────────────
     boq_items = (
@@ -82,48 +89,85 @@ def lot_material_summary(site_id: uuid.UUID, lot_id: uuid.UUID, db: DbSession):
             unique_boq_items.append(bi)
     boq_items = unique_boq_items
 
-    # ── 4. Build summary rows ─────────────────────────────────────────────────
+    # ── 4. Batch-load all StockLedger aggregates in 4 queries (replaces N+1) ────
+    from app.models.item import Item
+    from app.models.supplier import Supplier as _Sup
+
+    item_ids     = [bi.item_id for bi in boq_items if bi.item_id]
+    boq_item_ids = [bi.id      for bi in boq_items if not bi.item_id]
+
+    # delivered qty keyed by item_id (catalog path)
+    delivered_by_item: dict = {}
+    if item_ids:
+        rows = (
+            db.query(StockLedger.item_id, func.coalesce(func.sum(StockLedger.quantity_in), 0))
+            .filter(
+                StockLedger.lot_id        == lot_id,
+                StockLedger.item_id.in_(item_ids),
+                StockLedger.movement_type == MovementType.DELIVERY_RECEIVED,
+            )
+            .group_by(StockLedger.item_id)
+            .all()
+        )
+        delivered_by_item = {r[0]: float(r[1]) for r in rows}
+
+    # used qty keyed by item_id (catalog path)
+    used_by_item: dict = {}
+    if item_ids:
+        rows = (
+            db.query(StockLedger.item_id, func.coalesce(func.sum(StockLedger.quantity_out), 0))
+            .filter(StockLedger.lot_id == lot_id, StockLedger.item_id.in_(item_ids))
+            .group_by(StockLedger.item_id)
+            .all()
+        )
+        used_by_item = {r[0]: float(r[1]) for r in rows}
+
+    # delivered qty keyed by boq_item_id (template / non-catalog path)
+    delivered_by_boq: dict = {}
+    if boq_item_ids:
+        rows = (
+            db.query(StockLedger.boq_item_id, func.coalesce(func.sum(StockLedger.quantity_in), 0))
+            .filter(
+                StockLedger.lot_id        == lot_id,
+                StockLedger.boq_item_id.in_(boq_item_ids),
+                StockLedger.movement_type == MovementType.DELIVERY_RECEIVED,
+            )
+            .group_by(StockLedger.boq_item_id)
+            .all()
+        )
+        delivered_by_boq = {r[0]: float(r[1]) for r in rows}
+
+    # used qty keyed by boq_item_id (template / non-catalog path)
+    used_by_boq: dict = {}
+    if boq_item_ids:
+        rows = (
+            db.query(StockLedger.boq_item_id, func.coalesce(func.sum(StockLedger.quantity_out), 0))
+            .filter(StockLedger.lot_id == lot_id, StockLedger.boq_item_id.in_(boq_item_ids))
+            .group_by(StockLedger.boq_item_id)
+            .all()
+        )
+        used_by_boq = {r[0]: float(r[1]) for r in rows}
+
+    # Batch-load catalog items and suppliers (replaces db.get() inside the loop)
+    supplier_ids = [bi.supplier_id for bi in boq_items if bi.supplier_id]
+    items_map: dict = {}
+    if item_ids:
+        items_map = {i.id: i for i in db.query(Item).filter(Item.id.in_(item_ids)).all()}
+    suppliers_map: dict = {}
+    if supplier_ids:
+        suppliers_map = {s.id: s for s in db.query(_Sup).filter(_Sup.id.in_(supplier_ids)).all()}
+
+    # ── 5. Build summary rows (pure Python — zero additional DB queries) ────────
     result = []
     for bi in boq_items:
         allocated = float(bi.planned_quantity or 0)
 
-        # Stock filter strategy: prefer item_id (catalog), fall back to boq_item_id
         if bi.item_id:
-            delivered = float(
-                db.query(func.coalesce(func.sum(StockLedger.quantity_in), 0))
-                .filter(
-                    StockLedger.lot_id        == lot_id,
-                    StockLedger.item_id       == bi.item_id,
-                    StockLedger.movement_type == MovementType.DELIVERY_RECEIVED,
-                )
-                .scalar() or 0
-            )
-            used = float(
-                db.query(func.coalesce(func.sum(StockLedger.quantity_out), 0))
-                .filter(
-                    StockLedger.lot_id   == lot_id,
-                    StockLedger.item_id  == bi.item_id,
-                )
-                .scalar() or 0
-            )
+            delivered = delivered_by_item.get(bi.item_id, 0.0)
+            used      = used_by_item.get(bi.item_id, 0.0)
         else:
-            delivered = float(
-                db.query(func.coalesce(func.sum(StockLedger.quantity_in), 0))
-                .filter(
-                    StockLedger.lot_id        == lot_id,
-                    StockLedger.boq_item_id   == bi.id,
-                    StockLedger.movement_type == MovementType.DELIVERY_RECEIVED,
-                )
-                .scalar() or 0
-            )
-            used = float(
-                db.query(func.coalesce(func.sum(StockLedger.quantity_out), 0))
-                .filter(
-                    StockLedger.lot_id        == lot_id,
-                    StockLedger.boq_item_id   == bi.id,
-                )
-                .scalar() or 0
-            )
+            delivered = delivered_by_boq.get(bi.id, 0.0)
+            used      = used_by_boq.get(bi.id, 0.0)
 
         remaining = max(0.0, allocated - used)
         over      = max(0.0, used - allocated)
@@ -138,38 +182,33 @@ def lot_material_summary(site_id: uuid.UUID, lot_id: uuid.UUID, db: DbSession):
         else:
             status = "OK"
 
-        # Prefer linked catalog item name/unit; fall back to BOQ raw description
         description = bi.raw_description
         unit        = bi.unit
-        if bi.item_id:
-            cat_item = db.get(Item, bi.item_id)
-            if cat_item:
-                description = cat_item.name
-                unit        = cat_item.default_unit or bi.unit
+        cat_item    = items_map.get(bi.item_id) if bi.item_id else None
+        if cat_item:
+            description = cat_item.name
+            unit        = cat_item.default_unit or bi.unit
 
-        # Supplier info — used by frontend to pre-populate supplier on delivery/MR
         supplier_id   = str(bi.supplier_id) if bi.supplier_id else None
         supplier_name = None
-        if bi.supplier_id:
-            from app.models.supplier import Supplier as _Sup
-            sup = db.get(_Sup, bi.supplier_id)
-            if sup:
-                supplier_name = sup.name
+        sup = suppliers_map.get(bi.supplier_id) if bi.supplier_id else None
+        if sup:
+            supplier_name = sup.name
 
         result.append({
-            "boq_item_id":       str(bi.id),
-            "item_id":           str(bi.item_id) if bi.item_id else None,
-            "description":       description,
-            "unit":              unit,
-            "boq_allocated_qty": round(allocated, 3),
-            "delivered_qty":     round(delivered, 3),
-            "used_qty":          round(used, 3),
-            "remaining_qty":     round(remaining, 3),
-            "over_qty":          round(over, 3),
-            "status":            status,
+            "boq_item_id":        str(bi.id),
+            "item_id":            str(bi.item_id) if bi.item_id else None,
+            "description":        description,
+            "unit":               unit,
+            "boq_allocated_qty":  round(allocated, 3),
+            "delivered_qty":      round(delivered, 3),
+            "used_qty":           round(used, 3),
+            "remaining_qty":      round(remaining, 3),
+            "over_qty":           round(over, 3),
+            "status":             status,
             "from_site_template": fallback,
-            "supplier_id":       supplier_id,
-            "supplier_name":     supplier_name,
+            "supplier_id":        supplier_id,
+            "supplier_name":      supplier_name,
         })
 
     return ApiSuccess(data=result)
@@ -178,7 +217,7 @@ def lot_material_summary(site_id: uuid.UUID, lot_id: uuid.UUID, db: DbSession):
 # ── Activity feed ─────────────────────────────────────────────────────────────
 
 @router.get("/{site_id}/lots/{lot_id}/activity", dependencies=[ALL_ROLES])
-def lot_activity(site_id: uuid.UUID, lot_id: uuid.UUID, db: DbSession, limit: int = 20):
+def lot_activity(site_id: uuid.UUID, lot_id: uuid.UUID, db: DbSession, current_user: CurrentUser, limit: int = 20):
     """
     Recent activity for a site/lot — deliveries, usage, alerts, stage updates.
     Returns a unified list sorted newest-first.
@@ -187,6 +226,10 @@ def lot_activity(site_id: uuid.UUID, lot_id: uuid.UUID, db: DbSession, limit: in
     from app.models.alert import SystemAlert
     from app.models.item import Item
     from app.models.stage import ProjectStageStatus
+    from app.models.site import Site as _Site2
+    _site2 = db.get(_Site2, site_id)
+    if _site2:
+        check_project_access(db, current_user, _site2.project_id)
 
     activities = []
 
@@ -332,6 +375,7 @@ async def replace_evidence_photo(
     if record_type not in subdir_map:
         raise HTTPException(422, f"Unsupported record_type: {record_type!r}")
 
+    validate_upload(photo, PHOTO_MIMES)
     ext     = os.path.splitext(photo.filename or "photo")[1] or ".jpg"
     fname   = f"{_uuid.uuid4().hex}{ext}"
     save_dir = os.path.join(_s.UPLOAD_DIR, *subdir_map[record_type])
@@ -341,7 +385,7 @@ async def replace_evidence_photo(
         fh.write(content)
 
     url_path = "/" + "/".join(["uploads", *subdir_map[record_type], fname])
-    print(f"[REPLACE-PHOTO] type={record_type} id={record_id} saved={url_path} size={len(content)}", flush=True)
+    _log.info("replace_photo type=%s id=%s path=%s size=%d", record_type, record_id, url_path, len(content))
 
     # ── Update DB record ──────────────────────────────────────────────────────
     rid = _uuid.UUID(record_id)
@@ -402,7 +446,7 @@ async def replace_evidence_photo(
     "/{lot_id}/material-summary",
     dependencies=[ALL_ROLES],
 )
-def project_lot_material_summary(project_id: uuid.UUID, lot_id: uuid.UUID, db: DbSession):
+def project_lot_material_summary(project_id: uuid.UUID, lot_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
     """
     Per-item material summary for a lot, compatible with Phase 3B warehouse model.
 
@@ -421,6 +465,8 @@ def project_lot_material_summary(project_id: uuid.UUID, lot_id: uuid.UUID, db: D
     """
     from app.models.lot import Lot
     from app.models.item import Item
+
+    check_project_access(db, current_user, project_id)
 
     lot = db.get(Lot, lot_id)
     if not lot or lot.project_id != project_id:

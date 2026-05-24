@@ -21,7 +21,7 @@ import pytest
 from sqlalchemy.orm import Session
 from fastapi.testclient import TestClient
 
-from tests.conftest import auth, login, make_lot, make_project, make_site, make_user
+from tests.conftest import auth, login, make_lot, make_project, make_site, make_user, make_user_project_access
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -39,6 +39,8 @@ def lt_setup(db: Session, client: TestClient):
     lot1     = make_lot(db, project["id"], site["id"], "1")
     lot2     = make_lot(db, project["id"], site["id"], "2")
     lot_free = make_lot(db, project["id"], None,       "F1")  # freestanding
+    make_user_project_access(db, office["id"], project["id"])
+    make_user_project_access(db, ro["id"], project["id"])
 
     db.flush()
     return {

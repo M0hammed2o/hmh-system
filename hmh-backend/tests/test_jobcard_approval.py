@@ -21,7 +21,7 @@ from fastapi.testclient import TestClient
 
 from tests.conftest import (
     auth, login, make_lot, make_project,
-    make_site, make_user,
+    make_site, make_user, make_user_project_access,
 )
 from app.models.job_card import OWNER_APPROVAL_THRESHOLD
 
@@ -34,6 +34,8 @@ def jc_setup(db: Session, client: TestClient):
     project = make_project(db, owner["id"])
     site = make_site(db, project["id"])
     lot = make_lot(db, project["id"], site["id"])
+    make_user_project_access(db, office["id"], project["id"])
+    make_user_project_access(db, site_mgr["id"], project["id"])
     db.flush()
     return {
         "owner": owner, "office": office, "site_mgr": site_mgr,

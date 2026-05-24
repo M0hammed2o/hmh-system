@@ -18,7 +18,7 @@ from fastapi.testclient import TestClient
 
 from tests.conftest import (
     auth, login, make_item, make_lot, make_project,
-    make_site, make_supplier, make_user,
+    make_site, make_supplier, make_user, make_user_project_access,
 )
 
 
@@ -30,6 +30,7 @@ def proof_setup(db: Session, client: TestClient):
     site = make_site(db, project["id"])
     supplier = make_supplier(db)
     item = make_item(db)
+    make_user_project_access(db, office["id"], project["id"])
     db.flush()
     tok = login(client, office["email"], office["password"])
     return {

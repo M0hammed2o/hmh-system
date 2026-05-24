@@ -7,7 +7,7 @@ from typing import Optional
 from fastapi import APIRouter, Query
 from pydantic import BaseModel
 
-from app.dependencies import ALL_ROLES, CurrentUser, DbSession, OFFICE_AND_ABOVE
+from app.dependencies import ALL_ROLES, CurrentUser, DbSession, OFFICE_AND_ABOVE, check_project_access
 from app.schemas.common import ApiSuccess
 from app.schemas.purchase_order import (
     POItemCreate, POItemRead,
@@ -27,7 +27,8 @@ po_router = APIRouter(prefix="/purchase-orders", tags=["purchase-orders"])
     response_model=ApiSuccess[list[PurchaseOrderRead]],
     dependencies=[ALL_ROLES],
 )
-def list_purchase_orders(project_id: uuid.UUID, db: DbSession):
+def list_purchase_orders(project_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
+    check_project_access(db, current_user, project_id)
     pos = po_service.list_pos(db, project_id)
     return ApiSuccess(data=[PurchaseOrderRead.model_validate(p) for p in pos])
 
@@ -44,6 +45,7 @@ def create_purchase_order(
     db: DbSession,
     current_user: CurrentUser,
 ):
+    check_project_access(db, current_user, project_id)
     po = po_service.create_po(db, project_id, body, current_user.id)
     return ApiSuccess(
         data=PurchaseOrderRead.model_validate(po),
@@ -88,6 +90,7 @@ def capture_external_purchase_order(
     from app.models.purchase_order import PurchaseOrder, PurchaseOrderItem
     from app.services.mr_service import _generate_po_number
 
+    check_project_access(db, current_user, project_id)
     project = db.get(Project, project_id)
     if not project:
         from app.core.exceptions import NotFoundError
@@ -337,6 +340,15 @@ def mark_po_sent(po_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
     po.sent_at  = datetime.now(timezone.utc)
     db.commit()
     db.refresh(po)
+
+    # WhatsApp notification: PO manually marked sent (fire-and-forget)
+    try:
+        from app.services.po_service import _notify_po_sent
+        _notify_po_sent(db, po)
+        db.commit()
+    except Exception:
+        pass
+
     return ApiSuccess(data=PurchaseOrderRead.model_validate(po), message="PO marked as sent to supplier.")
 
 
@@ -409,6 +421,26 @@ def get_po_activity(po_id: uuid.UUID, db: DbSession, limit: int = Query(30, le=1
 
     activity.sort(key=lambda x: x["timestamp"], reverse=True)
     return ApiSuccess(data=activity[:limit])
+
+
+@po_router.post(
+    "/{po_id}/confirm-supplier",
+    response_model=ApiSuccess[PurchaseOrderRead],
+    dependencies=[OFFICE_AND_ABOVE],
+)
+def confirm_supplier(po_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
+    """Transition a SENT PO to SUPPLIER_CONFIRMED (supplier acknowledged the order)."""
+    from app.services.po_service import confirm_supplier as _confirm
+    po = _confirm(db, po_id, current_user["id"])
+    return ApiSuccess(data=PurchaseOrderRead.model_validate(po), message="Supplier confirmation recorded.")
+
+
+@po_router.get("/{po_id}/linked-docs", response_model=ApiSuccess[dict], dependencies=[ALL_ROLES])
+def get_po_linked_docs(po_id: uuid.UUID, db: DbSession):
+    """Return all linked documents for a PO: source MR, deliveries, invoices + payment totals."""
+    from app.services.po_service import get_po_linked_docs as _linked
+    data = _linked(db, po_id)
+    return ApiSuccess(data=data)
 
 
 @po_router.get("/{po_id}/email-log", response_model=ApiSuccess[list[dict]], dependencies=[OFFICE_AND_ABOVE])

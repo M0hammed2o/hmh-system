@@ -7,7 +7,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
-from app.dependencies import ALL_ROLES, CurrentUser, DbSession, OFFICE_AND_ABOVE
+from app.dependencies import ALL_ROLES, CurrentUser, DbSession, OFFICE_AND_ABOVE, check_project_access
 from app.schemas.common import ApiSuccess
 from app.schemas.invoice import InvoiceCreate, InvoiceRead, InvoiceUpdate
 from app.services import invoice_service
@@ -24,7 +24,8 @@ invoice_router = APIRouter(prefix="/invoices", tags=["invoices"])
     response_model=ApiSuccess[list[InvoiceRead]],
     dependencies=[ALL_ROLES],
 )
-def list_invoices(project_id: uuid.UUID, db: DbSession):
+def list_invoices(project_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
+    check_project_access(db, current_user, project_id)
     invoices = invoice_service.list_invoices(db, project_id)
     return ApiSuccess(data=[InvoiceRead.model_validate(i) for i in invoices])
 
@@ -34,12 +35,13 @@ def list_invoices(project_id: uuid.UUID, db: DbSession):
     response_model=ApiSuccess[list[dict]],
     dependencies=[ALL_ROLES],
 )
-def list_invoices_enriched(project_id: uuid.UUID, db: DbSession):
+def list_invoices_enriched(project_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
     """
     Enriched invoice list for the Payments page.
     Returns supplier name, PO number, match status, outstanding amount,
     overdue flag — everything needed for the Invoices tab and Outstanding view.
     """
+    check_project_access(db, current_user, project_id)
     from datetime import date
     from sqlalchemy import func
     from app.models.invoice import Invoice, InvoiceMatchingResult
@@ -109,6 +111,7 @@ def create_invoice(
     db: DbSession,
     current_user: CurrentUser,
 ):
+    check_project_access(db, current_user, project_id)
     invoice = invoice_service.create_invoice(db, project_id, body, current_user.id)
     return ApiSuccess(data=InvoiceRead.model_validate(invoice), message="Invoice captured.")
 

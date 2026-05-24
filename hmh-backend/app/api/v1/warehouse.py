@@ -13,6 +13,9 @@ GET  /sites/{site_id}/warehouse/history   — recent movements through this ware
 """
 
 import uuid
+
+from app.core.logging_config import get_logger as _get_logger
+_wh_log = _get_logger(__name__)
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -20,7 +23,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import func, text
 
-from app.dependencies import ALL_ROLES, CurrentUser, DbSession, OFFICE_AND_ABOVE, WRITE_ROLES
+from app.dependencies import ALL_ROLES, CurrentUser, DbSession, OFFICE_AND_ABOVE, WRITE_ROLES, check_project_access
 from app.models.enums import MovementType
 from app.models.item import Item
 from app.models.lot import Lot
@@ -37,7 +40,7 @@ project_warehouse_router = APIRouter(prefix="/projects/{project_id}/warehouse", 
 # ── On-hand stock ─────────────────────────────────────────────────────────────
 
 @router.get("/", response_model=ApiSuccess[list[dict]], dependencies=[ALL_ROLES])
-def get_warehouse_stock(site_id: uuid.UUID, db: DbSession):
+def get_warehouse_stock(site_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
     """
     Returns current on-hand stock for the Site Warehouse.
 
@@ -47,6 +50,7 @@ def get_warehouse_stock(site_id: uuid.UUID, db: DbSession):
     site = db.get(Site, site_id)
     if not site:
         raise HTTPException(404, "Site not found.")
+    check_project_access(db, current_user, site.project_id)
 
     # Aggregate: net balance per item at site level (lot_id IS NULL)
     rows = db.execute(text("""
@@ -108,6 +112,7 @@ def transfer_to_lot(
     site = db.get(Site, site_id)
     if not site:
         raise HTTPException(404, "Site not found.")
+    check_project_access(db, current_user, site.project_id)
 
     lot = db.get(Lot, body.lot_id)
     if not lot or lot.site_id != site_id:
@@ -201,11 +206,8 @@ def transfer_to_lot(
         except Exception:
             db.rollback()
 
-    print(
-        f"[WAREHOUSE] Transferred {body.quantity} {item.default_unit or ''} of {item.name}"
-        f" from site={site_id} to lot={lot.lot_number} (ref={transfer_ref})",
-        flush=True,
-    )
+    _wh_log.info("warehouse transfer qty=%s item=%s site=%s lot=%s ref=%s",
+                 body.quantity, item.name, site_id, lot.lot_number, transfer_ref)
 
     return ApiSuccess(
         data={
@@ -227,12 +229,14 @@ def transfer_to_lot(
 def get_warehouse_history(
     site_id: uuid.UUID,
     db: DbSession,
+    current_user: CurrentUser,
     limit: int = Query(50, le=200),
 ):
     """Recent stock movements through this site warehouse (lot_id IS NULL)."""
     site = db.get(Site, site_id)
     if not site:
         raise HTTPException(404, "Site not found.")
+    check_project_access(db, current_user, site.project_id)
 
     rows = db.execute(text("""
         SELECT
@@ -275,7 +279,7 @@ def get_warehouse_history(
 # ── Main Warehouse (project-level stock: site_id IS NULL, lot_id IS NULL) ─────
 
 @project_warehouse_router.get("/", response_model=ApiSuccess[list[dict]], dependencies=[ALL_ROLES])
-def get_main_warehouse_stock(project_id: uuid.UUID, db: DbSession):
+def get_main_warehouse_stock(project_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
     """
     Returns current on-hand stock in the Main (Project) Warehouse.
 
@@ -286,6 +290,7 @@ def get_main_warehouse_stock(project_id: uuid.UUID, db: DbSession):
     project = db.get(Project, project_id)
     if not project:
         raise HTTPException(404, "Project not found.")
+    check_project_access(db, current_user, project_id)
 
     rows = db.execute(text("""
         SELECT
@@ -344,6 +349,7 @@ def transfer_main_to_site(
     project = db.get(Project, project_id)
     if not project:
         raise HTTPException(404, "Project not found.")
+    check_project_access(db, current_user, project_id)
 
     site = db.get(Site, body.site_id)
     if not site or site.project_id != project_id:
@@ -467,6 +473,7 @@ def return_from_site_to_main(
     project = db.get(Project, project_id)
     if not project:
         raise HTTPException(404, "Project not found.")
+    check_project_access(db, current_user, project_id)
 
     site = db.get(Site, body.site_id)
     if not site or site.project_id != project_id:
@@ -573,6 +580,7 @@ def return_from_site_to_main(
 def get_main_warehouse_history(
     project_id: uuid.UUID,
     db: DbSession,
+    current_user: CurrentUser,
     limit: int = Query(100, le=500),
 ):
     """Recent movements through the Main (Project) Warehouse (site_id IS NULL, lot_id IS NULL)."""
@@ -580,6 +588,7 @@ def get_main_warehouse_history(
     project = db.get(Project, project_id)
     if not project:
         raise HTTPException(404, "Project not found.")
+    check_project_access(db, current_user, project_id)
 
     rows = db.execute(text("""
         SELECT

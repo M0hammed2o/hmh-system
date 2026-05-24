@@ -25,7 +25,7 @@ import pytest
 from sqlalchemy.orm import Session
 from fastapi.testclient import TestClient
 
-from tests.conftest import auth, login, make_lot, make_project, make_site, make_user
+from tests.conftest import auth, login, make_lot, make_project, make_site, make_user, make_user_project_access
 
 
 def _upload(client, tok, entity_type: str, entity_id: str, att_type: str = "PHOTO"):
@@ -53,6 +53,8 @@ def att_setup(db: Session, client: TestClient):
     site      = make_site(db, project["id"])
     lot       = make_lot(db, project["id"], site["id"], "7")
     lot_free  = make_lot(db, project["id"], None, "F99")   # freestanding
+    make_user_project_access(db, office["id"], project["id"])
+    make_user_project_access(db, site_s["id"], project["id"])
     db.flush()
 
     return {

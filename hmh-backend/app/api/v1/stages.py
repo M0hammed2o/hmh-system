@@ -10,7 +10,8 @@ from pydantic import BaseModel
 
 from app.core.config import settings
 from app.core.storage import save_upload
-from app.dependencies import ALL_ROLES, CurrentUser, DbSession, OFFICE_AND_ABOVE, WRITE_ROLES
+from app.core.upload_validation import PHOTO_MIMES, validate_upload
+from app.dependencies import ALL_ROLES, CurrentUser, DbSession, OFFICE_AND_ABOVE, WRITE_ROLES, check_project_access
 from app.models.attachment import Attachment
 from app.models.enums import AttachmentEntity, AttachmentType
 from app.schemas.common import ApiSuccess
@@ -58,9 +59,11 @@ def seed_stages(db: DbSession):
 def list_project_stage_statuses(
     project_id: uuid.UUID,
     db: DbSession,
+    current_user: CurrentUser,
     site_id: Optional[uuid.UUID] = Query(None),
     lot_id: Optional[uuid.UUID] = Query(None),
 ):
+    check_project_access(db, current_user, project_id)
     statuses = stage_service.list_project_stage_statuses(
         db, project_id, site_id=site_id, lot_id=lot_id
     )
@@ -80,6 +83,7 @@ def upsert_stage_status(
     current_user: CurrentUser,
 ):
     """Create or update a stage status for a project/site/lot combination."""
+    check_project_access(db, current_user, project_id)
     pss = stage_service.upsert_stage_status(db, project_id, body, current_user.id)
     return ApiSuccess(
         data=stage_service._enrich(pss),
@@ -106,12 +110,14 @@ async def upsert_stage_status_with_evidence(
     evidence_file: Optional[UploadFile] = File(None),
 ):
     """Update a stage status and optionally upload a progress photo."""
+    check_project_access(db, current_user, project_id)
     from app.models.enums import StageStatus
 
     # Save evidence photo (Supabase Storage when configured, else local disk)
     from app.core.storage import save_upload
     evidence_url: Optional[str] = None
     if evidence_file and evidence_file.filename:
+        validate_upload(evidence_file, PHOTO_MIMES)
         ext     = os.path.splitext(evidence_file.filename)[1] or ".bin"
         fname   = f"{uuid.uuid4().hex}{ext}"
         content = await evidence_file.read()
@@ -169,6 +175,7 @@ def complete_milestone(
     Optionally captures completion notes and who completed it.
     Milestones are NEVER auto-completed.
     """
+    check_project_access(db, current_user, project_id)
     from app.models.stage import ProjectStageStatus
     from app.models.enums import StageStatus
     pss = db.get(ProjectStageStatus, status_id)
@@ -205,6 +212,7 @@ def block_milestone(
     current_user: CurrentUser,
 ):
     """Mark a milestone as BLOCKED with a required reason."""
+    check_project_access(db, current_user, project_id)
     from app.models.stage import ProjectStageStatus
     from app.models.enums import StageStatus
     if not body.blocked_reason.strip():
@@ -235,6 +243,7 @@ def unblock_milestone(
     current_user: CurrentUser,
 ):
     """Resume a blocked milestone — sets status back to IN_PROGRESS."""
+    check_project_access(db, current_user, project_id)
     from app.models.stage import ProjectStageStatus
     from app.models.enums import StageStatus
     pss = db.get(ProjectStageStatus, status_id)
@@ -264,6 +273,7 @@ def set_milestone_progress(
     current_user: CurrentUser,
 ):
     """Set manual progress percentage (0–100)."""
+    check_project_access(db, current_user, project_id)
     from app.models.stage import ProjectStageStatus
     from app.models.enums import StageStatus
     pss = db.get(ProjectStageStatus, status_id)
@@ -291,12 +301,14 @@ def get_milestone_activity(
     project_id: uuid.UUID,
     status_id:  uuid.UUID,
     db: DbSession,
+    current_user: CurrentUser,
     limit: int = Query(30, le=100),
 ):
     """
     Return a human-readable activity feed for this milestone.
     Combines audit events with photo upload events.
     """
+    check_project_access(db, current_user, project_id)
     from app.models.stage import ProjectStageStatus
     from app.models.audit import AuditEvent
     from sqlalchemy import text
@@ -421,8 +433,10 @@ def list_milestone_photos(
     project_id: uuid.UUID,
     status_id:  uuid.UUID,
     db: DbSession,
+    current_user: CurrentUser,
 ):
     """List all photos attached to a milestone (stage status)."""
+    check_project_access(db, current_user, project_id)
     from app.models.stage import ProjectStageStatus
     pss = db.get(ProjectStageStatus, status_id)
     if not pss or pss.project_id != project_id:
@@ -462,6 +476,7 @@ async def upload_milestone_photo(
     photo: UploadFile = File(...),
 ):
     """Upload a progress photo to a milestone."""
+    check_project_access(db, current_user, project_id)
     from app.models.stage import ProjectStageStatus
     pss = db.get(ProjectStageStatus, status_id)
     if not pss or pss.project_id != project_id:
@@ -516,6 +531,7 @@ def delete_milestone_photo(
     current_user: CurrentUser,
 ):
     """Soft-delete a milestone photo."""
+    check_project_access(db, current_user, project_id)
     from app.models.stage import ProjectStageStatus
     pss = db.get(ProjectStageStatus, status_id)
     if not pss or pss.project_id != project_id:

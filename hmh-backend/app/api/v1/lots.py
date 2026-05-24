@@ -6,7 +6,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, field_validator
 
-from app.dependencies import ALL_ROLES, CurrentUser, DbSession, OFFICE_AND_ABOVE
+from app.dependencies import ALL_ROLES, CurrentUser, DbSession, OFFICE_AND_ABOVE, check_project_access
 from app.schemas.common import ApiSuccess
 from app.schemas.lot import LotCreate, LotRead, LotUpdate
 from app.services import lot_service
@@ -23,7 +23,8 @@ lots_router = APIRouter(prefix="/lots", tags=["lots"])
     response_model=ApiSuccess[list[LotRead]],
     dependencies=[ALL_ROLES],
 )
-def list_lots(project_id: uuid.UUID, db: DbSession):
+def list_lots(project_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
+    check_project_access(db, current_user, project_id)
     lots = lot_service.list_lots(db, project_id)
     return ApiSuccess(data=[LotRead.model_validate(l) for l in lots])
 
@@ -34,7 +35,8 @@ def list_lots(project_id: uuid.UUID, db: DbSession):
     status_code=201,
     dependencies=[OFFICE_AND_ABOVE],
 )
-def create_lot(project_id: uuid.UUID, body: LotCreate, db: DbSession):
+def create_lot(project_id: uuid.UUID, body: LotCreate, db: DbSession, current_user: CurrentUser):
+    check_project_access(db, current_user, project_id)
     lot = lot_service.create_lot(db, project_id, body)
     return ApiSuccess(data=LotRead.model_validate(lot), message="Lot created successfully.")
 
@@ -259,8 +261,9 @@ def get_lot_boq_summary(lot_id: uuid.UUID, db: DbSession):
     response_model=ApiSuccess[list[LotRead]],
     dependencies=[OFFICE_AND_ABOVE],
 )
-def list_unassigned_lots(project_id: uuid.UUID, db: DbSession):
+def list_unassigned_lots(project_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
     """Return all lots for this project that have no site_id set."""
+    check_project_access(db, current_user, project_id)
     from app.models.lot import Lot
     lots = (
         db.query(Lot)
@@ -285,12 +288,14 @@ def bulk_assign_lots_to_site(
     project_id: uuid.UUID,
     body: _BulkAssignSiteBody,
     db: DbSession,
+    current_user: CurrentUser,
 ):
     """
     Assign a list of lots to a specific site.
     Only operates on lots that currently have site_id IS NULL — it will not
     override an existing site assignment, preventing accidental cross-site moves.
     """
+    check_project_access(db, current_user, project_id)
     from app.models.lot import Lot
     from app.models.site import Site
 
@@ -356,6 +361,7 @@ def generate_lots(
     Skips any lot_number that already exists for this project.
     If boq_template_id is provided, clones the template to each new lot.
     """
+    check_project_access(db, current_user, project_id)
     created_lots = lot_service.generate_lots(
         db,
         project_id=project_id,

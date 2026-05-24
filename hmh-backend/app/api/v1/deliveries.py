@@ -7,11 +7,15 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 
 from app.core.config import settings
-from app.dependencies import ALL_ROLES, CurrentUser, DbSession, OFFICE_AND_ABOVE
+from app.core.logging_config import get_logger
+from app.core.upload_validation import DOCUMENT_MIMES, validate_upload
+from app.dependencies import ALL_ROLES, CurrentUser, DbSession, OFFICE_AND_ABOVE, check_project_access
+
+logger = get_logger(__name__)
 from app.models.enums import DeliveryDestination
 from app.schemas.common import ApiSuccess
 from app.schemas.delivery import DeliveryCreate, DeliveryRead, DeliveryUpdate
@@ -29,8 +33,15 @@ delivery_router = APIRouter(prefix="/deliveries", tags=["deliveries"])
     response_model=ApiSuccess[list[DeliveryRead]],
     dependencies=[ALL_ROLES],
 )
-def list_deliveries(project_id: uuid.UUID, db: DbSession):
-    deliveries = delivery_service.list_deliveries(db, project_id)
+def list_deliveries(
+    project_id: uuid.UUID,
+    db: DbSession,
+    current_user: CurrentUser,
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+):
+    check_project_access(db, current_user, project_id)
+    deliveries = delivery_service.list_deliveries(db, project_id, limit=limit, offset=offset)
     return ApiSuccess(data=[DeliveryRead.model_validate(d) for d in deliveries])
 
 
@@ -46,6 +57,7 @@ def create_delivery(
     db: DbSession,
     current_user: CurrentUser,
 ):
+    check_project_access(db, current_user, project_id)
     delivery = delivery_service.create_delivery(db, project_id, body, current_user.id)
     return ApiSuccess(
         data=DeliveryRead.model_validate(delivery),
@@ -166,6 +178,7 @@ async def receive_delivery_with_document(
     dn_mime:           Optional[str] = None
     dn_size:           int           = 0
     if delivery_note_file and delivery_note_file.filename:
+        validate_upload(delivery_note_file, DOCUMENT_MIMES)
         from app.core.storage import save_upload as _save
         ext       = os.path.splitext(delivery_note_file.filename)[1] or ".bin"
         dn_fname  = f"{uuid.uuid4().hex}{ext}"
@@ -238,7 +251,7 @@ async def receive_delivery_with_document(
     )
     db.add(delivery)
     db.flush()
-    print(f"[DELIVERY] receive-with-document created id={delivery.id}", flush=True)
+    logger.info("delivery created id=%s", delivery.id)
 
     # ── Create Attachment record for delivery note file (enables delivery detail view) ──
     if delivery_note_url and dn_fname:
@@ -299,7 +312,7 @@ async def receive_delivery_with_document(
             if _po_item:
                 if not item_id and _po_item.item_id:
                     item_id = _po_item.item_id
-                    print(f"[DELIVERY] resolved item_id={item_id} from PO item for '{item_data.get('description')}'", flush=True)
+                    logger.debug("delivery resolved item_id=%s for '%s'", item_id, item_data.get('description'))
                 if not boq_item_id and _po_item.boq_item_id:
                     boq_item_id = _po_item.boq_item_id
 
@@ -381,11 +394,7 @@ async def receive_delivery_with_document(
                 "unit":              item_data.get("unit"),
             })
             if item_data.get("description"):
-                print(
-                    f"[DELIVERY] item '{item_data.get('description')}' has no item_id — "
-                    "stock ledger NOT updated. Link via PATCH /deliveries/{id}/items/{item_id}/link",
-                    flush=True,
-                )
+                logger.warning("delivery unlinked_item '%s' no item_id — stock not updated", item_data.get('description'))
 
     # ── Update PO status ──────────────────────────────────────────────────────
     if purchase_order_id:
@@ -446,11 +455,8 @@ async def receive_delivery_with_document(
         except Exception:
             pass
 
-    print(
-        f"[DELIVERY] saved — id={delivery.id} partial={is_partial} "
-        f"items={len(items_data)} stock_updated={stock_updated_count} unlinked={len(unlinked_items)}",
-        flush=True,
-    )
+    logger.info("delivery saved id=%s partial=%s items=%d stock_updated=%d unlinked=%d",
+                delivery.id, is_partial, len(items_data), stock_updated_count, len(unlinked_items))
     msg = "Delivery recorded successfully."
     if unlinked_items:
         msg = (
@@ -551,11 +557,8 @@ def link_delivery_item(
     ))
 
     db.commit()
-    print(
-        f"[DELIVERY] item linked — delivery={delivery.delivery_number} "
-        f"item='{catalog_item.name}' qty={d_item.quantity_received}",
-        flush=True,
-    )
+    logger.info("delivery item_linked delivery=%s item=%s qty=%s",
+                delivery.delivery_number, catalog_item.name, d_item.quantity_received)
 
     # Refresh materialized view
     import os as _os

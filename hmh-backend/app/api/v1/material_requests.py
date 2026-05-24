@@ -1,16 +1,17 @@
 """Material Request routes."""
 
 import logging
-import traceback
 import uuid
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
-logger = logging.getLogger(__name__)
+from app.core.logging_config import get_logger
 
-from app.dependencies import ALL_ROLES, CurrentUser, DbSession, OFFICE_AND_ABOVE, WRITE_ROLES
+logger = get_logger(__name__)
+
+from app.dependencies import ALL_ROLES, CurrentUser, DbSession, OFFICE_AND_ABOVE, WRITE_ROLES, check_project_access
 from app.models.enums import RecordStatus
 from app.schemas.common import ApiSuccess
 from app.schemas.material_request import (
@@ -27,27 +28,25 @@ mr_router = APIRouter(prefix="/material-requests", tags=["material-requests"])
 
 @project_mr_router.get("/", response_model=ApiSuccess[list[MaterialRequestRead]], dependencies=[ALL_ROLES])
 def list_material_requests(
-    project_id: uuid.UUID, db: DbSession,
+    project_id: uuid.UUID, db: DbSession, current_user: CurrentUser,
     status:  Optional[RecordStatus] = Query(None),
     site_id: Optional[uuid.UUID]    = Query(None),
 ):
+    check_project_access(db, current_user, project_id)
     mrs = mr_service.list_requests(db, project_id, site_id=site_id, status=status)
     return ApiSuccess(data=[MaterialRequestRead.model_validate(m) for m in mrs])
 
 
 @project_mr_router.post("/", response_model=ApiSuccess[MaterialRequestRead], status_code=201, dependencies=[WRITE_ROLES])
 def create_material_request(project_id: uuid.UUID, body: MaterialRequestCreate, db: DbSession, current_user: CurrentUser):
+    check_project_access(db, current_user, project_id)
     import json as _json
     try:
-        payload_log = body.model_dump()
-        print(f"[MR-CREATE] project_id={project_id} user={current_user.id} payload={_json.dumps(payload_log, default=str)}", flush=True)
         mr = mr_service.create_request(db, project_id, body, current_user.id)
-        print(f"[MR-CREATE] SUCCESS mr_id={mr.id} request_number={mr.request_number}", flush=True)
+        logger.info("mr_created project_id=%s user=%s mr_id=%s number=%s", project_id, current_user.id, mr.id, mr.request_number)
         return ApiSuccess(data=MaterialRequestRead.model_validate(mr), message="Material request created.")
     except Exception as exc:
-        tb = traceback.format_exc()
-        print(f"[MR-CREATE] FAILED project_id={project_id} error={exc!r}\n{tb}", flush=True)
-        logger.error("create_material_request failed project_id=%s: %s\n%s", project_id, exc, tb)
+        logger.exception("mr_create_failed project_id=%s error=%s", project_id, exc)
         raise
 
 
@@ -77,7 +76,7 @@ class ApproveBody(BaseModel):
 
 @mr_router.post("/{mr_id}/approve", response_model=ApiSuccess[MaterialRequestRead], dependencies=[OFFICE_AND_ABOVE])
 def approve_request(mr_id: uuid.UUID, body: ApproveBody, db: DbSession, current_user: CurrentUser):
-    print(f"[MR-APPROVE] mr_id={mr_id} user={current_user.id} role={current_user.role.value} allowed=True", flush=True)
+    logger.info("mr_approve mr_id=%s user=%s role=%s", mr_id, current_user.id, current_user.role.value)
     mr = mr_service.approve_request(db, mr_id, current_user.id, body.over_boq_reason)
     return ApiSuccess(data=MaterialRequestRead.model_validate(mr), message="Request approved.")
 

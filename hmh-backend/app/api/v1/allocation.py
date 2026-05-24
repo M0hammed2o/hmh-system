@@ -11,7 +11,7 @@ import uuid
 
 from fastapi import APIRouter, Query
 
-from app.dependencies import ALL_ROLES, CurrentUser, DbSession
+from app.dependencies import ALL_ROLES, CurrentUser, DbSession, check_project_access
 from app.schemas.common import ApiSuccess
 from app.services import allocation_service, transfer_service
 from pydantic import BaseModel
@@ -98,6 +98,7 @@ def transfer_to_lot(
     db: DbSession,
     current_user: CurrentUser,
 ):
+    check_project_access(db, current_user, project_id)
     entry = transfer_service.transfer_to_lot(
         db,
         project_id=project_id,
@@ -137,6 +138,7 @@ def transfer_between_sites(
     db: DbSession,
     current_user: CurrentUser,
 ):
+    check_project_access(db, current_user, project_id)
     out_entry, in_entry = transfer_service.transfer_to_site(
         db,
         project_id=project_id,

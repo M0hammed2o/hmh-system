@@ -22,7 +22,7 @@ import uuid
 from sqlalchemy.orm import Session
 from fastapi.testclient import TestClient
 
-from tests.conftest import auth, login, make_lot, make_project, make_site, make_supplier, make_user
+from tests.conftest import auth, login, make_lot, make_project, make_site, make_supplier, make_user, make_user_project_access
 
 
 @pytest.fixture()
@@ -37,6 +37,11 @@ def pay_setup(db: Session, client: TestClient):
     lot      = make_lot(db, project["id"], site["id"], "5")
     lot_free = make_lot(db, project["id"], None, "FREESTANDING-PAY")
     supplier = make_supplier(db)
+
+    make_user_project_access(db, office["id"], project["id"])
+    make_user_project_access(db, ro["id"], project["id"])
+    make_user_project_access(db, site_s["id"], project["id"])
+
     db.flush()
 
     # Create an invoice directly in DB

@@ -11,6 +11,7 @@ from app.dependencies import (
     CurrentUser,
     DbSession,
     OFFICE_ADMIN_AND_ABOVE,
+    check_project_access,
 )
 from app.models.enums import ProjectStatus
 from app.schemas.common import ApiSuccess, PaginatedResult
@@ -68,8 +69,9 @@ def create_project(
     response_model=ApiSuccess[ProjectRead],
     dependencies=[ALL_ROLES],
 )
-def get_project(project_id: uuid.UUID, db: DbSession):
+def get_project(project_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
     """Get a single project by ID."""
+    check_project_access(db, current_user, project_id)
     project = project_service.get_project(db, project_id)
     return ApiSuccess(data=ProjectRead.model_validate(project))
 
@@ -79,8 +81,9 @@ def get_project(project_id: uuid.UUID, db: DbSession):
     response_model=ApiSuccess[ProjectRead],
     dependencies=[OFFICE_ADMIN_AND_ABOVE],
 )
-def update_project(project_id: uuid.UUID, body: ProjectUpdate, db: DbSession):
+def update_project(project_id: uuid.UUID, body: ProjectUpdate, db: DbSession, current_user: CurrentUser):
     """Partially update a project. Requires Office Admin or above."""
+    check_project_access(db, current_user, project_id)
     project = project_service.update_project(db, project_id, body)
     return ApiSuccess(
         data=ProjectRead.model_validate(project),
@@ -93,12 +96,13 @@ def update_project(project_id: uuid.UUID, body: ProjectUpdate, db: DbSession):
     response_model=ApiSuccess[dict],
     dependencies=[OFFICE_ADMIN_AND_ABOVE],
 )
-def delete_project(project_id: uuid.UUID, db: DbSession):
+def delete_project(project_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
     """
     Permanently delete a project and all its linked data (sites, lots, BOQ,
     deliveries, payments, etc. — all cascade via DB FK).
     Requires Office Admin or above.  Owner READ_ONLY users are blocked.
     """
+    check_project_access(db, current_user, project_id)
     result = project_service.delete_project(db, project_id)
     return ApiSuccess(
         data=result,
