@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.exceptions import NotFoundError
 from app.core.storage import save_upload
+from app.core.upload_validation import _check_extension
 from app.models.attachment import Attachment
 from app.models.enums import AttachmentEntity, AttachmentType
 
@@ -76,6 +77,9 @@ def save_attachment(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"Invalid attachment_type: {attachment_type}",
         )
+
+    # Validate extension (independent of client-declared MIME type)
+    _check_extension(file.filename)
 
     # Validate MIME type
     mime = file.content_type or "application/octet-stream"
