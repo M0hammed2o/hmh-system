@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from tests.conftest import (
     auth, login, make_item, make_lot, make_project, make_site,
-    make_stock, make_supplier, make_user,
+    make_stock, make_supplier, make_user, make_user_project_access,
 )
 
 
@@ -33,6 +33,8 @@ def setup(db: Session, client: TestClient):
     item = make_item(db)
     supplier = make_supplier(db)
     make_stock(db, project["id"], site["id"], item["id"], qty=100.0)
+    make_user_project_access(db, office["id"], project["id"])
+    make_user_project_access(db, site_mgr["id"], project["id"])
     db.flush()
     return {
         "owner": owner, "office": office, "site_mgr": site_mgr,

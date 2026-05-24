@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 from tests.conftest import (
     auth, login,
     make_user, make_project, make_site, make_supplier, make_item, make_stock,
+    make_user_project_access,
 )
 
 
@@ -25,6 +26,7 @@ def test_delivery_read_includes_document_fields(db, client):
     token = login(client, user["email"], user["password"])
 
     proj     = make_project(db, user["id"])
+    make_user_project_access(db, user["id"], proj["id"])
     site     = make_site(db, proj["id"])
     supplier = make_supplier(db)
 
@@ -61,6 +63,7 @@ def test_receive_with_document_creates_attachment_record(db, client, tmp_path):
     user     = make_user(db, role="SITE_MANAGER")
     token    = login(client, user["email"], user["password"])
     proj     = make_project(db, user["id"])
+    make_user_project_access(db, user["id"], proj["id"])
     site     = make_site(db, proj["id"])
     supplier = make_supplier(db)
 
@@ -115,6 +118,7 @@ def test_signature_stored_as_file_not_base64(db, client):
     user     = make_user(db, role="SITE_STAFF")
     token    = login(client, user["email"], user["password"])
     proj     = make_project(db, user["id"])
+    make_user_project_access(db, user["id"], proj["id"])
     site     = make_site(db, proj["id"])
     supplier = make_supplier(db)
 
@@ -171,6 +175,7 @@ def test_manual_match_invoice(db, client):
     user     = make_user(db, role="OFFICE_ADMIN")
     token    = login(client, user["email"], user["password"])
     proj     = make_project(db, user["id"])
+    make_user_project_access(db, user["id"], proj["id"])
     supplier = make_supplier(db)
 
     # Create invoice
@@ -212,6 +217,7 @@ def test_manual_match_partially_matched(db, client):
     user     = make_user(db, role="OFFICE_ADMIN")
     token    = login(client, user["email"], user["password"])
     proj     = make_project(db, user["id"])
+    make_user_project_access(db, user["id"], proj["id"])
     supplier = make_supplier(db)
 
     r = client.post(
@@ -237,6 +243,7 @@ def test_record_usage_with_evidence_saves_file(db, client):
     user     = make_user(db, role="SITE_MANAGER")
     token    = login(client, user["email"], user["password"])
     proj     = make_project(db, user["id"])
+    make_user_project_access(db, user["id"], proj["id"])
     site     = make_site(db, proj["id"])
     item     = make_item(db, name="Test Sand")
     make_stock(db, proj["id"], site["id"], item["id"], qty=50)
@@ -273,6 +280,7 @@ def test_update_stage_with_evidence_saves_file(db, client):
     user  = make_user(db, role="SITE_MANAGER")
     token = login(client, user["email"], user["password"])
     proj  = make_project(db, user["id"])
+    make_user_project_access(db, user["id"], proj["id"])
 
     # Get a stage master id
     r = client.get("/api/v1/stages/", headers=auth(token))

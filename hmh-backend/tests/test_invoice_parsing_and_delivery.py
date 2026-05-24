@@ -15,7 +15,7 @@ import tempfile
 import pytest
 from datetime import datetime, timezone
 
-from tests.conftest import auth, login, make_user, make_project, make_site
+from tests.conftest import auth, login, make_user, make_project, make_site, make_user_project_access
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -128,6 +128,8 @@ def dn_setup(db, client):
     mgr    = make_user(db, role="SITE_MANAGER")
     project = make_project(db, owner_id=owner["id"])
     site   = make_site(db, project_id=project["id"])
+    make_user_project_access(db, staff["id"], project["id"])
+    make_user_project_access(db, mgr["id"], project["id"])
     db.commit()
     owner_tok = login(client, owner["email"], owner["password"])
     staff_tok = login(client, staff["email"], staff["password"])
@@ -142,7 +144,7 @@ def dn_setup(db, client):
 def _upload_txt(client, tok, site_id, content=b"DN-001\nCement 30 bags"):
     return client.post(
         "/api/v1/site-capture/delivery-note/upload",
-        files={"file": ("note.txt", io.BytesIO(content), "text/plain")},
+        files={"file": ("note.pdf", io.BytesIO(content), "application/pdf")},
         data={"site_id": site_id, "supplier_name": "Test Supplier"},
         headers=auth(tok),
     )

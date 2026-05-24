@@ -16,7 +16,7 @@ from fastapi.testclient import TestClient
 
 from tests.conftest import (
     auth, login, make_boq_item, make_item, make_lot, make_project,
-    make_site, make_stock, make_user,
+    make_site, make_stock, make_user, make_user_project_access,
 )
 
 
@@ -34,6 +34,7 @@ def stock_setup(db: Session, client: TestClient):
     make_stock(db, project["id"], warehouse["id"], item["id"], qty=50.0)
     # BOQ allocation: 10 bags for lot
     make_boq_item(db, project["id"], lot["id"], item["id"], qty=10.0)
+    make_user_project_access(db, office["id"], project["id"])
     db.flush()
 
     return {

@@ -132,6 +132,74 @@ def ensure_tables():
                 EXCEPTION WHEN others THEN NULL;
                 END $$;
             """))
+        # migration 0021: record_status_enum SUPPLIER_CONFIRMED
+        conn.execute(_t("""
+            DO $$ BEGIN
+                ALTER TYPE record_status_enum ADD VALUE IF NOT EXISTS 'SUPPLIER_CONFIRMED';
+            EXCEPTION WHEN others THEN NULL;
+            END $$;
+        """))
+
+        # migration 0022: alert_type_enum new operational values
+        for _val in [
+            "MR_APPROVED", "PO_SENT_ALERT", "DELIVERY_RECEIVED_ALERT",
+            "WAREHOUSE_TRANSFER_COMPLETED", "INVOICE_CAPTURED",
+            "PAYMENT_COMPLETED", "PARTIAL_PAYMENT_RECORDED",
+            "MILESTONE_COMPLETED_ALERT", "MILESTONE_DELAYED_ALERT",
+        ]:
+            conn.execute(_t(f"""
+                DO $$ BEGIN
+                    ALTER TYPE alert_type_enum ADD VALUE IF NOT EXISTS '{_val}';
+                EXCEPTION WHEN others THEN NULL;
+                END $$;
+            """))
+
+        # migration 0023: PAYMENT_DUE alert type
+        conn.execute(_t("""
+            DO $$ BEGIN
+                ALTER TYPE alert_type_enum ADD VALUE IF NOT EXISTS 'PAYMENT_DUE';
+            EXCEPTION WHEN others THEN NULL;
+            END $$;
+        """))
+
+        # migration 0022: alert_recipients new category flags + project_id
+        conn.execute(_t("""
+            DO $$
+            BEGIN
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                    WHERE table_name='alert_recipients' AND column_name='receives_procurement_alerts')
+                THEN ALTER TABLE alert_recipients
+                    ADD COLUMN receives_procurement_alerts BOOLEAN NOT NULL DEFAULT FALSE; END IF;
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                    WHERE table_name='alert_recipients' AND column_name='receives_milestone_alerts')
+                THEN ALTER TABLE alert_recipients
+                    ADD COLUMN receives_milestone_alerts BOOLEAN NOT NULL DEFAULT FALSE; END IF;
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                    WHERE table_name='alert_recipients' AND column_name='receives_payment_alerts')
+                THEN ALTER TABLE alert_recipients
+                    ADD COLUMN receives_payment_alerts BOOLEAN NOT NULL DEFAULT FALSE; END IF;
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                    WHERE table_name='alert_recipients' AND column_name='project_id')
+                THEN ALTER TABLE alert_recipients ADD COLUMN project_id UUID; END IF;
+            END $$;
+        """))
+
+        # migration 0022: notification_queue entity context columns
+        conn.execute(_t("""
+            DO $$
+            BEGIN
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                    WHERE table_name='notification_queue' AND column_name='project_id')
+                THEN ALTER TABLE notification_queue ADD COLUMN project_id UUID; END IF;
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                    WHERE table_name='notification_queue' AND column_name='entity_type')
+                THEN ALTER TABLE notification_queue ADD COLUMN entity_type VARCHAR(50); END IF;
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                    WHERE table_name='notification_queue' AND column_name='entity_id')
+                THEN ALTER TABLE notification_queue ADD COLUMN entity_id UUID; END IF;
+            END $$;
+        """))
+
         # record_status_enum: add INVOICED (0018), PARTIALLY_PAID, OVERPAID (0020)
         for _val in ["INVOICED", "PARTIALLY_PAID", "OVERPAID"]:
             conn.execute(_t(f"""
@@ -299,6 +367,36 @@ def ensure_tables():
                 END IF;
             END $$;
         """))
+
+        # migration 0024: performance indexes (CREATE INDEX IF NOT EXISTS is safe on existing DB)
+        for _idx_sql in [
+            "CREATE INDEX IF NOT EXISTS ix_stock_ledger_site_id ON stock_ledger(site_id)",
+            "CREATE INDEX IF NOT EXISTS ix_stock_ledger_movement_date ON stock_ledger(movement_date)",
+            "CREATE INDEX IF NOT EXISTS ix_stock_ledger_lot_item ON stock_ledger(lot_id, item_id)",
+            "CREATE INDEX IF NOT EXISTS ix_system_alerts_project_status_type ON system_alerts(project_id, status, alert_type)",
+            "CREATE INDEX IF NOT EXISTS ix_notification_queue_status_scheduled ON notification_queue(status, scheduled_for)",
+        ]:
+            try:
+                conn.execute(_t(_idx_sql))
+            except Exception:
+                pass
+
+        # migration 0025: data consistency partial unique indexes
+        for _idx_sql in [
+            """CREATE UNIQUE INDEX IF NOT EXISTS uq_invoices_supplier_invoice_number
+               ON invoices(supplier_id, invoice_number)
+               WHERE supplier_id IS NOT NULL AND invoice_number IS NOT NULL""",
+            """CREATE UNIQUE INDEX IF NOT EXISTS uq_payments_project_reference
+               ON payments(project_id, payment_reference)
+               WHERE payment_reference IS NOT NULL""",
+            """CREATE UNIQUE INDEX IF NOT EXISTS uq_notification_queue_provider_message_id
+               ON notification_queue(provider_message_id)
+               WHERE provider_message_id IS NOT NULL""",
+        ]:
+            try:
+                conn.execute(_t(_idx_sql))
+            except Exception:
+                pass
     yield
 
 
@@ -509,6 +607,32 @@ def make_stock(db: Session, project_id: str, site_id, item_id: str,
         unit="bag",
         movement_date=_now(),
         entered_by=None,
+        created_at=_now(),
+    ))
+    db.flush()
+
+
+def make_user_project_access(
+    db: Session,
+    user_id: str,
+    project_id: str,
+    can_view: bool = True,
+    can_edit: bool = True,
+    can_approve: bool = True,
+) -> None:
+    """Grant a non-OWNER user explicit access to a project.
+
+    Required for any test that uses a non-OWNER user to access project-scoped
+    resources.  OWNER role bypasses the check automatically; all other roles
+    need a UserProjectAccess record.
+    """
+    from app.models.access import UserProjectAccess
+    db.add(UserProjectAccess(
+        user_id=uuid.UUID(user_id),
+        project_id=uuid.UUID(project_id),
+        can_view=can_view,
+        can_edit=can_edit,
+        can_approve=can_approve,
         created_at=_now(),
     ))
     db.flush()

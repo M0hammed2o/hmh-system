@@ -15,7 +15,7 @@ import io
 import uuid
 import pytest
 
-from tests.conftest import auth, login, make_user, make_project, make_site
+from tests.conftest import auth, login, make_user, make_project, make_site, make_user_project_access
 
 
 @pytest.fixture
@@ -24,6 +24,7 @@ def expense_setup(db, client):
     staff  = make_user(db, role="SITE_STAFF")
     project = make_project(db, owner_id=owner["id"])
     site   = make_site(db, project_id=project["id"])
+    make_user_project_access(db, staff["id"], project["id"])
     owner_tok = login(client, owner["email"], owner["password"])
     staff_tok = login(client, staff["email"], staff["password"])
     return dict(
@@ -46,7 +47,7 @@ def _upload_expense(client, tok, supplier="Tyre Shop", category="VEHICLE_REPAIR"
         data["amount"] = str(amount)
 
     if file_content:
-        files = {"file": ("receipt.txt", io.BytesIO(file_content), "text/plain")}
+        files = {"file": ("receipt.pdf", io.BytesIO(file_content), "application/pdf")}
     else:
         files = {}
 

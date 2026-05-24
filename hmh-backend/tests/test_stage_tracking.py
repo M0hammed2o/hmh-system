@@ -13,7 +13,7 @@ import pytest
 from sqlalchemy.orm import Session
 from fastapi.testclient import TestClient
 
-from tests.conftest import auth, login, make_project, make_site, make_user
+from tests.conftest import auth, login, make_project, make_site, make_user, make_user_project_access
 
 
 @pytest.fixture()
@@ -26,6 +26,8 @@ def stage_setup(db: Session, client: TestClient):
     site_mgr = make_user(db, role="SITE_MANAGER")
     project = make_project(db, owner["id"])
     site = make_site(db, project["id"])
+    make_user_project_access(db, office["id"], project["id"])
+    make_user_project_access(db, site_mgr["id"], project["id"])
     db.flush()
 
     # Ensure stages exist

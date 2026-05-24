@@ -18,7 +18,7 @@ import uuid
 from sqlalchemy.orm import Session
 from fastapi.testclient import TestClient
 
-from tests.conftest import auth, login, make_item, make_lot, make_project, make_site, make_stock, make_user
+from tests.conftest import auth, login, make_item, make_lot, make_project, make_site, make_stock, make_user, make_user_project_access
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -46,7 +46,8 @@ def wh_setup(db: Session, client: TestClient):
 
     # Site warehouse stock (site_id = site, lot_id = None)
     make_stock(db, project["id"], site["id"], item["id"], qty=20.0)
-
+    make_user_project_access(db, office["id"], project["id"])
+    make_user_project_access(db, ro_user["id"], project["id"])
     db.flush()
 
     return {

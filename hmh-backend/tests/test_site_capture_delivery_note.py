@@ -14,7 +14,7 @@ import io
 import uuid
 import pytest
 
-from tests.conftest import auth, login, make_user, make_project, make_site, make_supplier
+from tests.conftest import auth, login, make_user, make_project, make_site, make_supplier, make_user_project_access
 
 
 @pytest.fixture
@@ -23,6 +23,7 @@ def capture_setup(db, client):
     staff  = make_user(db, role="SITE_STAFF")
     project = make_project(db, owner_id=owner["id"])
     site   = make_site(db, project_id=project["id"])
+    make_user_project_access(db, staff["id"], project["id"])
     owner_tok = login(client, owner["email"], owner["password"])
     staff_tok = login(client, staff["email"], staff["password"])
     return dict(
@@ -39,7 +40,7 @@ def _upload_delivery_note(client, tok, site_id, content=b"DELIVERY NOTE\nDN-TEST
     """Helper that uploads a fake delivery note file."""
     return client.post(
         "/api/v1/site-capture/delivery-note/upload",
-        files={"file": ("delivery_note.txt", io.BytesIO(content), "text/plain")},
+        files={"file": ("delivery_note.pdf", io.BytesIO(content), "application/pdf")},
         data={"site_id": site_id, "supplier_name": "Test Supplier"},
         headers=auth(tok),
     )
