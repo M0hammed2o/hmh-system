@@ -14,6 +14,7 @@ from app.core.config import settings
 from app.core.logging_config import get_logger
 from app.core.upload_validation import DOCUMENT_MIMES, validate_upload
 from app.dependencies import ALL_ROLES, CurrentUser, DbSession, OFFICE_AND_ABOVE, check_project_access
+from app.models.delivery import Delivery
 
 logger = get_logger(__name__)
 from app.models.enums import DeliveryDestination
@@ -70,8 +71,9 @@ def create_delivery(
     response_model=ApiSuccess[DeliveryRead],
     dependencies=[ALL_ROLES],
 )
-def get_delivery(delivery_id: uuid.UUID, db: DbSession):
+def get_delivery(delivery_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
     delivery = delivery_service.get_delivery(db, delivery_id)
+    check_project_access(db, current_user, delivery.project_id)
     return ApiSuccess(data=DeliveryRead.model_validate(delivery))
 
 
@@ -80,7 +82,11 @@ def get_delivery(delivery_id: uuid.UUID, db: DbSession):
     response_model=ApiSuccess[DeliveryRead],
     dependencies=[OFFICE_AND_ABOVE],
 )
-def update_delivery(delivery_id: uuid.UUID, body: DeliveryUpdate, db: DbSession):
+def update_delivery(delivery_id: uuid.UUID, body: DeliveryUpdate, db: DbSession, current_user: CurrentUser):
+    _d = db.get(Delivery, delivery_id)
+    if not _d:
+        raise HTTPException(404, "Delivery not found.")
+    check_project_access(db, current_user, _d.project_id)
     delivery = delivery_service.update_delivery(db, delivery_id, body)
     return ApiSuccess(data=DeliveryRead.model_validate(delivery), message="Delivery updated.")
 
@@ -98,6 +104,10 @@ class ReceiveStockBody(BaseModel):
     dependencies=[ALL_ROLES],
 )
 def receive_stock(delivery_id: uuid.UUID, body: ReceiveStockBody, db: DbSession, current_user: CurrentUser):
+    _d = db.get(Delivery, delivery_id)
+    if not _d:
+        raise HTTPException(404, "Delivery not found.")
+    check_project_access(db, current_user, _d.project_id)
     from app.services.delivery_service import receive_stock as _receive
     delivery = _receive(
         db, delivery_id,
@@ -502,7 +512,7 @@ def link_delivery_item(
     StockLedger entry.  Called by office staff when a delivery was recorded with
     an unlinked item — fixes the stock balance retroactively.
     """
-    from app.models.delivery import Delivery, DeliveryItem
+    from app.models.delivery import DeliveryItem
     from app.models.item import Item
     from app.models.stock import StockLedger
     from app.models.enums import MovementType
@@ -511,6 +521,7 @@ def link_delivery_item(
     delivery = db.get(Delivery, delivery_id)
     if not delivery:
         raise HTTPException(404, "Delivery not found.")
+    check_project_access(db, current_user, delivery.project_id)
 
     d_item = (
         db.query(DeliveryItem)
@@ -585,7 +596,7 @@ def link_delivery_item(
 # ── Reconciliation ────────────────────────────────────────────────────────────
 
 @delivery_router.get("/{delivery_id}/reconcile", dependencies=[OFFICE_AND_ABOVE])
-def reconcile_delivery(delivery_id: uuid.UUID, db: DbSession):
+def reconcile_delivery(delivery_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
     """
     Reconcile a delivery against its linked PO and any supplier invoices.
     Returns a structured match result with per-item checks.
@@ -603,10 +614,11 @@ def reconcile_delivery(delivery_id: uuid.UUID, db: DbSession):
     if not delivery:
         raise HTTPException(404, "Delivery not found.")
 
-    from app.models.delivery import Delivery as _Del, DeliveryItem
-    delivery = db.query(_Del).options(joinedload(_Del.items)).filter(_Del.id == delivery_id).first()
+    from app.models.delivery import DeliveryItem
+    delivery = db.query(Delivery).options(joinedload(Delivery.items)).filter(Delivery.id == delivery_id).first()
     if not delivery:
         raise HTTPException(404, "Delivery not found.")
+    check_project_access(db, current_user, delivery.project_id)
 
     po      = db.get(PurchaseOrder, delivery.purchase_order_id) if delivery.purchase_order_id else None
     invoices = (

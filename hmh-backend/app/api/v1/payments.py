@@ -9,7 +9,8 @@ from typing import Optional
 from fastapi import APIRouter, Query
 from fastapi.responses import StreamingResponse
 
-from app.dependencies import ALL_ROLES, CurrentUser, DbSession, OFFICE_AND_ABOVE
+from app.dependencies import ALL_ROLES, CurrentUser, DbSession, OFFICE_AND_ABOVE, check_project_access
+from app.models.payment import Payment
 from app.schemas.common import ApiSuccess
 from app.schemas.payment import PaymentCreate, PaymentRead, PaymentUpdate
 from app.services import payment_service
@@ -27,7 +28,8 @@ payment_router = APIRouter(prefix="/payments", tags=["payments"])
     response_model=ApiSuccess[list[PaymentRead]],
     dependencies=[ALL_ROLES],
 )
-def list_payments(project_id: uuid.UUID, db: DbSession):
+def list_payments(project_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
+    check_project_access(db, current_user, project_id)
     payments = payment_service.list_payments(db, project_id)
     return ApiSuccess(data=[PaymentRead.model_validate(p) for p in payments])
 
@@ -44,6 +46,7 @@ def create_payment(
     db: DbSession,
     current_user: CurrentUser,
 ):
+    check_project_access(db, current_user, project_id)
     payment = payment_service.create_payment(db, project_id, body, current_user.id)
     return ApiSuccess(data=PaymentRead.model_validate(payment), message="Payment captured.")
 
@@ -53,8 +56,9 @@ def create_payment(
     response_model=ApiSuccess[PaymentRead],
     dependencies=[ALL_ROLES],
 )
-def get_payment(payment_id: uuid.UUID, db: DbSession):
+def get_payment(payment_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
     payment = payment_service.get_payment(db, payment_id)
+    check_project_access(db, current_user, payment.project_id)
     return ApiSuccess(data=PaymentRead.model_validate(payment))
 
 
@@ -66,6 +70,11 @@ def get_payment(payment_id: uuid.UUID, db: DbSession):
 def update_payment(
     payment_id: uuid.UUID, body: PaymentUpdate, db: DbSession, current_user: CurrentUser
 ):
+    _p = db.get(Payment, payment_id)
+    if not _p:
+        from fastapi import HTTPException
+        raise HTTPException(404, "Payment not found.")
+    check_project_access(db, current_user, _p.project_id)
     payment = payment_service.update_payment(db, payment_id, body, current_user.id)
     return ApiSuccess(data=PaymentRead.model_validate(payment), message="Payment updated.")
 
@@ -75,17 +84,18 @@ def update_payment(
     response_model=ApiSuccess[list[dict]],
     dependencies=[OFFICE_AND_ABOVE],
 )
-def get_payment_activity(payment_id: uuid.UUID, db: DbSession):
+def get_payment_activity(payment_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
     """Human-readable activity timeline for a payment record."""
     from app.models.audit import AuditEvent
     from app.models.attachment import Attachment
     from app.models.enums import AttachmentEntity
     from app.core.storage import public_url as _pub
+    from fastapi import HTTPException
 
-    p = db.get(__import__("app.models.payment", fromlist=["Payment"]).Payment, payment_id)
+    p = db.get(Payment, payment_id)
     if not p:
-        from fastapi import HTTPException
         raise HTTPException(404, "Payment not found.")
+    check_project_access(db, current_user, p.project_id)
 
     audit_rows = (
         db.query(AuditEvent)
@@ -137,29 +147,64 @@ def get_payment_activity(payment_id: uuid.UUID, db: DbSession):
     response_model=ApiSuccess[dict],
     dependencies=[ALL_ROLES],
 )
-def outstanding_summary(project_id: uuid.UUID, db: DbSession):
+def outstanding_summary(project_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
     """
     Return outstanding payment summary for a project:
     - Unpaid/overdue supplier invoices
     - Total outstanding amount
     - Approved but unpaid job cards (labour)
     """
+    check_project_access(db, current_user, project_id)
     from datetime import date
     from app.models.invoice import Invoice
     from app.models.enums import RecordStatus
     from app.models.supplier import Supplier
 
-    # Invoices that are not PAID or CANCELLED
+    # All invoices with an outstanding balance (not PAID / CANCELLED / REJECTED)
     unpaid_statuses = [
         RecordStatus.DRAFT, RecordStatus.SUBMITTED, RecordStatus.RECEIVED,
         RecordStatus.APPROVED, RecordStatus.MATCHED,
+        RecordStatus.INVOICED, RecordStatus.PARTIALLY_PAID,  # Phase 3L fix
     ]
     unpaid_invoices = (
         db.query(Invoice)
         .filter(Invoice.project_id == project_id, Invoice.status.in_(unpaid_statuses))
-        .order_by(Invoice.due_date.asc())
+        .order_by(Invoice.due_date.asc().nullslast())
         .all()
     )
+
+    if not unpaid_invoices:
+        return ApiSuccess(data={
+            "total_outstanding_invoices": 0.0,
+            "overdue_amount":             0.0,
+            "pending_payments_amount":    0.0,
+            "outstanding_invoices":       [],
+            "overdue_count":              0,
+        })
+
+    # Bulk: total paid per invoice (so we can calculate real outstanding balance)
+    from app.models.payment import Payment
+    from app.models.enums import PaymentStatus
+    from sqlalchemy import func as _f
+
+    invoice_ids = [inv.id for inv in unpaid_invoices]
+    paid_rows = (
+        db.query(Payment.invoice_id, _f.coalesce(_f.sum(Payment.amount_paid), 0).label("total"))
+        .filter(
+            Payment.invoice_id.in_(invoice_ids),
+            Payment.status.notin_(["CANCELLED", "FAILED"]),
+        )
+        .group_by(Payment.invoice_id)
+        .all()
+    )
+    paid_by_invoice = {str(r.invoice_id): float(r.total) for r in paid_rows}
+
+    # Bulk: supplier names
+    supplier_ids = {inv.supplier_id for inv in unpaid_invoices if inv.supplier_id}
+    supplier_names = {}
+    if supplier_ids:
+        for s in db.query(Supplier).filter(Supplier.id.in_(supplier_ids)).all():
+            supplier_names[str(s.id)] = s.name
 
     today = date.today()
     invoice_rows = []
@@ -167,25 +212,32 @@ def outstanding_summary(project_id: uuid.UUID, db: DbSession):
     overdue_amount = 0.0
 
     for inv in unpaid_invoices:
-        supplier = db.get(Supplier, inv.supplier_id) if inv.supplier_id else None
-        amt = float(inv.total_amount or 0)
+        total_amt  = float(inv.total_amount or 0)
+        total_paid = paid_by_invoice.get(str(inv.id), 0.0)
+        balance    = max(0.0, total_amt - total_paid)
+
+        # Skip invoices where balance is actually zero (edge: status not updated yet)
+        if balance <= 0 and total_paid >= total_amt:
+            continue
+
         is_overdue = inv.due_date is not None and inv.due_date < today
-        total_outstanding += amt
+        total_outstanding += balance
         if is_overdue:
-            overdue_amount += amt
+            overdue_amount += balance
+
         invoice_rows.append({
-            "invoice_id":      str(inv.id),
-            "invoice_number":  inv.invoice_number,
-            "supplier_name":   supplier.name if supplier else None,
-            "total_amount":    amt,
-            "due_date":        inv.due_date.isoformat() if inv.due_date else None,
-            "status":          inv.status.value,
-            "is_overdue":      is_overdue,
+            "invoice_id":         str(inv.id),
+            "invoice_number":     inv.invoice_number,
+            "supplier_name":      supplier_names.get(str(inv.supplier_id)) if inv.supplier_id else None,
+            "total_amount":       total_amt,
+            "total_paid":         round(total_paid, 2),
+            "outstanding_balance": round(balance, 2),
+            "due_date":           inv.due_date.isoformat() if inv.due_date else None,
+            "status":             inv.status.value,
+            "is_overdue":         is_overdue,
         })
 
-    # Pending payments (LABOUR + SUPPLIER not yet PAID)
-    from app.models.payment import Payment
-    from app.models.enums import PaymentStatus
+    # Pending payments (not yet PAID)
     pending_payments = (
         db.query(Payment)
         .filter(
@@ -197,9 +249,9 @@ def outstanding_summary(project_id: uuid.UUID, db: DbSession):
     pending_amount = sum(float(p.amount_paid or 0) for p in pending_payments)
 
     return ApiSuccess(data={
-        "total_outstanding_invoices": total_outstanding,
-        "overdue_amount":             overdue_amount,
-        "pending_payments_amount":    pending_amount,
+        "total_outstanding_invoices": round(total_outstanding, 2),
+        "overdue_amount":             round(overdue_amount, 2),
+        "pending_payments_amount":    round(pending_amount, 2),
         "outstanding_invoices":       invoice_rows,
         "overdue_count":              sum(1 for i in invoice_rows if i["is_overdue"]),
     })
@@ -213,6 +265,7 @@ def outstanding_summary(project_id: uuid.UUID, db: DbSession):
 def payment_report(
     project_id: uuid.UUID,
     db: DbSession,
+    current_user: CurrentUser,
     from_date:   Optional[date] = Query(None),
     to_date:     Optional[date] = Query(None),
     supplier_id: Optional[uuid.UUID] = Query(None),
@@ -221,6 +274,7 @@ def payment_report(
     Monthly payment report: totals by supplier and by month.
     Used by the PaymentReportsPage.
     """
+    check_project_access(db, current_user, project_id)
     from sqlalchemy import extract, func, text
     from app.models.payment import Payment
     from app.models.enums import PaymentStatus
@@ -277,6 +331,125 @@ def payment_report(
 
 
 @project_payment_router.get(
+    "/aging",
+    response_model=ApiSuccess[dict],
+    dependencies=[ALL_ROLES],
+)
+def payment_aging(project_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
+    """
+    Invoice aging report: unpaid invoices grouped into 5 overdue bands.
+
+    Bands:
+      current   — due date in the future or no due date
+      1_30      — 1–30 days overdue
+      31_60     — 31–60 days overdue
+      61_90     — 61–90 days overdue
+      90_plus   — 91+ days overdue
+
+    Returns each band with: count, total_outstanding, invoices[].
+    Calculated using real outstanding balance (total_amount − payments), not raw total_amount.
+    """
+    check_project_access(db, current_user, project_id)
+    from app.models.invoice import Invoice
+    from app.models.supplier import Supplier
+    from app.models.enums import RecordStatus, PaymentStatus
+    from sqlalchemy import func as _f
+
+    unpaid_statuses = [
+        RecordStatus.DRAFT, RecordStatus.SUBMITTED, RecordStatus.RECEIVED,
+        RecordStatus.APPROVED, RecordStatus.MATCHED,
+        RecordStatus.INVOICED, RecordStatus.PARTIALLY_PAID,
+    ]
+
+    invoices = (
+        db.query(Invoice)
+        .filter(Invoice.project_id == project_id, Invoice.status.in_(unpaid_statuses))
+        .all()
+    )
+
+    if not invoices:
+        empty_band = {"count": 0, "total_outstanding": 0.0, "invoices": []}
+        return ApiSuccess(data={
+            "as_of": date.today().isoformat(),
+            "current": empty_band, "1_30": empty_band,
+            "31_60": empty_band, "61_90": empty_band, "90_plus": empty_band,
+            "grand_total": 0.0,
+        })
+
+    # Bulk paid amounts
+    inv_ids = [i.id for i in invoices]
+    paid_rows = (
+        db.query(Payment.invoice_id, _f.coalesce(_f.sum(Payment.amount_paid), 0).label("total"))
+        .filter(Payment.invoice_id.in_(inv_ids), Payment.status.notin_(["CANCELLED", "FAILED"]))
+        .group_by(Payment.invoice_id)
+        .all()
+    )
+    paid_map = {str(r.invoice_id): float(r.total) for r in paid_rows}
+
+    # Bulk supplier names
+    sup_ids = {i.supplier_id for i in invoices if i.supplier_id}
+    sup_names: dict = {}
+    if sup_ids:
+        for s in db.query(Supplier).filter(Supplier.id.in_(sup_ids)).all():
+            sup_names[str(s.id)] = s.name
+
+    today_dt = date.today()
+    bands: dict = {
+        "current": {"count": 0, "total_outstanding": 0.0, "invoices": []},
+        "1_30":    {"count": 0, "total_outstanding": 0.0, "invoices": []},
+        "31_60":   {"count": 0, "total_outstanding": 0.0, "invoices": []},
+        "61_90":   {"count": 0, "total_outstanding": 0.0, "invoices": []},
+        "90_plus": {"count": 0, "total_outstanding": 0.0, "invoices": []},
+    }
+
+    grand_total = 0.0
+    for inv in invoices:
+        total_amt  = float(inv.total_amount or 0)
+        total_paid = paid_map.get(str(inv.id), 0.0)
+        balance    = max(0.0, total_amt - total_paid)
+        if balance <= 0:
+            continue
+
+        # Determine band
+        if not inv.due_date or inv.due_date >= today_dt:
+            band_key = "current"
+        else:
+            days_overdue = (today_dt - inv.due_date).days
+            if days_overdue <= 30:
+                band_key = "1_30"
+            elif days_overdue <= 60:
+                band_key = "31_60"
+            elif days_overdue <= 90:
+                band_key = "61_90"
+            else:
+                band_key = "90_plus"
+
+        bands[band_key]["count"] += 1
+        bands[band_key]["total_outstanding"] += balance
+        bands[band_key]["invoices"].append({
+            "invoice_id":         str(inv.id),
+            "invoice_number":     inv.invoice_number,
+            "supplier_name":      sup_names.get(str(inv.supplier_id)) if inv.supplier_id else None,
+            "total_amount":       total_amt,
+            "total_paid":         round(total_paid, 2),
+            "outstanding_balance": round(balance, 2),
+            "due_date":           inv.due_date.isoformat() if inv.due_date else None,
+            "status":             inv.status.value,
+        })
+        grand_total += balance
+
+    # Round totals
+    for band in bands.values():
+        band["total_outstanding"] = round(band["total_outstanding"], 2)
+
+    return ApiSuccess(data={
+        "as_of":       today_dt.isoformat(),
+        **bands,
+        "grand_total": round(grand_total, 2),
+    })
+
+
+@project_payment_router.get(
     "/export",
     dependencies=[OFFICE_AND_ABOVE],
     response_class=StreamingResponse,
@@ -284,6 +457,7 @@ def payment_report(
 def export_payments_csv(
     project_id: uuid.UUID,
     db: DbSession,
+    current_user: CurrentUser,
     from_date:     Optional[date] = Query(None),
     to_date:       Optional[date] = Query(None),
     payment_type:  Optional[str]  = Query(None),
@@ -292,7 +466,7 @@ def export_payments_csv(
     Download a CSV of all payments for the project, with optional date and type filters.
     Used by finance to generate monthly payment reports.
     """
-    from app.models.payment import Payment
+    check_project_access(db, current_user, project_id)
     from app.models.supplier import Supplier
     from datetime import datetime, timezone
 

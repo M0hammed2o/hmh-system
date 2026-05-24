@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from app.dependencies import ALL_ROLES, CurrentUser, DbSession, OFFICE_AND_ABOVE, check_project_access
+from app.models.invoice import Invoice
 from app.schemas.common import ApiSuccess
 from app.schemas.invoice import InvoiceCreate, InvoiceRead, InvoiceUpdate
 from app.services import invoice_service
@@ -146,8 +147,9 @@ def list_all_invoices(
     response_model=ApiSuccess[InvoiceRead],
     dependencies=[ALL_ROLES],
 )
-def get_invoice(invoice_id: uuid.UUID, db: DbSession):
+def get_invoice(invoice_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
     invoice = invoice_service.get_invoice(db, invoice_id)
+    check_project_access(db, current_user, invoice.project_id)
     return ApiSuccess(data=InvoiceRead.model_validate(invoice))
 
 
@@ -156,7 +158,11 @@ def get_invoice(invoice_id: uuid.UUID, db: DbSession):
     response_model=ApiSuccess[InvoiceRead],
     dependencies=[OFFICE_AND_ABOVE],
 )
-def update_invoice(invoice_id: uuid.UUID, body: InvoiceUpdate, db: DbSession):
+def update_invoice(invoice_id: uuid.UUID, body: InvoiceUpdate, db: DbSession, current_user: CurrentUser):
+    _inv = db.get(Invoice, invoice_id)
+    if not _inv:
+        raise HTTPException(404, "Invoice not found.")
+    check_project_access(db, current_user, _inv.project_id)
     invoice = invoice_service.update_invoice(db, invoice_id, body)
     return ApiSuccess(data=InvoiceRead.model_validate(invoice), message="Invoice updated.")
 
@@ -166,11 +172,15 @@ def update_invoice(invoice_id: uuid.UUID, body: InvoiceUpdate, db: DbSession):
     response_model=ApiSuccess[dict],
     dependencies=[OFFICE_AND_ABOVE],
 )
-def get_invoice_reconciliation(invoice_id: uuid.UUID, db: DbSession):
+def get_invoice_reconciliation(invoice_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
     """
     Full reconciliation view: invoice totals, all payments, balance, status.
     Office-only — site users must not see pricing or payment amounts.
     """
+    _inv = db.get(Invoice, invoice_id)
+    if not _inv:
+        raise HTTPException(404, "Invoice not found.")
+    check_project_access(db, current_user, _inv.project_id)
     from app.services import payment_service
     data = payment_service.get_invoice_reconciliation(db, invoice_id)
     return ApiSuccess(data=data)
@@ -181,7 +191,7 @@ def get_invoice_reconciliation(invoice_id: uuid.UUID, db: DbSession):
     response_model=ApiSuccess[dict],
     dependencies=[ALL_ROLES],
 )
-def get_invoice_proof(invoice_id: uuid.UUID, db: DbSession):
+def get_invoice_proof(invoice_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
     """
     Return the full proof pack for one invoice:
     invoice + PO + delivery note + signature + email log + match result.
@@ -193,6 +203,7 @@ def get_invoice_proof(invoice_id: uuid.UUID, db: DbSession):
     from app.models.supplier import Supplier
 
     invoice = invoice_service.get_invoice(db, invoice_id)
+    check_project_access(db, current_user, invoice.project_id)
     supplier = db.get(Supplier, invoice.supplier_id)
 
     # PO
@@ -346,6 +357,7 @@ def approve_for_payment(invoice_id: uuid.UUID, db: DbSession, current_user: Curr
     from app.models.enums import RecordStatus, AuditAction
     from app.services import audit_service
     invoice = invoice_service.get_invoice(db, invoice_id)
+    check_project_access(db, current_user, invoice.project_id)
     invoice.status = RecordStatus.APPROVED
     audit_service.write_event(
         db, AuditAction.APPROVE, "invoice", current_user.id, invoice_id,
@@ -381,12 +393,13 @@ def manual_match_invoice(
     Creates or updates the InvoiceMatchingResult record.
     Reviewed_by and reviewed_at are set automatically.
     """
-    from app.models.invoice import Invoice, InvoiceMatchingResult
+    from app.models.invoice import InvoiceMatchingResult
     from app.models.enums import InvoiceMatchStatus
 
     invoice = db.get(Invoice, invoice_id)
     if not invoice:
         raise HTTPException(404, "Invoice not found.")
+    check_project_access(db, current_user, invoice.project_id)
 
     # Validate match_status
     try:

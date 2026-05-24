@@ -13,6 +13,7 @@ logger = get_logger(__name__)
 
 from app.dependencies import ALL_ROLES, CurrentUser, DbSession, OFFICE_AND_ABOVE, WRITE_ROLES, check_project_access
 from app.models.enums import RecordStatus
+from app.models.material_request import MaterialRequest
 from app.schemas.common import ApiSuccess
 from app.schemas.material_request import (
     MaterialRequestCreate, MaterialRequestRead, MaterialRequestUpdate,
@@ -51,13 +52,18 @@ def create_material_request(project_id: uuid.UUID, body: MaterialRequestCreate, 
 
 
 @mr_router.get("/{mr_id}", response_model=ApiSuccess[MaterialRequestRead], dependencies=[ALL_ROLES])
-def get_material_request(mr_id: uuid.UUID, db: DbSession):
+def get_material_request(mr_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
     mr = mr_service.get_request(db, mr_id)
+    check_project_access(db, current_user, mr.project_id)
     return ApiSuccess(data=MaterialRequestRead.model_validate(mr))
 
 
 @mr_router.patch("/{mr_id}", response_model=ApiSuccess[MaterialRequestRead], dependencies=[OFFICE_AND_ABOVE])
 def update_material_request(mr_id: uuid.UUID, body: MaterialRequestUpdate, db: DbSession, current_user: CurrentUser):
+    _mr = db.get(MaterialRequest, mr_id)
+    if not _mr:
+        raise HTTPException(404, "Material request not found.")
+    check_project_access(db, current_user, _mr.project_id)
     mr = mr_service.update_request(db, mr_id, body, current_user.id)
     return ApiSuccess(data=MaterialRequestRead.model_validate(mr), message="Material request updated.")
 
@@ -66,6 +72,10 @@ def update_material_request(mr_id: uuid.UUID, body: MaterialRequestUpdate, db: D
 
 @mr_router.post("/{mr_id}/submit", response_model=ApiSuccess[MaterialRequestRead], dependencies=[ALL_ROLES])
 def submit_request(mr_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
+    _mr = db.get(MaterialRequest, mr_id)
+    if not _mr:
+        raise HTTPException(404, "Material request not found.")
+    check_project_access(db, current_user, _mr.project_id)
     mr = mr_service.submit_request(db, mr_id, current_user.id)
     return ApiSuccess(data=MaterialRequestRead.model_validate(mr), message="Request submitted.")
 
@@ -76,6 +86,10 @@ class ApproveBody(BaseModel):
 
 @mr_router.post("/{mr_id}/approve", response_model=ApiSuccess[MaterialRequestRead], dependencies=[OFFICE_AND_ABOVE])
 def approve_request(mr_id: uuid.UUID, body: ApproveBody, db: DbSession, current_user: CurrentUser):
+    _mr = db.get(MaterialRequest, mr_id)
+    if not _mr:
+        raise HTTPException(404, "Material request not found.")
+    check_project_access(db, current_user, _mr.project_id)
     logger.info("mr_approve mr_id=%s user=%s role=%s", mr_id, current_user.id, current_user.role.value)
     mr = mr_service.approve_request(db, mr_id, current_user.id, body.over_boq_reason)
     return ApiSuccess(data=MaterialRequestRead.model_validate(mr), message="Request approved.")
@@ -88,6 +102,10 @@ class RejectBody(BaseModel):
 @mr_router.post("/{mr_id}/send-email", dependencies=[OFFICE_AND_ABOVE])
 def send_mr_email(mr_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
     """(Re)send the approval email to the preferred supplier. Always creates a new send attempt."""
+    _mr = db.get(MaterialRequest, mr_id)
+    if not _mr:
+        raise HTTPException(404, "Material request not found.")
+    check_project_access(db, current_user, _mr.project_id)
     log = mr_service.resend_mr_email(db, mr_id, sent_by_id=current_user.id)
     return ApiSuccess(
         data={
@@ -101,8 +119,12 @@ def send_mr_email(mr_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
 
 
 @mr_router.get("/{mr_id}/email-log", dependencies=[OFFICE_AND_ABOVE])
-def get_mr_email_log(mr_id: uuid.UUID, db: DbSession):
+def get_mr_email_log(mr_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
     """Return all email send attempts for a material request."""
+    _mr = db.get(MaterialRequest, mr_id)
+    if not _mr:
+        raise HTTPException(404, "Material request not found.")
+    check_project_access(db, current_user, _mr.project_id)
     from app.models.mr_email_log import MREmailLog
     logs = (
         db.query(MREmailLog)
@@ -131,6 +153,7 @@ def prepare_mr_email_draft(mr_id: uuid.UUID, db: DbSession, current_user: Curren
     from datetime import datetime, timezone
 
     mr = mr_service.get_request(db, mr_id)
+    check_project_access(db, current_user, mr.project_id)
     subject, body_html = build_mr_email_body(db, mr)
     now = datetime.now(timezone.utc)
 
@@ -170,8 +193,12 @@ def prepare_mr_email_draft(mr_id: uuid.UUID, db: DbSession, current_user: Curren
 
 
 @mr_router.get("/{mr_id}/prepare-email", response_model=ApiSuccess[dict], dependencies=[OFFICE_AND_ABOVE])
-def get_mr_email_draft(mr_id: uuid.UUID, db: DbSession):
+def get_mr_email_draft(mr_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
     """Return the current unsent draft for the MR email."""
+    _mr = db.get(MaterialRequest, mr_id)
+    if not _mr:
+        raise HTTPException(404, "Material request not found.")
+    check_project_access(db, current_user, _mr.project_id)
     from app.models.mr_email_log import MREmailLog
     draft = (
         db.query(MREmailLog)
@@ -194,13 +221,17 @@ def get_mr_email_draft(mr_id: uuid.UUID, db: DbSession):
 def update_mr_email_draft(
     mr_id: uuid.UUID,
     db: DbSession,
+    current_user: CurrentUser,
     subject: str | None = None,
     body_html: str | None = None,
     to_email: str | None = None,
 ):
     """Update the unsent MR email draft body/subject/recipient."""
+    _mr = db.get(MaterialRequest, mr_id)
+    if not _mr:
+        raise HTTPException(404, "Material request not found.")
+    check_project_access(db, current_user, _mr.project_id)
     from app.models.mr_email_log import MREmailLog
-    from fastapi import HTTPException
     draft = (
         db.query(MREmailLog)
         .filter(MREmailLog.material_request_id == mr_id, MREmailLog.status == "queued")
@@ -218,6 +249,10 @@ def update_mr_email_draft(
 @mr_router.post("/{mr_id}/mark-sent", response_model=ApiSuccess[dict], dependencies=[OFFICE_AND_ABOVE])
 def mark_mr_email_sent(mr_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
     """Mark the MR enquiry email as manually sent (e.g., via WhatsApp or phone)."""
+    _mr = db.get(MaterialRequest, mr_id)
+    if not _mr:
+        raise HTTPException(404, "Material request not found.")
+    check_project_access(db, current_user, _mr.project_id)
     from app.models.mr_email_log import MREmailLog
     from datetime import datetime, timezone
     now = datetime.now(timezone.utc)
@@ -238,6 +273,10 @@ def mark_mr_email_sent(mr_id: uuid.UUID, db: DbSession, current_user: CurrentUse
 
 @mr_router.post("/{mr_id}/reject", response_model=ApiSuccess[MaterialRequestRead], dependencies=[OFFICE_AND_ABOVE])
 def reject_request(mr_id: uuid.UUID, body: RejectBody, db: DbSession, current_user: CurrentUser):
+    _mr = db.get(MaterialRequest, mr_id)
+    if not _mr:
+        raise HTTPException(404, "Material request not found.")
+    check_project_access(db, current_user, _mr.project_id)
     mr = mr_service.reject_request(db, mr_id, current_user.id, body.reason)
     return ApiSuccess(data=MaterialRequestRead.model_validate(mr), message="Request rejected.")
 
@@ -251,6 +290,10 @@ class ConvertToPOBody(BaseModel):
 
 @mr_router.post("/{mr_id}/convert-to-po", response_model=ApiSuccess[dict], status_code=201, dependencies=[OFFICE_AND_ABOVE])
 def convert_to_po(mr_id: uuid.UUID, body: ConvertToPOBody, db: DbSession, current_user: CurrentUser):
+    _mr = db.get(MaterialRequest, mr_id)
+    if not _mr:
+        raise HTTPException(404, "Material request not found.")
+    check_project_access(db, current_user, _mr.project_id)
     from datetime import date
     exp_date = date.fromisoformat(body.expected_delivery_date) if body.expected_delivery_date else None
     po = mr_service.convert_to_po(
@@ -292,13 +335,21 @@ class QuoteRead(BaseModel):
 
 
 @mr_router.get("/{mr_id}/quotes", response_model=ApiSuccess[list[QuoteRead]], dependencies=[ALL_ROLES])
-def list_quotes(mr_id: uuid.UUID, db: DbSession):
+def list_quotes(mr_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
+    _mr = db.get(MaterialRequest, mr_id)
+    if not _mr:
+        raise HTTPException(404, "Material request not found.")
+    check_project_access(db, current_user, _mr.project_id)
     quotes = mr_service.list_quotes(db, mr_id)
     return ApiSuccess(data=[QuoteRead.model_validate(q) for q in quotes])
 
 
 @mr_router.post("/{mr_id}/quotes", response_model=ApiSuccess[QuoteRead], status_code=201, dependencies=[OFFICE_AND_ABOVE])
 def add_quote(mr_id: uuid.UUID, body: QuoteCreate, db: DbSession, current_user: CurrentUser):
+    _mr = db.get(MaterialRequest, mr_id)
+    if not _mr:
+        raise HTTPException(404, "Material request not found.")
+    check_project_access(db, current_user, _mr.project_id)
     from datetime import date
     delivery_date = date.fromisoformat(body.delivery_date) if body.delivery_date else None
     quote = mr_service.add_quote(
@@ -312,12 +363,16 @@ def add_quote(mr_id: uuid.UUID, body: QuoteCreate, db: DbSession, current_user: 
 
 @mr_router.post("/{mr_id}/quotes/{quote_id}/select", response_model=ApiSuccess[QuoteRead], dependencies=[OFFICE_AND_ABOVE])
 def select_quote(mr_id: uuid.UUID, quote_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
+    _mr = db.get(MaterialRequest, mr_id)
+    if not _mr:
+        raise HTTPException(404, "Material request not found.")
+    check_project_access(db, current_user, _mr.project_id)
     quote = mr_service.select_quote(db, mr_id, quote_id, current_user.id)
     return ApiSuccess(data=QuoteRead.model_validate(quote), message="Quote selected.")
 
 
 @mr_router.get("/{mr_id}/activity", response_model=ApiSuccess[list[dict]], dependencies=[ALL_ROLES])
-def get_mr_activity(mr_id: uuid.UUID, db: DbSession, limit: int = Query(30, le=100)):
+def get_mr_activity(mr_id: uuid.UUID, db: DbSession, current_user: CurrentUser, limit: int = Query(30, le=100)):
     """Return a human-readable activity timeline for this material request."""
     from app.models.audit import AuditEvent
     from app.models.attachment import Attachment
@@ -325,6 +380,7 @@ def get_mr_activity(mr_id: uuid.UUID, db: DbSession, limit: int = Query(30, le=1
     from app.core.storage import public_url as _pub
 
     mr = mr_service.get_request(db, mr_id)  # 404 if not found
+    check_project_access(db, current_user, mr.project_id)
 
     audit_rows = (
         db.query(AuditEvent)
