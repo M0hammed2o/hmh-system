@@ -12,12 +12,48 @@ from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, RedirectResponse
 
 from app.core.exceptions import NotFoundError
-from app.dependencies import ALL_ROLES, CurrentUser, DbSession, WRITE_ROLES
+from app.dependencies import ALL_ROLES, CurrentUser, DbSession, WRITE_ROLES, check_project_access
 from app.schemas.attachment import AttachmentRead
 from app.schemas.common import ApiSuccess
 from app.services import attachment_service
 
 router = APIRouter(prefix="/attachments", tags=["attachments"])
+
+
+def _entity_project_id(db, entity_type: str, entity_id: uuid.UUID):
+    """Resolve an attachment entity to its project_id. Returns None for non-project entities."""
+    t = entity_type.upper()
+    if t == "PROJECT":
+        return entity_id
+    if t == "LOT":
+        from app.models.lot import Lot
+        obj = db.get(Lot, entity_id)
+        return obj.project_id if obj else None
+    if t == "MATERIAL_REQUEST":
+        from app.models.material_request import MaterialRequest
+        obj = db.get(MaterialRequest, entity_id)
+        return obj.project_id if obj else None
+    if t == "PURCHASE_ORDER":
+        from app.models.purchase_order import PurchaseOrder
+        obj = db.get(PurchaseOrder, entity_id)
+        return obj.project_id if obj else None
+    if t == "DELIVERY":
+        from app.models.delivery import Delivery
+        obj = db.get(Delivery, entity_id)
+        return obj.project_id if obj else None
+    if t == "INVOICE":
+        from app.models.invoice import Invoice
+        obj = db.get(Invoice, entity_id)
+        return obj.project_id if obj else None
+    if t == "PAYMENT":
+        from app.models.payment import Payment
+        obj = db.get(Payment, entity_id)
+        return obj.project_id if obj else None
+    if t == "BOQ_HEADER":
+        from app.models.boq import BOQHeader
+        obj = db.get(BOQHeader, entity_id)
+        return obj.project_id if obj else None
+    return None
 
 
 @router.post(
@@ -34,6 +70,9 @@ async def upload_attachment(
     entity_id: str = Form(..., description="UUID of the linked entity"),
     attachment_type: str = Form(default="PHOTO", description="e.g. PHOTO, PDF, PROOF"),
 ):
+    project_id = _entity_project_id(db, entity_type, uuid.UUID(entity_id))
+    if project_id:
+        check_project_access(db, current_user, project_id)
     record = attachment_service.save_attachment(
         db=db,
         file=file,
@@ -54,9 +93,13 @@ async def upload_attachment(
 )
 def list_attachments(
     db: DbSession,
+    current_user: CurrentUser,
     entity_type: str = Query(...),
     entity_id: uuid.UUID = Query(...),
 ):
+    project_id = _entity_project_id(db, entity_type, entity_id)
+    if project_id:
+        check_project_access(db, current_user, project_id)
     records = attachment_service.list_attachments(db, entity_type, entity_id)
 
     # Bulk-fetch user names for uploaded_by resolution
@@ -81,11 +124,14 @@ def list_attachments(
     "/{attachment_id}/download",
     dependencies=[ALL_ROLES],
 )
-def download_attachment(attachment_id: uuid.UUID, db: DbSession):
+def download_attachment(attachment_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
     """Stream local files; redirect to Supabase for cloud-stored files."""
     record = attachment_service.get_attachment(db, attachment_id)
     if not record.is_active:
         raise HTTPException(404, "Attachment is no longer available.")
+    project_id = _entity_project_id(db, record.entity_type.value, record.entity_id)
+    if project_id:
+        check_project_access(db, current_user, project_id)
 
     # Supabase Storage or any absolute URL → redirect (no backend proxy needed)
     if record.stored_path.startswith("http"):
@@ -107,9 +153,12 @@ def download_attachment(attachment_id: uuid.UUID, db: DbSession):
     response_model=ApiSuccess[dict],
     dependencies=[WRITE_ROLES],
 )
-def delete_attachment(attachment_id: uuid.UUID, db: DbSession):
+def delete_attachment(attachment_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
     """Soft-delete an attachment (sets is_active=False)."""
     record = attachment_service.get_attachment(db, attachment_id)
+    project_id = _entity_project_id(db, record.entity_type.value, record.entity_id)
+    if project_id:
+        check_project_access(db, current_user, project_id)
     record.is_active = False
     db.commit()
     return ApiSuccess(data={"id": str(attachment_id)}, message="Attachment removed.")
