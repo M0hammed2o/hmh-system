@@ -6,16 +6,17 @@ from typing import Optional
 
 from fastapi import APIRouter, Query
 
-from app.dependencies import OFFICE_AND_ABOVE, DbSession
+from app.dependencies import CurrentUser, DbSession, OWNER_ONLY
 from app.models.audit import AuditEvent
 from app.schemas.common import ApiSuccess
 
 router = APIRouter(prefix="/audit", tags=["audit"])
 
 
-@router.get("/", response_model=ApiSuccess[list[dict]], dependencies=[OFFICE_AND_ABOVE])
+@router.get("/", response_model=ApiSuccess[list[dict]], dependencies=[OWNER_ONLY])
 def list_audit_events(
     db: DbSession,
+    current_user: CurrentUser,
     actor_id:    Optional[uuid.UUID] = Query(None, description="Filter by user (actor)"),
     entity_type: Optional[str]        = Query(None, description="e.g. material_request, purchase_order"),
     action:      Optional[str]        = Query(None, description="CREATE, UPDATE, APPROVE, etc."),
