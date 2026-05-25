@@ -9,6 +9,7 @@ from typing import Optional
 from fastapi import APIRouter, Query
 from fastapi.responses import StreamingResponse
 
+from app.core.resource_access import get_and_check_project_resource, secure_project_lookup
 from app.dependencies import ALL_ROLES, CurrentUser, DbSession, OFFICE_AND_ABOVE, check_project_access
 from app.models.payment import Payment
 from app.schemas.common import ApiSuccess
@@ -57,8 +58,7 @@ def create_payment(
     dependencies=[ALL_ROLES],
 )
 def get_payment(payment_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
-    payment = payment_service.get_payment(db, payment_id)
-    check_project_access(db, current_user, payment.project_id)
+    payment = secure_project_lookup(payment_service.get_payment(db, payment_id), db, current_user)
     return ApiSuccess(data=PaymentRead.model_validate(payment))
 
 
@@ -70,11 +70,7 @@ def get_payment(payment_id: uuid.UUID, db: DbSession, current_user: CurrentUser)
 def update_payment(
     payment_id: uuid.UUID, body: PaymentUpdate, db: DbSession, current_user: CurrentUser
 ):
-    _p = db.get(Payment, payment_id)
-    if not _p:
-        from fastapi import HTTPException
-        raise HTTPException(404, "Payment not found.")
-    check_project_access(db, current_user, _p.project_id)
+    get_and_check_project_resource(db, current_user, Payment, payment_id, "Payment not found.")
     payment = payment_service.update_payment(db, payment_id, body, current_user.id)
     return ApiSuccess(data=PaymentRead.model_validate(payment), message="Payment updated.")
 
@@ -90,12 +86,8 @@ def get_payment_activity(payment_id: uuid.UUID, db: DbSession, current_user: Cur
     from app.models.attachment import Attachment
     from app.models.enums import AttachmentEntity
     from app.core.storage import public_url as _pub
-    from fastapi import HTTPException
 
-    p = db.get(Payment, payment_id)
-    if not p:
-        raise HTTPException(404, "Payment not found.")
-    check_project_access(db, current_user, p.project_id)
+    get_and_check_project_resource(db, current_user, Payment, payment_id, "Payment not found.")
 
     audit_rows = (
         db.query(AuditEvent)

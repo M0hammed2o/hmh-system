@@ -7,6 +7,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
+from app.core.resource_access import get_and_check_project_resource, secure_project_lookup
 from app.dependencies import ALL_ROLES, CurrentUser, DbSession, OFFICE_AND_ABOVE, check_project_access
 from app.models.invoice import Invoice
 from app.schemas.common import ApiSuccess
@@ -148,8 +149,7 @@ def list_all_invoices(
     dependencies=[ALL_ROLES],
 )
 def get_invoice(invoice_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
-    invoice = invoice_service.get_invoice(db, invoice_id)
-    check_project_access(db, current_user, invoice.project_id)
+    invoice = secure_project_lookup(invoice_service.get_invoice(db, invoice_id), db, current_user)
     return ApiSuccess(data=InvoiceRead.model_validate(invoice))
 
 
@@ -159,10 +159,7 @@ def get_invoice(invoice_id: uuid.UUID, db: DbSession, current_user: CurrentUser)
     dependencies=[OFFICE_AND_ABOVE],
 )
 def update_invoice(invoice_id: uuid.UUID, body: InvoiceUpdate, db: DbSession, current_user: CurrentUser):
-    _inv = db.get(Invoice, invoice_id)
-    if not _inv:
-        raise HTTPException(404, "Invoice not found.")
-    check_project_access(db, current_user, _inv.project_id)
+    get_and_check_project_resource(db, current_user, Invoice, invoice_id, "Invoice not found.")
     invoice = invoice_service.update_invoice(db, invoice_id, body)
     return ApiSuccess(data=InvoiceRead.model_validate(invoice), message="Invoice updated.")
 
@@ -177,10 +174,7 @@ def get_invoice_reconciliation(invoice_id: uuid.UUID, db: DbSession, current_use
     Full reconciliation view: invoice totals, all payments, balance, status.
     Office-only — site users must not see pricing or payment amounts.
     """
-    _inv = db.get(Invoice, invoice_id)
-    if not _inv:
-        raise HTTPException(404, "Invoice not found.")
-    check_project_access(db, current_user, _inv.project_id)
+    get_and_check_project_resource(db, current_user, Invoice, invoice_id, "Invoice not found.")
     from app.services import payment_service
     data = payment_service.get_invoice_reconciliation(db, invoice_id)
     return ApiSuccess(data=data)
@@ -202,8 +196,7 @@ def get_invoice_proof(invoice_id: uuid.UUID, db: DbSession, current_user: Curren
     from app.models.purchase_order import PoEmailLog, PurchaseOrder, PurchaseOrderItem
     from app.models.supplier import Supplier
 
-    invoice = invoice_service.get_invoice(db, invoice_id)
-    check_project_access(db, current_user, invoice.project_id)
+    invoice = secure_project_lookup(invoice_service.get_invoice(db, invoice_id), db, current_user)
     supplier = db.get(Supplier, invoice.supplier_id)
 
     # PO
@@ -356,8 +349,7 @@ def get_invoice_proof(invoice_id: uuid.UUID, db: DbSession, current_user: Curren
 def approve_for_payment(invoice_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
     from app.models.enums import RecordStatus, AuditAction
     from app.services import audit_service
-    invoice = invoice_service.get_invoice(db, invoice_id)
-    check_project_access(db, current_user, invoice.project_id)
+    invoice = secure_project_lookup(invoice_service.get_invoice(db, invoice_id), db, current_user)
     invoice.status = RecordStatus.APPROVED
     audit_service.write_event(
         db, AuditAction.APPROVE, "invoice", current_user.id, invoice_id,
@@ -396,10 +388,7 @@ def manual_match_invoice(
     from app.models.invoice import InvoiceMatchingResult
     from app.models.enums import InvoiceMatchStatus
 
-    invoice = db.get(Invoice, invoice_id)
-    if not invoice:
-        raise HTTPException(404, "Invoice not found.")
-    check_project_access(db, current_user, invoice.project_id)
+    invoice = get_and_check_project_resource(db, current_user, Invoice, invoice_id, "Invoice not found.")
 
     # Validate match_status
     try:

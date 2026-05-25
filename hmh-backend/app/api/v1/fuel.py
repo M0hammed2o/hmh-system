@@ -9,10 +9,13 @@ import os
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, File, Form, Query, UploadFile
 
 from app.core.config import settings
+from app.core.resource_access import get_resource_or_404
+from app.core.upload_validation import PHOTO_MIMES, validate_upload
 from app.dependencies import ALL_ROLES, CurrentUser, DbSession, OFFICE_AND_ABOVE
+from app.models.fuel import FuelLog
 from app.schemas.common import ApiSuccess
 from app.schemas.fuel import FuelLogCreate, FuelLogRead, FuelLogUpdate
 from app.services import fuel_service
@@ -114,6 +117,10 @@ async def create_fuel_log_with_evidence(
         odometer_reading = odometer_reading,
         notes            = notes,
     )
+    for _photo in (photo_odometer, photo_pump, photo_invoice):
+        if _photo and _photo.filename:
+            validate_upload(_photo, PHOTO_MIMES)
+
     log = fuel_service.create_fuel_log(db, project_id, body, current_user.id)
 
     # Save photos and attach URLs
@@ -136,7 +143,6 @@ async def create_fuel_log_with_evidence(
 )
 def list_fuel_logs_for_vehicle(project_id: uuid.UUID, vehicle_id: uuid.UUID, db: DbSession):
     """List all fuel logs for a specific vehicle within a project."""
-    from app.models.fuel import FuelLog
     logs = (
         db.query(FuelLog)
         .filter(FuelLog.project_id == project_id, FuelLog.vehicle_id == vehicle_id)
@@ -169,10 +175,7 @@ def update_fuel_log(log_id: uuid.UUID, body: FuelLogUpdate, db: DbSession):
 @fuel_router.delete("/{log_id}", response_model=ApiSuccess[dict], dependencies=[OFFICE_AND_ABOVE])
 def delete_fuel_log(log_id: uuid.UUID, db: DbSession):
     """Hard-delete a fuel log entry."""
-    from app.models.fuel import FuelLog
-    log = db.get(FuelLog, log_id)
-    if not log:
-        raise HTTPException(404, "Fuel log not found.")
+    log = get_resource_or_404(db, FuelLog, log_id, "Fuel log not found.")
     db.delete(log)
     db.commit()
     return ApiSuccess(data={"log_id": str(log_id)}, message="Fuel log deleted.")
