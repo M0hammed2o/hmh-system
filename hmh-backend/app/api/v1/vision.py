@@ -21,16 +21,18 @@ import os
 import uuid as _uuid_module
 from typing import Optional
 
-from fastapi import APIRouter, File, Form, UploadFile
+from fastapi import APIRouter, Depends, File, Form, UploadFile
 
 from app.core.config import settings
+from app.core.rate_limit import ocr_rate_limit
+from app.core.upload_validation import DOCUMENT_MIMES, validate_upload
 from app.dependencies import ALL_ROLES, CurrentUser, DbSession
 from app.schemas.common import ApiSuccess
 
 router = APIRouter(prefix="/vision", tags=["vision"])
 
 
-@router.post("/extract", dependencies=[ALL_ROLES])
+@router.post("/extract", dependencies=[ALL_ROLES, Depends(ocr_rate_limit)])
 async def vision_extract(
     db:             DbSession,
     current_user:   CurrentUser,
@@ -57,6 +59,8 @@ async def vision_extract(
     import json
     from datetime import datetime, timezone
     from app.services.document_ai_service import extract_document_data
+
+    validate_upload(file, DOCUMENT_MIMES)
 
     # ── Save uploaded file to a temp location ─────────────────────────────────
     upload_dir = os.path.join(settings.UPLOAD_DIR, "vision_uploads")
@@ -90,8 +94,11 @@ async def vision_extract(
             "invoice_number": fields.get("invoice_number"),
             "supplier_name":  fields.get("supplier_name"),
             "supplier_email": fields.get("supplier_email"),
+            "po_number":      fields.get("po_number"),
             "date":           fields.get("date"),
+            "due_date":       fields.get("due_date"),
             "total_amount":   fields.get("total_amount"),
+            "vat_amount":     fields.get("vat_amount"),
             "line_items":     [
                 {
                     "description": i.get("description"),

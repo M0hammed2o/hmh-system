@@ -1,8 +1,9 @@
 """Auth routes — login, token refresh, password change."""
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
 from app.core.config import settings
+from app.core.rate_limit import login_rate_limit
 from app.dependencies import CurrentUser, DbSession
 from app.schemas.common import ApiSuccess
 from app.schemas.user import (
@@ -16,7 +17,7 @@ from app.services import auth_service
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
-@router.post("/login", response_model=TokenResponse)
+@router.post("/login", response_model=TokenResponse, dependencies=[Depends(login_rate_limit)])
 def login(body: LoginRequest, db: DbSession):
     user, access_token, refresh_token = auth_service.login(db, body.email, body.password)
     return TokenResponse(
@@ -27,7 +28,7 @@ def login(body: LoginRequest, db: DbSession):
     )
 
 
-@router.post("/refresh", response_model=TokenResponse)
+@router.post("/refresh", response_model=TokenResponse, dependencies=[Depends(login_rate_limit)])
 def refresh(body: RefreshRequest, db: DbSession):
     user, access_token, refresh_token = auth_service.refresh(db, body.refresh_token)
     return TokenResponse(
