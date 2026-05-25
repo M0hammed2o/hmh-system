@@ -8,6 +8,7 @@ from typing import Literal
 
 from app.core.logging_config import get_logger
 from app.core.upload_validation import SPREADSHEET_MIMES, validate_upload
+from app.core.resource_access import get_and_check_project_resource
 from app.dependencies import ALL_ROLES, CurrentUser, DbSession, OFFICE_AND_ABOVE, check_project_access
 from app.models.boq import BOQItem
 
@@ -166,10 +167,7 @@ def create_boq_item(section_id: uuid.UUID, body: BOQItemCreate, db: DbSession):
     dependencies=[OFFICE_AND_ABOVE],
 )
 def update_boq_item(item_id: uuid.UUID, body: BOQItemUpdate, db: DbSession, current_user: CurrentUser):
-    _item = db.get(BOQItem, item_id)
-    if not _item:
-        raise HTTPException(404, "BOQ item not found.")
-    check_project_access(db, current_user, _item.project_id)
+    get_and_check_project_resource(db, current_user, BOQItem, item_id, "BOQ item not found.")
     item = boq_service.update_item(db, item_id, body)
     return ApiSuccess(data=BOQItemRead.model_validate(item), message="BOQ item updated.")
 
@@ -198,10 +196,7 @@ def apply_item_to_all_site_lots(item_id: uuid.UUID, body: BOQItemUpdate, db: DbS
     """
     from app.models.lot import Lot
 
-    _item = db.get(BOQItem, item_id)
-    if not _item:
-        raise HTTPException(404, "BOQ item not found.")
-    check_project_access(db, current_user, _item.project_id)
+    get_and_check_project_resource(db, current_user, BOQItem, item_id, "BOQ item not found.")
 
     # Apply to the source item first
     updated = boq_service.update_item(db, item_id, body)
@@ -324,10 +319,7 @@ def apply_item_to_all_site_lots(item_id: uuid.UUID, body: BOQItemUpdate, db: DbS
     dependencies=[OFFICE_AND_ABOVE],
 )
 def delete_boq_item(item_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
-    _item = db.get(BOQItem, item_id)
-    if not _item:
-        raise HTTPException(404, "BOQ item not found.")
-    check_project_access(db, current_user, _item.project_id)
+    get_and_check_project_resource(db, current_user, BOQItem, item_id, "BOQ item not found.")
     boq_service.delete_item(db, item_id)
     return ApiSuccess(data=None, message="BOQ item deleted.")
 

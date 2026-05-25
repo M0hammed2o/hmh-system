@@ -13,6 +13,7 @@ from pydantic import BaseModel
 from app.core.config import settings
 from app.core.logging_config import get_logger
 from app.core.upload_validation import DOCUMENT_MIMES, validate_upload
+from app.core.resource_access import get_and_check_project_resource, secure_project_lookup
 from app.dependencies import ALL_ROLES, CurrentUser, DbSession, OFFICE_AND_ABOVE, check_project_access
 from app.models.delivery import Delivery
 
@@ -72,8 +73,7 @@ def create_delivery(
     dependencies=[ALL_ROLES],
 )
 def get_delivery(delivery_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
-    delivery = delivery_service.get_delivery(db, delivery_id)
-    check_project_access(db, current_user, delivery.project_id)
+    delivery = secure_project_lookup(delivery_service.get_delivery(db, delivery_id), db, current_user)
     return ApiSuccess(data=DeliveryRead.model_validate(delivery))
 
 
@@ -83,10 +83,7 @@ def get_delivery(delivery_id: uuid.UUID, db: DbSession, current_user: CurrentUse
     dependencies=[OFFICE_AND_ABOVE],
 )
 def update_delivery(delivery_id: uuid.UUID, body: DeliveryUpdate, db: DbSession, current_user: CurrentUser):
-    _d = db.get(Delivery, delivery_id)
-    if not _d:
-        raise HTTPException(404, "Delivery not found.")
-    check_project_access(db, current_user, _d.project_id)
+    get_and_check_project_resource(db, current_user, Delivery, delivery_id, "Delivery not found.")
     delivery = delivery_service.update_delivery(db, delivery_id, body)
     return ApiSuccess(data=DeliveryRead.model_validate(delivery), message="Delivery updated.")
 
@@ -104,10 +101,7 @@ class ReceiveStockBody(BaseModel):
     dependencies=[ALL_ROLES],
 )
 def receive_stock(delivery_id: uuid.UUID, body: ReceiveStockBody, db: DbSession, current_user: CurrentUser):
-    _d = db.get(Delivery, delivery_id)
-    if not _d:
-        raise HTTPException(404, "Delivery not found.")
-    check_project_access(db, current_user, _d.project_id)
+    get_and_check_project_resource(db, current_user, Delivery, delivery_id, "Delivery not found.")
     from app.services.delivery_service import receive_stock as _receive
     delivery = _receive(
         db, delivery_id,
@@ -518,10 +512,7 @@ def link_delivery_item(
     from app.models.enums import MovementType
     from sqlalchemy.orm import joinedload
 
-    delivery = db.get(Delivery, delivery_id)
-    if not delivery:
-        raise HTTPException(404, "Delivery not found.")
-    check_project_access(db, current_user, delivery.project_id)
+    get_and_check_project_resource(db, current_user, Delivery, delivery_id, "Delivery not found.")
 
     d_item = (
         db.query(DeliveryItem)
