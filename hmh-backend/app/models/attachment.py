@@ -6,7 +6,7 @@ from typing import Optional
 
 from sqlalchemy import BigInteger, Boolean, DateTime, Enum, ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
 from app.models.enums import AttachmentEntity, AttachmentType
@@ -41,6 +41,8 @@ class Attachment(Base):
     )
     uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    caption: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    uploaded_role: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
 
     def __repr__(self) -> str:
         return f"<Attachment {self.file_name} ({self.entity_type}/{self.entity_id})>"

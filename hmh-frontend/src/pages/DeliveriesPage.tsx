@@ -11,12 +11,19 @@ import { sitesApi, type Site } from "@/api/sites";
 import { deliveriesApi, type Delivery, type DeliveryItemCreate } from "@/api/deliveries";
 import { suppliersApi, type Supplier } from "@/api/suppliers";
 import { purchaseOrdersApi, type PurchaseOrder } from "@/api/purchaseOrders";
-import { AttachmentStrip } from "@/components/shared/AttachmentStrip";
+import { AttachmentGallery, type GalleryCategory } from "@/components/shared/AttachmentGallery";
 import { formatDateTime } from "@/lib/format";
 import { API_BASE } from "@/lib/constants";
 import client from "@/api/client";
 
 const SERVER_BASE = API_BASE.replace(/\/api\/v1\/?$/, "");
+
+const DELIVERY_PHOTO_CATEGORIES: GalleryCategory[] = [
+  { value: "ALL",               label: "All" },
+  { value: "DELIVERY_EVIDENCE", label: "Delivery" },
+  { value: "DELIVERY_NOTE",     label: "Delivery Note" },
+  { value: "PHOTO",             label: "Photo" },
+];
 function fileUrl(path: string | null | undefined): string | undefined {
   if (!path) return undefined;
   if (path.startsWith("http")) return path;
@@ -787,11 +794,12 @@ export default function DeliveriesPage() {
                 )}
 
                 {/* Attachments — photos and documents */}
-                <AttachmentStrip
+                <AttachmentGallery
                   entityType="DELIVERY"
                   entityId={selectedDelivery.id}
                   label="Photos & Documents"
-                  accept="image/*,application/pdf"
+                  defaultType="DELIVERY_EVIDENCE"
+                  categories={DELIVERY_PHOTO_CATEGORIES}
                 />
               </div>
             </div>

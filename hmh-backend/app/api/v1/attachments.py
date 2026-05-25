@@ -13,6 +13,7 @@ from fastapi.responses import FileResponse, RedirectResponse
 
 from app.core.exceptions import NotFoundError
 from app.dependencies import ALL_ROLES, CurrentUser, DbSession, WRITE_ROLES, check_project_access
+from app.models.enums import UserRole
 from app.schemas.attachment import AttachmentRead
 from app.schemas.common import ApiSuccess
 from app.services import attachment_service
@@ -69,6 +70,7 @@ async def upload_attachment(
     entity_type: str = Form(..., description="e.g. DELIVERY, PAYMENT, FUEL_LOG"),
     entity_id: str = Form(..., description="UUID of the linked entity"),
     attachment_type: str = Form(default="PHOTO", description="e.g. PHOTO, PDF, PROOF"),
+    caption: Optional[str] = Form(default=None, description="Optional short caption"),
 ):
     project_id = _entity_project_id(db, entity_type, uuid.UUID(entity_id))
     if project_id:
@@ -80,6 +82,8 @@ async def upload_attachment(
         entity_id=entity_id,
         attachment_type=attachment_type,
         uploaded_by_id=current_user.id,
+        caption=caption,
+        uploaded_role=current_user.role.value if current_user.role else None,
     )
     read = AttachmentRead.model_validate(record)
     read.uploaded_by_name = current_user.full_name if hasattr(current_user, "full_name") else None
@@ -96,11 +100,19 @@ def list_attachments(
     current_user: CurrentUser,
     entity_type: str = Query(...),
     entity_id: uuid.UUID = Query(...),
+    attachment_type: Optional[str] = Query(default=None, description="Filter by attachment type"),
+    limit: Optional[int] = Query(default=None, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
 ):
     project_id = _entity_project_id(db, entity_type, entity_id)
     if project_id:
         check_project_access(db, current_user, project_id)
-    records = attachment_service.list_attachments(db, entity_type, entity_id)
+    records = attachment_service.list_attachments(
+        db, entity_type, entity_id,
+        attachment_type=attachment_type,
+        limit=limit,
+        offset=offset,
+    )
 
     # Bulk-fetch user names for uploaded_by resolution
     from app.models.user import User
@@ -154,11 +166,22 @@ def download_attachment(attachment_id: uuid.UUID, db: DbSession, current_user: C
     dependencies=[WRITE_ROLES],
 )
 def delete_attachment(attachment_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
-    """Soft-delete an attachment (sets is_active=False)."""
+    """Soft-delete an attachment (sets is_active=False).
+
+    SITE_STAFF can only delete their own uploads; office/admin can delete any.
+    """
     record = attachment_service.get_attachment(db, attachment_id)
     project_id = _entity_project_id(db, record.entity_type.value, record.entity_id)
     if project_id:
         check_project_access(db, current_user, project_id)
-    record.is_active = False
-    db.commit()
+
+    # SITE_STAFF own-only delete enforcement
+    if current_user.role == UserRole.SITE_STAFF:
+        if record.uploaded_by != current_user.id:
+            raise HTTPException(
+                status_code=403,
+                detail="Site staff can only delete their own uploads.",
+            )
+
+    attachment_service.soft_delete_attachment(db, record, deleted_by_id=current_user.id)
     return ApiSuccess(data={"id": str(attachment_id)}, message="Attachment removed.")

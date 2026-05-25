@@ -411,6 +411,28 @@ def ensure_tables():
             END $$;
         """))
 
+    # migration 0027 — attachment enhancements: caption, uploaded_role, 4 new type enum values
+    with engine.begin() as conn:
+        conn.execute(_t("""
+            DO $$ BEGIN
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                    WHERE table_name='attachments' AND column_name='caption')
+                THEN ALTER TABLE attachments ADD COLUMN caption VARCHAR(500);
+                END IF;
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                    WHERE table_name='attachments' AND column_name='uploaded_role')
+                THEN ALTER TABLE attachments ADD COLUMN uploaded_role VARCHAR(50);
+                END IF;
+            END $$;
+        """))
+        for _val in ["BEFORE_PHOTO", "COMPLETION_PHOTO", "ISSUE_PHOTO", "DELIVERY_EVIDENCE"]:
+            conn.execute(_t(f"""
+                DO $$ BEGIN
+                    ALTER TYPE attachment_type_enum ADD VALUE IF NOT EXISTS '{_val}';
+                EXCEPTION WHEN others THEN NULL;
+                END $$;
+            """))
+
     yield
 
 

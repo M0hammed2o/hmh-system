@@ -54,6 +54,32 @@ def _save_via_storage(file: UploadFile, entity_type: str, entity_id: str) -> tup
     return stored, len(content)
 
 
+def _log_audit(
+    db: Session,
+    action: str,
+    entity_type: str,
+    entity_id: uuid.UUID,
+    attachment_id: uuid.UUID,
+    user_id: Optional[uuid.UUID],
+    description: str,
+) -> None:
+    """Write an audit log entry for attachment upload/delete events."""
+    try:
+        from app.models.audit import AuditEvent
+        db.add(AuditEvent(
+            actor_id=user_id,
+            action=action,
+            entity_type="attachments",
+            entity_id=attachment_id,
+            after_value={"entity_type": entity_type, "entity_id": str(entity_id)},
+            notes=description,
+            created_at=datetime.now(timezone.utc),
+        ))
+        db.flush()
+    except Exception:
+        pass  # Audit failures must never break the primary operation
+
+
 def save_attachment(
     db: Session,
     file: UploadFile,
@@ -61,6 +87,8 @@ def save_attachment(
     entity_id: str,
     attachment_type: str,
     uploaded_by_id: uuid.UUID,
+    caption: Optional[str] = None,
+    uploaded_role: Optional[str] = None,
 ) -> Attachment:
     # Validate enum values
     try:
@@ -114,8 +142,18 @@ def save_attachment(
         uploaded_by     = uploaded_by_id,
         uploaded_at     = datetime.now(timezone.utc),
         is_active       = True,
+        caption         = caption.strip() if caption else None,
+        uploaded_role   = uploaded_role,
     )
     db.add(record)
+    db.flush()
+
+    _log_audit(
+        db, "UPLOAD", entity_type, uuid.UUID(str(entity_id)),
+        record.id, uploaded_by_id,
+        f"Uploaded {record.file_name} ({attachment_type})",
+    )
+
     db.commit()
     db.refresh(record)
     return record
@@ -126,6 +164,9 @@ def list_attachments(
     entity_type: str,
     entity_id: uuid.UUID,
     active_only: bool = True,
+    attachment_type: Optional[str] = None,
+    limit: Optional[int] = None,
+    offset: int = 0,
 ) -> list[Attachment]:
     try:
         ent = AttachmentEntity(entity_type)
@@ -138,7 +179,21 @@ def list_attachments(
     )
     if active_only:
         q = q.filter(Attachment.is_active == True)  # noqa: E712
-    return q.order_by(Attachment.uploaded_at.desc()).all()
+    if attachment_type:
+        try:
+            att_enum = AttachmentType(attachment_type)
+            q = q.filter(Attachment.attachment_type == att_enum)
+        except ValueError:
+            pass
+
+    q = q.order_by(Attachment.uploaded_at.desc())
+
+    if offset:
+        q = q.offset(offset)
+    if limit:
+        q = q.limit(limit)
+
+    return q.all()
 
 
 def get_attachment(db: Session, attachment_id: uuid.UUID) -> Attachment:
@@ -146,6 +201,21 @@ def get_attachment(db: Session, attachment_id: uuid.UUID) -> Attachment:
     if not a:
         raise NotFoundError(f"Attachment {attachment_id} not found.")
     return a
+
+
+def soft_delete_attachment(
+    db: Session,
+    record: Attachment,
+    deleted_by_id: Optional[uuid.UUID] = None,
+) -> None:
+    """Soft-delete and write audit log."""
+    record.is_active = False
+    _log_audit(
+        db, "DELETE", record.entity_type.value, record.entity_id,
+        record.id, deleted_by_id,
+        f"Deleted attachment {record.file_name}",
+    )
+    db.commit()
 
 
 def resolve_abs_path(stored_path: str) -> str:

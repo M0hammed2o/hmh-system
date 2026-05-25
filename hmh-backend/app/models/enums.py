@@ -29,6 +29,7 @@ class RecordStatus(str, enum.Enum):
     APPROVED = "APPROVED"
     REJECTED = "REJECTED"
     SENT = "SENT"
+    SUPPLIER_CONFIRMED = "SUPPLIER_CONFIRMED"  # Phase 3I: supplier acknowledged the PO
     CONVERTED_TO_PO = "CONVERTED_TO_PO"
     ORDERED = "ORDERED"
     PARTIALLY_RECEIVED = "PARTIALLY_RECEIVED"
@@ -143,6 +144,18 @@ class AlertType(str, enum.Enum):
     PROJECT_OVER_BUDGET = "PROJECT_OVER_BUDGET"
     DAILY_SUMMARY = "DAILY_SUMMARY"
     WEEKLY_SUMMARY = "WEEKLY_SUMMARY"
+    # Phase 3Q.1 — operational notification types
+    MR_APPROVED                  = "MR_APPROVED"
+    PO_SENT_ALERT                = "PO_SENT_ALERT"
+    DELIVERY_RECEIVED_ALERT      = "DELIVERY_RECEIVED_ALERT"
+    WAREHOUSE_TRANSFER_COMPLETED = "WAREHOUSE_TRANSFER_COMPLETED"
+    INVOICE_CAPTURED             = "INVOICE_CAPTURED"
+    PAYMENT_COMPLETED            = "PAYMENT_COMPLETED"
+    PARTIAL_PAYMENT_RECORDED     = "PARTIAL_PAYMENT_RECORDED"
+    MILESTONE_COMPLETED_ALERT    = "MILESTONE_COMPLETED_ALERT"
+    MILESTONE_DELAYED_ALERT      = "MILESTONE_DELAYED_ALERT"
+    # Phase 3Q.3 — finance alerts
+    PAYMENT_DUE                  = "PAYMENT_DUE"  # approaching due date (scan-based)
 
 
 class NotificationChannel(str, enum.Enum):
@@ -210,9 +223,14 @@ class AttachmentType(str, enum.Enum):
     QUOTATION      = "QUOTATION"        # Phase 3K: supplier quotation
     PO_DOCUMENT    = "PO_DOCUMENT"      # Phase 3K: purchase order document
     # Site/progress
-    PROGRESS_PHOTO = "PROGRESS_PHOTO"   # Phase 3K: construction progress shot
-    PROOF_OF_WORK  = "PROOF_OF_WORK"    # Phase 3K: work completion evidence
-    FUEL_SLIP      = "FUEL_SLIP"        # Phase 3K: fuel receipt/pump photo
+    PROGRESS_PHOTO    = "PROGRESS_PHOTO"    # Phase 3K: construction progress shot
+    PROOF_OF_WORK     = "PROOF_OF_WORK"     # Phase 3K: work completion evidence
+    FUEL_SLIP         = "FUEL_SLIP"         # Phase 3K: fuel receipt/pump photo
+    # Phase FINAL-2: milestone/delivery categorised photos
+    BEFORE_PHOTO      = "BEFORE_PHOTO"      # before-work photo
+    COMPLETION_PHOTO  = "COMPLETION_PHOTO"  # completion evidence
+    ISSUE_PHOTO       = "ISSUE_PHOTO"       # defect/issue photo
+    DELIVERY_EVIDENCE = "DELIVERY_EVIDENCE" # delivery verification photo
 
 
 class EmailStatus(str, enum.Enum):

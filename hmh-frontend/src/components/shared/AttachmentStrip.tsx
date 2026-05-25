@@ -6,11 +6,11 @@
  * Supports:
  *   - Multiple image uploads (sequential, with per-file progress)
  *   - Multiple PDF/document uploads
- *   - Thumbnail grid with lightbox image preview
+ *   - Thumbnail grid with lightbox image preview (prev/next navigation)
  *   - PDF/doc download links
  *   - Soft-delete with optimistic UI
  *   - Optional category selector on upload
- *   - uploaded_by_name display on hover
+ *   - uploaded_by_name and caption display
  *   - READ_ONLY enforcement (no upload/delete)
  *   - SITE_STAFF: upload-only (can delete own uploads during same session)
  *   - compact mode for inline/table use
@@ -23,6 +23,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Camera, FileText, RefreshCw, X as XIcon, Upload, Eye, User,
+  ChevronLeft, ChevronRight,
 } from "lucide-react";
 import {
   attachmentsApi,
@@ -36,12 +37,35 @@ import { cn } from "@/lib/utils";
 
 // ── Lightbox ──────────────────────────────────────────────────────────────────
 
-function Lightbox({ att, onClose }: { att: Attachment; onClose: () => void }) {
+interface LightboxProps {
+  images:    Attachment[];
+  index:     number;
+  onClose:   () => void;
+  onChange:  (idx: number) => void;
+}
+
+function Lightbox({ images, index, onClose, onChange }: LightboxProps) {
+  const att = images[index];
+  const hasPrev = index > 0;
+  const hasNext = index < images.length - 1;
+
+  // Keyboard navigation
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape")     onClose();
+      if (e.key === "ArrowLeft"  && hasPrev) onChange(index - 1);
+      if (e.key === "ArrowRight" && hasNext) onChange(index + 1);
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [index, hasPrev, hasNext, onClose, onChange]);
+
   return (
     <div
       className="fixed inset-0 z-[200] flex items-center justify-center bg-black/88 backdrop-blur-sm"
       onClick={onClose}
     >
+      {/* Close */}
       <button
         className="absolute top-4 right-4 p-2 rounded-full bg-black/50 text-white/80 hover:text-white"
         onClick={onClose}
@@ -49,14 +73,46 @@ function Lightbox({ att, onClose }: { att: Attachment; onClose: () => void }) {
         <XIcon className="w-5 h-5" />
       </button>
 
+      {/* Prev */}
+      {hasPrev && (
+        <button
+          className="absolute left-4 top-1/2 -translate-y-1/2 p-2 rounded-full bg-black/50 text-white/80 hover:text-white"
+          onClick={e => { e.stopPropagation(); onChange(index - 1); }}
+        >
+          <ChevronLeft className="w-6 h-6" />
+        </button>
+      )}
+
+      {/* Next */}
+      {hasNext && (
+        <button
+          className="absolute right-4 top-1/2 -translate-y-1/2 p-2 rounded-full bg-black/50 text-white/80 hover:text-white"
+          onClick={e => { e.stopPropagation(); onChange(index + 1); }}
+        >
+          <ChevronRight className="w-6 h-6" />
+        </button>
+      )}
+
       <img
         src={att.download_url}
-        alt={att.file_name}
+        alt={att.caption ?? att.file_name}
         className="max-h-[90vh] max-w-[90vw] rounded-xl shadow-2xl object-contain"
         onClick={e => e.stopPropagation()}
       />
 
-      <div className="absolute bottom-4 left-0 right-0 flex flex-col items-center gap-1" onClick={e => e.stopPropagation()}>
+      <div
+        className="absolute bottom-4 left-0 right-0 flex flex-col items-center gap-1"
+        onClick={e => e.stopPropagation()}
+      >
+        {/* Counter */}
+        {images.length > 1 && (
+          <p className="text-white/50 text-xs">{index + 1} / {images.length}</p>
+        )}
+        {/* Caption */}
+        {att.caption && (
+          <p className="text-white/90 text-sm font-medium">{att.caption}</p>
+        )}
+        {/* Uploader + date */}
         {att.uploaded_by_name && (
           <p className="text-white/60 text-xs flex items-center gap-1">
             <User className="w-3 h-3" />
@@ -78,16 +134,15 @@ function Lightbox({ att, onClose }: { att: Attachment; onClose: () => void }) {
 // ── Single attachment thumbnail ───────────────────────────────────────────────
 
 function AttachmentThumb({
-  att, canDelete, compact, onDelete,
+  att, canDelete, compact, onDelete, onOpenLightbox,
 }: {
-  att: Attachment;
-  canDelete: boolean;
-  compact: boolean;
-  onDelete: (id: string) => void;
+  att:             Attachment;
+  canDelete:       boolean;
+  compact:         boolean;
+  onDelete:        (id: string) => void;
+  onOpenLightbox?: () => void;
 }) {
   const [deleting, setDeleting] = useState(false);
-  const [lightbox, setLightbox] = useState(false);
-
   const size = compact ? "h-14 w-14" : "h-20 w-20";
 
   const handleDelete = async (e: React.MouseEvent) => {
@@ -105,86 +160,84 @@ function AttachmentThumb({
   const typeLabel = ATTACHMENT_TYPE_LABELS[att.attachment_type] ?? att.attachment_type;
 
   return (
-    <>
-      <div
-        className="relative group shrink-0"
-        title={`${att.file_name} · ${typeLabel}${att.uploaded_by_name ? ` · ${att.uploaded_by_name}` : ""}`}
-      >
-        {att.is_image ? (
-          <img
-            src={att.download_url}
-            alt={att.file_name}
-            className={cn(
-              "rounded-lg object-cover border border-border cursor-zoom-in hover:opacity-85 transition-opacity",
-              size
-            )}
-            onClick={() => setLightbox(true)}
-            onError={e => { (e.target as HTMLImageElement).style.display = "none"; }}
-          />
-        ) : (
-          <a
-            href={att.download_url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className={cn(
-              "rounded-lg border border-border bg-muted/50 flex flex-col items-center justify-center",
-              "hover:bg-muted transition-colors cursor-pointer gap-1",
-              size
-            )}
-          >
-            <FileText className="w-6 h-6 text-muted-foreground" />
-            <span className="text-[9px] text-muted-foreground text-center leading-tight px-1 truncate max-w-full">
-              {att.file_name.split(".").pop()?.toUpperCase() ?? "FILE"}
-            </span>
-          </a>
-        )}
-
-        {/* Size badge */}
-        <span className="absolute bottom-0.5 left-0.5 bg-black/50 text-white rounded text-[8px] px-1 py-0.5 leading-none select-none">
-          {att.file_size_display}
-        </span>
-
-        {/* Type badge (non-compact only) */}
-        {!compact && att.attachment_type !== "PHOTO" && (
-          <span className="absolute top-0.5 left-0.5 bg-primary/80 text-white rounded text-[8px] px-1 py-0.5 leading-none select-none max-w-[90%] truncate">
-            {typeLabel.split(" ")[0]}
+    <div
+      className="relative group shrink-0"
+      title={`${att.file_name} · ${typeLabel}${att.uploaded_by_name ? ` · ${att.uploaded_by_name}` : ""}${att.caption ? ` · ${att.caption}` : ""}`}
+    >
+      {att.is_image ? (
+        <img
+          src={att.download_url}
+          alt={att.caption ?? att.file_name}
+          loading="lazy"
+          decoding="async"
+          className={cn(
+            "rounded-lg object-cover border border-border cursor-zoom-in hover:opacity-85 transition-opacity",
+            size
+          )}
+          onClick={onOpenLightbox}
+          onError={e => { (e.target as HTMLImageElement).style.display = "none"; }}
+        />
+      ) : (
+        <a
+          href={att.download_url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className={cn(
+            "rounded-lg border border-border bg-muted/50 flex flex-col items-center justify-center",
+            "hover:bg-muted transition-colors cursor-pointer gap-1",
+            size
+          )}
+        >
+          <FileText className="w-6 h-6 text-muted-foreground" />
+          <span className="text-[9px] text-muted-foreground text-center leading-tight px-1 truncate max-w-full">
+            {att.file_name.split(".").pop()?.toUpperCase() ?? "FILE"}
           </span>
-        )}
+        </a>
+      )}
 
-        {/* Delete button */}
-        {canDelete && (
-          <button
-            onClick={handleDelete}
-            disabled={deleting}
-            className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-destructive text-white
-                       flex items-center justify-center opacity-0 group-hover:opacity-100
-                       transition-opacity disabled:opacity-50 z-10"
-            title="Remove"
-          >
-            {deleting
-              ? <RefreshCw className="w-2.5 h-2.5 animate-spin" />
-              : <XIcon className="w-2.5 h-2.5" />}
-          </button>
-        )}
+      {/* Size badge */}
+      <span className="absolute bottom-0.5 left-0.5 bg-black/50 text-white rounded text-[8px] px-1 py-0.5 leading-none select-none">
+        {att.file_size_display}
+      </span>
 
-        {/* View overlay on hover for images */}
-        {att.is_image && (
-          <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none rounded-lg">
-            <Eye className="w-5 h-5 text-white drop-shadow-lg" />
-          </div>
-        )}
-      </div>
+      {/* Type badge (non-compact only) */}
+      {!compact && att.attachment_type !== "PHOTO" && (
+        <span className="absolute top-0.5 left-0.5 bg-primary/80 text-white rounded text-[8px] px-1 py-0.5 leading-none select-none max-w-[90%] truncate">
+          {typeLabel.split(" ")[0]}
+        </span>
+      )}
 
-      {lightbox && <Lightbox att={att} onClose={() => setLightbox(false)} />}
-    </>
+      {/* Delete button */}
+      {canDelete && (
+        <button
+          onClick={handleDelete}
+          disabled={deleting}
+          className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-destructive text-white
+                     flex items-center justify-center opacity-0 group-hover:opacity-100
+                     transition-opacity disabled:opacity-50 z-10"
+          title="Remove"
+        >
+          {deleting
+            ? <RefreshCw className="w-2.5 h-2.5 animate-spin" />
+            : <XIcon className="w-2.5 h-2.5" />}
+        </button>
+      )}
+
+      {/* View overlay on hover for images */}
+      {att.is_image && (
+        <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none rounded-lg">
+          <Eye className="w-5 h-5 text-white drop-shadow-lg" />
+        </div>
+      )}
+    </div>
   );
 }
 
 // ── Upload progress indicator ─────────────────────────────────────────────────
 
 interface UploadState {
-  name: string;
-  done: boolean;
+  name:  string;
+  done:  boolean;
   error: boolean;
 }
 
@@ -226,6 +279,7 @@ export function AttachmentStrip({
   const [loading,     setLoading]     = useState(false);
   const [uploads,     setUploads]     = useState<UploadState[]>([]);
   const [selType,     setSelType]     = useState<AttachmentType>(attachmentType);
+  const [lightboxIdx, setLightboxIdx] = useState<number | null>(null);
 
   const load = useCallback(async () => {
     if (!entityId) return;
@@ -269,6 +323,9 @@ export function AttachmentStrip({
 
   const isUploading = uploads.some(u => !u.done && !u.error);
   const thumbSize   = compact ? "h-14 w-14" : "h-20 w-20";
+
+  // Only images participate in the lightbox navigation
+  const imageAttachments = attachments.filter(a => a.is_image);
 
   return (
     <div className={cn("space-y-2", className)}>
@@ -322,15 +379,19 @@ export function AttachmentStrip({
         </div>
       ) : (
         <div className="flex items-start gap-2 flex-wrap">
-          {attachments.map(att => (
-            <AttachmentThumb
-              key={att.id}
-              att={att}
-              canDelete={canDelete}
-              compact={compact}
-              onDelete={handleDelete}
-            />
-          ))}
+          {attachments.map(att => {
+            const imgIdx = att.is_image ? imageAttachments.indexOf(att) : -1;
+            return (
+              <AttachmentThumb
+                key={att.id}
+                att={att}
+                canDelete={canDelete}
+                compact={compact}
+                onDelete={handleDelete}
+                onOpenLightbox={att.is_image ? () => setLightboxIdx(imgIdx) : undefined}
+              />
+            );
+          })}
 
           {/* Upload button */}
           {canUpload && !atMax && (
@@ -368,6 +429,16 @@ export function AttachmentStrip({
             </p>
           )}
         </div>
+      )}
+
+      {/* Lightbox (managed at strip level for proper prev/next) */}
+      {lightboxIdx !== null && imageAttachments.length > 0 && (
+        <Lightbox
+          images={imageAttachments}
+          index={lightboxIdx}
+          onClose={() => setLightboxIdx(null)}
+          onChange={setLightboxIdx}
+        />
       )}
 
       <input

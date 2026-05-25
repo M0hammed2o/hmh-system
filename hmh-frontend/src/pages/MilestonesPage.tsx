@@ -18,7 +18,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PageHeader } from "@/components/shared/PageHeader";
-import { AttachmentStrip } from "@/components/shared/AttachmentStrip";
+import { AttachmentGallery, type GalleryCategory } from "@/components/shared/AttachmentGallery";
 import { projectsApi, type Project } from "@/api/projects";
 import { sitesApi, type Site } from "@/api/sites";
 import { lotsApi, type Lot } from "@/api/lots";
@@ -44,6 +44,14 @@ function fmtDate(iso: string | null | undefined): string {
   if (!iso) return "—";
   return new Date(iso).toLocaleDateString("en-ZA", { day: "numeric", month: "short", year: "numeric" });
 }
+
+const MILESTONE_PHOTO_CATEGORIES: GalleryCategory[] = [
+  { value: "ALL",              label: "All" },
+  { value: "BEFORE_PHOTO",     label: "Before" },
+  { value: "PROGRESS_PHOTO",   label: "Progress" },
+  { value: "COMPLETION_PHOTO", label: "Completion" },
+  { value: "ISSUE_PHOTO",      label: "Issues" },
+];
 
 const STATUS_META: Record<StageStatus, { label: string; icon: React.ReactNode; color: string; bg: string }> = {
   NOT_STARTED:         { label: "Not started",    icon: <Circle className="w-4 h-4" />,          color: "text-muted-foreground", bg: "bg-muted/40" },
@@ -556,21 +564,17 @@ function MilestoneCard({
             ) : null;
           })()}
 
-          {/* Progress photos — unified AttachmentStrip (Phase 3J finalization) */}
+          {/* Progress photos — AttachmentGallery with category chips */}
           <div>
-            <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2 flex items-center gap-1.5">
-              <Camera className="w-3.5 h-3.5" />
-              Progress Photos
-            </h4>
             {status ? (
-              <AttachmentStrip
+              <AttachmentGallery
                 entityType="STAGE_STATUS"
                 entityId={status.id}
-                attachmentType="PROGRESS_PHOTO"
-                accept="image/*"
+                label="Photos"
+                defaultType="PROGRESS_PHOTO"
                 canWrite={canWrite}
-                showTypeSelector={false}
-                label=""
+                showCaptionInput
+                categories={MILESTONE_PHOTO_CATEGORIES}
               />
             ) : (
               <p className="text-xs text-muted-foreground">Start the milestone to upload photos.</p>

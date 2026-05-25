@@ -23,6 +23,8 @@ class AttachmentRead(BaseModel):
     uploaded_by: Optional[uuid.UUID] = None
     uploaded_at: datetime
     is_active: bool
+    caption: Optional[str] = None
+    uploaded_role: Optional[str] = None
     # Populated at API layer via user join — not a DB column
     uploaded_by_name: Optional[str] = None
 
@@ -58,3 +60,5 @@ class AttachmentCreate(BaseModel):
     mime_type: str
     file_size_bytes: Optional[int] = None
     attachment_type: AttachmentType
+    caption: Optional[str] = None
+    uploaded_role: Optional[str] = None
