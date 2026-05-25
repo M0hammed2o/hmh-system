@@ -7,6 +7,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
+from app.core.resource_access import get_and_check_project_resource, secure_project_lookup
 from app.dependencies import ALL_ROLES, CurrentUser, DbSession, OFFICE_AND_ABOVE, check_project_access
 from app.models.purchase_order import PurchaseOrder
 from app.schemas.common import ApiSuccess
@@ -167,8 +168,7 @@ def capture_external_purchase_order(
     dependencies=[ALL_ROLES],
 )
 def get_purchase_order(po_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
-    po = po_service.get_po(db, po_id)
-    check_project_access(db, current_user, po.project_id)
+    po = secure_project_lookup(po_service.get_po(db, po_id), db, current_user)
     return ApiSuccess(data=PurchaseOrderRead.model_validate(po))
 
 
@@ -178,10 +178,7 @@ def get_purchase_order(po_id: uuid.UUID, db: DbSession, current_user: CurrentUse
     dependencies=[OFFICE_AND_ABOVE],
 )
 def update_purchase_order(po_id: uuid.UUID, body: PurchaseOrderUpdate, db: DbSession, current_user: CurrentUser):
-    _po = db.get(PurchaseOrder, po_id)
-    if not _po:
-        raise HTTPException(404, "Purchase order not found.")
-    check_project_access(db, current_user, _po.project_id)
+    get_and_check_project_resource(db, current_user, PurchaseOrder, po_id, "Purchase order not found.")
     po = po_service.update_po(db, po_id, body)
     return ApiSuccess(data=PurchaseOrderRead.model_validate(po), message="PO updated.")
 
@@ -193,20 +190,14 @@ def update_purchase_order(po_id: uuid.UUID, body: PurchaseOrderUpdate, db: DbSes
     dependencies=[OFFICE_AND_ABOVE],
 )
 def add_po_item(po_id: uuid.UUID, body: POItemCreate, db: DbSession, current_user: CurrentUser):
-    _po = db.get(PurchaseOrder, po_id)
-    if not _po:
-        raise HTTPException(404, "Purchase order not found.")
-    check_project_access(db, current_user, _po.project_id)
+    get_and_check_project_resource(db, current_user, PurchaseOrder, po_id, "Purchase order not found.")
     item = po_service.add_po_item(db, po_id, body)
     return ApiSuccess(data=POItemRead.model_validate(item), message="Item added to PO.")
 
 
 @po_router.post("/{po_id}/approve", response_model=ApiSuccess[PurchaseOrderRead], dependencies=[OFFICE_AND_ABOVE])
 def approve_po(po_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
-    _po = db.get(PurchaseOrder, po_id)
-    if not _po:
-        raise HTTPException(404, "Purchase order not found.")
-    check_project_access(db, current_user, _po.project_id)
+    get_and_check_project_resource(db, current_user, PurchaseOrder, po_id, "Purchase order not found.")
     po = po_service.approve_po(db, po_id, current_user.id)
     return ApiSuccess(data=PurchaseOrderRead.model_validate(po), message="PO approved.")
 
@@ -217,17 +208,13 @@ def prepare_po_email_draft(po_id: uuid.UUID, db: DbSession, current_user: Curren
     Generate the PO confirmation email body and store it as a draft (status=queued)
     in po_email_logs WITHOUT sending.  Office staff can then view, edit, and send.
     """
-    from app.models.purchase_order import PurchaseOrder, PoEmailLog
+    from app.models.purchase_order import PoEmailLog
     from app.models.enums import EmailStatus
     from app.models.supplier import Supplier
     from app.services.email_service import build_po_email_body
     from datetime import datetime, timezone
-    from fastapi import HTTPException
 
-    po = db.get(PurchaseOrder, po_id)
-    if not po:
-        raise HTTPException(404, "PO not found.")
-    check_project_access(db, current_user, po.project_id)
+    po = get_and_check_project_resource(db, current_user, PurchaseOrder, po_id, "Purchase order not found.")
 
     supplier = db.get(Supplier, po.supplier_id) if po.supplier_id else None
     to_email = supplier.email if supplier else ""
@@ -278,14 +265,9 @@ def update_po_email_draft(po_id: uuid.UUID, db: DbSession, current_user: Current
                           subject: str | None = None, body_html: str | None = None,
                           to_email: str | None = None):
     """Update the unsent draft body/subject/recipient before sending."""
-    _po = db.get(PurchaseOrder, po_id)
-    if not _po:
-        raise HTTPException(404, "Purchase order not found.")
-    check_project_access(db, current_user, _po.project_id)
+    get_and_check_project_resource(db, current_user, PurchaseOrder, po_id, "Purchase order not found.")
     from app.models.purchase_order import PoEmailLog
     from app.models.enums import EmailStatus
-    from fastapi import HTTPException
-    from pydantic import BaseModel
 
     draft = (
         db.query(PoEmailLog)
@@ -304,10 +286,7 @@ def update_po_email_draft(po_id: uuid.UUID, db: DbSession, current_user: Current
 @po_router.get("/{po_id}/prepare-email", response_model=ApiSuccess[dict], dependencies=[OFFICE_AND_ABOVE])
 def get_po_email_draft(po_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
     """Return the current unsent draft for the PO email."""
-    _po = db.get(PurchaseOrder, po_id)
-    if not _po:
-        raise HTTPException(404, "Purchase order not found.")
-    check_project_access(db, current_user, _po.project_id)
+    get_and_check_project_resource(db, current_user, PurchaseOrder, po_id, "Purchase order not found.")
     from app.models.purchase_order import PoEmailLog
     from app.models.enums import EmailStatus
 
@@ -330,10 +309,7 @@ def get_po_email_draft(po_id: uuid.UUID, db: DbSession, current_user: CurrentUse
 
 @po_router.post("/{po_id}/send-email", response_model=ApiSuccess[dict], dependencies=[OFFICE_AND_ABOVE])
 def send_po_email(po_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
-    _po = db.get(PurchaseOrder, po_id)
-    if not _po:
-        raise HTTPException(404, "Purchase order not found.")
-    check_project_access(db, current_user, _po.project_id)
+    get_and_check_project_resource(db, current_user, PurchaseOrder, po_id, "Purchase order not found.")
     po, log = po_service.send_po_email(db, po_id, current_user.id)
     return ApiSuccess(
         data={
@@ -354,14 +330,9 @@ def send_po_email(po_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
 )
 def mark_po_sent(po_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
     """Manually mark a PO as sent to the supplier (for non-email channels)."""
-    from app.models.purchase_order import PurchaseOrder
     from app.models.enums import RecordStatus
-    from fastapi import HTTPException
 
-    po = db.get(PurchaseOrder, po_id)
-    if not po:
-        raise HTTPException(404, "PO not found.")
-    check_project_access(db, current_user, po.project_id)
+    po = get_and_check_project_resource(db, current_user, PurchaseOrder, po_id, "Purchase order not found.")
     if po.status not in (RecordStatus.APPROVED, RecordStatus.SENT):
         raise HTTPException(422, "Only APPROVED or SENT POs can be marked as sent.")
     po.status   = RecordStatus.SENT
@@ -382,10 +353,7 @@ def mark_po_sent(po_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
 
 @po_router.get("/{po_id}/outstanding", response_model=ApiSuccess[dict], dependencies=[ALL_ROLES])
 def get_po_outstanding(po_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
-    _po = db.get(PurchaseOrder, po_id)
-    if not _po:
-        raise HTTPException(404, "Purchase order not found.")
-    check_project_access(db, current_user, _po.project_id)
+    get_and_check_project_resource(db, current_user, PurchaseOrder, po_id, "Purchase order not found.")
     from app.services.delivery_service import get_po_outstanding as _get
     result = _get(db, po_id)
     return ApiSuccess(data=result)
@@ -399,10 +367,7 @@ def get_po_activity(po_id: uuid.UUID, db: DbSession, current_user: CurrentUser, 
     from app.models.enums import AttachmentEntity
     from app.core.storage import public_url as _pub
 
-    po = db.get(PurchaseOrder, po_id)
-    if not po:
-        raise HTTPException(404, "Purchase order not found.")
-    check_project_access(db, current_user, po.project_id)
+    get_and_check_project_resource(db, current_user, PurchaseOrder, po_id, "Purchase order not found.")
 
     audit_rows = (
         db.query(AuditEvent)
@@ -461,10 +426,7 @@ def get_po_activity(po_id: uuid.UUID, db: DbSession, current_user: CurrentUser, 
 )
 def confirm_supplier(po_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
     """Transition a SENT PO to SUPPLIER_CONFIRMED (supplier acknowledged the order)."""
-    _po = db.get(PurchaseOrder, po_id)
-    if not _po:
-        raise HTTPException(404, "Purchase order not found.")
-    check_project_access(db, current_user, _po.project_id)
+    get_and_check_project_resource(db, current_user, PurchaseOrder, po_id, "Purchase order not found.")
     from app.services.po_service import confirm_supplier as _confirm
     po = _confirm(db, po_id, current_user["id"])
     return ApiSuccess(data=PurchaseOrderRead.model_validate(po), message="Supplier confirmation recorded.")
@@ -473,10 +435,7 @@ def confirm_supplier(po_id: uuid.UUID, db: DbSession, current_user: CurrentUser)
 @po_router.get("/{po_id}/linked-docs", response_model=ApiSuccess[dict], dependencies=[ALL_ROLES])
 def get_po_linked_docs(po_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
     """Return all linked documents for a PO: source MR, deliveries, invoices + payment totals."""
-    _po = db.get(PurchaseOrder, po_id)
-    if not _po:
-        raise HTTPException(404, "Purchase order not found.")
-    check_project_access(db, current_user, _po.project_id)
+    get_and_check_project_resource(db, current_user, PurchaseOrder, po_id, "Purchase order not found.")
     from app.services.po_service import get_po_linked_docs as _linked
     data = _linked(db, po_id)
     return ApiSuccess(data=data)
@@ -484,10 +443,7 @@ def get_po_linked_docs(po_id: uuid.UUID, db: DbSession, current_user: CurrentUse
 
 @po_router.get("/{po_id}/email-log", response_model=ApiSuccess[list[dict]], dependencies=[OFFICE_AND_ABOVE])
 def get_email_log(po_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
-    _po = db.get(PurchaseOrder, po_id)
-    if not _po:
-        raise HTTPException(404, "Purchase order not found.")
-    check_project_access(db, current_user, _po.project_id)
+    get_and_check_project_resource(db, current_user, PurchaseOrder, po_id, "Purchase order not found.")
     from app.models.purchase_order import PoEmailLog
     logs = db.query(PoEmailLog).filter(PoEmailLog.purchase_order_id == po_id).order_by(PoEmailLog.created_at.desc()).all()
     return ApiSuccess(data=[
