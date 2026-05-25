@@ -1,11 +1,11 @@
 """Stage master and project stage status models."""
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Optional
 
 from sqlalchemy import (
-    Boolean, DateTime, Enum, ForeignKey, Integer, SmallInteger, String, Text, UniqueConstraint,
+    Boolean, Date, DateTime, Enum, ForeignKey, Integer, SmallInteger, String, Text, UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -100,6 +100,8 @@ class ProjectStageStatus(TimestampMixin, Base):
     completed_by_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     progress_pct:      Mapped[int]           = mapped_column(SmallInteger, nullable=False, default=0)
     blocked_reason:    Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Phase FINAL-1: planned completion date for overdue tracking
+    planned_completion_date: Mapped[Optional[date]] = mapped_column(Date(), nullable=True)
 
     updated_by: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True),

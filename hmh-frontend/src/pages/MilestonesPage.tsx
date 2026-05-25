@@ -9,10 +9,11 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
   CheckCircle2, Circle, Clock, AlertTriangle, Camera,
   ChevronDown, ChevronUp, Plus, X as XIcon,
-  RefreshCw, Package, HardHat, Ban, PlayCircle, History,
+  RefreshCw, Package, HardHat, Ban, PlayCircle, History, CalendarClock,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -128,6 +129,8 @@ function PhotoStrip({
           <img
             src={p.url}
             alt={p.file_name}
+            loading="lazy"
+            decoding="async"
             className="h-20 w-20 rounded-lg object-cover border border-border cursor-zoom-in hover:opacity-85 transition-opacity"
             onClick={() => setLightbox(p.url)}
             onError={e => { (e.target as HTMLImageElement).style.display = "none"; }}
@@ -350,10 +353,11 @@ function MilestoneCard({
     <>
     <div className={cn(
       "rounded-2xl border overflow-hidden transition-colors",
-      isDone    ? "border-green-200 bg-green-50/40 dark:border-green-900/50 dark:bg-green-950/10"
+      isDone      ? "border-green-200 bg-green-50/40 dark:border-green-900/50 dark:bg-green-950/10"
       : isBlocked ? "border-destructive/30 bg-destructive/5"
+      : status?.is_overdue ? "border-orange-300 bg-orange-50/40 dark:border-orange-800/50 dark:bg-orange-950/10"
       : status?.status === "IN_PROGRESS" || status?.status === "AWAITING_INSPECTION"
-                ? "border-blue-200 bg-blue-50/30 dark:border-blue-900/50 dark:bg-blue-950/10"
+                  ? "border-blue-200 bg-blue-50/30 dark:border-blue-900/50 dark:bg-blue-950/10"
       : "border-border bg-card"
     )}>
       {/* Card header — always visible */}
@@ -406,6 +410,17 @@ function MilestoneCard({
               </div>
               <span className="text-[10px] text-muted-foreground">{status.progress_pct}%</span>
             </div>
+          )}
+          {/* Planned date + overdue indicator */}
+          {status?.planned_completion_date && !isDone && (
+            <p className={cn(
+              "text-[10px] mt-0.5 flex items-center gap-1",
+              status.is_overdue ? "text-destructive font-semibold" : "text-muted-foreground"
+            )}>
+              <CalendarClock className="w-3 h-3 shrink-0" />
+              {status.is_overdue ? "OVERDUE · " : "Due "}
+              {fmtDate(status.planned_completion_date)}
+            </p>
           )}
         </div>
 
@@ -773,8 +788,27 @@ function BlockModal({
 
 // ── Main page ─────────────────────────────────────────────────────────────────
 
+type MilestoneFilter = "all" | "active" | "blocked" | "completed" | "overdue";
+
+const FILTER_OPTIONS: { value: MilestoneFilter; label: string }[] = [
+  { value: "all",       label: "All"       },
+  { value: "active",    label: "Active"    },
+  { value: "blocked",   label: "Blocked"   },
+  { value: "overdue",   label: "Overdue"   },
+  { value: "completed", label: "Completed" },
+];
+
 export default function MilestonesPage() {
   const canWrite = localStorage.getItem(ROLE_KEY) !== "READ_ONLY";
+  const [searchParams, setSearchParams] = useSearchParams();
+  const activeFilter = (searchParams.get("filter") as MilestoneFilter) ?? "all";
+
+  const setFilter = (f: MilestoneFilter) => {
+    const next = new URLSearchParams(searchParams);
+    if (f === "all") next.delete("filter");
+    else next.set("filter", f);
+    setSearchParams(next, { replace: true });
+  };
 
   const [projects,  setProjects]  = useState<Project[]>([]);
   const [sites,     setSites]     = useState<Site[]>([]);
@@ -880,7 +914,19 @@ export default function MilestonesPage() {
 
   const done    = milestones.filter(m => m.status?.status === "COMPLETED" || m.status?.status === "CERTIFIED").length;
   const active  = milestones.filter(m => m.status?.status === "IN_PROGRESS" || m.status?.status === "AWAITING_INSPECTION").length;
+  const blocked = milestones.filter(m => m.status?.status === "BLOCKED").length;
+  const overdue = milestones.filter(m => m.status?.is_overdue === true).length;
   const pending = milestones.filter(m => !m.status || m.status.status === "NOT_STARTED").length;
+
+  const filteredMilestones = milestones.filter(m => {
+    switch (activeFilter) {
+      case "active":    return m.status?.status === "IN_PROGRESS" || m.status?.status === "AWAITING_INSPECTION";
+      case "blocked":   return m.status?.status === "BLOCKED";
+      case "completed": return m.status?.status === "COMPLETED" || m.status?.status === "CERTIFIED";
+      case "overdue":   return m.status?.is_overdue === true;
+      default:          return true;
+    }
+  });
 
   return (
     <div className="space-y-5 animate-fade-in">
@@ -942,10 +988,11 @@ export default function MilestonesPage() {
 
       {/* Summary KPIs */}
       {!loading && milestones.length > 0 && (
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid grid-cols-4 gap-3">
           {[
             { label: "Completed", value: done,    color: "text-green-600" },
             { label: "Active",    value: active,  color: "text-blue-600"  },
+            { label: "Overdue",   value: overdue, color: overdue > 0 ? "text-destructive" : "text-muted-foreground" },
             { label: "Pending",   value: pending, color: "text-muted-foreground" },
           ].map(k => (
             <div key={k.label} className="bg-card border border-border rounded-xl p-3 text-center">
@@ -969,6 +1016,42 @@ export default function MilestonesPage() {
               style={{ width: `${milestones.length > 0 ? (done / milestones.length) * 100 : 0}%` }}
             />
           </div>
+        </div>
+      )}
+
+      {/* Filter chips */}
+      {!loading && milestones.length > 0 && (
+        <div className="flex flex-wrap gap-2">
+          {FILTER_OPTIONS.map(f => {
+            const count =
+              f.value === "all"       ? milestones.length :
+              f.value === "active"    ? active :
+              f.value === "blocked"   ? blocked :
+              f.value === "overdue"   ? overdue :
+              f.value === "completed" ? done : 0;
+            return (
+              <button
+                key={f.value}
+                onClick={() => setFilter(f.value)}
+                className={cn(
+                  "inline-flex items-center gap-1.5 h-8 px-3 rounded-full text-xs font-medium border transition-colors",
+                  activeFilter === f.value
+                    ? f.value === "overdue" && overdue > 0
+                      ? "bg-destructive text-white border-destructive"
+                      : "bg-primary text-primary-foreground border-primary"
+                    : "bg-background text-muted-foreground border-border hover:border-primary hover:text-foreground"
+                )}
+              >
+                {f.label}
+                <span className={cn(
+                  "inline-flex items-center justify-center w-4 h-4 rounded-full text-[10px]",
+                  activeFilter === f.value ? "bg-white/20" : "bg-muted"
+                )}>
+                  {count}
+                </span>
+              </button>
+            );
+          })}
         </div>
       )}
 
@@ -996,9 +1079,13 @@ export default function MilestonesPage() {
             </Button>
           )}
         </div>
+      ) : filteredMilestones.length === 0 ? (
+        <div className="bg-card border border-border rounded-2xl p-8 text-center text-sm text-muted-foreground">
+          No milestones match the &ldquo;{FILTER_OPTIONS.find(f => f.value === activeFilter)?.label}&rdquo; filter.
+        </div>
       ) : (
         <div className="space-y-3">
-          {milestones.map((m, i) => (
+          {filteredMilestones.map((m, i) => (
             <MilestoneCard
               key={m.master.id}
               projectId={projectId}

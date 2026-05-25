@@ -397,6 +397,20 @@ def ensure_tables():
                 conn.execute(_t(_idx_sql))
             except Exception:
                 pass
+
+    # migration 0026 — separate connection to avoid inheriting any aborted
+    # transaction state from the try/except blocks above
+    with engine.begin() as conn:
+        conn.execute(_t("""
+            DO $$ BEGIN
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                    WHERE table_name='project_stage_status'
+                    AND column_name='planned_completion_date')
+                THEN ALTER TABLE project_stage_status ADD COLUMN planned_completion_date DATE;
+                END IF;
+            END $$;
+        """))
+
     yield
 
 

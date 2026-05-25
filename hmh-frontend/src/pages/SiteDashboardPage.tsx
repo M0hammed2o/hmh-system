@@ -4,7 +4,7 @@ import {
   LogOut, RefreshCw, PackagePlus, Truck, Minus,
   ListChecks, Upload, PenLine, AlertTriangle, CheckCircle2,
   Clock, Circle, ChevronRight, Box, Bell, Camera, Image, X,
-  Plus, Trash2, ClipboardList, Flag,
+  Plus, Trash2, ClipboardList, Flag, Ban, Lock, CalendarClock,
 } from "lucide-react";
 import { siteCaptureApi, type ExtractedItem } from "@/api/siteCapture";
 import { siteDashboardApi, type MaterialSummaryItem, type ActivityItem } from "@/api/siteDashboard";
@@ -70,6 +70,7 @@ const todayStr = () => new Date().toISOString().split("T")[0];
 const STAGE_LABEL: Record<string, string> = {
   NOT_STARTED:         "Not Started",
   IN_PROGRESS:         "In Progress",
+  BLOCKED:             "Blocked",
   AWAITING_INSPECTION: "Awaiting Inspection",
   COMPLETED:           "Completed",
   CERTIFIED:           "Certified",
@@ -1859,20 +1860,53 @@ function UpdateStageModal({ projectId, siteId, lotId, stageMasters, stages, onCl
   onClose: () => void; onDone: () => void;
 }) {
   const evidenceRef = useRef<HTMLInputElement>(null);
-  const [stageId,      setStageId]     = useState("");
-  const [status,       setStatus]      = useState("IN_PROGRESS");
-  const [notes,        setNotes]       = useState("");
-  const [evidenceFile, setEvidenceFile] = useState<File | null>(null);
-  const [loading,      setLoading]     = useState(false);
-  const [error,        setError]       = useState("");
+  const userRole = localStorage.getItem(ROLE_KEY) ?? "";
+  const isSiteStaff = userRole === "SITE_STAFF";
+
+  const [stageId,        setStageId]        = useState("");
+  const [status,         setStatus]         = useState("IN_PROGRESS");
+  const [notes,          setNotes]          = useState("");
+  const [blockedReason,  setBlockedReason]  = useState("");
+  const [progressPct,    setProgressPct]    = useState(0);
+  const [plannedDate,    setPlannedDate]    = useState("");
+  const [completionNotes, setCompletionNotes] = useState("");
+  const [evidenceFile,   setEvidenceFile]   = useState<File | null>(null);
+  const [loading,        setLoading]        = useState(false);
+  const [error,          setError]          = useState("");
 
   const STATUS_OPTIONS = [
-    "NOT_STARTED", "IN_PROGRESS", "AWAITING_INSPECTION", "COMPLETED", "CERTIFIED",
+    "NOT_STARTED", "IN_PROGRESS", "BLOCKED", "AWAITING_INSPECTION", "COMPLETED", "CERTIFIED",
   ] as const;
+
+  // When stage selection changes, pre-fill from existing data
+  const currentStage = stages.find(s => s.stage_id === stageId);
+  const isCompletedLock = isSiteStaff && (
+    currentStage?.status === "COMPLETED" || currentStage?.status === "CERTIFIED"
+  );
+
+  const handleStageChange = (id: string) => {
+    setStageId(id);
+    const s = stages.find(st => st.stage_id === id);
+    if (s) {
+      setStatus(s.status);
+      setProgressPct(s.progress_pct ?? 0);
+      setPlannedDate(s.planned_completion_date ?? "");
+      setBlockedReason(s.blocked_reason ?? "");
+    } else {
+      setStatus("IN_PROGRESS");
+      setProgressPct(0);
+      setPlannedDate("");
+      setBlockedReason("");
+    }
+  };
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!stageId) { setError("Select a stage."); return; }
+    if (status === "BLOCKED" && !blockedReason.trim()) {
+      setError("A reason is required when blocking a milestone.");
+      return;
+    }
     setLoading(true); setError("");
     try {
       if (evidenceFile) {
@@ -1886,24 +1920,32 @@ function UpdateStageModal({ projectId, siteId, lotId, stageMasters, stages, onCl
         await stagesApi.upsertWithEvidence(projectId, fd);
       } else {
         await stagesApi.upsert(projectId, {
-          stage_id: stageId,
-          site_id:  siteId || null,
-          lot_id:   lotId  || null,
-          status:   status as ProjectStageStatus["status"],
-          notes:    notes  || null,
+          stage_id:               stageId,
+          site_id:                siteId || null,
+          lot_id:                 lotId  || null,
+          status:                 status as ProjectStageStatus["status"],
+          notes:                  notes  || null,
+          blocked_reason:         status === "BLOCKED" ? blockedReason.trim() : null,
+          progress_pct:           status === "IN_PROGRESS" ? progressPct : undefined,
+          planned_completion_date: plannedDate || null,
+          completion_notes:       status === "COMPLETED" ? (completionNotes || null) : undefined,
         });
       }
       onDone();
-    } catch { setError("Failed to update. Try again."); }
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      setError(detail ?? "Failed to update. Try again.");
+    }
     finally  { setLoading(false); }
   };
 
   return (
     <ModalShell title="Update Stage" onClose={onClose}>
       <form onSubmit={submit} className="space-y-3">
+        {/* Stage selector */}
         <div className="space-y-1">
           <Label>Stage</Label>
-          <select value={stageId} onChange={e => setStageId(e.target.value)} required
+          <select value={stageId} onChange={e => handleStageChange(e.target.value)} required
                   className="w-full h-10 px-3 text-sm rounded-md border border-border bg-background">
             <option value="">— Select stage —</option>
             {stageMasters.map(m => {
@@ -1916,44 +1958,121 @@ function UpdateStageModal({ projectId, siteId, lotId, stageMasters, stages, onCl
             })}
           </select>
         </div>
-        <div className="space-y-1">
-          <Label>New status</Label>
-          <select value={status} onChange={e => setStatus(e.target.value)}
-                  className="w-full h-10 px-3 text-sm rounded-md border border-border bg-background">
-            {STATUS_OPTIONS.map(s => <option key={s} value={s}>{STAGE_LABEL[s]}</option>)}
-          </select>
-        </div>
-        <div className="space-y-1">
-          <Label htmlFor="st-notes">Notes</Label>
-          <textarea id="st-notes" rows={2} value={notes} onChange={e => setNotes(e.target.value)}
-                    placeholder="Any notes about this stage…"
-                    className="w-full px-3 py-2 text-sm rounded-md border border-border bg-background resize-none
-                               focus:outline-none focus:ring-1 focus:ring-primary" />
-        </div>
 
-        {/* Progress photo */}
-        <div className="space-y-1">
-          <Label className="text-xs">Progress Photo (optional)</Label>
-          <div
-            onClick={() => evidenceRef.current?.click()}
-            className="flex items-center gap-2 border-2 border-dashed border-border rounded-xl p-3 cursor-pointer hover:border-primary/50 hover:bg-primary/5 transition-colors"
-          >
-            <Camera className="w-5 h-5 text-muted-foreground shrink-0" />
-            <span className="text-xs text-muted-foreground truncate">
-              {evidenceFile ? evidenceFile.name : "Tap to add progress photo"}
-            </span>
-            <input
-              ref={evidenceRef} type="file" className="sr-only"
-              accept="image/*" capture="environment"
-              onChange={e => setEvidenceFile(e.target.files?.[0] ?? null)}
-            />
+        {/* Edit-lock for site staff on completed milestones */}
+        {isCompletedLock ? (
+          <div className="flex items-start gap-2.5 rounded-xl border border-amber-200 bg-amber-50 dark:border-amber-800/50 dark:bg-amber-950/20 px-4 py-3">
+            <Lock className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+            <div className="text-xs text-amber-800 dark:text-amber-300">
+              <p className="font-semibold">Milestone completed — locked</p>
+              <p className="mt-0.5 text-amber-700 dark:text-amber-400">
+                Contact office or admin to reopen this milestone.
+              </p>
+            </div>
           </div>
-        </div>
+        ) : (
+          <>
+            {/* Status selector */}
+            <div className="space-y-1">
+              <Label>New status</Label>
+              <select value={status} onChange={e => setStatus(e.target.value)}
+                      className="w-full h-10 px-3 text-sm rounded-md border border-border bg-background">
+                {STATUS_OPTIONS.map(s => <option key={s} value={s}>{STAGE_LABEL[s] ?? s}</option>)}
+              </select>
+            </div>
 
-        {error && <p className="text-xs text-destructive">{error}</p>}
-        <Button type="submit" className="w-full" disabled={loading}>
-          {loading ? "Updating…" : "Update Stage"}
-        </Button>
+            {/* BLOCKED — reason required */}
+            {status === "BLOCKED" && (
+              <div className="space-y-1">
+                <Label className="flex items-center gap-1.5 text-destructive">
+                  <Ban className="w-3.5 h-3.5" />Block reason *
+                </Label>
+                <textarea
+                  rows={2} value={blockedReason} onChange={e => setBlockedReason(e.target.value)}
+                  placeholder="e.g. Waiting for material delivery…"
+                  className="w-full px-3 py-2 text-sm rounded-md border border-destructive/50 bg-background resize-none
+                             focus:outline-none focus:ring-1 focus:ring-destructive"
+                />
+              </div>
+            )}
+
+            {/* IN_PROGRESS — progress slider */}
+            {status === "IN_PROGRESS" && (
+              <div className="space-y-1">
+                <Label className="flex items-center justify-between">
+                  <span>Progress</span>
+                  <span className="font-semibold text-foreground">{progressPct}%</span>
+                </Label>
+                <input
+                  type="range" min={0} max={100} step={5}
+                  value={progressPct}
+                  onChange={e => setProgressPct(parseInt(e.target.value))}
+                  className="w-full accent-primary cursor-pointer"
+                />
+                <div className="flex justify-between text-[10px] text-muted-foreground">
+                  <span>0%</span><span>50%</span><span>100%</span>
+                </div>
+              </div>
+            )}
+
+            {/* COMPLETED — completion notes */}
+            {status === "COMPLETED" && (
+              <div className="space-y-1">
+                <Label>Completion notes (optional)</Label>
+                <textarea rows={2} value={completionNotes} onChange={e => setCompletionNotes(e.target.value)}
+                  placeholder="Any notes about the completion…"
+                  className="w-full px-3 py-2 text-sm rounded-md border border-border bg-background resize-none
+                             focus:outline-none focus:ring-1 focus:ring-primary" />
+              </div>
+            )}
+
+            {/* Planned completion date — always shown */}
+            <div className="space-y-1">
+              <Label className="flex items-center gap-1.5">
+                <CalendarClock className="w-3.5 h-3.5 text-muted-foreground" />
+                Planned completion date
+              </Label>
+              <input
+                type="date" value={plannedDate} onChange={e => setPlannedDate(e.target.value)}
+                className="w-full h-10 px-3 text-sm rounded-md border border-border bg-background
+                           focus:outline-none focus:ring-1 focus:ring-primary"
+              />
+            </div>
+
+            {/* Notes */}
+            <div className="space-y-1">
+              <Label htmlFor="st-notes">Notes</Label>
+              <textarea id="st-notes" rows={2} value={notes} onChange={e => setNotes(e.target.value)}
+                        placeholder="Any notes about this stage…"
+                        className="w-full px-3 py-2 text-sm rounded-md border border-border bg-background resize-none
+                                   focus:outline-none focus:ring-1 focus:ring-primary" />
+            </div>
+
+            {/* Progress photo */}
+            <div className="space-y-1">
+              <Label className="text-xs">Progress Photo (optional)</Label>
+              <div
+                onClick={() => evidenceRef.current?.click()}
+                className="flex items-center gap-2 border-2 border-dashed border-border rounded-xl p-3 cursor-pointer hover:border-primary/50 hover:bg-primary/5 transition-colors"
+              >
+                <Camera className="w-5 h-5 text-muted-foreground shrink-0" />
+                <span className="text-xs text-muted-foreground truncate">
+                  {evidenceFile ? evidenceFile.name : "Tap to add progress photo"}
+                </span>
+                <input
+                  ref={evidenceRef} type="file" className="sr-only"
+                  accept="image/*" capture="environment"
+                  onChange={e => setEvidenceFile(e.target.files?.[0] ?? null)}
+                />
+              </div>
+            </div>
+
+            {error && <p className="text-xs text-destructive">{error}</p>}
+            <Button type="submit" className="w-full" disabled={loading}>
+              {loading ? "Updating…" : "Update Stage"}
+            </Button>
+          </>
+        )}
       </form>
     </ModalShell>
   );

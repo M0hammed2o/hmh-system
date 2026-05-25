@@ -6,7 +6,8 @@ from typing import Optional
 
 from sqlalchemy.orm import Session, joinedload
 
-from app.core.exceptions import ConflictError, NotFoundError
+from app.core.exceptions import ConflictError, ForbiddenError, NotFoundError
+from app.models.enums import StageStatus, UserRole
 from app.models.lot import Lot
 from app.models.project import Project
 from app.models.site import Site
@@ -79,6 +80,13 @@ def _enrich(pss: ProjectStageStatus) -> ProjectStageStatusRead:
     if pss.stage:
         data.stage_name = pss.stage.name
         data.sequence_order = pss.stage.sequence_order
+    # Timezone-safe overdue: compare DB date to UTC calendar date
+    if pss.planned_completion_date is not None:
+        today = datetime.now(timezone.utc).date()
+        data.is_overdue = (
+            pss.planned_completion_date < today
+            and pss.status not in (StageStatus.COMPLETED, StageStatus.CERTIFIED)
+        )
     return data
 
 
@@ -87,6 +95,7 @@ def upsert_stage_status(
     project_id: uuid.UUID,
     data: StageStatusUpsert,
     updated_by_id: uuid.UUID,
+    actor_role: Optional[UserRole] = None,
 ) -> ProjectStageStatus:
     project = db.get(Project, project_id)
     if not project:
@@ -115,6 +124,17 @@ def upsert_stage_status(
 
     pss = q.first()
 
+    # Edit-lock: site staff cannot modify completed/certified milestones
+    if (
+        pss is not None
+        and actor_role == UserRole.SITE_STAFF
+        and pss.status in (StageStatus.COMPLETED, StageStatus.CERTIFIED)
+    ):
+        raise ForbiddenError(
+            "Completed milestones cannot be modified by site staff. "
+            "Contact office or admin to reopen."
+        )
+
     if pss is None:
         pss = ProjectStageStatus(
             project_id=project_id,
@@ -142,6 +162,22 @@ def upsert_stage_status(
     if "blocked_reason" in fields:
         pss.blocked_reason = data.blocked_reason
 
+    # Phase FINAL-1: planned date + completion metadata
+    if "planned_completion_date" in fields:
+        pss.planned_completion_date = data.planned_completion_date
+    if "completion_notes" in fields:
+        pss.completion_notes = data.completion_notes
+    if "completed_by_name" in fields:
+        pss.completed_by_name = data.completed_by_name
+
+    # Auto-force progress to 100 and stamp completed_at when transitioning to COMPLETED
+    if "status" in fields and data.status == StageStatus.COMPLETED:
+        pss.progress_pct = 100
+        if pss.completed_at is None:
+            pss.completed_at = datetime.now(timezone.utc)
+        # Clear blocked state on completion
+        pss.blocked_reason = None
+
     # Append delay reason to notes if provided
     if "delay_reason" in fields and data.delay_reason:
         existing = pss.notes or ""
@@ -149,7 +185,6 @@ def upsert_stage_status(
         # Create a site delay alert
         from app.models.alert import SystemAlert
         from app.models.enums import AlertSeverity, AlertStatus, AlertType
-        from datetime import datetime, timezone
         db.add(SystemAlert(
             project_id=project_id,
             alert_type=AlertType.SITE_DELAY,

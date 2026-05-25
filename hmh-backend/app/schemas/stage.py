@@ -1,7 +1,7 @@
 """Pydantic v2 schemas for StageMaster and ProjectStageStatus."""
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Optional
 
 from pydantic import BaseModel, ConfigDict
@@ -43,6 +43,9 @@ class ProjectStageStatusRead(BaseModel):
     updated_by: Optional[uuid.UUID] = None
     created_at: datetime
     updated_at: datetime
+    # Phase FINAL-1 fields
+    planned_completion_date: Optional[date] = None
+    is_overdue: bool = False
 
     # Convenience — populated when stage is eager-loaded
     stage_name: Optional[str] = None
@@ -63,3 +66,7 @@ class StageStatusUpsert(BaseModel):
     # Phase 3J
     progress_pct:   Optional[int] = None
     blocked_reason: Optional[str] = None
+    # Phase FINAL-1
+    planned_completion_date: Optional[date] = None
+    completion_notes:        Optional[str]  = None
+    completed_by_name:       Optional[str]  = None

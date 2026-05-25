@@ -46,6 +46,9 @@ export interface ProjectStageStatus {
   updated_by: string | null;
   created_at: string;
   updated_at: string;
+  // Phase FINAL-1 fields
+  planned_completion_date: string | null;  // ISO date "YYYY-MM-DD"
+  is_overdue: boolean;
   // Enriched fields
   stage_name: string | null;
   sequence_order: number | null;
@@ -71,6 +74,12 @@ export interface StageStatusUpsert {
   ready_for_labour_payment?: boolean;
   notes?: string | null;
   delay_reason?: string | null;
+  // Phase FINAL-1
+  planned_completion_date?: string | null;  // "YYYY-MM-DD"
+  completion_notes?: string | null;
+  completed_by_name?: string | null;
+  blocked_reason?: string | null;
+  progress_pct?: number | null;
 }
 
 export const stagesApi = {

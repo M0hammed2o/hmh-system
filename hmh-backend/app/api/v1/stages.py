@@ -9,6 +9,7 @@ from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 
 from app.core.config import settings
+from app.core.exceptions import ForbiddenError
 from app.core.storage import save_upload
 from app.core.upload_validation import PHOTO_MIMES, validate_upload
 from app.dependencies import ALL_ROLES, CurrentUser, DbSession, OFFICE_AND_ABOVE, WRITE_ROLES, check_project_access
@@ -84,7 +85,12 @@ def upsert_stage_status(
 ):
     """Create or update a stage status for a project/site/lot combination."""
     check_project_access(db, current_user, project_id)
-    pss = stage_service.upsert_stage_status(db, project_id, body, current_user.id)
+    try:
+        pss = stage_service.upsert_stage_status(
+            db, project_id, body, current_user.id, actor_role=current_user.role
+        )
+    except ForbiddenError as exc:
+        raise HTTPException(status_code=403, detail=exc.message)
     return ApiSuccess(
         data=stage_service._enrich(pss),
         message="Stage status saved.",
@@ -136,7 +142,12 @@ async def upsert_stage_status_with_evidence(
         notes        = combined_notes or None,
         delay_reason = delay_reason,
     )
-    pss = stage_service.upsert_stage_status(db, project_id, body, current_user.id)
+    try:
+        pss = stage_service.upsert_stage_status(
+            db, project_id, body, current_user.id, actor_role=current_user.role
+        )
+    except ForbiddenError as exc:
+        raise HTTPException(status_code=403, detail=exc.message)
     return ApiSuccess(
         data=stage_service._enrich(pss),
         message="Stage updated." + (f" Photo saved: {evidence_url}" if evidence_url else ""),
