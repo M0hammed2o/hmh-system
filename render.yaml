@@ -1,0 +1,53 @@
+# Render deployment configuration — HMH Construction OS
+#
+# The notification queue is drained automatically by two mechanisms:
+#   1. In-process background task (_queue_drain_loop in main.py) — fires every 5 min
+#   2. Render cron job below — external safety net, fires every 5 min
+#
+# Required env vars for WhatsApp (set in Render dashboard):
+#   WHATSAPP_ENABLED=true
+#   WHATSAPP_PHONE_NUMBER_ID, WHATSAPP_BUSINESS_ACCOUNT_ID
+#   WHATSAPP_ACCESS_TOKEN  (permanent system user token from Meta)
+#   WHATSAPP_APP_SECRET    (App Secret from Meta App settings — for HMAC verification)
+#   WHATSAPP_VERIFY_TOKEN  (change from default "hmh_verify_token")
+#   WHATSAPP_ALERT_TEMPLATE_NAME  (name of your approved Meta template)
+#   CRON_SECRET            (random string for the cron endpoint)
+
+services:
+  - type: web
+    name: hmh-backend
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    rootDir: hmh-backend
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: PYTHON_VERSION
+        value: "3.11"
+
+  - type: web
+    name: hmh-frontend
+    runtime: static
+    buildCommand: npm ci && npm run build
+    staticPublishPath: ./dist
+    rootDir: hmh-frontend
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+
+cronJobs:
+  # External safety-net trigger for notification queue drain.
+  # Uses the lightweight /api/v1/internal/process-notifications endpoint
+  # which requires only X-Cron-Secret (no JWT needed).
+  # The in-process background task in main.py is the primary drain mechanism.
+  - name: notification-queue-drain
+    schedule: "*/5 * * * *"
+    command: >
+      curl -s -f -X POST
+      https://hmh-backend.onrender.com/api/v1/internal/process-notifications
+      -H "X-Cron-Secret: $CRON_SECRET"
+    envVars:
+      - key: CRON_SECRET
+        sync: false
