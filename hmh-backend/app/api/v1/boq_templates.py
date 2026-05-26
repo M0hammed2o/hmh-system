@@ -1,7 +1,6 @@
 """BOQ template routes — list templates, clone template to lots."""
 
 import logging
-import traceback
 import uuid
 
 from fastapi import APIRouter, HTTPException
@@ -104,9 +103,8 @@ def preview_clone(body: PreviewCloneRequest, db: DbSession):
         )
         return ApiSuccess(data=result)
     except Exception as exc:
-        tb = traceback.format_exc()
-        logger.error("preview_clone failed: %s\n%s", exc, tb)
-        raise HTTPException(400, detail=str(exc))
+        logger.exception("preview_clone failed: %s", exc)
+        raise HTTPException(400, detail="Failed to preview template application. Check server logs.")
 
 
 @router.post(
@@ -143,7 +141,4 @@ def clone_to_lots(body: CloneToLotsRequest, db: DbSession, current_user: Current
         return ApiSuccess(data=result, message=msg.strip())
     except Exception as exc:
         logger.exception("boq_clone failed: %s", exc)
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to apply template: {exc}",
-        )
+        raise HTTPException(status_code=500, detail="Failed to apply template. Check server logs.")

@@ -283,7 +283,7 @@ def _gmail_alert(db, email, title: str, message: str, severity: str, now) -> Non
         ))
         db.flush()
     except Exception:
-        pass
+        logger.exception("_gmail_alert failed — alert not created for: %s", title)
 
 
 @gmail_router.post("/attachments/{att_id}/refetch", dependencies=[OFFICE_AND_ABOVE])
@@ -300,7 +300,8 @@ def refetch_attachment(att_id: uuid.UUID, db: DbSession):
         result = refetch_attachment_from_imap(db, att_id)
         return ApiSuccess(data=result, message="Attachment re-fetched successfully.")
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
+        logger.warning("refetch_attachment failed att_id=%s: %s", att_id, exc)
+        raise HTTPException(status_code=422, detail="Attachment re-fetch failed. Check server logs for details.")
 
 
 @gmail_router.get("/attachments/{att_id}", dependencies=[OFFICE_AND_ABOVE])

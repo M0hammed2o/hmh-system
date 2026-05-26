@@ -501,9 +501,9 @@ class TestCronEndpoint:
             )
         assert resp.status_code == 403
 
-    def test_no_cron_secret_configured_returns_403(self, client):
-        """When CRON_SECRET is not set, endpoint is disabled (403)."""
+    def test_no_cron_secret_configured_returns_404(self, client):
+        """When CRON_SECRET is not set, endpoint is hidden (404, not 403)."""
         with patch("main.settings") as ms:
             ms.CRON_SECRET = ""
             resp = client.post("/api/v1/internal/process-notifications")
-        assert resp.status_code == 403
+        assert resp.status_code == 404

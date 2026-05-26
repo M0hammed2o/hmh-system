@@ -309,6 +309,7 @@ def process_queue(db: Session) -> dict:
             continue
 
         # Check if parent alert was resolved/acknowledged
+        alert = None
         if entry.alert_id:
             alert = db.get(SystemAlert, entry.alert_id)
             if alert and alert.status in (AlertStatus.ACKNOWLEDGED, AlertStatus.RESOLVED):
@@ -326,12 +327,11 @@ def process_queue(db: Session) -> dict:
         if status_str == "SENT":
             entry.status = NotificationStatus.SENT
             counts["sent"] += 1
-            # Schedule next attempt for escalation if not acknowledged
-            _schedule_next(entry, alert if entry.alert_id else None)
+            _schedule_next(entry, alert)
         elif status_str == "MOCK_SENT":
             entry.status = NotificationStatus.MOCK_SENT
             counts["mock_sent"] += 1
-            _schedule_next(entry, alert if entry.alert_id else None)
+            _schedule_next(entry, alert)
         else:
             entry.status = NotificationStatus.FAILED
             entry.error_message = provider_id

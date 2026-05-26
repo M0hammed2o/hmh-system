@@ -365,11 +365,11 @@ async def internal_process_notifications(request: Request):
     Lightweight endpoint for Render Cron Job / external scheduler.
 
     Validates X-Cron-Secret header against CRON_SECRET env var.
-    Returns 403 if the secret is wrong or not configured.
+    Returns 404 if CRON_SECRET is not set (endpoint disabled), 403 if wrong secret.
     This is a secondary safety net — the primary drain runs in-process every 5 min.
     """
     if not settings.CRON_SECRET:
-        return JSONResponse({"detail": "Cron endpoint disabled (CRON_SECRET not set)"}, status_code=403)
+        return JSONResponse({"detail": "Not found"}, status_code=404)
 
     import secrets as _secrets
     header_secret = request.headers.get("X-Cron-Secret", "")
@@ -387,6 +387,9 @@ async def internal_process_notifications(request: Request):
                   result.get("sent", 0), result.get("mock_sent", 0),
                   result.get("failed", 0), result.get("skipped", 0))
         return JSONResponse(result)
+    except Exception:
+        _db.rollback()
+        raise
     finally:
         _db.close()
 

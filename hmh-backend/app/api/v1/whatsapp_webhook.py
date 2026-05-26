@@ -120,14 +120,10 @@ def _unknown_reply() -> str:
 
 # ── Debug ─────────────────────────────────────────────────────────────────────
 
-@router.get("/debug")
+@router.get("/debug", include_in_schema=False)
 def debug_router():
     logger.debug("GET /whatsapp/debug hit")
-    return {
-        "loaded": True,
-        "file": __file__,
-        "message": "whatsapp webhook router active",
-    }
+    return {"loaded": True, "message": "whatsapp webhook router active"}
 
 
 # ── Verification ──────────────────────────────────────────────────────────────
@@ -167,6 +163,7 @@ async def receive_webhook(request: Request, db: DbSession):
         import json
         payload = json.loads(body)
     except Exception:
+        logger.warning("wa_webhook JSON parse error — returning 200 to Meta")
         return Response(status_code=200)
 
     messages = whatsapp_service.parse_incoming(payload)
@@ -197,6 +194,18 @@ async def receive_webhook(request: Request, db: DbSession):
 
         # ── RESET TEST ALERTS — exact phrase, checked before intent ───────────
         if normalized == "RESET TEST ALERTS":
+            # Only known AlertRecipients may reset alerts (prevents spoofing)
+            from app.models.alert_recipient import AlertRecipient
+            _authorized = db.query(AlertRecipient).filter(
+                AlertRecipient.phone_number.in_(_phone_variants(from_number)),
+                AlertRecipient.is_active == True,  # noqa: E712
+            ).first()
+            if not _authorized:
+                logger.warning(
+                    "wa_command RESET_TEST_ALERTS rejected unknown_phone=%s",
+                    _normalise(from_number),
+                )
+                continue
             logger.info("wa_command cmd=RESET_TEST_ALERTS from=%s", _normalise(from_number))
             reset_count = _reset_test_alerts(db, from_number)
             _reply(
@@ -263,6 +272,13 @@ async def receive_webhook(request: Request, db: DbSession):
         else:
             logger.info("wa_command cmd=UNKNOWN from=%s", _normalise(from_number))
             _reply(from_number, _unknown_reply())
+
+    # Commit any pending flushes (e.g. last_inbound_at stamps not yet committed)
+    try:
+        db.commit()
+    except Exception:
+        logger.exception("wa_webhook final commit failed")
+        db.rollback()
 
     logger.info("wa_webhook done acked=%d approved=%d rejected=%d", total_acked, len(approved), len(rejected))
 
@@ -527,6 +543,7 @@ def _stamp_recipient_inbound(db, from_phone: str) -> None:
     Record the timestamp of an inbound WhatsApp message against the matching
     AlertRecipient row.  Called for every incoming message so notification_service
     can decide whether the 24-hour conversation window is still open.
+    Uses flush (not commit) — caller is responsible for the transaction boundary.
     """
     from datetime import datetime, timezone
     from app.models.alert_recipient import AlertRecipient
@@ -538,7 +555,7 @@ def _stamp_recipient_inbound(db, from_phone: str) -> None:
         ).first()
         if recipient:
             recipient.last_inbound_at = now
-            db.commit()
+            db.flush()
             logger.debug("wa_inbound_stamped recipient=%s phone=%s", recipient.name, variant)
             return
 
@@ -597,7 +614,10 @@ def _handle_delivery_status(db, status: dict) -> None:
         if wa_status == "failed" and record.status == NotificationStatus.FAILED:
             logger.debug("wa_status already_failed msg_id=%s", msg_id)
             return
-        if wa_status == "read":
+        if wa_status in ("sent", "delivered"):
+            logger.debug("wa_status %s msg_id=%s recipient=%s", wa_status, msg_id, recipient)
+            # No DB update — Meta confirming delivery progress; record stays SENT
+        elif wa_status == "read":
             from datetime import datetime, timezone
             record.status = NotificationStatus.ACKNOWLEDGED
             record.acknowledged_at = datetime.now(timezone.utc)

@@ -376,7 +376,7 @@ def refetch_attachment_from_imap(db, att_id: uuid.UUID) -> dict:
                 _, data = imap.search(None, f'HEADER "Message-ID" "{mid}"')
                 msg_ids = data[0].split() if data[0] else []
             except Exception:
-                pass
+                logger.debug("IMAP '[Gmail]/All Mail' folder search failed (may not exist)")
 
         if not msg_ids:
             raise ValueError(
@@ -442,7 +442,7 @@ def _trigger_extraction(db, file_path: str, doc_type: str, source_id: str, now) 
 
         extraction = DocumentExtraction(
             source_type="GMAIL_ATTACHMENT",
-            source_id=None,          # attachment UUID stored as string source_id isn't UUID FK
+            source_id=uuid.UUID(source_id) if source_id else None,
             file_path=file_path,
             document_type=doc_type,
             status=result["status"],
