@@ -2,25 +2,20 @@
  * AttachmentGallery — enhanced gallery with grid, lightbox, category chips,
  * caption support, and strip-preview (first 3 + "+X more").
  *
- * Phase FINAL-2: Used by MilestonesPage (with BEFORE/COMPLETION/ISSUE chips)
- * and DeliveriesPage (with DELIVERY_EVIDENCE category).
- *
- * Features:
- *   - Category filter chips (configurable per use-site)
- *   - Grid layout (thumbnails sized 80px)
- *   - Full lightbox: prev/next navigation, keyboard (←/→/Esc), caption, uploader
- *   - Strip preview mode: first 3 thumbnails + "+X more" chip
- *   - Upload zone with type pre-selected from active chip
- *   - Caption input field on upload (optional)
- *   - Loading skeleton placeholders
- *   - Empty state message
- *   - SITE_STAFF own-delete handled server-side (client shows delete button for own uploads)
+ * Phase FINAL-2 / FINAL-2.5 hardened:
+ *   - Body scroll lock when lightbox is open (prevents bleed-through on iOS)
+ *   - Touch swipe (left/right) for mobile image navigation
+ *   - Upload guard ref — prevents duplicate submissions
+ *   - Client-side file validation (size + MIME) before network hit
+ *   - O(1) image-index lookup via Map (was O(n²))
+ *   - Larger touch targets on mobile nav buttons
+ *   - overscroll-contain on lightbox overlay
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Camera, ChevronLeft, ChevronRight, FileText, RefreshCw,
-  Upload, X as XIcon, Eye, User, Images,
+  Upload, X as XIcon, Eye, User, Images, AlertCircle,
 } from "lucide-react";
 import {
   attachmentsApi,
@@ -31,6 +26,32 @@ import {
 } from "@/api/attachments";
 import { ROLE_KEY } from "@/lib/constants";
 import { cn } from "@/lib/utils";
+
+// ── File validation ───────────────────────────────────────────────────────────
+
+const MAX_FILE_MB = 5;  // must match backend settings.MAX_UPLOAD_SIZE_MB
+
+const ALLOWED_MIME_TYPES = new Set([
+  "image/jpeg", "image/png", "image/webp", "image/gif",
+  "image/heic", "image/heif",       // iPhone native formats
+  "application/pdf",
+  "application/vnd.ms-excel",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "text/csv", "text/plain",
+  "application/msword",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+]);
+
+function validateFile(file: File): string | null {
+  if (file.size > MAX_FILE_MB * 1024 * 1024) {
+    return `"${file.name}" is too large (max ${MAX_FILE_MB} MB)`;
+  }
+  // Allow empty/unknown MIME (mobile cameras sometimes report "")
+  if (file.type && !ALLOWED_MIME_TYPES.has(file.type)) {
+    return `"${file.name}" — unsupported type (${file.type})`;
+  }
+  return null;
+}
 
 // ── Category chip config ──────────────────────────────────────────────────────
 
@@ -49,13 +70,22 @@ interface LightboxProps {
 }
 
 function GalleryLightbox({ images, index, onClose, onChange }: LightboxProps) {
-  const att     = images[index];
-  const hasPrev = index > 0;
-  const hasNext = index < images.length - 1;
+  const att      = images[index];
+  const hasPrev  = index > 0;
+  const hasNext  = index < images.length - 1;
+  const touchX   = useRef<number | null>(null);
 
+  // Prevent body scroll bleed-through (critical on iOS Safari)
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => { document.body.style.overflow = prev; };
+  }, []);
+
+  // Keyboard navigation
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape")     onClose();
+      if (e.key === "Escape")                onClose();
       if (e.key === "ArrowLeft"  && hasPrev) onChange(index - 1);
       if (e.key === "ArrowRight" && hasNext) onChange(index + 1);
     };
@@ -63,57 +93,77 @@ function GalleryLightbox({ images, index, onClose, onChange }: LightboxProps) {
     return () => window.removeEventListener("keydown", handler);
   }, [index, hasPrev, hasNext, onClose, onChange]);
 
+  // Touch swipe
+  const onTouchStart = (e: React.TouchEvent) => {
+    touchX.current = e.touches[0].clientX;
+  };
+  const onTouchEnd = (e: React.TouchEvent) => {
+    if (touchX.current === null) return;
+    const dx = e.changedTouches[0].clientX - touchX.current;
+    touchX.current = null;
+    if (dx >  50 && hasPrev) onChange(index - 1);
+    if (dx < -50 && hasNext) onChange(index + 1);
+  };
+
   return (
     <div
-      className="fixed inset-0 z-[200] flex items-center justify-center bg-black/90 backdrop-blur-sm"
+      className="fixed inset-0 z-[200] flex items-center justify-center bg-black/90 backdrop-blur-sm overscroll-contain"
+      style={{ touchAction: "pan-y" }}
       onClick={onClose}
+      onTouchStart={onTouchStart}
+      onTouchEnd={onTouchEnd}
     >
-      {/* Close */}
+      {/* Close — large tap area on mobile */}
       <button
-        className="absolute top-4 right-4 p-2 rounded-full bg-black/50 text-white/80 hover:text-white z-10"
+        className="absolute top-3 right-3 p-3 rounded-full bg-black/50 text-white/80 hover:text-white z-10 min-w-[44px] min-h-[44px] flex items-center justify-center"
         onClick={onClose}
+        aria-label="Close"
       >
         <XIcon className="w-5 h-5" />
       </button>
 
-      {/* Prev */}
+      {/* Prev — wide touch target */}
       {hasPrev && (
         <button
-          className="absolute left-4 top-1/2 -translate-y-1/2 p-3 rounded-full bg-black/50 text-white/80 hover:text-white z-10"
+          className="absolute left-2 top-1/2 -translate-y-1/2 p-3 rounded-full bg-black/50 text-white/80 hover:text-white z-10 min-w-[44px] min-h-[44px] flex items-center justify-center"
           onClick={e => { e.stopPropagation(); onChange(index - 1); }}
+          aria-label="Previous image"
         >
           <ChevronLeft className="w-6 h-6" />
         </button>
       )}
 
-      {/* Next */}
+      {/* Next — wide touch target */}
       {hasNext && (
         <button
-          className="absolute right-4 top-1/2 -translate-y-1/2 p-3 rounded-full bg-black/50 text-white/80 hover:text-white z-10"
+          className="absolute right-2 top-1/2 -translate-y-1/2 p-3 rounded-full bg-black/50 text-white/80 hover:text-white z-10 min-w-[44px] min-h-[44px] flex items-center justify-center"
           onClick={e => { e.stopPropagation(); onChange(index + 1); }}
+          aria-label="Next image"
         >
           <ChevronRight className="w-6 h-6" />
         </button>
       )}
 
-      {/* Image */}
+      {/* Image — safe max sizing, no broken zoom */}
       <img
+        key={att.id}          // re-mount on change so browser fetches fresh
         src={att.download_url}
         alt={att.caption ?? att.file_name}
-        className="max-h-[90vh] max-w-[90vw] rounded-xl shadow-2xl object-contain"
+        className="max-h-[85vh] max-w-[92vw] rounded-xl shadow-2xl object-contain select-none"
+        draggable={false}
         onClick={e => e.stopPropagation()}
       />
 
-      {/* Footer */}
+      {/* Footer metadata */}
       <div
-        className="absolute bottom-4 left-0 right-0 flex flex-col items-center gap-1.5 px-8"
+        className="absolute bottom-3 left-0 right-0 flex flex-col items-center gap-1 px-8"
         onClick={e => e.stopPropagation()}
       >
         {images.length > 1 && (
           <p className="text-white/50 text-xs">{index + 1} / {images.length}</p>
         )}
         {att.caption && (
-          <p className="text-white text-sm font-semibold text-center max-w-lg">{att.caption}</p>
+          <p className="text-white text-sm font-semibold text-center max-w-sm leading-snug">{att.caption}</p>
         )}
         <p className="text-white/60 text-xs">
           {ATTACHMENT_TYPE_LABELS[att.attachment_type] ?? att.attachment_type}
@@ -126,8 +176,11 @@ function GalleryLightbox({ images, index, onClose, onChange }: LightboxProps) {
           </p>
         )}
         <a
-          href={att.download_url} target="_blank" rel="noopener noreferrer"
+          href={att.download_url}
+          target="_blank"
+          rel="noopener noreferrer"
           className="text-white/40 hover:text-white text-xs underline mt-0.5"
+          onClick={e => e.stopPropagation()}
         >
           Open original
         </a>
@@ -157,8 +210,10 @@ function GalleryThumb({
     try {
       await attachmentsApi.delete(att.id);
       onDelete(att.id);
-    } catch {
+    } catch (err: unknown) {
       setDeleting(false);
+      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      if (msg) alert(msg);
     }
   };
 
@@ -203,32 +258,37 @@ function GalleryThumb({
         {att.file_size_display}
       </span>
 
-      {/* Type badge */}
+      {/* Type badge (suppress for generic PHOTO and BEFORE_PHOTO) */}
       {att.attachment_type !== "PHOTO" && att.attachment_type !== "BEFORE_PHOTO" && (
         <span className="absolute top-0.5 left-0.5 bg-primary/80 text-white rounded text-[8px] px-1 py-0.5 leading-none select-none max-w-[90%] truncate">
           {typeLabel.split(" ")[0]}
         </span>
       )}
 
-      {/* Delete */}
+      {/* Delete — always-visible on touch (group-hover only works on desktop) */}
       {canDelete && (
         <button
           onClick={handleDelete}
           disabled={deleting}
-          className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-destructive text-white
-                     flex items-center justify-center opacity-0 group-hover:opacity-100
-                     transition-opacity disabled:opacity-50 z-10"
+          className={cn(
+            "absolute -top-1.5 -right-1.5 w-6 h-6 rounded-full bg-destructive text-white",
+            "flex items-center justify-center z-10 disabled:opacity-50",
+            // Desktop: fade in on hover; mobile: always visible (no hover state)
+            "opacity-0 group-hover:opacity-100 focus:opacity-100",
+            "@media (hover: none) { opacity: 100 }",
+            "transition-opacity"
+          )}
           title="Remove"
         >
           {deleting
-            ? <RefreshCw className="w-2.5 h-2.5 animate-spin" />
-            : <XIcon className="w-2.5 h-2.5" />}
+            ? <RefreshCw className="w-3 h-3 animate-spin" />
+            : <XIcon className="w-3 h-3" />}
         </button>
       )}
 
-      {/* View overlay */}
+      {/* View overlay — desktop only */}
       {att.is_image && (
-        <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none rounded-lg">
+        <div className="hidden sm:flex absolute inset-0 items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none rounded-lg">
           <Eye className="w-5 h-5 text-white drop-shadow-lg" />
         </div>
       )}
@@ -236,12 +296,13 @@ function GalleryThumb({
   );
 }
 
-// ── Upload row ────────────────────────────────────────────────────────────────
+// ── Upload state ──────────────────────────────────────────────────────────────
 
-interface UploadState {
-  name:  string;
-  done:  boolean;
-  error: boolean;
+interface UploadItem {
+  name:   string;
+  done:   boolean;
+  error:  boolean;
+  errMsg: string;
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
@@ -277,18 +338,20 @@ export function AttachmentGallery({
   const isReadOnly  = userRole === "READ_ONLY";
 
   const canUpload    = canWrite ?? !isReadOnly;
-  // SITE_STAFF can attempt delete (server enforces own-only via 403);
-  // SITE_MANAGER and READ_ONLY cannot delete
   const canDeleteAny = canWrite ?? (!isReadOnly && userRole !== "SITE_MANAGER");
 
-  const fileRef = useRef<HTMLInputElement>(null);
-  const [attachments,  setAttachments]  = useState<Attachment[]>([]);
-  const [loading,      setLoading]      = useState(true);
-  const [uploads,      setUploads]      = useState<UploadState[]>([]);
-  const [lightboxIdx,  setLightboxIdx]  = useState<number | null>(null);
-  const [activeChip,   setActiveChip]   = useState<AttachmentType | "ALL">("ALL");
-  const [caption,      setCaption]      = useState("");
-  const [expanded,     setExpanded]     = useState(!previewCount);
+  const fileRef     = useRef<HTMLInputElement>(null);
+  // Guard against duplicate upload submissions (double-tap, fast users)
+  const uploadingRef = useRef(false);
+
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [loading,     setLoading]     = useState(true);
+  const [uploads,     setUploads]     = useState<UploadItem[]>([]);
+  const [lightboxIdx, setLightboxIdx] = useState<number | null>(null);
+  const [activeChip,  setActiveChip]  = useState<AttachmentType | "ALL">("ALL");
+  const [caption,     setCaption]     = useState("");
+  const [expanded,    setExpanded]    = useState(!previewCount);
+  const [validationErrors, setValidationErrors] = useState<string[]>([]);
 
   const load = useCallback(async () => {
     if (!entityId) return;
@@ -296,7 +359,7 @@ export function AttachmentGallery({
     try {
       const list = await attachmentsApi.listByEntity(entityType, entityId);
       setAttachments(list.filter(a => a.is_active));
-    } catch { /* silent */ }
+    } catch { /* silent — server may be unreachable */ }
     finally { setLoading(false); }
   }, [entityType, entityId]);
 
@@ -316,29 +379,56 @@ export function AttachmentGallery({
     ? filtered.slice(0, previewCount)
     : filtered;
 
-  // Only images participate in lightbox
-  const imageAttachments = filtered.filter(a => a.is_image);
+  // O(1) image-index lookup — avoids O(n²) indexOf in the render loop
+  const imageAttachments = useMemo(
+    () => filtered.filter(a => a.is_image),
+    [filtered]
+  );
+  const imgIndexMap = useMemo(() => {
+    const m = new Map<string, number>();
+    imageAttachments.forEach((a, i) => m.set(a.id, i));
+    return m;
+  }, [imageAttachments]);
 
   const handleUpload = async (files: File[]) => {
-    if (!entityId) return;
-    const newUploads: UploadState[] = files.map(f => ({ name: f.name, done: false, error: false }));
-    setUploads(newUploads);
+    if (!entityId || uploadingRef.current) return;
 
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i];
+    // Client-side validation before any network request
+    const errors: string[] = [];
+    const valid: File[] = [];
+    for (const f of files) {
+      const err = validateFile(f);
+      if (err) errors.push(err);
+      else valid.push(f);
+    }
+    setValidationErrors(errors);
+    if (valid.length === 0) return;
+
+    uploadingRef.current = true;
+    const newItems: UploadItem[] = valid.map(f => ({ name: f.name, done: false, error: false, errMsg: "" }));
+    setUploads(newItems);
+
+    for (let i = 0; i < valid.length; i++) {
+      const file = valid[i];
       try {
         const att = await attachmentsApi.upload(
           file, entityType, entityId, uploadType, caption || undefined
         );
         setAttachments(prev => [att, ...prev]);
         setUploads(prev => prev.map((u, idx) => idx === i ? { ...u, done: true } : u));
-      } catch {
-        setUploads(prev => prev.map((u, idx) => idx === i ? { ...u, error: true } : u));
+      } catch (err: unknown) {
+        const detail =
+          (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+          ?? "Upload failed";
+        setUploads(prev => prev.map((u, idx) =>
+          idx === i ? { ...u, error: true, errMsg: detail } : u
+        ));
       }
     }
 
     setCaption("");
-    setTimeout(() => setUploads([]), 2500);
+    uploadingRef.current = false;
+    setTimeout(() => setUploads([]), 3000);
   };
 
   const handleDelete = (id: string) => {
@@ -346,9 +436,6 @@ export function AttachmentGallery({
   };
 
   const isUploading = uploads.some(u => !u.done && !u.error);
-
-  // Determine if a given attachment can be deleted by the current user
-  const canDeleteAtt = (_att: Attachment) => canDeleteAny;
 
   return (
     <div className={cn("space-y-3", className)}>
@@ -380,43 +467,59 @@ export function AttachmentGallery({
               )}
             >
               {c.label}
-              {c.value !== "ALL" && (
-                <span className="ml-1 opacity-70">
-                  ({attachments.filter(a => a.attachment_type === c.value).length})
-                </span>
-              )}
-              {c.value === "ALL" && (
-                <span className="ml-1 opacity-70">({attachments.length})</span>
-              )}
+              <span className="ml-1 opacity-70">
+                ({c.value === "ALL"
+                  ? attachments.length
+                  : attachments.filter(a => a.attachment_type === c.value).length})
+              </span>
             </button>
           ))}
         </div>
       )}
 
-      {/* Caption input (shown above upload button when enabled) */}
+      {/* Caption input */}
       {showCaptionInput && canUpload && (
         <input
           type="text"
           value={caption}
           onChange={e => setCaption(e.target.value)}
           placeholder="Caption for next upload (optional)"
-          className="w-full h-8 rounded-md border border-input bg-background px-3 text-xs"
+          className="w-full h-9 rounded-md border border-input bg-background px-3 text-xs"
           maxLength={500}
         />
+      )}
+
+      {/* Client-side validation errors */}
+      {validationErrors.length > 0 && (
+        <div className="space-y-1">
+          {validationErrors.map((e, i) => (
+            <p key={i} className="text-xs text-destructive flex items-start gap-1">
+              <AlertCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+              {e}
+            </p>
+          ))}
+        </div>
       )}
 
       {/* Upload progress */}
       {uploads.length > 0 && (
         <div className="flex flex-wrap gap-1.5">
           {uploads.map((u, i) => (
-            <span key={i} className={cn(
-              "flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px]",
-              u.error ? "bg-destructive/10 text-destructive"
-              : u.done  ? "bg-green-100 text-green-700 dark:bg-green-950/30 dark:text-green-400"
-              :           "bg-muted text-muted-foreground"
-            )}>
+            <span
+              key={i}
+              className={cn(
+                "flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px]",
+                u.error ? "bg-destructive/10 text-destructive"
+                : u.done  ? "bg-green-100 text-green-700 dark:bg-green-950/30 dark:text-green-400"
+                :           "bg-muted text-muted-foreground"
+              )}
+              title={u.error ? u.errMsg : undefined}
+            >
               {u.error  ? "✗" : u.done ? "✓" : <RefreshCw className="w-2.5 h-2.5 animate-spin" />}
-              {u.name.length > 16 ? `${u.name.slice(0, 14)}…` : u.name}
+              {u.name.length > 18 ? `${u.name.slice(0, 16)}…` : u.name}
+              {u.error && u.errMsg && (
+                <span className="ml-0.5 underline decoration-dotted cursor-help" title={u.errMsg}>!</span>
+              )}
             </span>
           ))}
         </div>
@@ -431,18 +534,15 @@ export function AttachmentGallery({
         </div>
       ) : (
         <div className="flex items-start gap-2 flex-wrap">
-          {displayed.map(att => {
-            const imgIdx = att.is_image ? imageAttachments.indexOf(att) : -1;
-            return (
-              <GalleryThumb
-                key={att.id}
-                att={att}
-                canDelete={canDeleteAtt(att)}
-                onDelete={handleDelete}
-                onOpen={att.is_image ? () => setLightboxIdx(imgIdx) : undefined}
-              />
-            );
-          })}
+          {displayed.map(att => (
+            <GalleryThumb
+              key={att.id}
+              att={att}
+              canDelete={canDeleteAny}
+              onDelete={handleDelete}
+              onOpen={att.is_image ? () => setLightboxIdx(imgIndexMap.get(att.id) ?? 0) : undefined}
+            />
+          ))}
 
           {/* "+X more" chip */}
           {previewCount && !expanded && filtered.length > previewCount && (
@@ -458,12 +558,15 @@ export function AttachmentGallery({
           {/* Upload button */}
           {canUpload && (
             <button
-              onClick={() => fileRef.current?.click()}
+              onClick={() => {
+                setValidationErrors([]);
+                fileRef.current?.click();
+              }}
               disabled={isUploading}
               className={cn(
                 "h-20 w-20 rounded-lg border-2 border-dashed border-border flex flex-col items-center justify-center",
                 "hover:border-primary hover:bg-muted/40 transition-colors text-muted-foreground hover:text-primary shrink-0",
-                isUploading && "opacity-50 pointer-events-none"
+                "disabled:opacity-40 disabled:pointer-events-none"
               )}
               title="Upload file"
             >
@@ -516,13 +619,13 @@ export function AttachmentGallery({
       <input
         ref={fileRef}
         type="file"
-        accept="image/*,application/pdf"
+        accept="image/*,application/pdf,.csv,.xlsx,.xls,.doc,.docx"
         multiple
         className="sr-only"
         onChange={async e => {
           const files = Array.from(e.target.files ?? []);
+          e.target.value = "";          // reset immediately so same file can be re-selected
           if (files.length > 0) await handleUpload(files);
-          e.target.value = "";
         }}
       />
     </div>

@@ -12,33 +12,25 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import HTTPException, UploadFile, status
+from fastapi import HTTPException, UploadFile
+from fastapi import status as http_status
 from sqlalchemy.orm import Session
 
-from app.core.config import settings
+from app.core.config import settings  # used by resolve_abs_path
 from app.core.exceptions import NotFoundError
 from app.core.storage import save_upload
-from app.core.upload_validation import _check_extension
+from app.core.upload_validation import validate_upload, DOCUMENT_MIMES, SPREADSHEET_MIMES
 from app.models.attachment import Attachment
 from app.models.enums import AttachmentEntity, AttachmentType
 
-# ── Allowed MIME types ────────────────────────────────────────────────────────
-ALLOWED_MIME_TYPES = {
-    # Images
-    "image/jpeg",
-    "image/png",
-    "image/webp",
-    "image/gif",
-    # Documents
-    "application/pdf",
-    # Spreadsheets
-    "application/vnd.ms-excel",
-    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    "text/csv",
-    # Word documents (for BOQ uploads)
+# All MIME types accepted by the general attachment upload endpoint
+_ATTACHMENT_MIMES = DOCUMENT_MIMES | SPREADSHEET_MIMES | frozenset({
     "application/msword",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-}
+})
+
+# Max filename length stored in DB (file_name column is VARCHAR(255))
+_MAX_FILENAME_LEN = 200
 
 
 def _save_via_storage(file: UploadFile, entity_type: str, entity_id: str) -> tuple[str, int]:
@@ -95,45 +87,34 @@ def save_attachment(
         ent = AttachmentEntity(entity_type)
     except ValueError:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"Invalid entity_type: {entity_type}",
         )
     try:
         att = AttachmentType(attachment_type)
     except ValueError:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"Invalid attachment_type: {attachment_type}",
         )
 
-    # Validate extension (independent of client-declared MIME type)
-    _check_extension(file.filename)
-
-    # Validate MIME type
-    mime = file.content_type or "application/octet-stream"
-    if mime not in ALLOWED_MIME_TYPES:
-        raise HTTPException(
-            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-            detail=f"File type '{mime}' is not supported. Allowed: images, PDF, spreadsheets.",
-        )
-
-    # Validate size before reading
-    max_bytes = settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024
-    file.file.seek(0, 2)
-    size = file.file.tell()
-    file.file.seek(0)
-    if size > max_bytes:
-        raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail=f"File exceeds maximum size of {settings.MAX_UPLOAD_SIZE_MB} MB.",
-        )
+    # Unified validation: extension blocklist + MIME allowlist + size cap
+    validate_upload(file, allowed=_ATTACHMENT_MIMES)
 
     stored_path, file_size = _save_via_storage(file, entity_type, str(entity_id))
+
+    # Sanitize filename: strip path traversal, truncate to column length
+    safe_name = os.path.basename(file.filename or "upload")
+    if len(safe_name) > _MAX_FILENAME_LEN:
+        stem, ext = os.path.splitext(safe_name)
+        safe_name = stem[:_MAX_FILENAME_LEN - len(ext)] + ext
+
+    mime = (file.content_type or "application/octet-stream").split(";")[0].strip().lower()
 
     record = Attachment(
         entity_type     = ent,
         entity_id       = uuid.UUID(str(entity_id)),
-        file_name       = os.path.basename(file.filename or "upload"),
+        file_name       = safe_name,
         stored_path     = stored_path,
         file_url        = stored_path,   # legacy column kept in sync
         mime_type       = mime,

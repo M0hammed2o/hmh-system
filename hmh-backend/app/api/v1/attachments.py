@@ -20,12 +20,24 @@ from app.services import attachment_service
 
 router = APIRouter(prefix="/attachments", tags=["attachments"])
 
+# Hard ceiling on list results — prevents accidental full-table scans
+_LIST_MAX = 200
+
 
 def _entity_project_id(db, entity_type: str, entity_id: uuid.UUID):
-    """Resolve an attachment entity to its project_id. Returns None for non-project entities."""
+    """Resolve an attachment entity to its project_id for access-control checks.
+
+    Returns None for entities that are not project-scoped (e.g. global suppliers).
+    A None return means the caller skips the project-access check — NOT that access
+    is unconditionally granted; the route still requires a valid authenticated user.
+    """
     t = entity_type.upper()
     if t == "PROJECT":
         return entity_id
+    if t == "STAGE_STATUS":
+        from app.models.stage import ProjectStageStatus
+        obj = db.get(ProjectStageStatus, entity_id)
+        return obj.project_id if obj else None
     if t == "LOT":
         from app.models.lot import Lot
         obj = db.get(Lot, entity_id)
@@ -54,6 +66,15 @@ def _entity_project_id(db, entity_type: str, entity_id: uuid.UUID):
         from app.models.boq import BOQHeader
         obj = db.get(BOQHeader, entity_id)
         return obj.project_id if obj else None
+    if t == "FUEL_LOG":
+        from app.models.fuel import FuelLog
+        obj = db.get(FuelLog, entity_id)
+        return obj.project_id if obj else None
+    if t == "USAGE_LOG":
+        from app.models.stock import UsageLog
+        obj = db.get(UsageLog, entity_id)
+        return obj.project_id if obj else None
+    # SUPPLIER, CERTIFICATION, BOQ_HEADER — not project-scoped; any authed user may access
     return None
 
 
@@ -70,11 +91,22 @@ async def upload_attachment(
     entity_type: str = Form(..., description="e.g. DELIVERY, PAYMENT, FUEL_LOG"),
     entity_id: str = Form(..., description="UUID of the linked entity"),
     attachment_type: str = Form(default="PHOTO", description="e.g. PHOTO, PDF, PROOF"),
-    caption: Optional[str] = Form(default=None, description="Optional short caption"),
+    caption: Optional[str] = Form(default=None, description="Optional short caption (max 500 chars)"),
 ):
-    project_id = _entity_project_id(db, entity_type, uuid.UUID(entity_id))
+    # Validate entity_id is a valid UUID before any DB work
+    try:
+        eid = uuid.UUID(entity_id)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="entity_id must be a valid UUID.")
+
+    # Truncate caption defensively (client may bypass maxLength)
+    if caption:
+        caption = caption.strip()[:500] or None
+
+    project_id = _entity_project_id(db, entity_type, eid)
     if project_id:
         check_project_access(db, current_user, project_id)
+
     record = attachment_service.save_attachment(
         db=db,
         file=file,
@@ -101,20 +133,23 @@ def list_attachments(
     entity_type: str = Query(...),
     entity_id: uuid.UUID = Query(...),
     attachment_type: Optional[str] = Query(default=None, description="Filter by attachment type"),
-    limit: Optional[int] = Query(default=None, ge=1, le=200),
+    limit: Optional[int] = Query(default=None, ge=1, le=_LIST_MAX),
     offset: int = Query(default=0, ge=0),
 ):
     project_id = _entity_project_id(db, entity_type, entity_id)
     if project_id:
         check_project_access(db, current_user, project_id)
+
+    # Apply hard ceiling when caller omits limit
+    effective_limit = min(limit, _LIST_MAX) if limit else _LIST_MAX
+
     records = attachment_service.list_attachments(
         db, entity_type, entity_id,
         attachment_type=attachment_type,
-        limit=limit,
+        limit=effective_limit,
         offset=offset,
     )
 
-    # Bulk-fetch user names for uploaded_by resolution
     from app.models.user import User
     uploader_ids = {r.uploaded_by for r in records if r.uploaded_by}
     name_map: dict = {}
@@ -138,18 +173,21 @@ def list_attachments(
 )
 def download_attachment(attachment_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
     """Stream local files; redirect to Supabase for cloud-stored files."""
-    record = attachment_service.get_attachment(db, attachment_id)
+    try:
+        record = attachment_service.get_attachment(db, attachment_id)
+    except NotFoundError:
+        raise HTTPException(404, "Attachment not found.")
+
     if not record.is_active:
         raise HTTPException(404, "Attachment is no longer available.")
+
     project_id = _entity_project_id(db, record.entity_type.value, record.entity_id)
     if project_id:
         check_project_access(db, current_user, project_id)
 
-    # Supabase Storage or any absolute URL → redirect (no backend proxy needed)
     if record.stored_path.startswith("http"):
         return RedirectResponse(record.stored_path, status_code=302)
 
-    # Local disk
     abs_path = attachment_service.resolve_abs_path(record.stored_path)
     if not os.path.exists(abs_path):
         raise HTTPException(404, "File not found on server. It may have been deleted.")
@@ -170,7 +208,11 @@ def delete_attachment(attachment_id: uuid.UUID, db: DbSession, current_user: Cur
 
     SITE_STAFF can only delete their own uploads; office/admin can delete any.
     """
-    record = attachment_service.get_attachment(db, attachment_id)
+    try:
+        record = attachment_service.get_attachment(db, attachment_id)
+    except NotFoundError:
+        raise HTTPException(404, "Attachment not found.")
+
     project_id = _entity_project_id(db, record.entity_type.value, record.entity_id)
     if project_id:
         check_project_access(db, current_user, project_id)
