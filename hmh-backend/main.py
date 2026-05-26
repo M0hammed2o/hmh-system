@@ -16,9 +16,30 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-_log = logging.getLogger("hmh.startup")
-
+from app.core.logging_config import configure_logging, get_logger
 from app.core.config import settings
+
+# Configure root logger before any other imports emit log records
+configure_logging("DEBUG" if settings.DEBUG else "INFO")
+_log = get_logger("hmh.startup")
+
+# ── Fail fast if deployed to production with the default dev secret ────────────
+_DEFAULT_SECRET = "dev_secret_change_before_production_minimum_64_chars_long!!"
+if settings.is_production and settings.SECRET_KEY == _DEFAULT_SECRET:
+    _log.critical(
+        "SECURITY ERROR: SECRET_KEY is the default development value. "
+        "Set a strong SECRET_KEY environment variable before deploying to production."
+    )
+    raise RuntimeError(
+        "SECRET_KEY must be overridden in production. "
+        "Set SECRET_KEY in your environment or .env file."
+    )
+elif settings.SECRET_KEY == _DEFAULT_SECRET:
+    _log.warning(
+        "SECRET_KEY is the default dev value. "
+        "Override it with a strong random string before deploying."
+    )
+
 from app.core.exceptions import HMHException
 from app.api.health import router as health_router
 from app.api.v1.auth import router as auth_router
@@ -51,6 +72,7 @@ from app.api.v1.boq_templates import router as boq_templates_router
 from app.api.v1.delivery_capture import router as delivery_capture_router
 from app.api.v1.summary import router as summary_router
 from app.api.v1.whatsapp_webhook import router as whatsapp_router
+from app.api.v1.notification_settings import router as notification_settings_router
 from app.api.v1.job_cards import project_jc_router, jc_router
 from app.api.v1.site_dashboard import router as site_dashboard_router, project_lot_router as site_dashboard_lot_router
 from app.api.v1.gmail import gmail_router, gmail_docs_router
@@ -59,6 +81,7 @@ from app.api.v1.site_capture import router as site_capture_router
 from app.api.v1.document_ai import router as document_ai_router
 from app.api.v1.vision import router as vision_router
 from app.api.v1.expenses import router as expenses_router
+from app.dependencies import OWNER_ONLY
 
 
 app = FastAPI(
@@ -110,9 +133,12 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=_cors_methods,
     allow_headers=_cors_headers,
-    expose_headers=["Content-Length", "X-Total-Count"],
+    expose_headers=["Content-Length", "X-Total-Count", "X-Request-ID"],
     max_age=600,
 )
+
+from app.middleware.request_context import RequestContextMiddleware
+app.add_middleware(RequestContextMiddleware)
 
 # ── Exception handlers ────────────────────────────────────────────────────────
 def _cors_headers_for(request: Request) -> dict[str, str]:
@@ -269,6 +295,7 @@ app.include_router(boq_templates_router, prefix="/api/v1")
 app.include_router(delivery_capture_router, prefix="/api/v1")
 app.include_router(summary_router, prefix="/api/v1")
 app.include_router(whatsapp_router, prefix="/api/v1")
+app.include_router(notification_settings_router, prefix="/api/v1")
 app.include_router(project_jc_router, prefix="/api/v1")
 app.include_router(jc_router, prefix="/api/v1")
 app.include_router(site_dashboard_router, prefix="/api/v1")
@@ -286,6 +313,12 @@ app.include_router(audit_router, prefix="/api/v1")
 
 from app.api.v1.admin import router as admin_router
 app.include_router(admin_router, prefix="/api/v1")
+
+from app.api.v1.reconciliation import router as reconciliation_router
+app.include_router(reconciliation_router, prefix="/api/v1")
+
+from app.api.v1.ops import router as ops_router
+app.include_router(ops_router, prefix="/api/v1")
 
 from app.api.v1.warehouse import router as warehouse_router, project_warehouse_router
 app.include_router(warehouse_router, prefix="/api/v1")
@@ -307,7 +340,7 @@ app.mount("/uploads", StaticFiles(directory=_uploads_dir), name="uploads")
 
 # ── Debug routes ─────────────────────────────────────────────────────────────
 
-@app.get("/api/v1/debug/db-schema", tags=["debug"])
+@app.get("/api/v1/debug/db-schema", tags=["debug"], dependencies=[OWNER_ONLY])
 def db_schema_check():
     """
     Admin-safe DB schema diagnostic: alembic revision, tables, generated columns, warnings.
@@ -377,7 +410,7 @@ def db_schema_check():
     }
 
 
-@app.get("/api/v1/debug/routes", tags=["debug"])
+@app.get("/api/v1/debug/routes", tags=["debug"], dependencies=[OWNER_ONLY])
 def list_routes():
     """
     Returns all registered route paths and their HTTP methods.
@@ -404,33 +437,31 @@ def list_routes():
 # ── Startup logging ────────────────────────────────────────────────────────────
 @app.on_event("startup")
 def _log_startup_config() -> None:
-    """Print non-secret configuration at startup for production diagnostics."""
+    """Log non-secret configuration at startup for production diagnostics."""
     from fastapi.routing import APIRoute
     api_routes = [r for r in app.routes if isinstance(r, APIRoute)]
-    print("=" * 60, flush=True)
-    print(f"HMH_BACKEND_BUILD_MARKER=whatsapp-failure-logging-v2", flush=True)
-    print(f"[HMH] APP_ENV        : {settings.APP_ENV}", flush=True)
-    print(f"[HMH] DEBUG          : {settings.DEBUG}", flush=True)
-    print(f"[HMH] API routes     : {len(api_routes)}", flush=True)
-    print(f"[HMH] CORS origins   : {_cors_origins}", flush=True)
     import os as _os
     _upload_exists = _os.path.isdir(settings.UPLOAD_DIR)
     _upload_abs    = _os.path.abspath(settings.UPLOAD_DIR)
-    print(f"[HMH] UPLOAD_DIR     : {settings.UPLOAD_DIR}", flush=True)
-    print(f"[HMH] UPLOAD_DIR_ABS : {_upload_abs}", flush=True)
-    print(f"[HMH] UPLOAD_DIR_OK  : {_upload_exists} {'OK' if _upload_exists else 'MISSING - check for typo (scr vs src)'}", flush=True)
     from app.core.storage import storage_mode, verify_supabase_connection
     _mode  = storage_mode()
     _check = verify_supabase_connection()
-    print(f"[HMH] STORAGE_MODE   : {_mode.upper()}", flush=True)
+
+    _log.info("HMH_BACKEND_BUILD_MARKER=observability-v1")
+    _log.info("startup app_env=%s debug=%s routes=%d", settings.APP_ENV, settings.DEBUG, len(api_routes))
+    _log.info("startup cors_origins=%s", _cors_origins)
+    _log.info("startup upload_dir=%s abs=%s exists=%s", settings.UPLOAD_DIR, _upload_abs, _upload_exists)
+    if not _upload_exists:
+        _log.warning("startup UPLOAD_DIR missing — check for path typo")
+    _log.info("startup storage_mode=%s", _mode.upper())
     if _mode == "supabase":
-        _ok = "OK - photos stored permanently in Supabase" if _check["ok"] else f"ERROR: {_check.get('error','?')}"
-        print(f"[HMH] SUPABASE       : {_ok}", flush=True)
+        if _check["ok"]:
+            _log.info("startup supabase=OK photos stored permanently")
+        else:
+            _log.error("startup supabase=ERROR %s", _check.get("error", "unknown"))
     else:
-        print("[HMH] SUPABASE       : NOT CONFIGURED — photos lost on Render restart!", flush=True)
-        print("[HMH]                  Fix: add SUPABASE_URL + SUPABASE_SERVICE_KEY in Render env vars.", flush=True)
-    print(f"[HMH] SMTP_ENABLED   : {settings.SMTP_ENABLED}", flush=True)
-    print("=" * 60, flush=True)
+        _log.warning("startup supabase=NOT_CONFIGURED photos will be lost on Render restart")
+    _log.info("startup smtp_enabled=%s whatsapp_enabled=%s", settings.SMTP_ENABLED, settings.WHATSAPP_ENABLED)
 
 
 # ── Temporary startup seeding ────────────────────────────────────────────────
@@ -444,11 +475,11 @@ def ensure_default_stages() -> None:
         try:
             if not list_stage_masters(db):
                 seed_default_stages(db)
-                print("Default stages seeded on startup.")
+                _log.info("Default stages seeded on startup.")
         finally:
             db.close()
     except Exception as exc:
-        print(f"Stage auto-seed skipped: {exc}")
+        _log.warning("Stage auto-seed skipped: %s", exc)
 
 
 @app.on_event("startup")
@@ -460,7 +491,7 @@ def run_demo_seed_once() -> None:
     """
     should_seed = os.getenv("RUN_STARTUP_SEED", "false").lower() == "true"
     if not should_seed:
-        print("Startup seed skipped.")
+        _log.debug("Startup seed skipped (RUN_STARTUP_SEED not set).")
         return
 
     base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -475,14 +506,14 @@ def run_demo_seed_once() -> None:
         script_path = os.path.join(scripts_dir, script_name)
 
         if not os.path.exists(script_path):
-            print(f"Seed script not found: {script_path}")
+            _log.warning("Seed script not found: %s", script_path)
             continue
 
         try:
-            print(f"Running startup seed: {script_name}")
+            _log.info("Running startup seed: %s", script_name)
             subprocess.run([sys.executable, script_path], check=True)
-            print(f"Seed completed: {script_name}")
+            _log.info("Seed completed: %s", script_name)
         except subprocess.CalledProcessError as exc:
-            print(f"Seed script failed: {script_name} -> {exc}")
+            _log.error("Seed script failed: %s -> %s", script_name, exc)
         except Exception as exc:
-            print(f"Unexpected seed error in {script_name}: {exc}")
+            _log.error("Unexpected seed error in %s: %s", script_name, exc)

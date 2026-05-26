@@ -8,7 +8,6 @@ Revision ID: 0026
 Revises: 0025
 """
 
-import sqlalchemy as sa
 from alembic import op
 
 revision = "0026"
@@ -18,11 +17,14 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "project_stage_status",
-        sa.Column("planned_completion_date", sa.Date(), nullable=True),
-    )
+    op.execute("""
+        ALTER TABLE project_stage_status
+        ADD COLUMN IF NOT EXISTS planned_completion_date DATE
+    """)
 
 
 def downgrade() -> None:
-    op.drop_column("project_stage_status", "planned_completion_date")
+    op.execute("""
+        ALTER TABLE project_stage_status
+        DROP COLUMN IF EXISTS planned_completion_date
+    """)

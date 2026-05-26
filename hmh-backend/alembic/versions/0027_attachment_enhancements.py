@@ -5,7 +5,6 @@ Revises: 0026
 Create Date: 2026-05-26
 """
 
-import sqlalchemy as sa
 from alembic import op
 
 revision = "0027"
@@ -15,24 +14,14 @@ depends_on = None
 
 
 def upgrade() -> None:
-    # Add caption and uploaded_role columns to attachments
-    op.add_column(
-        "attachments",
-        sa.Column("caption", sa.String(500), nullable=True),
-    )
-    op.add_column(
-        "attachments",
-        sa.Column("uploaded_role", sa.String(50), nullable=True),
-    )
+    op.execute("ALTER TABLE attachments ADD COLUMN IF NOT EXISTS caption VARCHAR(500)")
+    op.execute("ALTER TABLE attachments ADD COLUMN IF NOT EXISTS uploaded_role VARCHAR(50)")
 
-    # Add 4 new attachment type enum values
-    op.execute("ALTER TYPE attachment_type_enum ADD VALUE IF NOT EXISTS 'BEFORE_PHOTO'")
-    op.execute("ALTER TYPE attachment_type_enum ADD VALUE IF NOT EXISTS 'COMPLETION_PHOTO'")
-    op.execute("ALTER TYPE attachment_type_enum ADD VALUE IF NOT EXISTS 'ISSUE_PHOTO'")
-    op.execute("ALTER TYPE attachment_type_enum ADD VALUE IF NOT EXISTS 'DELIVERY_EVIDENCE'")
+    for val in ["BEFORE_PHOTO", "COMPLETION_PHOTO", "ISSUE_PHOTO", "DELIVERY_EVIDENCE"]:
+        op.execute(f"ALTER TYPE attachment_type_enum ADD VALUE IF NOT EXISTS '{val}'")
 
 
 def downgrade() -> None:
-    op.drop_column("attachments", "caption")
-    op.drop_column("attachments", "uploaded_role")
+    op.execute("ALTER TABLE attachments DROP COLUMN IF EXISTS uploaded_role")
+    op.execute("ALTER TABLE attachments DROP COLUMN IF EXISTS caption")
     # Note: PostgreSQL enum values cannot be removed without recreating the type
