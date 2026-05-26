@@ -565,6 +565,14 @@ def _log_startup_config() -> None:
         _log.warning("startup supabase=NOT_CONFIGURED photos will be lost on Render restart")
     _log.info("startup smtp_enabled=%s whatsapp_enabled=%s", settings.SMTP_ENABLED, settings.WHATSAPP_ENABLED)
 
+    # OCR / Vision
+    from app.services.document_ai_service import validate_ocr_setup
+    _ocr = validate_ocr_setup()
+    if _ocr["ready"]:
+        _log.info("startup ocr_provider=%s %s", _ocr["provider"], _ocr["message"])
+    else:
+        _log.warning("startup ocr_not_ready provider=%s — %s", _ocr["provider"], _ocr["message"])
+
 
 # ── Temporary startup seeding ────────────────────────────────────────────────
 @app.on_event("startup")

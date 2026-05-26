@@ -34,27 +34,83 @@ def _ocr_provider() -> str:
     return (settings.OCR_PROVIDER or "local").lower()
 
 
+def _resolve_credentials_path(raw: str) -> str:
+    """
+    Resolve GOOGLE_APPLICATION_CREDENTIALS to an absolute path.
+    Relative paths are resolved relative to the hmh-backend/ project root
+    (3 directories above this file: services/ → app/ → hmh-backend/).
+    Inline JSON strings (starting with '{') are returned unchanged.
+    """
+    if not raw or raw.strip().startswith("{"):
+        return raw
+    if os.path.isabs(raw):
+        return raw
+    import pathlib
+    base_dir = pathlib.Path(__file__).resolve().parent.parent.parent
+    return str(base_dir / raw)
+
+
+# Module-level cache for inline-JSON temp credential file (written once per process).
+_cred_temp_path: Optional[str] = None
+
+
+def _prepare_credentials() -> None:
+    """
+    Resolve GOOGLE_APPLICATION_CREDENTIALS from settings and set it as an
+    absolute path env var so the Vision client can find it.
+    Handles:
+      - File path (relative or absolute)
+      - Inline JSON string → written to a temp file once per process
+    Called inside extract_text_via_google_vision before creating the client.
+    """
+    global _cred_temp_path
+    from app.core.config import settings
+
+    raw = settings.GOOGLE_APPLICATION_CREDENTIALS
+    if not raw:
+        return
+
+    if raw.strip().startswith("{"):
+        # Inline JSON: write to a temp file once and cache the path.
+        if not (_cred_temp_path and os.path.exists(_cred_temp_path)):
+            import json, tempfile
+            try:
+                json.loads(raw)  # validate JSON before writing
+            except json.JSONDecodeError as exc:
+                logger.warning("GOOGLE_APPLICATION_CREDENTIALS inline JSON is invalid: %s", exc)
+                return
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".json", delete=False, prefix="hmh_gcp_creds_"
+            ) as f:
+                f.write(raw)
+                _cred_temp_path = f.name
+            logger.debug("vision credentials written to temp file %s", _cred_temp_path)
+        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = _cred_temp_path
+    else:
+        abs_path = _resolve_credentials_path(raw)
+        if not os.path.exists(abs_path):
+            logger.warning("GOOGLE_APPLICATION_CREDENTIALS file not found: %s", abs_path)
+            return
+        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = abs_path
+
+
 def extract_text_via_google_vision(file_path: str) -> str:
     """
     Extract text from an image or PDF using Google Cloud Vision DOCUMENT_TEXT_DETECTION.
     Returns empty string on any error — never raises.
     OCR_PROVIDER must be "google_vision" and GOOGLE_APPLICATION_CREDENTIALS must point
-    to a valid service-account JSON file.
+    to a valid service-account JSON file (or inline JSON string).
     """
     try:
         from google.cloud import vision  # type: ignore
-        from app.core.config import settings
 
-        if settings.GOOGLE_APPLICATION_CREDENTIALS:
-            os.environ.setdefault(
-                "GOOGLE_APPLICATION_CREDENTIALS", settings.GOOGLE_APPLICATION_CREDENTIALS
-            )
-
+        _prepare_credentials()
         client_v = vision.ImageAnnotatorClient()
+
         with open(file_path, "rb") as f:
             content = f.read()
 
-        image   = vision.Image(content=content)
+        image    = vision.Image(content=content)
         response = client_v.document_text_detection(image=image)
 
         if response.error.message:
@@ -71,6 +127,60 @@ def extract_text_via_google_vision(file_path: str) -> str:
     except Exception as exc:
         logger.warning("Google Vision extraction failed for %s: %s", file_path, exc)
         return ""
+
+
+def validate_ocr_setup() -> dict:
+    """
+    Check OCR configuration at startup.
+    Returns dict: { provider, ready, message }
+    Never raises — intended for diagnostic logging only.
+    """
+    provider = _ocr_provider()
+
+    if provider == "disabled":
+        return {"provider": "disabled", "ready": True, "message": "OCR disabled by config"}
+
+    if provider == "google_vision":
+        from app.core.config import settings
+        cred = settings.GOOGLE_APPLICATION_CREDENTIALS
+        if not cred:
+            return {
+                "provider": "google_vision", "ready": False,
+                "message": "GOOGLE_APPLICATION_CREDENTIALS not set",
+            }
+        if cred.strip().startswith("{"):
+            try:
+                import json
+                json.loads(cred)
+                label = "inline JSON credentials"
+            except Exception:
+                return {"provider": "google_vision", "ready": False, "message": "inline JSON is invalid"}
+        else:
+            abs_path = _resolve_credentials_path(cred)
+            if not os.path.exists(abs_path):
+                return {
+                    "provider": "google_vision", "ready": False,
+                    "message": f"credentials file not found: {abs_path}",
+                }
+            label = os.path.basename(abs_path)
+        try:
+            from google.cloud import vision  # type: ignore  # noqa: F401
+            return {"provider": "google_vision", "ready": True, "message": f"credentials: {label}"}
+        except ImportError:
+            return {
+                "provider": "google_vision", "ready": False,
+                "message": "google-cloud-vision package not installed (run: pip install google-cloud-vision)",
+            }
+
+    # local tesseract
+    try:
+        import pytesseract  # type: ignore  # noqa: F401
+        return {"provider": "local", "ready": True, "message": "pytesseract available"}
+    except ImportError:
+        return {
+            "provider": "local", "ready": False,
+            "message": "pytesseract not installed (OCR unavailable on Render without build config)",
+        }
 
 # ── Regex patterns ────────────────────────────────────────────────────────────
 

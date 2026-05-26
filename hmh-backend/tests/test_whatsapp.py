@@ -249,8 +249,12 @@ class TestQueueProcessing:
         entry = _make_queue_entry(db, recipient, alert)
         db.commit()
 
-        # Patch the actual send function so no real HTTP call happens.
+        # Patch BOTH send paths so no real HTTP calls happen regardless of whether
+        # the notification service uses send_text (24h window) or send_template_message
+        # (when WHATSAPP_ALERT_TEMPLATE_NAME is configured in .env).
         with patch("app.services.notification_service.whatsapp_service.send_text",
+                   return_value=("MOCK_SENT", None)), \
+             patch("app.services.notification_service.whatsapp_service.send_template_message",
                    return_value=("MOCK_SENT", None)):
             from app.services.notification_service import process_queue
             result = process_queue(db)

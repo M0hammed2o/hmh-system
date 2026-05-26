@@ -265,3 +265,175 @@ class TestComparePOInvoiceDelivery:
             db=db,
         )
         assert result["status"] == "FAILED"
+
+
+# ── Google Vision OCR tests (all mocked — no real API calls) ─────────────────
+
+class TestGoogleVisionOCR:
+    """
+    Tests for extract_text_via_google_vision() and validate_ocr_setup().
+    All Vision API calls are mocked; no real credentials or network needed.
+    """
+
+    def _mock_vision(self, text: str = "", error_msg: str = ""):
+        """Return a minimal google.cloud.vision mock wired to return `text`."""
+        from unittest.mock import MagicMock
+        mock_v = MagicMock()
+        mock_resp = MagicMock()
+        mock_resp.error.message = error_msg
+        mock_resp.full_text_annotation.text = text
+        mock_v.ImageAnnotatorClient.return_value.document_text_detection.return_value = mock_resp
+        mock_v.Image.return_value = MagicMock()
+        return mock_v
+
+    def _patch_vision(self, mock_v):
+        """Return a patch.dict context that injects `mock_v` as google.cloud.vision."""
+        import sys
+        from unittest.mock import MagicMock, patch
+        mock_gc = MagicMock()
+        mock_gc.vision = mock_v
+        return patch.dict(sys.modules, {
+            "google": MagicMock(),
+            "google.cloud": mock_gc,
+            "google.cloud.vision": mock_v,
+        })
+
+    def test_vision_not_installed_returns_empty(self, tmp_path):
+        """ImportError (package not installed) → returns empty string, never raises."""
+        import sys
+        from unittest.mock import patch
+        from app.services.document_ai_service import extract_text_via_google_vision
+
+        with patch.dict(sys.modules, {"google.cloud.vision": None}):
+            result = extract_text_via_google_vision(str(tmp_path / "fake.png"))
+        assert result == ""
+
+    def test_vision_success_returns_text(self, tmp_path, monkeypatch):
+        """Mocked Vision API returns text → function returns that text."""
+        from app.services.document_ai_service import extract_text_via_google_vision
+
+        test_file = tmp_path / "invoice.png"
+        test_file.write_bytes(b"\x89PNG\r\n\x1a\n")  # minimal PNG header bytes
+
+        monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
+        monkeypatch.setattr(
+            "app.services.document_ai_service._prepare_credentials", lambda: None
+        )
+
+        mock_v = self._mock_vision(text="Invoice INV-MOCK-001\nTotal Due: R12500.00")
+        with self._patch_vision(mock_v):
+            result = extract_text_via_google_vision(str(test_file))
+
+        assert "INV-MOCK-001" in result
+        assert "12500" in result
+
+    def test_vision_api_error_returns_empty(self, tmp_path, monkeypatch):
+        """Vision response.error.message set → returns empty string, no raise."""
+        from app.services.document_ai_service import extract_text_via_google_vision
+
+        test_file = tmp_path / "doc.png"
+        test_file.write_bytes(b"\x89PNG\r\n\x1a\n")
+        monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
+        monkeypatch.setattr(
+            "app.services.document_ai_service._prepare_credentials", lambda: None
+        )
+
+        mock_v = self._mock_vision(text="", error_msg="PERMISSION_DENIED: quota exceeded")
+        with self._patch_vision(mock_v):
+            result = extract_text_via_google_vision(str(test_file))
+
+        assert result == ""
+
+    def test_vision_client_exception_returns_empty(self, tmp_path, monkeypatch):
+        """Vision client constructor raises (bad credentials) → returns empty string."""
+        import sys
+        from unittest.mock import MagicMock, patch
+        from app.services.document_ai_service import extract_text_via_google_vision
+
+        test_file = tmp_path / "doc.png"
+        test_file.write_bytes(b"\x89PNG\r\n\x1a\n")
+        monkeypatch.setattr(
+            "app.services.document_ai_service._prepare_credentials", lambda: None
+        )
+
+        mock_v = MagicMock()
+        mock_v.ImageAnnotatorClient.side_effect = Exception("DefaultCredentialsError: no credentials found")
+
+        with self._patch_vision(mock_v):
+            result = extract_text_via_google_vision(str(test_file))
+
+        assert result == ""
+
+    def test_vision_missing_file_returns_empty(self, monkeypatch):
+        """File does not exist → open() raises → caught → returns empty string."""
+        from app.services.document_ai_service import extract_text_via_google_vision
+        monkeypatch.setattr(
+            "app.services.document_ai_service._prepare_credentials", lambda: None
+        )
+        mock_v = self._mock_vision(text="some text")
+        with self._patch_vision(mock_v):
+            result = extract_text_via_google_vision("/nonexistent/path/invoice.png")
+        assert result == ""
+
+    def test_disabled_provider_returns_not_available(self, tmp_path, monkeypatch):
+        """OCR_PROVIDER=disabled → extract_document_data returns OCR_NOT_AVAILABLE for images."""
+        monkeypatch.setattr("app.services.document_ai_service._ocr_provider", lambda: "disabled")
+
+        img_file = tmp_path / "scan.png"
+        img_file.write_bytes(b"\x89PNG\r\n\x1a\n")
+
+        from app.services.document_ai_service import extract_document_data
+        result = extract_document_data(str(img_file), "INVOICE")
+        assert result["status"] == "OCR_NOT_AVAILABLE"
+
+    def test_validate_ocr_setup_disabled(self, monkeypatch):
+        """validate_ocr_setup returns ready=True for disabled provider."""
+        monkeypatch.setattr("app.services.document_ai_service._ocr_provider", lambda: "disabled")
+        from app.services.document_ai_service import validate_ocr_setup
+        status = validate_ocr_setup()
+        assert status["ready"] is True
+        assert status["provider"] == "disabled"
+
+    def test_validate_ocr_setup_vision_missing_credentials(self, monkeypatch):
+        """validate_ocr_setup returns ready=False when credentials not configured."""
+        monkeypatch.setattr("app.services.document_ai_service._ocr_provider", lambda: "google_vision")
+        from app.core.config import settings
+        monkeypatch.setattr(settings, "GOOGLE_APPLICATION_CREDENTIALS", "")
+        from app.services.document_ai_service import validate_ocr_setup
+        status = validate_ocr_setup()
+        assert status["ready"] is False
+        assert "GOOGLE_APPLICATION_CREDENTIALS" in status["message"]
+
+    def test_validate_ocr_setup_vision_file_not_found(self, monkeypatch):
+        """validate_ocr_setup returns ready=False when credentials file doesn't exist."""
+        monkeypatch.setattr("app.services.document_ai_service._ocr_provider", lambda: "google_vision")
+        from app.core.config import settings
+        monkeypatch.setattr(settings, "GOOGLE_APPLICATION_CREDENTIALS", "/nonexistent/creds.json")
+        from app.services.document_ai_service import validate_ocr_setup
+        status = validate_ocr_setup()
+        assert status["ready"] is False
+        assert "not found" in status["message"]
+
+    def test_validate_ocr_setup_vision_ready(self, monkeypatch, tmp_path):
+        """validate_ocr_setup returns ready=True when credentials file exists and library installed."""
+        import sys
+        from unittest.mock import MagicMock, patch
+
+        cred_file = tmp_path / "creds.json"
+        cred_file.write_text('{"type": "service_account"}')
+
+        monkeypatch.setattr("app.services.document_ai_service._ocr_provider", lambda: "google_vision")
+        from app.core.config import settings
+        monkeypatch.setattr(settings, "GOOGLE_APPLICATION_CREDENTIALS", str(cred_file))
+
+        mock_v = MagicMock()
+        with patch.dict(sys.modules, {
+            "google": MagicMock(),
+            "google.cloud": MagicMock(vision=mock_v),
+            "google.cloud.vision": mock_v,
+        }):
+            from app.services.document_ai_service import validate_ocr_setup
+            status = validate_ocr_setup()
+
+        assert status["ready"] is True
+        assert status["provider"] == "google_vision"
