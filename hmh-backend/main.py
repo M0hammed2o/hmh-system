@@ -40,6 +40,25 @@ elif settings.SECRET_KEY == _DEFAULT_SECRET:
         "Override it with a strong random string before deploying."
     )
 
+# ── Fail fast if WhatsApp is enabled in production with the default verify token
+_DEFAULT_WA_TOKEN = "hmh_verify_token"
+if settings.is_production and settings.WHATSAPP_ENABLED:
+    if settings.WHATSAPP_VERIFY_TOKEN == _DEFAULT_WA_TOKEN:
+        _log.critical(
+            "SECURITY ERROR: WHATSAPP_VERIFY_TOKEN is the default value 'hmh_verify_token'. "
+            "Anyone who knows this value can complete the Meta webhook verification against "
+            "your endpoint. Set a strong random WHATSAPP_VERIFY_TOKEN in your environment."
+        )
+        raise RuntimeError(
+            "WHATSAPP_VERIFY_TOKEN must be changed from the default before enabling WhatsApp "
+            "in production. Set WHATSAPP_VERIFY_TOKEN in your environment."
+        )
+    if not settings.WHATSAPP_APP_SECRET:
+        _log.warning(
+            "WHATSAPP_APP_SECRET is not set. Webhook HMAC signature verification is disabled. "
+            "Set WHATSAPP_APP_SECRET to your Meta App Secret to secure the webhook endpoint."
+        )
+
 from app.core.exceptions import HMHException
 from app.api.health import router as health_router
 from app.api.v1.auth import router as auth_router
@@ -338,6 +357,40 @@ os.makedirs(_uploads_dir, exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=_uploads_dir), name="uploads")
 
 
+# ── Internal cron endpoint ───────────────────────────────────────────────────
+
+@app.post("/api/v1/internal/process-notifications", include_in_schema=False)
+async def internal_process_notifications(request: Request):
+    """
+    Lightweight endpoint for Render Cron Job / external scheduler.
+
+    Validates X-Cron-Secret header against CRON_SECRET env var.
+    Returns 403 if the secret is wrong or not configured.
+    This is a secondary safety net — the primary drain runs in-process every 5 min.
+    """
+    if not settings.CRON_SECRET:
+        return JSONResponse({"detail": "Cron endpoint disabled (CRON_SECRET not set)"}, status_code=403)
+
+    import secrets as _secrets
+    header_secret = request.headers.get("X-Cron-Secret", "")
+    if not _secrets.compare_digest(settings.CRON_SECRET, header_secret):
+        _log.warning("internal_cron rejected invalid_secret ip=%s",
+                     request.client.host if request.client else "unknown")
+        return JSONResponse({"detail": "Forbidden"}, status_code=403)
+
+    from app.db.session import SessionLocal
+    from app.services.notification_service import process_queue
+    _db = SessionLocal()
+    try:
+        result = process_queue(_db)
+        _log.info("internal_cron queue_drain sent=%d mock=%d failed=%d skipped=%d",
+                  result.get("sent", 0), result.get("mock_sent", 0),
+                  result.get("failed", 0), result.get("skipped", 0))
+        return JSONResponse(result)
+    finally:
+        _db.close()
+
+
 # ── Debug routes ─────────────────────────────────────────────────────────────
 
 @app.get("/api/v1/debug/db-schema", tags=["debug"], dependencies=[OWNER_ONLY])
@@ -432,6 +485,52 @@ def list_routes():
         "cors_origins":  _cors_origins,
         "routes":        sorted(routes, key=lambda r: r["path"]),
     }
+
+
+# ── Background notification queue drain ──────────────────────────────────────
+import asyncio as _asyncio
+
+
+async def _queue_drain_loop() -> None:
+    """
+    Drain the notification queue every 5 minutes.
+
+    Runs as a background asyncio task for the lifetime of the process.
+    Equivalent to a Render Cron Job calling POST /api/v1/alerts/queue/process,
+    but runs in-process so it works out of the box without external configuration.
+
+    Set WHATSAPP_ENABLED=false to suppress all real sends; the loop still runs
+    so queue rows are processed (marked MOCK_SENT / FAILED) and the system
+    remains testable without real WhatsApp credentials.
+    """
+    # Short startup delay so DB connections are established before first drain.
+    await _asyncio.sleep(30)
+    while True:
+        try:
+            from app.db.session import SessionLocal
+            from app.services.notification_service import process_queue
+            _db = SessionLocal()
+            try:
+                result = process_queue(_db)
+                total = result.get("sent", 0) + result.get("mock_sent", 0) + result.get("failed", 0)
+                if total > 0:
+                    _log.info(
+                        "queue_drain sent=%d mock_sent=%d failed=%d skipped=%d",
+                        result.get("sent", 0), result.get("mock_sent", 0),
+                        result.get("failed", 0), result.get("skipped", 0),
+                    )
+            finally:
+                _db.close()
+        except Exception:
+            _log.exception("queue_drain background task error — will retry in 5 min")
+        await _asyncio.sleep(300)  # 5 minutes
+
+
+@app.on_event("startup")
+async def _start_background_queue_drain() -> None:
+    """Launch the background queue drain loop as a fire-and-forget asyncio task."""
+    _asyncio.create_task(_queue_drain_loop())
+    _log.info("startup queue_drain_task=started interval=300s")
 
 
 # ── Startup logging ────────────────────────────────────────────────────────────

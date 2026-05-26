@@ -5,20 +5,50 @@ GET  /whatsapp/webhook  — Meta verification handshake
 POST /whatsapp/webhook  — Incoming messages + delivery statuses
 """
 
+import hashlib
+import hmac
 import logging
 import re
 
 from fastapi import APIRouter, Query, Request, Response
 from fastapi.responses import PlainTextResponse
 
+from app.core.config import settings
 from app.dependencies import DbSession
 from app.schemas.common import ApiSuccess
 from app.services import notification_service, whatsapp_service
 
-logger = logging.getLogger(__name__)
+from app.core.logging_config import get_logger
+
+logger = get_logger(__name__)
 router = APIRouter(prefix="/whatsapp", tags=["whatsapp"])
 
-print("### REAL WHATSAPP WEBHOOK FILE LOADED ###", flush=True)
+
+# ── HMAC signature verification ───────────────────────────────────────────────
+
+def _verify_hmac_signature(body: bytes, signature_header: str) -> bool:
+    """
+    Verify the X-Hub-Signature-256 header sent by Meta on every webhook POST.
+
+    The HMAC is computed with the Meta App Secret as the key and the raw
+    request body as the message (SHA-256).  Returns True when the signature
+    is valid or when WHATSAPP_APP_SECRET is not configured (dev/test mode).
+    """
+    app_secret = settings.WHATSAPP_APP_SECRET
+    if not app_secret:
+        # No secret configured — skip verification (dev / disabled mode).
+        return True
+
+    if not signature_header or not signature_header.startswith("sha256="):
+        return False
+
+    expected = "sha256=" + hmac.new(
+        app_secret.encode("utf-8"),
+        body,
+        hashlib.sha256,
+    ).hexdigest()
+
+    return hmac.compare_digest(expected, signature_header)
 
 # Intent keyword groups — checked in APPROVE > REJECT > ACK priority order
 _APPROVE_KEYWORDS = {"approve", "approved", "yes", "confirm"}
@@ -92,7 +122,7 @@ def _unknown_reply() -> str:
 
 @router.get("/debug")
 def debug_router():
-    print("### GET /whatsapp/debug HIT ###", flush=True)
+    logger.debug("GET /whatsapp/debug hit")
     return {
         "loaded": True,
         "file": __file__,
@@ -108,12 +138,11 @@ def verify_webhook(
     hub_token:     str = Query(alias="hub.verify_token", default=""),
     hub_challenge: str = Query(alias="hub.challenge",    default=""),
 ):
-    print("### GET WHATSAPP WEBHOOK HIT ###", flush=True)
     result = whatsapp_service.verify_webhook(hub_mode, hub_token, hub_challenge)
     if result:
-        print(f"[WA-WEBHOOK] Verified OK, challenge returned", flush=True)
+        logger.info("wa_webhook verified ok challenge_returned")
         return PlainTextResponse(result)
-    print(f"[WA-WEBHOOK] Verification FAILED — bad token", flush=True)
+    logger.warning("wa_webhook verification_failed bad_token")
     return Response(status_code=403)
 
 
@@ -121,16 +150,29 @@ def verify_webhook(
 
 @router.post("/webhook")
 async def receive_webhook(request: Request, db: DbSession):
-    print("### POST WHATSAPP WEBHOOK HIT ###", flush=True)
+    # Read raw bytes first so we can verify the HMAC before parsing JSON.
+    body = await request.body()
+
+    signature = request.headers.get("X-Hub-Signature-256", "")
+    if not _verify_hmac_signature(body, signature):
+        # Log rejection without including the signature or secret values.
+        logger.warning(
+            "wa_webhook HMAC_REJECTED ip=%s signature_present=%s",
+            request.client.host if request.client else "unknown",
+            bool(signature),
+        )
+        return Response(status_code=403)
+
     try:
-        payload = await request.json()
+        import json
+        payload = json.loads(body)
     except Exception:
         return Response(status_code=200)
 
     messages = whatsapp_service.parse_incoming(payload)
     statuses = whatsapp_service.parse_statuses(payload)
 
-    print(f"[WA-WEBHOOK] Received: {len(messages)} message(s), {len(statuses)} status update(s)", flush=True)
+    logger.info("wa_webhook received messages=%d statuses=%d", len(messages), len(statuses))
 
     for status in statuses:
         _handle_delivery_status(db, status)
@@ -151,11 +193,11 @@ async def receive_webhook(request: Request, db: DbSession):
         # notification_service knows the 24-hour window is open.
         _stamp_recipient_inbound(db, from_number)
 
-        print(f"[WA-WEBHOOK] from={_normalise(from_number)} body={body_raw!r} intent={intent} mr={mr_match and mr_match.group(0)}", flush=True)
+        logger.info("wa_msg from=%s intent=%s mr=%s", _normalise(from_number), intent, mr_match and mr_match.group(0))
 
         # ── RESET TEST ALERTS — exact phrase, checked before intent ───────────
         if normalized == "RESET TEST ALERTS":
-            print("[WA-WEBHOOK] Command=RESET_TEST_ALERTS", flush=True)
+            logger.info("wa_command cmd=RESET_TEST_ALERTS from=%s", _normalise(from_number))
             reset_count = _reset_test_alerts(db, from_number)
             _reply(
                 from_number,
@@ -165,7 +207,7 @@ async def receive_webhook(request: Request, db: DbSession):
 
         # ── LIST ──────────────────────────────────────────────────────────────
         if "list" in tokens:
-            print(f"[WA-WEBHOOK] Command=LIST", flush=True)
+            logger.info("wa_command cmd=LIST from=%s", _normalise(from_number))
             _reply(from_number, _list_pending_alerts(db, from_number))
             continue
 
@@ -173,56 +215,56 @@ async def receive_webhook(request: Request, db: DbSession):
         if mr_match:
             mr_number = mr_match.group(0).upper()
             if intent == "APPROVE":
-                print(f"[WA-WEBHOOK] Command=APPROVE mr={mr_number}", flush=True)
+                logger.info("wa_command cmd=APPROVE_MR mr=%s", mr_number)
                 result, reply = _approve_mr(db, mr_number, from_number)
                 approved.append({"mr_number": mr_number, "result": result})
                 _reply(from_number, reply)
-                print(f"[WA-WEBHOOK] APPROVE done: result={result}", flush=True)
+                logger.info("wa_approve_mr done mr=%s result=%s", mr_number, result)
             elif intent == "REJECT":
                 reason = _extract_reason(body_raw, tokens) or "Rejected via WhatsApp"
-                print(f"[WA-WEBHOOK] Command=REJECT mr={mr_number} reason={reason!r}", flush=True)
+                logger.info("wa_command cmd=REJECT_MR mr=%s", mr_number)
                 result, reply = _reject_mr(db, mr_number, from_number, reason)
                 rejected.append({"mr_number": mr_number, "result": result})
                 _reply(from_number, reply)
-                print(f"[WA-WEBHOOK] REJECT done: result={result}", flush=True)
+                logger.info("wa_reject_mr done mr=%s result=%s", mr_number, result)
             else:
-                print(f"[WA-WEBHOOK] Command=UNKNOWN_MR body={body_raw!r}", flush=True)
+                logger.info("wa_command cmd=UNKNOWN_MR from=%s", _normalise(from_number))
                 _reply(from_number, _unknown_reply())
             continue
 
         # ── Safety check: nothing pending → skip processing ───────────────────
         if intent in ("ACK", "APPROVE", "REJECT"):
             if _latest_pending_queue_entry(db, from_number) is None:
-                print(f"[WA-WEBHOOK] No pending alerts for {_normalise(from_number)}", flush=True)
+                logger.info("wa_no_pending_alerts from=%s", _normalise(from_number))
                 _reply(from_number, "No alerts to process.")
                 continue
 
         # ── General intent — applies to latest pending alert ──────────────────
         if intent == "ACK":
-            print(f"[WA-WEBHOOK] Command=ACK", flush=True)
+            logger.info("wa_command cmd=ACK from=%s", _normalise(from_number))
             count = _ack_with_variants(db, from_number)
             total_acked += count
             _reply(from_number, f"Alerts acknowledged. ({count} updated)")
-            print(f"[WA-WEBHOOK] ACK done: {count} updated", flush=True)
+            logger.info("wa_ack done count=%d from=%s", count, _normalise(from_number))
 
         elif intent == "APPROVE":
-            print(f"[WA-WEBHOOK] Command=APPROVE_ALERT", flush=True)
+            logger.info("wa_command cmd=APPROVE_ALERT from=%s", _normalise(from_number))
             result, reply = _approve_latest_alert(db, from_number)
             _reply(from_number, reply)
-            print(f"[WA-WEBHOOK] APPROVE_ALERT done: result={result}", flush=True)
+            logger.info("wa_approve_alert done result=%s", result)
 
         elif intent == "REJECT":
             reason = _extract_reason(body_raw, tokens)
-            print(f"[WA-WEBHOOK] Command=REJECT_ALERT reason={reason!r}", flush=True)
+            logger.info("wa_command cmd=REJECT_ALERT from=%s", _normalise(from_number))
             result, reply = _reject_latest_alert(db, from_number, reason)
             _reply(from_number, reply)
-            print(f"[WA-WEBHOOK] REJECT_ALERT done: result={result}", flush=True)
+            logger.info("wa_reject_alert done result=%s", result)
 
         else:
-            print(f"[WA-WEBHOOK] Command=UNKNOWN body={body_raw!r}", flush=True)
+            logger.info("wa_command cmd=UNKNOWN from=%s", _normalise(from_number))
             _reply(from_number, _unknown_reply())
 
-    print(f"[WA-WEBHOOK] Done: acked={total_acked} approved={len(approved)} rejected={len(rejected)}", flush=True)
+    logger.info("wa_webhook done acked=%d approved=%d rejected=%d", total_acked, len(approved), len(rejected))
 
     return ApiSuccess(data={
         "processed_messages": len(messages),
@@ -237,15 +279,11 @@ async def receive_webhook(request: Request, db: DbSession):
 
 def _reply(to: str, text: str) -> None:
     """Send a WhatsApp reply. Never raises. Prints result to CMD."""
-    from app.core.config import settings
-    print(f"[WA-REPLY] Sending to={_normalise(to)} enabled={settings.WHATSAPP_ENABLED}", flush=True)
     try:
         status, msg_id = whatsapp_service.send_text_message(to, text)
-        print(f"[WA-REPLY] status={status} id={msg_id} text={text[:60]!r}", flush=True)
-        logger.info("WhatsApp reply to %s: status=%s id=%s", _normalise(to), status, msg_id)
+        logger.info("wa_reply to=%s status=%s id=%s", _normalise(to), status, msg_id)
     except Exception as exc:
-        print(f"[WA-REPLY] EXCEPTION: {exc}", flush=True)
-        logger.exception("WhatsApp reply failed to %s", _normalise(to))
+        logger.exception("wa_reply_failed to=%s error=%s", _normalise(to), exc)
 
 
 # ── ACK with phone variants ───────────────────────────────────────────────────
@@ -258,7 +296,7 @@ def _ack_with_variants(db, from_phone: str) -> int:
             continue
         seen.add(variant)
         n = notification_service.acknowledge_by_phone(db, variant)
-        print(f"[WA-ACK] variant={variant!r} matched={n}", flush=True)
+        logger.debug("wa_ack variant=%s matched=%d", variant, n)
         total += n
     return total
 
@@ -284,7 +322,7 @@ def _reset_test_alerts(db, from_phone: str) -> int:
             entry.acknowledged_at = None
             entry.status = NotificationStatus.SENT
             total += 1
-            print(f"[WA-RESET] queue id={entry.id} phone={variant!r} -> SENT", flush=True)
+            logger.debug("wa_reset queue_id=%s phone=%s -> SENT", entry.id, variant)
             if entry.alert_id and entry.alert_id not in seen_alert_ids:
                 seen_alert_ids.add(entry.alert_id)
 
@@ -295,7 +333,7 @@ def _reset_test_alerts(db, from_phone: str) -> int:
             alert.status = AlertStatus.OPEN
             alert.acknowledged_at = None
             alert.acknowledged_by = None
-            print(f"[WA-RESET] alert id={alert_id} -> OPEN", flush=True)
+            logger.debug("wa_reset alert_id=%s -> OPEN", alert_id)
 
     db.commit()
     return total
@@ -381,7 +419,7 @@ def _approve_latest_alert(db, from_phone: str) -> tuple[str, str]:
     now = datetime.now(timezone.utc)
     entry.acknowledged_at = now
     entry.status = NotificationStatus.ACKNOWLEDGED
-    print(f"[WA-APPROVE-ALERT] queue id={entry.id} -> ACKNOWLEDGED", flush=True)
+    logger.info("wa_approve_alert queue_id=%s -> ACKNOWLEDGED", entry.id)
 
     label = "Latest alert"
     if entry.alert_id:
@@ -390,7 +428,7 @@ def _approve_latest_alert(db, from_phone: str) -> tuple[str, str]:
             label = _short_title(alert)
             alert.status = AlertStatus.ACKNOWLEDGED
             alert.acknowledged_at = now
-            print(f"[WA-APPROVE-ALERT] alert id={alert.id} -> ACKNOWLEDGED", flush=True)
+            logger.info("wa_approve_alert alert_id=%s -> ACKNOWLEDGED", alert.id)
 
     db.commit()
     return ("approved", f"{label} approved.")
@@ -408,7 +446,7 @@ def _reject_latest_alert(db, from_phone: str, reason: str) -> tuple[str, str]:
     now = datetime.now(timezone.utc)
     entry.acknowledged_at = now
     entry.status = NotificationStatus.ACKNOWLEDGED
-    print(f"[WA-REJECT-ALERT] queue id={entry.id} reason={reason!r} -> ACKNOWLEDGED", flush=True)
+    logger.info("wa_reject_alert queue_id=%s -> ACKNOWLEDGED", entry.id)
 
     label = "Latest alert"
     if entry.alert_id:
@@ -418,7 +456,7 @@ def _reject_latest_alert(db, from_phone: str, reason: str) -> tuple[str, str]:
             alert.status = AlertStatus.RESOLVED
             alert.acknowledged_at = now
             alert.resolved_at = now
-            print(f"[WA-REJECT-ALERT] alert id={alert.id} -> RESOLVED", flush=True)
+            logger.info("wa_reject_alert alert_id=%s -> RESOLVED", alert.id)
 
     db.commit()
     reply = f"{label} rejected. Reason: {reason}" if reason else f"{label} rejected."
@@ -440,7 +478,7 @@ def _approve_mr(db, mr_number: str, from_phone: str) -> tuple[str, str]:
         if not mr:
             return ("not_found", f"{mr_number} was not found.")
 
-        print(f"[WA-APPROVE] Found {mr_number} status={mr.status.value}", flush=True)
+        logger.debug("wa_approve_mr found mr=%s status=%s", mr_number, mr.status.value)
 
         if mr.status not in (RecordStatus.SUBMITTED, RecordStatus.PENDING_APPROVAL):
             return (
@@ -450,14 +488,13 @@ def _approve_mr(db, mr_number: str, from_phone: str) -> tuple[str, str]:
 
         actor = _find_user_by_phone(db, from_phone)
         actor_id = (actor.id if actor else None) or mr.requested_by
-        print(f"[WA-APPROVE] actor_id={actor_id}", flush=True)
+        logger.debug("wa_approve_mr actor_id=%s", actor_id)
 
         mr_service.approve_request(db, mr.id, actor_id)
         return ("approved", f"{mr_number} has been approved successfully.")
 
     except Exception as exc:
-        print(f"[WA-APPROVE] EXCEPTION: {exc}", flush=True)
-        logger.exception("approve_mr failed for %s", mr_number)
+        logger.exception("wa_approve_mr failed mr=%s", mr_number)
         return ("error", f"Error processing {mr_number}: {exc}")
 
 
@@ -473,7 +510,7 @@ def _reject_mr(db, mr_number: str, from_phone: str, reason: str) -> tuple[str, s
         if not mr:
             return ("not_found", f"{mr_number} was not found.")
 
-        print(f"[WA-REJECT] Found {mr_number} status={mr.status.value}", flush=True)
+        logger.debug("wa_reject_mr found mr=%s status=%s", mr_number, mr.status.value)
         actor = _find_user_by_phone(db, from_phone)
         actor_id = (actor.id if actor else None) or mr.requested_by
 
@@ -481,8 +518,7 @@ def _reject_mr(db, mr_number: str, from_phone: str, reason: str) -> tuple[str, s
         return ("rejected", f"{mr_number} has been rejected. Reason: {reason}")
 
     except Exception as exc:
-        print(f"[WA-REJECT] EXCEPTION: {exc}", flush=True)
-        logger.exception("reject_mr failed for %s", mr_number)
+        logger.exception("wa_reject_mr failed mr=%s", mr_number)
         return ("error", f"Error processing {mr_number}: {exc}")
 
 
@@ -503,11 +539,7 @@ def _stamp_recipient_inbound(db, from_phone: str) -> None:
         if recipient:
             recipient.last_inbound_at = now
             db.commit()
-            print(
-                f"[WA-WEBHOOK-V2] last_inbound_at stamped"
-                f" recipient={recipient.name!r} phone={variant}",
-                flush=True,
-            )
+            logger.debug("wa_inbound_stamped recipient=%s phone=%s", recipient.name, variant)
             return
 
 
@@ -516,9 +548,9 @@ def _find_user_by_phone(db, from_phone: str):
     for variant in _phone_variants(from_phone):
         user = db.query(User).filter(User.phone == variant).first()
         if user:
-            print(f"[WA-USER] Found user for variant={variant!r}", flush=True)
+            logger.debug("wa_user found variant=%s", variant)
             return user
-    print(f"[WA-USER] No user found for phone={_normalise(from_phone)}", flush=True)
+    logger.debug("wa_user not_found phone=%s", _normalise(from_phone))
     return None
 
 
@@ -532,8 +564,7 @@ def _handle_delivery_status(db, status: dict) -> None:
     if not msg_id or not wa_status:
         return
 
-    # V2 marker — confirms new code path is active
-    print(f"[WA-WEBHOOK-V2] status handler active | msg_id={msg_id} status={wa_status} recipient={recipient}", flush=True)
+    logger.debug("wa_status msg_id=%s status=%s recipient=%s", msg_id, wa_status, recipient)
 
     # Log full failure detail IMMEDIATELY — before any DB lookup so it always
     # fires even when no NotificationQueue row exists for the message_id.
@@ -543,17 +574,6 @@ def _handle_delivery_status(db, status: dict) -> None:
         err_code  = err.get("code", "n/a")
         err_title = err.get("title", "Delivery failed")
         err_msg   = err.get("message", "")
-        print(
-            f"[WA-STATUS-FAILED-FULL]"
-            f" msg_id={msg_id}"
-            f" | recipient={recipient}"
-            f" | error_code={err_code}"
-            f" | error_title={err_title!r}"
-            f" | error_message={err_msg!r}"
-            f" | full_errors={errs!r}"
-            f" | full_status={status!r}",
-            flush=True,
-        )
         logger.error(
             "WhatsApp delivery FAILED | msg_id=%s recipient=%s error_code=%s"
             " error_title=%r error_message=%r full_errors=%r",
@@ -568,14 +588,21 @@ def _handle_delivery_status(db, status: dict) -> None:
             NotificationQueue.provider_message_id == msg_id
         ).first()
         if not record:
-            print(f"[WA-STATUS] No NotificationQueue record for msg_id={msg_id}", flush=True)
+            logger.debug("wa_status no_queue_record msg_id=%s", msg_id)
+            return
+        # Idempotency guards — Meta retries webhooks on timeout; skip terminal-state rewrites
+        if wa_status == "read" and record.status == NotificationStatus.ACKNOWLEDGED:
+            logger.debug("wa_status already_acknowledged msg_id=%s", msg_id)
+            return
+        if wa_status == "failed" and record.status == NotificationStatus.FAILED:
+            logger.debug("wa_status already_failed msg_id=%s", msg_id)
             return
         if wa_status == "read":
             from datetime import datetime, timezone
             record.status = NotificationStatus.ACKNOWLEDGED
             record.acknowledged_at = datetime.now(timezone.utc)
             db.commit()
-            print(f"[WA-STATUS] Marked ACKNOWLEDGED msg_id={msg_id}", flush=True)
+            logger.info("wa_status acknowledged msg_id=%s", msg_id)
         elif wa_status == "failed":
             errs      = status.get("errors", [])
             err       = errs[0] if errs else {}
@@ -585,6 +612,6 @@ def _handle_delivery_status(db, status: dict) -> None:
             record.status        = NotificationStatus.FAILED
             record.error_message = f"[{err_code}] {err_title}" + (f": {err_msg}" if err_msg else "")
             db.commit()
-            print(f"[WA-STATUS] DB record marked FAILED msg_id={msg_id}", flush=True)
+            logger.warning("wa_status marked_failed msg_id=%s code=%s", msg_id, err_code)
     except Exception:
         logger.exception("delivery_status DB update error msg_id=%s", msg_id)

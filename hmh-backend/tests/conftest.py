@@ -374,7 +374,7 @@ def ensure_tables():
             "CREATE INDEX IF NOT EXISTS ix_stock_ledger_movement_date ON stock_ledger(movement_date)",
             "CREATE INDEX IF NOT EXISTS ix_stock_ledger_lot_item ON stock_ledger(lot_id, item_id)",
             "CREATE INDEX IF NOT EXISTS ix_system_alerts_project_status_type ON system_alerts(project_id, status, alert_type)",
-            "CREATE INDEX IF NOT EXISTS ix_notification_queue_status_scheduled ON notification_queue(status, scheduled_for)",
+            "CREATE INDEX IF NOT EXISTS ix_notification_queue_status_next_attempt ON notification_queue(status, next_attempt_at)",
         ]:
             try:
                 conn.execute(_t(_idx_sql))

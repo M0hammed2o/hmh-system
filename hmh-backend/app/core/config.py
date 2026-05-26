@@ -64,6 +64,7 @@ class Settings(BaseSettings):
     LOW_STOCK_THRESHOLD:     float = 5.0    # items below this trigger LOW_STOCK alert
     BOQ_VARIANCE_ALERT_PCT:  float = 10.0   # BOQ usage variance % that triggers BOQ_VARIANCE alert
     PENDING_MR_DAYS:         int   = 5      # MR pending longer than this triggers REQUEST_PENDING_TOO_LONG
+    PAYMENT_DUE_DAYS:        int   = 3      # Phase 3Q.3: days before due date to fire PAYMENT_DUE alert
 
     # CORS — comma-separated allowed origins
     # Render env var should set the production domain(s)
@@ -78,6 +79,7 @@ class Settings(BaseSettings):
     WHATSAPP_PHONE_NUMBER_ID: str = ""
     WHATSAPP_BUSINESS_ACCOUNT_ID: str = ""
     WHATSAPP_ACCESS_TOKEN: str = ""
+    WHATSAPP_APP_SECRET: str = ""     # Meta App Secret — used for X-Hub-Signature-256 HMAC verification
     WHATSAPP_VERIFY_TOKEN: str = "hmh_verify_token"
     WHATSAPP_API_VERSION: str = "v25.0"
     WHATSAPP_TEST_TO: str = ""
@@ -85,6 +87,11 @@ class Settings(BaseSettings):
     # WhatsApp alert templates (used when 24-hour conversation window is closed)
     WHATSAPP_ALERT_TEMPLATE_NAME: str = ""       # e.g. "hmh_alert_notification"
     WHATSAPP_ALERT_TEMPLATE_LANGUAGE: str = "en_US"
+
+    # Internal cron secret — used by the /api/v1/internal/process-notifications endpoint.
+    # Set this to a strong random string in Render env vars; used by the Render cron job.
+    # If empty, the internal cron endpoint is disabled.
+    CRON_SECRET: str = ""
 
     # Alert escalation
     CRITICAL_ALERT_MAX_ATTEMPTS: int = 5
