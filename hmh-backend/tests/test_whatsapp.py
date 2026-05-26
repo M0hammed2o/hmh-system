@@ -286,7 +286,11 @@ class TestQueueProcessing:
         entry = _make_queue_entry(db, recipient, alert)
         db.commit()
 
+        # Patch BOTH send paths: template is used when WHATSAPP_ALERT_TEMPLATE_NAME
+        # is configured in .env, so both must return FAILED for the assertion to hold.
         with patch("app.services.notification_service.whatsapp_service.send_text",
+                   return_value=("FAILED", "network error")), \
+             patch("app.services.notification_service.whatsapp_service.send_template_message",
                    return_value=("FAILED", "network error")):
             from app.services.notification_service import process_queue
             result = process_queue(db)
@@ -511,3 +515,368 @@ class TestCronEndpoint:
             ms.CRON_SECRET = ""
             resp = client.post("/api/v1/internal/process-notifications")
         assert resp.status_code == 404
+
+
+# ── 7. Cost optimization ──────────────────────────────────────────────────────
+
+class TestCostOptimization:
+
+    def _make_material_recipient(self, db, phone: str = "+27829001001"):
+        """Recipient that receives material alerts (for MEDIUM/LOW severity tests)."""
+        from app.models.alert_recipient import AlertRecipient
+        r = AlertRecipient(
+            name="Material Recipient",
+            phone_number=phone,
+            is_active=True,
+            receives_critical_alerts=False,
+            receives_material_alerts=True,
+            receives_daily_summary=False,
+            receives_invoice_alerts=False,
+            receives_delivery_alerts=False,
+            receives_vehicle_alerts=False,
+            receives_procurement_alerts=False,
+            receives_milestone_alerts=False,
+            receives_payment_alerts=False,
+        )
+        db.add(r)
+        db.flush()
+        return r
+
+    def _make_medium_alert(self, db):
+        """LOW_STOCK alert with MEDIUM severity."""
+        from app.models.alert import SystemAlert
+        from app.models.enums import AlertType, AlertStatus, AlertSeverity
+        a = SystemAlert(
+            alert_type=AlertType.LOW_STOCK,
+            severity=AlertSeverity.MEDIUM,
+            status=AlertStatus.OPEN,
+            title="Medium Stock Alert",
+            message="Item Y is running slightly low",
+            created_at=datetime.now(timezone.utc),
+        )
+        db.add(a)
+        db.flush()
+        return a
+
+    # ── Config: template name split ───────────────────────────────────────────
+
+    def test_template_name_split_in_config(self):
+        """model_validator splits comma-separated WHATSAPP_ALERT_TEMPLATE_NAME correctly."""
+        from app.core.config import Settings
+        s = Settings(
+            _env_file=None,
+            SECRET_KEY="test_secret_key_minimum_32_chars_long____",
+            WHATSAPP_ALERT_TEMPLATE_NAME="hmh_daily_summary, hmh_alert_notification",
+            WHATSAPP_DAILY_SUMMARY_TEMPLATE_NAME="",
+        )
+        assert s.WHATSAPP_ALERT_TEMPLATE_NAME == "hmh_alert_notification"
+        assert s.WHATSAPP_DAILY_SUMMARY_TEMPLATE_NAME == "hmh_daily_summary"
+
+    def test_existing_daily_summary_field_not_overwritten(self):
+        """If WHATSAPP_DAILY_SUMMARY_TEMPLATE_NAME is already set, the split doesn't overwrite it."""
+        from app.core.config import Settings
+        s = Settings(
+            _env_file=None,
+            SECRET_KEY="test_secret_key_minimum_32_chars_long____",
+            WHATSAPP_ALERT_TEMPLATE_NAME="old_daily, hmh_alert_notification",
+            WHATSAPP_DAILY_SUMMARY_TEMPLATE_NAME="my_custom_daily",
+        )
+        assert s.WHATSAPP_DAILY_SUMMARY_TEMPLATE_NAME == "my_custom_daily"
+        assert s.WHATSAPP_ALERT_TEMPLATE_NAME == "hmh_alert_notification"
+
+    # ── Template selection ────────────────────────────────────────────────────
+
+    def test_alert_template_used_for_normal_alerts(self, client, db):
+        """_send_for_queue_entry selects ALERT template for a normal alert."""
+        recipient = _make_recipient(db)
+        alert = _make_alert(db)
+        entry = _make_queue_entry(db, recipient, alert)
+        db.commit()
+
+        captured = {}
+
+        def mock_send_tpl(phone, template_name, lang, components=None):
+            captured["template_name"] = template_name
+            return ("MOCK_SENT", None)
+
+        with patch("app.services.notification_service.settings") as ms, \
+             patch("app.services.notification_service.whatsapp_service.send_template_message",
+                   side_effect=mock_send_tpl):
+            ms.WHATSAPP_ALERT_TEMPLATE_NAME = "hmh_alert_notification"
+            ms.WHATSAPP_DAILY_SUMMARY_TEMPLATE_NAME = "hmh_daily_summary"
+            ms.WHATSAPP_ALERT_TEMPLATE_LANGUAGE = "en_US"
+            ms.WHATSAPP_COST_OPTIMIZATION_ENABLED = False
+
+            from app.services.notification_service import _send_for_queue_entry
+            _send_for_queue_entry(entry, db)
+
+        assert captured.get("template_name") == "hmh_alert_notification"
+
+    def test_daily_summary_template_used_for_summary_alerts(self, client, db):
+        """_send_for_queue_entry selects DAILY_SUMMARY template for DAILY_SUMMARY alert type."""
+        from app.models.alert import SystemAlert
+        from app.models.enums import AlertType, AlertStatus, AlertSeverity
+        recipient = _make_recipient(db)
+        summary_alert = SystemAlert(
+            alert_type=AlertType.DAILY_SUMMARY,
+            severity=AlertSeverity.LOW,
+            status=AlertStatus.OPEN,
+            title="Daily Summary",
+            message="Today's summary",
+            created_at=datetime.now(timezone.utc),
+        )
+        db.add(summary_alert)
+        db.flush()
+        entry = _make_queue_entry(db, recipient, summary_alert)
+        db.commit()
+
+        captured = {}
+
+        def mock_send_tpl(phone, template_name, lang, components=None):
+            captured["template_name"] = template_name
+            return ("MOCK_SENT", None)
+
+        with patch("app.services.notification_service.settings") as ms, \
+             patch("app.services.notification_service.whatsapp_service.send_template_message",
+                   side_effect=mock_send_tpl):
+            ms.WHATSAPP_ALERT_TEMPLATE_NAME = "hmh_alert_notification"
+            ms.WHATSAPP_DAILY_SUMMARY_TEMPLATE_NAME = "hmh_daily_summary"
+            ms.WHATSAPP_ALERT_TEMPLATE_LANGUAGE = "en_US"
+            ms.WHATSAPP_COST_OPTIMIZATION_ENABLED = False
+
+            from app.services.notification_service import _send_for_queue_entry
+            _send_for_queue_entry(entry, db)
+
+        assert captured.get("template_name") == "hmh_daily_summary"
+
+    def test_missing_template_and_closed_window_returns_failed(self, client, db):
+        """No template + 24h window closed → FAILED (no crash, clear log)."""
+        recipient = _make_recipient(db)
+        recipient.last_inbound_at = None  # window closed
+        alert = _make_alert(db)
+        entry = _make_queue_entry(db, recipient, alert)
+        db.commit()
+
+        with patch("app.services.notification_service.settings") as ms:
+            ms.WHATSAPP_ALERT_TEMPLATE_NAME = ""
+            ms.WHATSAPP_DAILY_SUMMARY_TEMPLATE_NAME = ""
+            ms.WHATSAPP_ALERT_TEMPLATE_LANGUAGE = "en_US"
+            ms.WHATSAPP_COST_OPTIMIZATION_ENABLED = False
+
+            from app.services.notification_service import _send_for_queue_entry
+            status, msg = _send_for_queue_entry(entry, db)
+
+        assert status == "FAILED"
+        assert "template" in msg.lower()
+
+    # ── Throttling ────────────────────────────────────────────────────────────
+
+    def test_critical_alert_queued_immediately(self, client, db):
+        """CRITICAL severity alerts are queued with next_attempt_at = now (no delay)."""
+        from app.models.alert import SystemAlert
+        from app.models.enums import AlertType, AlertStatus, AlertSeverity
+        recipient = _make_recipient(db)
+        crit_alert = SystemAlert(
+            alert_type=AlertType.LOW_STOCK,
+            severity=AlertSeverity.CRITICAL,
+            status=AlertStatus.OPEN,
+            title="Critical Alert",
+            message="Critical issue",
+            created_at=datetime.now(timezone.utc),
+        )
+        db.add(crit_alert)
+        db.flush()
+        db.commit()
+
+        now = datetime.now(timezone.utc)
+
+        with patch("app.services.notification_service.settings") as ms:
+            ms.WHATSAPP_COST_OPTIMIZATION_ENABLED = True
+            ms.WHATSAPP_SUMMARY_INTERVAL_MINUTES = 60
+            ms.WHATSAPP_QUIET_HOURS_ENABLED = False
+            ms.CRITICAL_ALERT_MAX_ATTEMPTS = 5
+            ms.HIGH_ALERT_MAX_ATTEMPTS = 2
+
+            from app.services.notification_service import enqueue_for_alert
+            queued = enqueue_for_alert(db, crit_alert)
+        db.commit()
+
+        assert len(queued) >= 1
+        for entry in queued:
+            db.refresh(entry)
+            assert entry.next_attempt_at <= now + timedelta(seconds=5)
+
+    def test_medium_alert_queued_with_delay(self, client, db):
+        """MEDIUM severity alert gets delayed by SUMMARY_INTERVAL_MINUTES."""
+        recipient = self._make_material_recipient(db)
+        alert = self._make_medium_alert(db)
+        db.commit()
+
+        now = datetime.now(timezone.utc)
+
+        with patch("app.services.notification_service.settings") as ms:
+            ms.WHATSAPP_COST_OPTIMIZATION_ENABLED = True
+            ms.WHATSAPP_SUMMARY_INTERVAL_MINUTES = 60
+            ms.WHATSAPP_QUIET_HOURS_ENABLED = False
+            ms.CRITICAL_ALERT_MAX_ATTEMPTS = 5
+            ms.HIGH_ALERT_MAX_ATTEMPTS = 2
+
+            from app.services.notification_service import enqueue_for_alert
+            queued = enqueue_for_alert(db, alert)
+        db.commit()
+
+        assert len(queued) >= 1
+        for entry in queued:
+            db.refresh(entry)
+            assert entry.next_attempt_at >= now + timedelta(minutes=55)
+
+    # ── Hourly cap ────────────────────────────────────────────────────────────
+
+    def test_hourly_cap_skips_entry(self, client, db):
+        """process_queue skips a PENDING entry when the recipient hit the hourly cap."""
+        from app.models.enums import NotificationStatus
+        from app.models.notification_queue import NotificationQueue
+        from app.models.enums import NotificationChannel
+
+        recipient = _make_recipient(db)
+        alert = _make_alert(db)
+
+        # Simulate 2 already-sent entries within the last hour (to hit a cap of 2)
+        now = datetime.now(timezone.utc)
+        for _ in range(2):
+            sent = NotificationQueue(
+                alert_id=alert.id,
+                recipient_id=recipient.id,
+                channel=NotificationChannel.WHATSAPP,
+                phone_number=recipient.phone_number,
+                message_body="prior send",
+                status=NotificationStatus.SENT,
+                attempt_count=1,
+                last_attempt_at=now - timedelta(minutes=30),
+                next_attempt_at=now - timedelta(minutes=30),
+                requires_acknowledgement=False,
+                created_at=now - timedelta(minutes=30),
+            )
+            db.add(sent)
+        db.flush()
+
+        # New PENDING entry to process
+        pending = _make_queue_entry(db, recipient, alert)
+        db.commit()
+
+        with patch("app.services.notification_service.settings") as ms, \
+             patch("app.services.notification_service.whatsapp_service.send_text",
+                   return_value=("MOCK_SENT", None)), \
+             patch("app.services.notification_service.whatsapp_service.send_template_message",
+                   return_value=("MOCK_SENT", None)):
+            ms.WHATSAPP_COST_OPTIMIZATION_ENABLED = True
+            ms.WHATSAPP_MAX_ALERTS_PER_HOUR_PER_RECIPIENT = 2  # cap = 2, already at 2
+            ms.WHATSAPP_ALERT_TEMPLATE_NAME = ""
+            ms.WHATSAPP_DAILY_SUMMARY_TEMPLATE_NAME = ""
+
+            from app.services.notification_service import process_queue
+            result = process_queue(db)
+
+        db.refresh(pending)
+        assert result.get("skipped", 0) >= 1
+        assert pending.status == NotificationStatus.PENDING
+
+    # ── Quiet hours ───────────────────────────────────────────────────────────
+
+    def test_quiet_hours_delay_in_quiet_period(self):
+        """_quiet_hours_delay returns non-None when current time is in quiet hours."""
+        with patch("app.services.notification_service.settings") as ms:
+            ms.WHATSAPP_QUIET_HOURS_ENABLED = True
+            ms.WHATSAPP_QUIET_HOURS_START = "20:00"
+            ms.WHATSAPP_QUIET_HOURS_END = "07:00"
+
+            from app.services.notification_service import _quiet_hours_delay
+            # 21:00 UTC is within 20:00–07:00 quiet hours
+            test_time = datetime(2026, 5, 26, 21, 0, 0, tzinfo=timezone.utc)
+            delay = _quiet_hours_delay(test_time)
+
+        assert delay is not None
+        # 07:00 next day is 10 hours away
+        assert timedelta(hours=9) < delay < timedelta(hours=11)
+
+    def test_quiet_hours_no_delay_outside_period(self):
+        """_quiet_hours_delay returns None when outside quiet hours."""
+        with patch("app.services.notification_service.settings") as ms:
+            ms.WHATSAPP_QUIET_HOURS_ENABLED = True
+            ms.WHATSAPP_QUIET_HOURS_START = "20:00"
+            ms.WHATSAPP_QUIET_HOURS_END = "07:00"
+
+            from app.services.notification_service import _quiet_hours_delay
+            # 10:00 UTC is outside 20:00–07:00
+            test_time = datetime(2026, 5, 26, 10, 0, 0, tzinfo=timezone.utc)
+            delay = _quiet_hours_delay(test_time)
+
+        assert delay is None
+
+    def test_quiet_hours_disabled_returns_none(self):
+        """_quiet_hours_delay returns None when quiet hours are disabled."""
+        with patch("app.services.notification_service.settings") as ms:
+            ms.WHATSAPP_QUIET_HOURS_ENABLED = False
+
+            from app.services.notification_service import _quiet_hours_delay
+            delay = _quiet_hours_delay(datetime(2026, 5, 26, 22, 0, 0, tzinfo=timezone.utc))
+
+        assert delay is None
+
+    # ── Deduplication ─────────────────────────────────────────────────────────
+
+    def test_dedup_same_alert_same_recipient(self, client, db):
+        """Second enqueue_for_alert call for the same alert produces no duplicate entries."""
+        from app.models.notification_queue import NotificationQueue
+
+        recipient = _make_recipient(db)
+        alert = _make_alert(db)
+        db.commit()
+
+        with patch("app.services.notification_service.settings") as ms:
+            ms.WHATSAPP_COST_OPTIMIZATION_ENABLED = False
+            ms.WHATSAPP_QUIET_HOURS_ENABLED = False
+            ms.CRITICAL_ALERT_MAX_ATTEMPTS = 5
+            ms.HIGH_ALERT_MAX_ATTEMPTS = 2
+
+            from app.services.notification_service import enqueue_for_alert
+            first = enqueue_for_alert(db, alert)
+            db.commit()
+
+            count_after_first = db.query(NotificationQueue).filter(
+                NotificationQueue.alert_id == alert.id,
+            ).count()
+
+            second = enqueue_for_alert(db, alert)
+            db.commit()
+
+            count_after_second = db.query(NotificationQueue).filter(
+                NotificationQueue.alert_id == alert.id,
+            ).count()
+
+        assert len(first) >= 1
+        assert len(second) == 0
+        assert count_after_second == count_after_first
+
+    def test_no_dedup_different_alerts(self, client, db):
+        """Two different alerts for the same recipient both create queue entries."""
+        from app.models.notification_queue import NotificationQueue
+
+        recipient = _make_recipient(db)
+        alert1 = _make_alert(db)
+        alert2 = _make_alert(db)
+        db.commit()
+
+        with patch("app.services.notification_service.settings") as ms:
+            ms.WHATSAPP_COST_OPTIMIZATION_ENABLED = False
+            ms.WHATSAPP_QUIET_HOURS_ENABLED = False
+            ms.CRITICAL_ALERT_MAX_ATTEMPTS = 5
+            ms.HIGH_ALERT_MAX_ATTEMPTS = 2
+
+            from app.services.notification_service import enqueue_for_alert
+            q1 = enqueue_for_alert(db, alert1)
+            q2 = enqueue_for_alert(db, alert2)
+            db.commit()
+
+        assert len(q1) >= 1
+        assert len(q2) >= 1

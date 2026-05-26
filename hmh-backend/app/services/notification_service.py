@@ -82,6 +82,58 @@ _PAYMENT_TYPES = {
 }
 
 
+def _is_critical_for_throttle(severity: AlertSeverity) -> bool:
+    """CRITICAL and HIGH alerts bypass throttling — they always send immediately."""
+    return severity in (AlertSeverity.CRITICAL, AlertSeverity.HIGH)
+
+
+def _quiet_hours_delay(now: datetime) -> Optional[timedelta]:
+    """Return delay until quiet hours end, or None if not in quiet hours / quiet hours disabled."""
+    if not settings.WHATSAPP_QUIET_HOURS_ENABLED:
+        return None
+    try:
+        sh, sm = (int(x) for x in settings.WHATSAPP_QUIET_HOURS_START.split(":"))
+        eh, em = (int(x) for x in settings.WHATSAPP_QUIET_HOURS_END.split(":"))
+    except (ValueError, AttributeError):
+        return None
+
+    from datetime import time as dtime
+    start = dtime(sh, sm)
+    end = dtime(eh, em)
+    cur = now.time().replace(second=0, microsecond=0)
+
+    # Wrap-midnight: quiet if cur >= start OR cur < end
+    if start > end:
+        in_quiet = cur >= start or cur < end
+    else:
+        in_quiet = start <= cur < end
+
+    if not in_quiet:
+        return None
+
+    end_dt = now.replace(hour=eh, minute=em, second=0, microsecond=0)
+    if end_dt <= now:
+        end_dt += timedelta(days=1)
+    return end_dt - now
+
+
+def _count_recent_sends(db: Session, recipient_id: uuid.UUID, window: timedelta) -> int:
+    """Count SENT/MOCK_SENT notifications for a recipient within the given time window."""
+    cutoff = datetime.now(timezone.utc) - window
+    return (
+        db.query(NotificationQueue)
+        .filter(
+            NotificationQueue.recipient_id == recipient_id,
+            NotificationQueue.last_attempt_at >= cutoff,
+            NotificationQueue.status.in_([
+                NotificationStatus.SENT,
+                NotificationStatus.MOCK_SENT,
+            ]),
+        )
+        .count()
+    )
+
+
 def _should_notify(recipient: AlertRecipient, alert: SystemAlert) -> bool:
     """
     Return True if this recipient should receive this alert type.
@@ -164,8 +216,33 @@ def enqueue_for_alert(
         if not _should_notify(recipient, alert):
             continue
 
+        # Dedup: skip if a non-failed/cancelled entry already exists for this alert+recipient
+        existing = (
+            db.query(NotificationQueue)
+            .filter(
+                NotificationQueue.alert_id == alert.id,
+                NotificationQueue.recipient_id == recipient.id,
+                NotificationQueue.status.notin_([
+                    NotificationStatus.FAILED,
+                    NotificationStatus.CANCELLED,
+                ]),
+            )
+            .first()
+        )
+        if existing:
+            continue
+
         message = _build_message(alert)
         requires_ack = alert.severity in (AlertSeverity.CRITICAL, AlertSeverity.HIGH)
+
+        # Cost optimization: delay non-critical alerts by SUMMARY_INTERVAL_MINUTES
+        next_at = now
+        if settings.WHATSAPP_COST_OPTIMIZATION_ENABLED and not _is_critical_for_throttle(alert.severity):
+            next_at = now + timedelta(minutes=settings.WHATSAPP_SUMMARY_INTERVAL_MINUTES)
+            # Quiet hours: push further if in quiet period (non-critical only)
+            quiet_delay = _quiet_hours_delay(now)
+            if quiet_delay:
+                next_at = max(next_at, now + quiet_delay)
 
         entry = NotificationQueue(
             id=uuid.uuid4(),
@@ -176,7 +253,7 @@ def enqueue_for_alert(
             message_body=message,
             status=NotificationStatus.PENDING,
             attempt_count=0,
-            next_attempt_at=now,
+            next_attempt_at=next_at,
             requires_acknowledgement=requires_ack,
             created_at=now,
             # Phase 3Q.1: entity context
@@ -252,14 +329,31 @@ def _send_for_queue_entry(entry: NotificationQueue, db: Session) -> tuple[str, O
     Free-form command replies (OK/APPROVE/REJECT) are sent directly in the
     webhook handler and are always in-window, so they are unaffected.
     """
-    template_name = settings.WHATSAPP_ALERT_TEMPLATE_NAME
+    # Select template: daily summary types use their own template
+    is_daily = False
+    if entry.alert_id:
+        _alert_obj = db.get(SystemAlert, entry.alert_id)
+        if _alert_obj and _alert_obj.alert_type in (AlertType.DAILY_SUMMARY, AlertType.WEEKLY_SUMMARY):
+            is_daily = True
+
+    if is_daily and settings.WHATSAPP_DAILY_SUMMARY_TEMPLATE_NAME:
+        template_name = settings.WHATSAPP_DAILY_SUMMARY_TEMPLATE_NAME
+    else:
+        template_name = settings.WHATSAPP_ALERT_TEMPLATE_NAME
 
     # ── Tier 1: approved template ─────────────────────────────────────────────
     if template_name:
         lang = settings.WHATSAPP_ALERT_TEMPLATE_LANGUAGE or "en_US"
         logger.info("WA-SEND template='%s' lang=%s phone=%s", template_name, lang, entry.phone_number)
         status, msg_id = whatsapp_service.send_template_message(entry.phone_number, template_name, lang)
-        logger.info("WA-SEND result status=%s msg_id=%s phone=%s", status, msg_id, entry.phone_number)
+        if status == "FAILED":
+            logger.error(
+                "WA-TEMPLATE-FAILED template='%s' phone=%s error=%s — "
+                "verify template name in Meta Business Manager",
+                template_name, entry.phone_number, msg_id,
+            )
+        else:
+            logger.info("WA-SEND result status=%s msg_id=%s phone=%s", status, msg_id, entry.phone_number)
         return status, msg_id
 
     # ── Tier 2: no template — check 24h window ────────────────────────────────
@@ -307,6 +401,19 @@ def process_queue(db: Session) -> dict:
             entry.status = NotificationStatus.ACKNOWLEDGED
             counts["skipped"] += 1
             continue
+
+        # Hourly cap: skip low-priority sends when recipient hit the per-hour limit
+        if settings.WHATSAPP_COST_OPTIMIZATION_ENABLED and entry.recipient_id:
+            max_ph = settings.WHATSAPP_MAX_ALERTS_PER_HOUR_PER_RECIPIENT
+            if max_ph > 0:
+                recent = _count_recent_sends(db, entry.recipient_id, timedelta(hours=1))
+                if recent >= max_ph:
+                    logger.info(
+                        "WA hourly cap reached recipient=%s recent=%d max=%d — skipping",
+                        entry.recipient_id, recent, max_ph,
+                    )
+                    counts["skipped"] += 1
+                    continue
 
         # Check if parent alert was resolved/acknowledged
         alert = None

@@ -85,8 +85,20 @@ class Settings(BaseSettings):
     WHATSAPP_TEST_TO: str = ""
 
     # WhatsApp alert templates (used when 24-hour conversation window is closed)
-    WHATSAPP_ALERT_TEMPLATE_NAME: str = ""       # e.g. "hmh_alert_notification"
+    # Legacy: WHATSAPP_ALERT_TEMPLATE_NAME may be "daily_tpl, alert_tpl" (comma-separated).
+    # The model_validator auto-splits it — first part → DAILY_SUMMARY, second → ALERT.
+    WHATSAPP_ALERT_TEMPLATE_NAME: str = ""           # e.g. "hmh_alert_notification"
+    WHATSAPP_DAILY_SUMMARY_TEMPLATE_NAME: str = ""   # e.g. "hmh_daily_summary"
     WHATSAPP_ALERT_TEMPLATE_LANGUAGE: str = "en_US"
+
+    # WhatsApp cost optimization
+    WHATSAPP_COST_OPTIMIZATION_ENABLED: bool = True
+    WHATSAPP_SUMMARY_INTERVAL_MINUTES: int = 60      # delay MEDIUM/LOW alerts by this many minutes
+    WHATSAPP_QUIET_HOURS_ENABLED: bool = False
+    WHATSAPP_QUIET_HOURS_START: str = "20:00"        # UTC; wrap-midnight supported (e.g. 20:00–07:00)
+    WHATSAPP_QUIET_HOURS_END: str = "07:00"
+    WHATSAPP_MAX_ALERTS_PER_HOUR_PER_RECIPIENT: int = 10
+    WHATSAPP_TEST_PHONE_NUMBER: str = ""             # used by scripts/test_whatsapp_template.py
 
     # Internal cron secret — used by the /api/v1/internal/process-notifications endpoint.
     # Set this to a strong random string in Render env vars; used by the Render cron job.
@@ -157,6 +169,17 @@ class Settings(BaseSettings):
             self.IMAP_USERNAME = self.SMTP_USERNAME
         if not self.IMAP_PASSWORD:
             self.IMAP_PASSWORD = self.SMTP_PASSWORD
+
+        # ── WhatsApp template name split (backward compat) ─────────────────
+        # Old .env: WHATSAPP_ALERT_TEMPLATE_NAME=hmh_daily_summary, hmh_alert_notification
+        # If a comma is present, treat the first part as the daily summary template
+        # and the second part as the alert template name.
+        raw_tpl = self.WHATSAPP_ALERT_TEMPLATE_NAME
+        if "," in raw_tpl:
+            parts = [p.strip() for p in raw_tpl.split(",", 1)]
+            if not self.WHATSAPP_DAILY_SUMMARY_TEMPLATE_NAME:
+                self.WHATSAPP_DAILY_SUMMARY_TEMPLATE_NAME = parts[0]
+            self.WHATSAPP_ALERT_TEMPLATE_NAME = parts[1]
 
         return self
 
