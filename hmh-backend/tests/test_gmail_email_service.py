@@ -149,15 +149,21 @@ class TestSendPoEmail:
         assert po.po_number in (log.email_subject or "")
 
     def test_email_log_contains_document_instruction(self, db, email_setup):
-        """The email body includes the procurement Gmail address."""
+        """The email body includes the document submission instruction block using the configured address."""
         from app.services.email_service import send_po_email
+        from app.core.config import settings
 
         s = email_setup
         po = _make_po(db, s["project_id"], s["supplier_id"], s["owner_id"])
         db.commit()
 
         log = send_po_email(db, po)
-        assert "procurementhmhgroup@gmail.com" in (log.email_body or "")
+        body = log.email_body or ""
+        assert "document submission" in body.lower()
+        # Verify the body uses the config-driven address, not a literal hardcode
+        addr = settings.smtp_sender_address
+        if addr:
+            assert addr in body
 
 
 class TestSendSupplierPoEmail:

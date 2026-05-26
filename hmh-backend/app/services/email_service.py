@@ -240,8 +240,8 @@ def build_po_email_body(po: PurchaseOrder) -> tuple[str, str]:
     Please confirm receipt and advise your delivery date.<br><br>
     <strong>IMPORTANT — Document submission:</strong><br>
     Send your invoice, delivery note, and any supporting documents directly to:<br>
-    <a href="mailto:procurementhmhgroup@gmail.com" style="color:#e85d04">
-      procurementhmhgroup@gmail.com
+    <a href="mailto:{settings.smtp_sender_address}" style="color:#e85d04">
+      {settings.smtp_sender_address}
     </a><br>
     Quote reference <strong>{po.po_number}</strong> in the subject line of all correspondence
     so your documents can be automatically matched to this order.
@@ -446,8 +446,8 @@ def build_mr_email_body(db: Session, mr) -> tuple[str, str]:
   <p style="color:#555;font-size:13px;border-top:1px solid #eee;padding-top:16px;margin-top:20px">
     Please reply to this email with your quote or confirm availability.<br>
     Send invoices and delivery documents to:
-    <a href="mailto:procurementhmhgroup@gmail.com" style="color:#e85d04">
-      procurementhmhgroup@gmail.com
+    <a href="mailto:{settings.smtp_sender_address}" style="color:#e85d04">
+      {settings.smtp_sender_address}
     </a><br>
     Quote reference <strong>{request_number}</strong> on all correspondence.
   </p>

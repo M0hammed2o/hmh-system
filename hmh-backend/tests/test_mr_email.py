@@ -280,6 +280,11 @@ class TestMREmailBody:
         )
         db.add(mr)
         db.flush()
+        from app.core.config import settings
         _, body = build_mr_email_body(db, mr)
         assert "HMH Group" in body
-        assert "procurementhmhgroup@gmail.com" in body
+        assert "Send invoices" in body
+        # Verify the body uses the config-driven address, not a literal hardcode
+        addr = settings.smtp_sender_address
+        if addr:
+            assert addr in body

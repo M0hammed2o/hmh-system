@@ -1,8 +1,8 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   Mail, RefreshCw, FileText, Truck, MessageSquare, HelpCircle,
   CheckCircle2, Clock, AlertTriangle, ChevronRight, Download,
-  Zap, XCircle, Minus, Eye, RotateCcw,
+  Zap, XCircle, Minus, Eye, RotateCcw, PenSquare,
 } from "lucide-react";
 import {
   gmailApi,
@@ -11,6 +11,9 @@ import {
 } from "@/api/gmail";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { EmailDraftModal } from "@/components/EmailDraftModal";
+
+const AUTO_REFRESH_MS = 3 * 60 * 1000; // 3 minutes
 
 // ── Static maps ───────────────────────────────────────────────────────────────
 
@@ -152,6 +155,8 @@ export default function GmailInboxPage() {
   const [selected,   setSelected]   = useState<IncomingEmail | null>(null);
   const [filter,     setFilter]     = useState<string>("");
   const [extraction, setExtraction] = useState<ProcessedAttachment[] | null>(null);
+  const [composeOpen, setComposeOpen] = useState(false);
+  const autoRefreshTimer = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true); setError("");
@@ -163,6 +168,29 @@ export default function GmailInboxPage() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  // Auto-refresh every 3 minutes; pauses when tab is hidden to avoid waking a sleeping browser tab.
+  useEffect(() => {
+    const start = () => {
+      autoRefreshTimer.current = setInterval(() => {
+        if (!document.hidden) load();
+      }, AUTO_REFRESH_MS);
+    };
+    const handleVisibility = () => {
+      if (document.hidden) {
+        if (autoRefreshTimer.current) clearInterval(autoRefreshTimer.current);
+      } else {
+        load(); // immediate refresh on tab re-focus
+        start();
+      }
+    };
+    start();
+    document.addEventListener("visibilitychange", handleVisibility);
+    return () => {
+      if (autoRefreshTimer.current) clearInterval(autoRefreshTimer.current);
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
+  }, [load]);
 
   const handleFetch = async () => {
     setFetching(true); setNotice("");
@@ -279,6 +307,9 @@ export default function GmailInboxPage() {
             <Download className={cn("w-4 h-4 mr-1.5", fetching && "animate-spin")} />
             {fetching ? "Fetching…" : "Fetch New Emails"}
           </Button>
+          <Button size="sm" variant="outline" onClick={() => setComposeOpen(true)}>
+            <PenSquare className="w-4 h-4 mr-1.5" />Compose
+          </Button>
         </div>
       </div>
 
@@ -349,20 +380,23 @@ export default function GmailInboxPage() {
           <div className="bg-card border border-border rounded-xl p-4 space-y-4">
             {/* Email header */}
             <div className="flex items-start justify-between gap-2">
-              <div>
+              <div className="min-w-0 flex-1">
                 <p className="font-semibold text-sm">{selected.from_email}</p>
                 <p className="text-xs text-muted-foreground mt-0.5">{selected.subject}</p>
                 <p className="text-xs text-muted-foreground">{shortDate(selected.received_at)}</p>
               </div>
-              <span className={cn("text-xs px-2 py-0.5 rounded-full border font-medium",
-                selected.processed_status === "PROCESSED"
-                  ? "bg-green-100 text-green-700 border-green-200"
-                  : selected.processed_status === "PROCESSING_FAILED"
-                  ? "bg-red-100 text-red-700 border-red-200"
-                  : "bg-amber-100 text-amber-700 border-amber-200"
-              )}>
-                {selected.processed_status.replace("_", " ")}
-              </span>
+              <div className="flex items-center gap-2 shrink-0">
+                <span className={cn("text-xs px-2 py-0.5 rounded-full border font-medium",
+                  selected.processed_status === "PROCESSED"
+                    ? "bg-green-100 text-green-700 border-green-200"
+                    : selected.processed_status === "PROCESSING_FAILED"
+                    ? "bg-red-100 text-red-700 border-red-200"
+                    : "bg-amber-100 text-amber-700 border-amber-200"
+                )}>
+                  {selected.processed_status.replace("_", " ")}
+                </span>
+                <ReplyButton email={selected} />
+              </div>
             </div>
 
             {/* ── Process Email button ── */}
@@ -484,6 +518,42 @@ export default function GmailInboxPage() {
           </div>
         )}
       </div>
+
+      {/* Compose modal (free mode — no MR/PO attachment) */}
+      <EmailDraftModal
+        open={composeOpen}
+        onClose={() => setComposeOpen(false)}
+        mode="free"
+        entityId=""
+        title="New Email"
+      />
     </div>
+  );
+}
+
+// ── Reply button (inline, per-email) ─────────────────────────────────────────
+
+function ReplyButton({ email }: { email: IncomingEmail }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button
+        onClick={() => setOpen(true)}
+        className="text-xs px-2 py-0.5 rounded border border-border hover:bg-muted transition-colors"
+        title="Reply to sender"
+      >
+        Reply
+      </button>
+      <EmailDraftModal
+        open={open}
+        onClose={() => setOpen(false)}
+        mode="free"
+        entityId=""
+        title={`Reply: ${email.subject || "(no subject)"}`}
+        initialTo={email.from_email}
+        initialSubject={`Re: ${email.subject || ""}`}
+        initialBody=""
+      />
+    </>
   );
 }
