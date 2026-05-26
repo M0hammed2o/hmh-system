@@ -1,11 +1,12 @@
-import { useEffect, useState } from "react";
-import { Plus, Building2, CheckCircle2, XCircle, Trash2 } from "lucide-react";
+import React, { useEffect, useState } from "react";
+import { Plus, Building2, CheckCircle2, XCircle, Trash2, ChevronDown, ChevronUp, Paperclip } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Modal } from "@/components/shared/Modal";
 import { PageHeader } from "@/components/shared/PageHeader";
 import { StatCard } from "@/components/shared/StatCard";
+import { AttachmentStrip } from "@/components/shared/AttachmentStrip";
 import { suppliersApi, type Supplier, type SupplierCreate, type SupplierUpdate } from "@/api/suppliers";
 
 // ─── Supplier Form Modal ──────────────────────────────────────────────────────
@@ -160,6 +161,7 @@ export default function SuppliersPage() {
   const [showModal, setShowModal] = useState(false);
   const [editTarget, setEditTarget] = useState<Supplier | null>(null);
   const [search, setSearch] = useState("");
+  const [expandedDocs, setExpandedDocs] = useState<string | null>(null);
 
   useEffect(() => {
     suppliersApi
@@ -191,6 +193,10 @@ export default function SuppliersPage() {
   const handleToggleActive = async (supplier: Supplier) => {
     const updated = await suppliersApi.update(supplier.id, { is_active: !supplier.is_active });
     setSuppliers((prev) => prev.map((s) => (s.id === supplier.id ? updated : s)));
+  };
+
+  const toggleDocs = (id: string) => {
+    setExpandedDocs((prev) => (prev === id ? null : id));
   };
 
   return (
@@ -247,52 +253,79 @@ export default function SuppliersPage() {
               </thead>
               <tbody>
                 {filtered.map((s) => (
-                  <tr key={s.id} className="border-b border-border last:border-0 hover:bg-muted/30 transition-colors">
-                    <td className="px-4 py-3 font-mono text-xs">{s.code ?? "—"}</td>
-                    <td className="px-4 py-3 font-medium">{s.name}</td>
-                    <td className="px-4 py-3 text-xs text-muted-foreground">{s.contact_person ?? "—"}</td>
-                    <td className="px-4 py-3 text-xs text-muted-foreground">{s.email ?? "—"}</td>
-                    <td className="px-4 py-3 text-xs text-muted-foreground">{s.phone ?? "—"}</td>
-                    <td className="px-4 py-3 text-xs text-muted-foreground">{s.payment_terms ?? "—"}</td>
-                    <td className="px-4 py-3">
-                      <Badge variant={s.is_active ? "success" : "secondary"}>
-                        {s.is_active ? "Active" : "Inactive"}
-                      </Badge>
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-2">
-                        <button
-                          onClick={() => { setEditTarget(s); setShowModal(true); }}
-                          className="text-xs text-primary hover:underline"
-                        >
-                          Edit
-                        </button>
-                        <button
-                          onClick={() => handleToggleActive(s)}
-                          className="text-xs text-muted-foreground hover:text-foreground"
-                        >
-                          {s.is_active ? "Deactivate" : "Activate"}
-                        </button>
-                        {s.is_active && (
+                  <React.Fragment key={s.id}>
+                    <tr className="border-b border-border last:border-0 hover:bg-muted/30 transition-colors">
+                      <td className="px-4 py-3 font-mono text-xs">{s.code ?? "—"}</td>
+                      <td className="px-4 py-3 font-medium">{s.name}</td>
+                      <td className="px-4 py-3 text-xs text-muted-foreground">{s.contact_person ?? "—"}</td>
+                      <td className="px-4 py-3 text-xs text-muted-foreground">{s.email ?? "—"}</td>
+                      <td className="px-4 py-3 text-xs text-muted-foreground">{s.phone ?? "—"}</td>
+                      <td className="px-4 py-3 text-xs text-muted-foreground">{s.payment_terms ?? "—"}</td>
+                      <td className="px-4 py-3">
+                        <Badge variant={s.is_active ? "success" : "secondary"}>
+                          {s.is_active ? "Active" : "Inactive"}
+                        </Badge>
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-2">
                           <button
-                            onClick={async () => {
-                              if (!window.confirm(`Delete supplier "${s.name}"?\n\nThis will deactivate the supplier. All historical records are preserved.`)) return;
-                              try {
-                                await suppliersApi.delete(s.id);
-                                setSuppliers(prev => prev.filter(x => x.id !== s.id));
-                              } catch (err: unknown) {
-                                alert((err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ?? "Cannot delete supplier.");
-                              }
-                            }}
-                            className="p-1 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive"
-                            title="Delete supplier"
+                            onClick={() => toggleDocs(s.id)}
+                            className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+                            title="Supplier documents"
                           >
-                            <Trash2 className="w-3.5 h-3.5" />
+                            <Paperclip className="w-3 h-3" />
+                            Docs
+                            {expandedDocs === s.id ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
                           </button>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
+                          <button
+                            onClick={() => { setEditTarget(s); setShowModal(true); }}
+                            className="text-xs text-primary hover:underline"
+                          >
+                            Edit
+                          </button>
+                          <button
+                            onClick={() => handleToggleActive(s)}
+                            className="text-xs text-muted-foreground hover:text-foreground"
+                          >
+                            {s.is_active ? "Deactivate" : "Activate"}
+                          </button>
+                          {s.is_active && (
+                            <button
+                              onClick={async () => {
+                                if (!window.confirm(`Delete supplier "${s.name}"?\n\nThis will deactivate the supplier. All historical records are preserved.`)) return;
+                                try {
+                                  await suppliersApi.delete(s.id);
+                                  setSuppliers(prev => prev.filter(x => x.id !== s.id));
+                                } catch (err: unknown) {
+                                  alert((err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ?? "Cannot delete supplier.");
+                                }
+                              }}
+                              className="p-1 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive"
+                              title="Delete supplier"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                    {expandedDocs === s.id && (
+                      <tr className="bg-muted/20 border-b border-border">
+                        <td colSpan={8} className="px-6 py-4">
+                          <p className="text-xs font-medium text-muted-foreground mb-3">
+                            Supplier Documents — {s.name}
+                          </p>
+                          <AttachmentStrip
+                            entityType="SUPPLIER"
+                            entityId={s.id}
+                            attachmentType="QUOTATION"
+                            showTypeSelector
+                            compact
+                          />
+                        </td>
+                      </tr>
+                    )}
+                  </React.Fragment>
                 ))}
               </tbody>
             </table>

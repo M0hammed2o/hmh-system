@@ -6,7 +6,9 @@ import uuid
 
 from fastapi import APIRouter, HTTPException
 
-logger = logging.getLogger(__name__)
+from app.core.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 from app.dependencies import ALL_ROLES, CurrentUser, DbSession, OFFICE_AND_ABOVE
 from app.schemas.common import ApiSuccess
@@ -76,7 +78,7 @@ def delete_template(template_id: uuid.UUID, db: DbSession):
     header.is_template = False
     header.template_name = None
     db.commit()
-    print(f"[BOQ-TEMPLATE] Deleted template id={template_id}", flush=True)
+    logger.info("boq_template deleted id=%s", template_id)
     return ApiSuccess(data=None, message="Template deleted.")
 
 
@@ -114,15 +116,8 @@ def preview_clone(body: PreviewCloneRequest, db: DbSession):
     dependencies=[OFFICE_AND_ABOVE],
 )
 def clone_to_lots(body: CloneToLotsRequest, db: DbSession, current_user: CurrentUser):
-    print(
-        f"[BOQ-CLONE] template_boq_id={body.template_boq_id}"
-        f" project_id={body.project_id}"
-        f" lot_ids={body.lot_ids}"
-        f" mode={body.mode} overwrite={body.overwrite}"
-        f" generate_milestones={body.generate_milestones}"
-        f" actor={current_user.id}",
-        flush=True,
-    )
+    logger.info("boq_clone template=%s project=%s lots=%d mode=%s actor=%s",
+                body.template_boq_id, body.project_id, len(body.lot_ids), body.mode, current_user.id)
     if not body.lot_ids:
         raise HTTPException(422, "No lots selected. Select at least one lot.")
     try:
@@ -144,12 +139,10 @@ def clone_to_lots(body: CloneToLotsRequest, db: DbSession, current_user: Current
         if result.get("deactivated_count"):
             parts.append(f"{result['deactivated_count']} item(s) replaced")
         msg = " · ".join(parts)
-        print(f"[BOQ-CLONE] SUCCESS — {msg}", flush=True)
+        logger.info("boq_clone success %s", msg)
         return ApiSuccess(data=result, message=msg.strip())
     except Exception as exc:
-        tb = traceback.format_exc()
-        print(f"[BOQ-CLONE] FAILED: {exc!r}\n{tb}", flush=True)
-        logger.error("clone_to_lots failed: %s\n%s", exc, tb)
+        logger.exception("boq_clone failed: %s", exc)
         raise HTTPException(
             status_code=500,
             detail=f"Failed to apply template: {exc}",

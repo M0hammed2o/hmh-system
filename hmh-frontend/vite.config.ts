@@ -18,4 +18,26 @@ export default defineConfig({
       },
     },
   },
+  build: {
+    chunkSizeWarningLimit: 600,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          // React core — changes rarely, best for long-term caching
+          "vendor-react": ["react", "react-dom", "react-router-dom"],
+          // Radix UI primitives — stable across releases
+          "vendor-radix": [
+            "@radix-ui/react-dialog",
+            "@radix-ui/react-dropdown-menu",
+            "@radix-ui/react-label",
+            "@radix-ui/react-select",
+            "@radix-ui/react-slot",
+            "@radix-ui/react-toast",
+          ],
+          // Utility libs
+          "vendor-utils": ["axios", "clsx", "class-variance-authority", "tailwind-merge", "lucide-react"],
+        },
+      },
+    },
+  },
 });

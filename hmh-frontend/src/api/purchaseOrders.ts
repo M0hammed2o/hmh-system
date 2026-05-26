@@ -1,8 +1,41 @@
 import client from "./client";
 
 export type RecordStatus =
-  | "DRAFT" | "SUBMITTED" | "APPROVED" | "REJECTED"
-  | "SENT" | "RECEIVED" | "MATCHED" | "PAID" | "CANCELLED";
+  | "DRAFT" | "SUBMITTED" | "PENDING_APPROVAL" | "APPROVED" | "REJECTED"
+  | "SENT" | "SUPPLIER_CONFIRMED"
+  | "ORDERED" | "PARTIALLY_RECEIVED" | "RECEIVED"
+  | "MATCHED" | "INVOICED" | "PARTIALLY_PAID" | "OVERPAID" | "PAID"
+  | "CANCELLED" | "CLOSED" | "CONVERTED_TO_PO";
+
+export interface POLinkedDelivery {
+  delivery_id: string;
+  delivery_number: string;
+  delivery_date: string | null;
+  status: string | null;
+}
+
+export interface POLinkedInvoice {
+  invoice_id: string;
+  invoice_number: string;
+  total_amount: number;
+  total_paid: number;
+  balance_due: number;
+  status: string | null;
+  due_date: string | null;
+}
+
+export interface POLinkedDocs {
+  po_id: string;
+  po_number: string;
+  status: string;
+  source_mr: { mr_id: string; mr_number: string; status: string } | null;
+  deliveries: POLinkedDelivery[];
+  invoices: POLinkedInvoice[];
+  delivery_count: number;
+  invoice_count: number;
+  total_invoiced: number;
+  total_paid: number;
+}
 
 export type VatMode = "INCLUSIVE" | "EXCLUSIVE";
 
@@ -107,6 +140,16 @@ export const purchaseOrdersApi = {
 
   addItem: async (poId: string, body: POItemCreate): Promise<POItem> => {
     const res = await client.post<{ data: POItem }>(`/purchase-orders/${poId}/items`, body);
+    return res.data.data;
+  },
+
+  confirmSupplier: async (poId: string): Promise<PurchaseOrder> => {
+    const res = await client.post<{ data: PurchaseOrder }>(`/purchase-orders/${poId}/confirm-supplier`);
+    return res.data.data;
+  },
+
+  getLinkedDocs: async (poId: string): Promise<POLinkedDocs> => {
+    const res = await client.get<{ data: POLinkedDocs }>(`/purchase-orders/${poId}/linked-docs`);
     return res.data.data;
   },
 };

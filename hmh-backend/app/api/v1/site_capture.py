@@ -18,8 +18,12 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from app.core.config import settings
+from app.core.logging_config import get_logger
+from app.core.upload_validation import DOCUMENT_MIMES, validate_upload
 from app.dependencies import ALL_ROLES, CurrentUser, DbSession, OFFICE_AND_ABOVE
 from app.schemas.common import ApiSuccess
+
+logger = get_logger(__name__)
 
 router = APIRouter(prefix="/site-capture", tags=["site-capture"])
 
@@ -42,6 +46,7 @@ async def upload_delivery_note(
     """Upload a delivery note photo or PDF. Runs document AI extraction automatically."""
     from app.models.document_extraction import DeliveryVerification, DocumentExtraction
 
+    validate_upload(file, DOCUMENT_MIMES)
     os.makedirs(_DELIVERY_UPLOAD_DIR, exist_ok=True)
 
     # Save file
@@ -87,7 +92,7 @@ async def upload_delivery_note(
     db.add(verification)
     db.commit()
 
-    print(f"[DELIVERY-CAPTURE] upload created id={verification.id} status={extraction_result['status']}", flush=True)
+    logger.info("site_capture upload id=%s status=%s", verification.id, extraction_result['status'])
 
     return ApiSuccess(
         data={
@@ -217,7 +222,7 @@ def correct_delivery_note(
             ext.corrected_by = current_user.id
 
     db.commit()
-    print(f"[DELIVERY-CAPTURE] correction saved id={v.id}", flush=True)
+    logger.info("site_capture correction_saved id=%s", v.id)
     return ApiSuccess(data={"id": str(v.id)}, message="Corrections saved.")
 
 
@@ -257,7 +262,7 @@ def verify_delivery_note(verification_id: uuid.UUID, db: DbSession, current_user
         _create_verification_alert(db, v)
 
     db.commit()
-    print(f"[DELIVERY-CAPTURE] verified successfully id={v.id} status={new_status}", flush=True)
+    logger.info("site_capture verified id=%s status=%s", v.id, new_status)
     return ApiSuccess(data={"id": str(v.id), "status": new_status}, message=f"Verification: {new_status}")
 
 
@@ -307,7 +312,7 @@ def save_signature(
     v.signed_at      = now
     db.commit()
 
-    print(f"[DELIVERY-CAPTURE] signature payload received id={v.id} signer={body.signed_by_name}", flush=True)
+    logger.info("site_capture signature_saved id=%s signer=%s", v.id, body.signed_by_name)
     return ApiSuccess(data={"id": str(v.id), "signed_at": now.isoformat()}, message="Signature saved.")
 
 

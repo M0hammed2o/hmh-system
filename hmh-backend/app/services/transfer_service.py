@@ -13,7 +13,7 @@ from typing import Optional
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.core.exceptions import NotFoundError, ValidationError
+from app.core.exceptions import ConflictError, NotFoundError, ValidationError
 from app.models.enums import AuditAction, MovementType
 from app.models.item import Item
 from app.models.lot import Lot
@@ -134,6 +134,25 @@ def transfer_to_lot(
             },
         )
 
+    # Duplicate-submit guard: reject identical transfer from same user within 10 s.
+    # Prevents double-click / network retry from writing two identical ledger entries.
+    from datetime import timedelta
+    _window = datetime.now(timezone.utc) - timedelta(seconds=10)
+    _dup = db.query(StockLedger).filter(
+        StockLedger.project_id    == project_id,
+        StockLedger.lot_id        == lot_id,
+        StockLedger.item_id       == item_id,
+        StockLedger.movement_type == MovementType.TRANSFER_IN,
+        StockLedger.quantity_in   == quantity,
+        StockLedger.entered_by    == entered_by,
+        StockLedger.created_at    >= _window,
+    ).first()
+    if _dup:
+        raise ConflictError(
+            "Duplicate transfer detected (same item, quantity and user within 10 s). "
+            "If intentional, wait a moment and retry."
+        )
+
     # _write_ledger flushes internally; entry.id is set on return
     entry = _write_ledger(
         db,
@@ -178,6 +197,47 @@ def transfer_to_lot(
     # SQLAlchemy does not expire primary keys on commit, so entry.id remains valid.
     # Do NOT call refresh_stock_balances here — it runs its own commit which
     # conflicts with the test transaction harness. Call it from a background task.
+
+    # WhatsApp notification: warehouse transfer completed (fire-and-forget)
+    # 1-hour project-level cooldown: skip if a WAREHOUSE_TRANSFER_COMPLETED
+    # notification was already created for this project in the last hour.
+    try:
+        from app.services.notification_service import enqueue_direct
+        from app.models.enums import AlertType, AlertSeverity
+        from app.models.notification_queue import NotificationQueue
+        from app.models.alert import SystemAlert
+        from app.models.enums import AlertStatus
+        from datetime import timedelta
+
+        one_hour_ago = datetime.now(timezone.utc) - timedelta(hours=1)
+        recent = (
+            db.query(SystemAlert)
+            .filter(
+                SystemAlert.project_id == project_id,
+                SystemAlert.alert_type == AlertType.WAREHOUSE_TRANSFER_COMPLETED,
+                SystemAlert.created_at >= one_hour_ago,
+            )
+            .first()
+        )
+        if not recent:
+            lot_label = f"lot {lot.lot_number}" if lot.lot_number else "lot"
+            enqueue_direct(
+                db,
+                alert_type=AlertType.WAREHOUSE_TRANSFER_COMPLETED,
+                severity=AlertSeverity.LOW,
+                title=f"Stock Transferred: {item.name}",
+                message=(
+                    f"{quantity} {item.default_unit or 'units'} of {item.name} "
+                    f"transferred to {lot_label}."
+                ),
+                project_id=project_id,
+                entity_type="stock_ledger",
+                entity_id=entry.id,
+            )
+            db.commit()
+    except Exception:
+        pass
+
     return entry
 
 
@@ -197,6 +257,24 @@ def transfer_to_site(
     item = db.get(Item, item_id)
     if not item:
         raise NotFoundError(f"Item {item_id} not found.")
+
+    # Duplicate-submit guard: reject identical site transfer from same user within 10 s.
+    from datetime import timedelta
+    _window = datetime.now(timezone.utc) - timedelta(seconds=10)
+    _dup = db.query(StockLedger).filter(
+        StockLedger.project_id    == project_id,
+        StockLedger.site_id       == from_site_id,
+        StockLedger.item_id       == item_id,
+        StockLedger.movement_type == MovementType.TRANSFER_OUT,
+        StockLedger.quantity_out  == quantity,
+        StockLedger.entered_by    == entered_by,
+        StockLedger.created_at    >= _window,
+    ).first()
+    if _dup:
+        raise ConflictError(
+            "Duplicate transfer detected (same item, quantity and user within 10 s). "
+            "If intentional, wait a moment and retry."
+        )
 
     # Both calls flush internally; IDs are set before returning
     out_entry = _write_ledger(

@@ -30,8 +30,9 @@ from typing import Optional
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.logging_config import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # ── Classification keywords ───────────────────────────────────────────────────
 
@@ -93,15 +94,8 @@ def _save_attachment(payload: bytes, filename: str, doc_type: str) -> str:
         f.write(payload)
 
     exists = os.path.isfile(full_path)
-    logger.info("[GMAIL-SAVE-ATTACHMENT] filename=%s saved_path=%s exists=%s size=%d",
+    logger.info("gmail_attachment saved filename=%s path=%s exists=%s size=%d",
                 filename, full_path, exists, len(payload))
-    print(
-        f"[GMAIL-SAVE-ATTACHMENT] filename={filename!r}"
-        f" saved_path={full_path!r}"
-        f" exists={exists}"
-        f" size={len(payload)}",
-        flush=True,
-    )
     return full_path
 
 
@@ -316,13 +310,8 @@ def _refetch_missing_attachments(db, incoming_email, msg) -> None:
                 new_path = _save_attachment(payload_bytes, att.filename, doc_type)
                 att.file_path = new_path
                 db.commit()
-                print(
-                    f"[GMAIL-REFETCH-ATTACHMENT] att_id={att.id}"
-                    f" saved_path={new_path!r}"
-                    f" exists={os.path.isfile(new_path)}"
-                    f" size={len(payload_bytes)}",
-                    flush=True,
-                )
+                logger.info("gmail_refetch_attachment att_id=%s path=%s exists=%s size=%d",
+                            att.id, new_path, os.path.isfile(new_path), len(payload_bytes))
                 break
     except Exception:
         logger.exception("_refetch_missing_attachments failed for email %s", incoming_email.id)
@@ -423,13 +412,8 @@ def refetch_attachment_from_imap(db, att_id: uuid.UUID) -> dict:
             db.commit()
 
             exists = os.path.isfile(new_path)
-            print(
-                f"[GMAIL-REFETCH-ATTACHMENT] att_id={att_id}"
-                f" saved_path={new_path!r}"
-                f" exists={exists}"
-                f" size={len(payload_bytes)}",
-                flush=True,
-            )
+            logger.info("gmail_refetch_attachment att_id=%s path=%s exists=%s size=%d",
+                        att_id, new_path, exists, len(payload_bytes))
             return {"att_id": str(att_id), "saved_path": new_path, "exists": exists, "size": len(payload_bytes)}
 
         raise ValueError(

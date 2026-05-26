@@ -24,7 +24,9 @@ import os
 import re
 from typing import Optional
 
-logger = logging.getLogger(__name__)
+from app.core.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 # OCR_PROVIDER is read lazily on first use so that import order doesn't matter.
 def _ocr_provider() -> str:
@@ -60,11 +62,11 @@ def extract_text_via_google_vision(file_path: str) -> str:
             return ""
 
         text = response.full_text_annotation.text or ""
-        print(f"[VISION] Extracted {len(text)} chars from {os.path.basename(file_path)}", flush=True)
+        logger.info("vision extracted chars=%d file=%s", len(text), os.path.basename(file_path))
         return text
 
     except ImportError:
-        print("[VISION] google-cloud-vision not installed — falling back to local OCR", flush=True)
+        logger.debug("google-cloud-vision not installed — falling back to local OCR")
         return ""
     except Exception as exc:
         logger.warning("Google Vision extraction failed for %s: %s", file_path, exc)
@@ -88,6 +90,35 @@ _DN_RE = re.compile(
     re.IGNORECASE,
 )
 _EMAIL_RE = re.compile(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+")
+
+# Supplier name: look for common label lines, capture text on the SAME line only (no newline)
+# Patterns: "From:", "Supplier:", "Sold By:", "Vendor:", "Billed From:", "Company Name:"
+_SUPPLIER_LABEL_RE = re.compile(
+    r"(?:^|\n)[ \t]*(?:from|supplier|sold\s+by|vendor|billed\s+from|company\s+name)"
+    r"[ \t]*[:\-]?[ \t]*([A-Z][A-Za-z0-9&.,\t ]{2,60})",
+    re.IGNORECASE | re.MULTILINE,
+)
+# Also match standalone header-style company names: two or more title-case words at line start
+# (used as a last resort — only if label-based extraction found nothing)
+_COMPANY_HEADER_RE = re.compile(
+    r"^([A-Z][a-zA-Z]{1,30}(?:\s+[A-Z][a-zA-Z]{1,30}){1,4})\s*(?:\(PTY\)|\(Pty\)|Ltd|CC|Inc)?\s*$",
+    re.MULTILINE,
+)
+
+# VAT amount (South African context: "VAT", "Tax Amount")
+_VAT_RE = re.compile(
+    r"(?:vat|tax\s+amount)\s*(?:@?\s*\d{1,2}%\s*)?\s*[:\s]\s*R?\s*([\d,]+\.?\d*)",
+    re.IGNORECASE,
+)
+
+# Due date (separate from invoice date — look for "due", "payment due", "pay by")
+_DUE_DATE_RE = re.compile(
+    r"(?:due\s+date|payment\s+due|pay\s+by)\s*[:\-]?\s*"
+    r"(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}|\d{4}[\/\-]\d{1,2}[\/\-]\d{1,2}"
+    r"|\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{4})",
+    re.IGNORECASE,
+)
+
 _DATE_RE  = re.compile(
     r"\b(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}|\d{4}[\/\-]\d{1,2}[\/\-]\d{1,2}"
     r"|\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{4})\b",
@@ -125,7 +156,7 @@ def extract_text_from_pdf(file_path: str) -> str:
 
     Priority: PyMuPDF (fitz) → pdfplumber → pypdf → PyPDF2
     """
-    print(f"[PDF] Trying normal text extraction: {os.path.basename(file_path)}", flush=True)
+    logger.debug("pdf text extraction starting file=%s", os.path.basename(file_path))
 
     # 1. PyMuPDF (fitz) — best quality
     try:
@@ -134,14 +165,13 @@ def extract_text_from_pdf(file_path: str) -> str:
         text = "\n".join(page.get_text() for page in doc)
         doc.close()
         if text.strip():
-            print(f"[PDF] fitz: extracted {len(text)} chars", flush=True)
+            logger.debug("pdf fitz extracted chars=%d", len(text))
             return text
-        print("[PDF] fitz: no text found (scanned PDF?)", flush=True)
+        logger.debug("pdf fitz no text found (scanned PDF?)")
     except ImportError:
-        print("[PDF] fitz: not installed", flush=True)
+        logger.debug("pdf fitz not installed")
     except Exception as exc:
         logger.warning("fitz PDF extraction failed: %s", exc)
-        print(f"[PDF] fitz: error — {exc}", flush=True)
 
     # 2. pdfplumber
     try:
@@ -149,14 +179,13 @@ def extract_text_from_pdf(file_path: str) -> str:
         with pdfplumber.open(file_path) as pdf:
             text = "\n".join(page.extract_text() or "" for page in pdf.pages)
         if text.strip():
-            print(f"[PDF] pdfplumber: extracted {len(text)} chars", flush=True)
+            logger.debug("pdf pdfplumber extracted chars=%d", len(text))
             return text
-        print("[PDF] pdfplumber: no text found", flush=True)
+        logger.debug("pdf pdfplumber no text found")
     except ImportError:
-        print("[PDF] pdfplumber: not installed", flush=True)
+        logger.debug("pdf pdfplumber not installed")
     except Exception as exc:
         logger.warning("pdfplumber PDF extraction failed: %s", exc)
-        print(f"[PDF] pdfplumber: error — {exc}", flush=True)
 
     # 3. pypdf (pure Python, no binary dependencies)
     try:
@@ -165,14 +194,13 @@ def extract_text_from_pdf(file_path: str) -> str:
         pages  = [page.extract_text() or "" for page in reader.pages]
         text   = "\n".join(pages)
         if text.strip():
-            print(f"[PDF] pypdf: extracted {len(text)} chars", flush=True)
+            logger.debug("pdf pypdf extracted chars=%d", len(text))
             return text
-        print("[PDF] pypdf: no text found", flush=True)
+        logger.debug("pdf pypdf no text found")
     except ImportError:
-        print("[PDF] pypdf: not installed", flush=True)
+        logger.debug("pdf pypdf not installed")
     except Exception as exc:
         logger.warning("pypdf PDF extraction failed: %s", exc)
-        print(f"[PDF] pypdf: error — {exc}", flush=True)
 
     # 4. PyPDF2 (older API, same logic)
     try:
@@ -182,16 +210,15 @@ def extract_text_from_pdf(file_path: str) -> str:
             pages  = [page.extract_text() or "" for page in reader.pages]
         text = "\n".join(pages)
         if text.strip():
-            print(f"[PDF] PyPDF2: extracted {len(text)} chars", flush=True)
+            logger.debug("pdf PyPDF2 extracted chars=%d", len(text))
             return text
-        print("[PDF] PyPDF2: no text found", flush=True)
+        logger.debug("pdf PyPDF2 no text found")
     except ImportError:
-        print("[PDF] PyPDF2: not installed", flush=True)
+        logger.debug("pdf PyPDF2 not installed")
     except Exception as exc:
         logger.warning("PyPDF2 PDF extraction failed: %s", exc)
-        print(f"[PDF] PyPDF2: error — {exc}", flush=True)
 
-    print("[PDF] All PDF text-extraction libraries exhausted", flush=True)
+    logger.warning("pdf all extraction libraries exhausted file=%s", os.path.basename(file_path))
     return ""
 
 
@@ -225,13 +252,12 @@ def extract_document_text(file_path: str) -> tuple[str, str]:
 
     if ext == ".pdf":
         text = extract_text_from_pdf(file_path)
-        print(f"[PDF] Extracted text length: {len(text)}", flush=True)
+        logger.debug("pdf extracted chars=%d", len(text))
         if text.strip():
-            print("[PDF] OCR fallback required: False", flush=True)
             return (text, "EXTRACTED")
 
         # No text found — PDF is scanned (or empty); try OCR
-        print("[PDF] OCR fallback required: True", flush=True)
+        logger.info("pdf ocr_fallback=required file=%s", os.path.basename(file_path))
         if _ocr_provider() == "disabled":
             return ("", "OCR_NOT_AVAILABLE")
         if _ocr_provider() == "google_vision":
@@ -253,12 +279,12 @@ def extract_document_text(file_path: str) -> tuple[str, str]:
                     texts.append(pytesseract.image_to_string(img))
                 doc.close()
                 combined = "\n".join(texts)
-                print(f"[PDF] OCR extracted {len(combined)} chars via fitz+tesseract", flush=True)
+                logger.info("pdf ocr extracted chars=%d via fitz+tesseract", len(combined))
                 return (combined, "EXTRACTED") if combined.strip() else ("", "FAILED")
             except ImportError:
-                print("[PDF] fitz not available for OCR rendering", flush=True)
+                logger.debug("pdf fitz not available for OCR rendering")
         except ImportError:
-            print("[PDF] pytesseract/Pillow not installed — OCR_NOT_AVAILABLE", flush=True)
+            logger.debug("pdf pytesseract/Pillow not installed — OCR_NOT_AVAILABLE")
             return ("", "OCR_NOT_AVAILABLE")
         return ("", "OCR_REQUIRED")
 
@@ -293,6 +319,33 @@ def extract_document_text(file_path: str) -> tuple[str, str]:
 
 
 # ── Field parsers ─────────────────────────────────────────────────────────────
+
+def _extract_supplier_name(text: str) -> Optional[str]:
+    """
+    Extract supplier name using label-first strategy:
+      1. Look for lines with explicit labels (From:, Supplier:, Vendor:, etc.)
+      2. Fall back to header-style title-case company name near the top of the document
+    Returns None if no confident match found.
+    """
+    # Strategy 1: labelled lines
+    m = _SUPPLIER_LABEL_RE.search(text)
+    if m:
+        name = m.group(1).strip().rstrip(".,")
+        if len(name) >= 3:
+            return name
+
+    # Strategy 2: title-case company header in the first 600 characters (letterhead area)
+    header_region = text[:600]
+    for m in _COMPANY_HEADER_RE.finditer(header_region):
+        name = m.group(1).strip()
+        # Skip common false positives
+        if name.lower() in {"tax invoice", "purchase order", "delivery note", "invoice", "credit note", "receipt"}:
+            continue
+        if len(name) >= 4:
+            return name
+
+    return None
+
 
 def _first_match(pattern: re.Pattern, text: str) -> Optional[str]:
     m = pattern.search(text)
@@ -358,14 +411,24 @@ def _parse_line_items(text: str) -> list[dict]:
 
 def parse_invoice_text(text: str) -> dict:
     """Extract structured fields from invoice text."""
+    # Find invoice date and due date separately.
+    # Try due date first; the remaining earliest date is the invoice date.
+    due_date   = _first_match(_DUE_DATE_RE, text)
+    inv_date   = _first_match(_DATE_RE, text)
+
+    vat_raw    = _first_match(_VAT_RE, text)
+    vat_amount = _parse_amount(vat_raw) if vat_raw else None
+
     return {
         "po_number":            _first_match(_PO_RE,    text),
         "invoice_number":       _first_match(_INV_RE,   text),
         "delivery_note_number": None,
-        "supplier_name":        None,
+        "supplier_name":        _extract_supplier_name(text),
         "supplier_email":       _first_match(_EMAIL_RE, text),
-        "date":                 _first_match(_DATE_RE,  text),
+        "date":                 inv_date,
+        "due_date":             due_date,
         "total_amount":         _extract_total(text),
+        "vat_amount":           vat_amount,
     }
 
 

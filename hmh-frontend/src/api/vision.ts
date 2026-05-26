@@ -11,8 +11,11 @@ export interface VisionPreviewInvoice {
   invoice_number: string | null;
   supplier_name:  string | null;
   supplier_email: string | null;
+  po_number:      string | null;
   date:           string | null;
+  due_date:       string | null;
   total_amount:   number | null;
+  vat_amount:     number | null;
   line_items: Array<{
     description: string | null;
     quantity:    number | null;
@@ -20,6 +23,13 @@ export interface VisionPreviewInvoice {
     line_total:  number | null;
     unit:        string | null;
   }>;
+}
+
+export interface SupplierSuggestion {
+  id:    string;
+  name:  string;
+  email: string | null;
+  score: number;
 }
 
 export interface VisionPreviewDeliveryNote {
@@ -59,6 +69,11 @@ export const visionApi = {
     const res = await client.post<{ data: VisionResult }>("/vision/extract", fd, {
       headers: { "Content-Type": "multipart/form-data" },
     });
+    return res.data.data;
+  },
+
+  suggestSupplier: async (name: string): Promise<SupplierSuggestion[]> => {
+    const res = await client.get<{ data: SupplierSuggestion[] }>("/suppliers/suggest", { params: { name } });
     return res.data.data;
   },
 };

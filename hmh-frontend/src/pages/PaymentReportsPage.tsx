@@ -5,7 +5,7 @@
  */
 
 import { useEffect, useState } from "react";
-import { RefreshCw, CreditCard, TrendingDown, Building2, Calendar } from "lucide-react";
+import { RefreshCw, CreditCard, TrendingDown, Building2, Calendar, Download } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PageHeader } from "@/components/shared/PageHeader";
@@ -14,6 +14,7 @@ import { suppliersApi, type Supplier } from "@/api/suppliers";
 import { paymentsApi, type PaymentReport } from "@/api/payments";
 import { formatCurrency } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import client from "@/api/client";
 
 export default function PaymentReportsPage() {
   const [projects,    setProjects]    = useState<Project[]>([]);
@@ -34,6 +35,8 @@ export default function PaymentReportsPage() {
     suppliersApi.list().then(setSuppliers).catch(() => {});
   }, []);
 
+  const [exporting, setExporting] = useState(false);
+
   const load = async () => {
     if (!projectId) return;
     setLoading(true); setError("");
@@ -46,6 +49,26 @@ export default function PaymentReportsPage() {
       setReport(r);
     } catch { setError("Failed to load report."); }
     finally { setLoading(false); }
+  };
+
+  const handleExportCSV = async () => {
+    if (!projectId) return;
+    setExporting(true);
+    try {
+      const params = new URLSearchParams();
+      if (fromDate)    params.append("from_date",    fromDate);
+      if (toDate)      params.append("to_date",      toDate);
+      if (supplierId)  params.append("supplier_id",  supplierId);
+      const url = `${client.defaults.baseURL}/projects/${projectId}/payments/export?${params}`;
+      const res = await client.get(url, { responseType: "blob" });
+      const blob = new Blob([res.data as BlobPart], { type: "text/csv" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `payment_report_${projectId}_${fromDate || "all"}.csv`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    } catch { setError("Export failed."); }
+    finally { setExporting(false); }
   };
 
   useEffect(() => { if (projectId) load(); }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -87,6 +110,10 @@ export default function PaymentReportsPage() {
         </div>
         <Button onClick={load} disabled={loading || !projectId} size="sm" className="mb-0.5">
           {loading ? <RefreshCw className="w-4 h-4 animate-spin" /> : "Run Report"}
+        </Button>
+        <Button onClick={handleExportCSV} disabled={exporting || !projectId} size="sm" variant="outline" className="mb-0.5">
+          <Download className="w-3.5 h-3.5 mr-1" />
+          {exporting ? "Exporting…" : "Export CSV"}
         </Button>
       </div>
 

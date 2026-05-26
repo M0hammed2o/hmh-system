@@ -1,11 +1,12 @@
 /**
  * Procurement Page — MR → Approve → PO → Email workflow.
  */
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useMemo } from "react";
 import { WriteGuard } from "@/components/shared/WriteGuard";
 import {
   Plus, Check, X, ChevronRight, AlertTriangle, Mail,
   MailCheck, RefreshCw, FileText, ShoppingCart, Warehouse, ArrowRight,
+  CheckCircle2, Circle, Clock, Package, Receipt, CreditCard,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -18,6 +19,7 @@ import {
   type MaterialRequest, type MRCreate, type MRItemCreate,
   type MRQuote, type PurchaseOrder, type MRPriority, type DeliveryDestination,
 } from "@/api/procurement";
+import { purchaseOrdersApi, type POLinkedDocs } from "@/api/purchaseOrders";
 import { warehouseApi, type WarehouseStockItem } from "@/api/warehouse";
 import { AttachmentStrip } from "@/components/shared/AttachmentStrip";
 import { cn } from "@/lib/utils";
@@ -45,7 +47,10 @@ function timeAgo(iso: string) {
 const STATUS_BADGE: Record<string, "default" | "secondary" | "outline" | "destructive" | "success"> = {
   DRAFT: "outline", SUBMITTED: "secondary", PENDING_APPROVAL: "secondary",
   APPROVED: "success", REJECTED: "destructive", CONVERTED_TO_PO: "default",
-  ORDERED: "default", PARTIALLY_RECEIVED: "secondary", RECEIVED: "success", CLOSED: "outline",
+  SENT: "default", SUPPLIER_CONFIRMED: "success",
+  ORDERED: "default", PARTIALLY_RECEIVED: "secondary", RECEIVED: "success",
+  INVOICED: "secondary", PARTIALLY_PAID: "secondary", OVERPAID: "destructive",
+  PAID: "success", MATCHED: "success", CANCELLED: "destructive", CLOSED: "outline",
 };
 
 const PRIORITY_COLOR: Record<MRPriority, string> = {
@@ -576,6 +581,82 @@ function MRDetailModal({ mr, suppliers, onClose, onUpdated }: {
   );
 }
 
+// ── PO Lifecycle Timeline ─────────────────────────────────────────────────────
+
+const PO_LIFECYCLE_STEPS = [
+  { key: "DRAFT",              label: "Draft" },
+  { key: "APPROVED",           label: "Approved" },
+  { key: "SENT",               label: "Sent" },
+  { key: "SUPPLIER_CONFIRMED", label: "Confirmed" },
+  { key: "RECEIVED",           label: "Received" },
+  { key: "INVOICED",           label: "Invoiced" },
+  { key: "PAID",               label: "Paid" },
+];
+
+const STEP_ORDER: Record<string, number> = {
+  DRAFT: 0, SUBMITTED: 0, PENDING_APPROVAL: 0,
+  APPROVED: 1,
+  SENT: 2,
+  SUPPLIER_CONFIRMED: 3,
+  PARTIALLY_RECEIVED: 4, ORDERED: 4, RECEIVED: 4,
+  MATCHED: 5, INVOICED: 5,
+  PARTIALLY_PAID: 6, OVERPAID: 6, PAID: 6,
+  CANCELLED: -1, REJECTED: -1,
+};
+
+function POLifecycleTimeline({ status }: { status: string }) {
+  const currentIdx = STEP_ORDER[status] ?? 0;
+  const cancelled = status === "CANCELLED" || status === "REJECTED";
+
+  return (
+    <div className="bg-muted/30 rounded-lg px-3 py-3">
+      <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide mb-2">Order lifecycle</p>
+      {cancelled ? (
+        <p className="text-xs text-destructive font-medium flex items-center gap-1">
+          <X className="w-3.5 h-3.5" />{status.replace(/_/g, " ")}
+        </p>
+      ) : (
+        <div className="flex items-center gap-0.5 overflow-x-auto">
+          {PO_LIFECYCLE_STEPS.map((step, i) => {
+            const done = currentIdx > i;
+            const active = currentIdx === i;
+            return (
+              <div key={step.key} className="flex items-center gap-0.5 shrink-0">
+                <div className={cn(
+                  "flex flex-col items-center gap-0.5",
+                )}>
+                  {done ? (
+                    <CheckCircle2 className="w-4 h-4 text-green-600 dark:text-green-400" />
+                  ) : active ? (
+                    <Clock className="w-4 h-4 text-primary" />
+                  ) : (
+                    <Circle className="w-4 h-4 text-muted-foreground/40" />
+                  )}
+                  <span className={cn(
+                    "text-[9px] whitespace-nowrap",
+                    done ? "text-green-600 dark:text-green-400 font-medium" :
+                    active ? "text-primary font-semibold" :
+                    "text-muted-foreground/50",
+                  )}>
+                    {step.label}
+                  </span>
+                </div>
+                {i < PO_LIFECYCLE_STEPS.length - 1 && (
+                  <div className={cn(
+                    "w-5 h-px mb-3 shrink-0",
+                    done ? "bg-green-500" : "bg-border",
+                  )} />
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
 // ── PO Detail Modal ───────────────────────────────────────────────────────────
 
 function PODetailModal({ po, onClose, onUpdated }: { po: PurchaseOrder; onClose: () => void; onUpdated: () => void; }) {
@@ -594,6 +675,10 @@ function PODetailModal({ po, onClose, onUpdated }: { po: PurchaseOrder; onClose:
   const [showPOActivity, setShowPOActivity] = useState(false);
   const [poActivity,     setPoActivity]     = useState<ProcurementActivityEntry[]>([]);
   const [poActLoading,   setPoActLoading]   = useState(false);
+  // Phase 3I: linked docs (reconciliation)
+  const [linkedDocs,     setLinkedDocs]     = useState<POLinkedDocs | null>(null);
+  const [showLinkedDocs, setShowLinkedDocs] = useState(false);
+  const [linkedDocsLoading, setLinkedDocsLoading] = useState(false);
 
   const togglePOActivity = async () => {
     setShowPOActivity(p => !p);
@@ -602,6 +687,16 @@ function PODetailModal({ po, onClose, onUpdated }: { po: PurchaseOrder; onClose:
       try { setPoActivity(await procurementApi.getPOActivity(po.id)); }
       catch { /* silent */ }
       finally { setPoActLoading(false); }
+    }
+  };
+
+  const toggleLinkedDocs = async () => {
+    setShowLinkedDocs(p => !p);
+    if (!showLinkedDocs && !linkedDocs) {
+      setLinkedDocsLoading(true);
+      try { setLinkedDocs(await purchaseOrdersApi.getLinkedDocs(po.id)); }
+      catch { /* silent */ }
+      finally { setLinkedDocsLoading(false); }
     }
   };
 
@@ -644,6 +739,16 @@ function PODetailModal({ po, onClose, onUpdated }: { po: PurchaseOrder; onClose:
       onUpdated();
     }
     catch (err: unknown) { setError((err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Failed."); }
+    finally { setLoading(null); }
+  };
+
+  const handleConfirmSupplier = async () => {
+    setLoading("confirm"); setError("");
+    try {
+      await purchaseOrdersApi.confirmSupplier(po.id);
+      onUpdated();
+    }
+    catch (err: unknown) { setError((err as { response?: { data?: { detail?: string } } })?.response?.data?.detail || "Failed."); }
     finally { setLoading(null); }
   };
 
@@ -752,13 +857,17 @@ function PODetailModal({ po, onClose, onUpdated }: { po: PurchaseOrder; onClose:
 
           {error && <p className="text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-lg px-3 py-2">{error}</p>}
 
-          {/* PO lifecycle: DRAFT → APPROVED → SENT */}
-          <div className="text-xs text-muted-foreground bg-muted/30 rounded-lg px-3 py-2">
-            Lifecycle: <span className="font-mono text-[10px]">DRAFT → APPROVED → SENT → PARTIALLY_RECEIVED / RECEIVED → MATCHED → PAID</span>
-          </div>
+          {/* Lifecycle timeline */}
+          <POLifecycleTimeline status={po.status} />
+
+          {/* Action buttons */}
           <div className="flex flex-wrap gap-2">
-            {["DRAFT", "SUBMITTED"].includes(po.status) && <Button size="sm" onClick={handleApprove} disabled={loading === "approve"} className="h-8 text-xs"><Check className="w-3.5 h-3.5 mr-1" />{loading === "approve" ? "Approving…" : "Approve Purchase Order (PO)"}</Button>}
-            {["APPROVED", "SENT"].includes(po.status) && (
+            {["DRAFT", "SUBMITTED"].includes(po.status) && (
+              <Button size="sm" onClick={handleApprove} disabled={loading === "approve"} className="h-8 text-xs">
+                <Check className="w-3.5 h-3.5 mr-1" />{loading === "approve" ? "Approving…" : "Approve PO"}
+              </Button>
+            )}
+            {["APPROVED", "SENT", "SUPPLIER_CONFIRMED"].includes(po.status) && (
               <Button size="sm" variant="outline" onClick={() => setShowDraft(true)} className="h-8 text-xs">
                 <Mail className="w-3.5 h-3.5 mr-1" />Email Supplier
               </Button>
@@ -769,7 +878,106 @@ function PODetailModal({ po, onClose, onUpdated }: { po: PurchaseOrder; onClose:
                 {loading === "marksent" ? "Marking…" : "Mark as Sent (Manual)"}
               </Button>
             )}
-            {po.sent_at && <span className="text-xs text-green-600 flex items-center gap-1"><MailCheck className="w-3.5 h-3.5" />Order Placed — Sent {new Date(po.sent_at).toLocaleDateString()}</span>}
+            {po.status === "SENT" && (
+              <Button size="sm" variant="outline" onClick={handleConfirmSupplier} disabled={loading === "confirm"} className="h-8 text-xs border-green-500/50 text-green-700 hover:bg-green-500/10">
+                <CheckCircle2 className="w-3.5 h-3.5 mr-1" />
+                {loading === "confirm" ? "Recording…" : "Supplier Confirmed"}
+              </Button>
+            )}
+            {po.sent_at && <span className="text-xs text-green-600 flex items-center gap-1"><MailCheck className="w-3.5 h-3.5" />Sent {new Date(po.sent_at).toLocaleDateString()}</span>}
+          </div>
+
+          {/* Linked docs: Deliveries + Invoices reconciliation */}
+          <div className="border border-border rounded-xl overflow-hidden">
+            <button
+              className="w-full flex items-center justify-between px-3 py-2.5 hover:bg-muted/30 transition-colors text-left"
+              onClick={toggleLinkedDocs}
+            >
+              <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
+                <Receipt className="w-3 h-3" />Deliveries &amp; Invoices
+              </span>
+              <span className="text-xs text-muted-foreground">
+                {linkedDocsLoading ? "Loading…" : showLinkedDocs ? "Hide ▲" : "Show ▼"}
+              </span>
+            </button>
+            {showLinkedDocs && (
+              <div className="border-t border-border divide-y divide-border/60">
+                {linkedDocsLoading ? (
+                  <p className="text-xs text-muted-foreground text-center py-4">Loading…</p>
+                ) : !linkedDocs ? (
+                  <p className="text-xs text-muted-foreground text-center py-4">Failed to load.</p>
+                ) : (
+                  <>
+                    {/* Source MR */}
+                    {linkedDocs.source_mr && (
+                      <div className="px-3 py-2 flex items-center gap-2 text-xs">
+                        <FileText className="w-3 h-3 text-muted-foreground shrink-0" />
+                        <span className="text-muted-foreground">From MR:</span>
+                        <span className="font-medium">{linkedDocs.source_mr.mr_number}</span>
+                        <Badge variant={STATUS_BADGE[linkedDocs.source_mr.status] || "outline"} className="text-[10px] h-4 px-1.5">
+                          {linkedDocs.source_mr.status.replace(/_/g, " ")}
+                        </Badge>
+                      </div>
+                    )}
+
+                    {/* Deliveries */}
+                    <div className="px-3 py-2">
+                      <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide mb-1.5 flex items-center gap-1">
+                        <Package className="w-3 h-3" />Deliveries ({linkedDocs.delivery_count})
+                      </p>
+                      {linkedDocs.deliveries.length === 0 ? (
+                        <p className="text-xs text-muted-foreground">No deliveries yet.</p>
+                      ) : (
+                        <div className="space-y-1">
+                          {linkedDocs.deliveries.map((d) => (
+                            <div key={d.delivery_id} className="flex items-center justify-between text-xs">
+                              <span className="font-medium">{d.delivery_number}</span>
+                              <div className="flex items-center gap-2">
+                                {d.delivery_date && <span className="text-muted-foreground">{d.delivery_date}</span>}
+                                {d.status && <Badge variant={STATUS_BADGE[d.status] || "outline"} className="text-[10px] h-4 px-1.5">{d.status.replace(/_/g, " ")}</Badge>}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Invoices */}
+                    <div className="px-3 py-2">
+                      <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide mb-1.5 flex items-center gap-1">
+                        <CreditCard className="w-3 h-3" />Invoices ({linkedDocs.invoice_count})
+                      </p>
+                      {linkedDocs.invoices.length === 0 ? (
+                        <p className="text-xs text-muted-foreground">No invoices yet.</p>
+                      ) : (
+                        <div className="space-y-2">
+                          {linkedDocs.invoices.map((inv) => (
+                            <div key={inv.invoice_id} className="bg-muted/30 rounded-lg px-3 py-2 text-xs space-y-1">
+                              <div className="flex items-center justify-between">
+                                <span className="font-medium">{inv.invoice_number}</span>
+                                {inv.status && <Badge variant={STATUS_BADGE[inv.status] || "outline"} className="text-[10px] h-4 px-1.5">{inv.status.replace(/_/g, " ")}</Badge>}
+                              </div>
+                              <div className="grid grid-cols-3 gap-1 text-[10px] text-muted-foreground">
+                                <span>Invoice: R{inv.total_amount.toLocaleString()}</span>
+                                <span>Paid: R{inv.total_paid.toLocaleString()}</span>
+                                <span className={inv.balance_due > 0 ? "text-amber-500 font-medium" : "text-green-600"}>
+                                  Balance: R{inv.balance_due.toLocaleString()}
+                                </span>
+                              </div>
+                              {inv.due_date && <p className="text-[10px] text-muted-foreground">Due: {inv.due_date}</p>}
+                            </div>
+                          ))}
+                          <div className="flex justify-between text-xs font-medium pt-1 border-t border-border">
+                            <span>Total invoiced: R{linkedDocs.total_invoiced.toLocaleString()}</span>
+                            <span>Total paid: R{linkedDocs.total_paid.toLocaleString()}</span>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Phase 3I: Documents attached to this PO */}
@@ -1024,9 +1232,18 @@ export default function ProcurementPage() {
 
   useEffect(() => { loadData(); }, [loadData]);
 
-  const filteredMRs = mrFilter === "ALL" ? mrs : mrs.filter((m) => m.status === mrFilter);
-  const pendingCount = mrs.filter((m) => ["SUBMITTED", "PENDING_APPROVAL"].includes(m.status)).length;
-  const overBoqCount = mrs.filter((m) => m.over_boq && !["REJECTED", "CLOSED"].includes(m.status)).length;
+  const filteredMRs = useMemo(
+    () => mrFilter === "ALL" ? mrs : mrs.filter((m) => m.status === mrFilter),
+    [mrs, mrFilter],
+  );
+  const pendingCount = useMemo(
+    () => mrs.filter((m) => ["SUBMITTED", "PENDING_APPROVAL"].includes(m.status)).length,
+    [mrs],
+  );
+  const overBoqCount = useMemo(
+    () => mrs.filter((m) => m.over_boq && !["REJECTED", "CLOSED"].includes(m.status)).length,
+    [mrs],
+  );
 
   if (loading) return <div className="space-y-4">{[1, 2, 3].map((i) => <Skeleton key={i} className="h-16 rounded-xl" />)}</div>;
 

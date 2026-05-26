@@ -180,24 +180,144 @@ def send_po_email(
     db.commit()
     db.refresh(po)
 
-    # Alert: PO sent
+    # WhatsApp notification: PO sent (fire-and-forget, never blocks email send)
+    _notify_po_sent(db, po)
     try:
-        from app.models.alert import SystemAlert
-        from app.models.enums import AlertType, AlertSeverity, AlertStatus
-        db.add(SystemAlert(
-            project_id=po.project_id, site_id=po.site_id,
-            alert_type=AlertType.REQUEST_PENDING_TOO_LONG,
-            severity=AlertSeverity.LOW,
-            title=f"PO Sent: {po.po_number}",
-            message=f"Purchase order {po.po_number} was emailed to supplier. Status: {log.status.value}.",
-            status=AlertStatus.OPEN, notification_channel="in_app",
-            created_at=datetime.now(timezone.utc),
-        ))
         db.commit()
     except Exception:
         pass
 
     return po, log
+
+
+def _notify_po_sent(db: Session, po: PurchaseOrder) -> None:
+    """
+    Fire-and-forget WhatsApp notification when a PO transitions to SENT.
+    Called by both send_po_email() and the mark-sent API endpoint.
+    Never raises — notification failure must not block the business operation.
+    """
+    try:
+        from app.services.notification_service import enqueue_direct
+        from app.models.enums import AlertType, AlertSeverity
+        total = float(po.total_amount or 0)
+        enqueue_direct(
+            db,
+            alert_type=AlertType.PO_SENT_ALERT,
+            severity=AlertSeverity.LOW,
+            title=f"PO Sent: {po.po_number}",
+            message=(
+                f"Purchase order {po.po_number} has been sent to supplier. "
+                f"Total: R{total:,.2f}."
+            ),
+            project_id=po.project_id,
+            entity_type="purchase_order",
+            entity_id=po.id,
+        )
+    except Exception:
+        pass
+
+
+def confirm_supplier(db: Session, po_id: uuid.UUID, confirmed_by_id: uuid.UUID) -> PurchaseOrder:
+    """Transition PO from SENT → SUPPLIER_CONFIRMED."""
+    from app.services import audit_service
+    from app.models.enums import AuditAction
+    po = _get_po_or_404(db, po_id)
+    if po.status != RecordStatus.SENT:
+        raise ValidationError(f"Only SENT POs can be confirmed by supplier. Current status: {po.status.value}")
+    po.status = RecordStatus.SUPPLIER_CONFIRMED
+    audit_service.write_event(db, AuditAction.APPROVE, "purchase_order", confirmed_by_id, po_id,
+                              after_value={"status": "SUPPLIER_CONFIRMED"})
+    db.commit()
+    db.refresh(po)
+    return po
+
+
+def get_po_linked_docs(db: Session, po_id: uuid.UUID) -> dict:
+    """Return all linked documents for a PO: source MR, deliveries, invoices + payment totals."""
+    from app.models.delivery import Delivery
+    from app.models.invoice import Invoice
+    from app.models.material_request import MaterialRequest
+    from app.models.payment import Payment
+    from app.models.enums import PaymentStatus
+    from sqlalchemy import func
+
+    po = db.get(PurchaseOrder, po_id)
+    if not po:
+        raise NotFoundError(f"Purchase order {po_id} not found.")
+
+    # Source MR
+    mr_summary = None
+    if po.material_request_id:
+        mr = db.get(MaterialRequest, po.material_request_id)
+        if mr:
+            mr_summary = {
+                "mr_id": str(mr.id),
+                "mr_number": mr.request_number,
+                "status": mr.status.value,
+            }
+
+    # Deliveries linked to this PO
+    deliveries = (
+        db.query(Delivery)
+        .filter(Delivery.purchase_order_id == po_id)
+        .order_by(Delivery.delivery_date.desc())
+        .all()
+    )
+    delivery_list = [
+        {
+            "delivery_id": str(d.id),
+            "delivery_number": d.delivery_number or str(d.id)[:8],
+            "delivery_date": d.delivery_date.date().isoformat() if d.delivery_date else None,
+            "status": d.delivery_status.value if d.delivery_status else None,
+        }
+        for d in deliveries
+    ]
+
+    # Invoices linked to this PO
+    invoices = (
+        db.query(Invoice)
+        .filter(Invoice.purchase_order_id == po_id)
+        .order_by(Invoice.created_at.desc())
+        .all()
+    )
+    invoice_ids = [i.id for i in invoices]
+
+    # Payment totals per invoice (single bulk query)
+    paid_by_invoice: dict = {}
+    if invoice_ids:
+        rows = (
+            db.query(Payment.invoice_id, func.coalesce(func.sum(Payment.amount_paid), 0).label("total"))
+            .filter(Payment.invoice_id.in_(invoice_ids), Payment.status == PaymentStatus.PAID)
+            .group_by(Payment.invoice_id)
+            .all()
+        )
+        paid_by_invoice = {str(r.invoice_id): float(r.total) for r in rows}
+
+    invoice_list = [
+        {
+            "invoice_id": str(i.id),
+            "invoice_number": i.invoice_number,
+            "total_amount": float(i.total_amount or 0),
+            "total_paid": paid_by_invoice.get(str(i.id), 0.0),
+            "balance_due": round(float(i.total_amount or 0) - paid_by_invoice.get(str(i.id), 0.0), 2),
+            "status": i.status.value if i.status else None,
+            "due_date": i.due_date.isoformat() if i.due_date else None,
+        }
+        for i in invoices
+    ]
+
+    return {
+        "po_id": str(po_id),
+        "po_number": po.po_number,
+        "status": po.status.value,
+        "source_mr": mr_summary,
+        "deliveries": delivery_list,
+        "invoices": invoice_list,
+        "delivery_count": len(delivery_list),
+        "invoice_count": len(invoice_list),
+        "total_invoiced": round(sum(i["total_amount"] for i in invoice_list), 2),
+        "total_paid": round(sum(i["total_paid"] for i in invoice_list), 2),
+    }
 
 
 def add_po_item(db: Session, po_id: uuid.UUID, data: POItemCreate) -> PurchaseOrderItem:

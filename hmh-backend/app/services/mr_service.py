@@ -1,11 +1,16 @@
 """Material Request service — CRUD + BOQ check + approval flow + convert-to-PO."""
 
+import logging
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Optional
 
 from sqlalchemy.orm import Session, joinedload
+
+from app.core.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 from app.core.exceptions import NotFoundError, ValidationError
 from app.models.enums import (
@@ -226,12 +231,11 @@ def _create_mr_submitted_alert(db: Session, mr: "MaterialRequest") -> None:
     db.add(alert)
     db.flush()  # get alert.id — caller commits
 
-    print(f"[MR-ALERT] created alert_id={alert.id} for MR={mr.request_number}", flush=True)
+    logger.info("mr alert created alert_id=%s mr=%s", alert.id, mr.request_number)
 
     # Enqueue WhatsApp notifications for matching active recipients
     queued = notification_service.enqueue_for_alert(db, alert)
-    # No commit here — submit_request commits the whole alert + notification block
-    print(f"[MR-ALERT] queued {len(queued)} WhatsApp notification(s) for MR={mr.request_number}", flush=True)
+    logger.info("mr alert queued notifications=%d mr=%s", len(queued), mr.request_number)
 
 
 def approve_request(
@@ -261,19 +265,24 @@ def approve_request(
     db.commit()
     db.refresh(mr)
 
-    # Alert: MR approved
+    # Alert: MR approved — WhatsApp notification via enqueue_direct (never blocks approval)
     try:
-        from app.models.alert import SystemAlert
-        from app.models.enums import AlertSeverity, AlertStatus
-        db.add(SystemAlert(
-            project_id=mr.project_id, site_id=mr.site_id,
-            alert_type=AlertType.REQUEST_PENDING_TOO_LONG,
+        from app.services.notification_service import enqueue_direct
+        from app.models.enums import AlertSeverity
+        item_count = len(mr.items) if mr.items else 0
+        enqueue_direct(
+            db,
+            alert_type=AlertType.MR_APPROVED,
             severity=AlertSeverity.LOW,
             title=f"MR Approved: {mr.request_number}",
-            message=f"Material request {mr.request_number} was approved.",
-            status=AlertStatus.OPEN, notification_channel="in_app",
-            created_at=datetime.now(timezone.utc),
-        ))
+            message=(
+                f"Material request {mr.request_number} has been approved. "
+                f"{item_count} item{'s' if item_count != 1 else ''}."
+            ),
+            project_id=mr.project_id,
+            entity_type="material_request",
+            entity_id=mr.id,
+        )
         db.commit()
     except Exception:
         pass

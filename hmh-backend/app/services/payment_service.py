@@ -157,6 +157,70 @@ def create_payment(
 
     db.commit()
     db.refresh(payment)
+
+    # Phase 3Q.3: WhatsApp operational alerts — fire-and-forget after commit
+    if data.invoice_id:
+        try:
+            from app.models.invoice import Invoice
+            from app.models.supplier import Supplier
+            from app.models.enums import (
+                AlertType, AlertSeverity, RecordStatus,
+            )
+            from app.services.notification_service import enqueue_direct
+
+            inv = db.get(Invoice, data.invoice_id)
+            if inv:
+                _sup_name = "Unknown supplier"
+                if inv.supplier_id:
+                    _s = db.get(Supplier, inv.supplier_id)
+                    if _s:
+                        _sup_name = _s.name
+
+                _amount = float(data.amount_paid)
+                _total = float(inv.total_amount) if inv.total_amount else 0.0
+                _total_paid = float(
+                    db.query(func.coalesce(func.sum(Payment.amount_paid), 0))
+                    .filter(
+                        Payment.invoice_id == data.invoice_id,
+                        Payment.status.notin_(["CANCELLED", "FAILED"]),
+                    )
+                    .scalar() or 0
+                )
+                _outstanding = max(0.0, _total - _total_paid)
+
+                if inv.status == RecordStatus.PAID:
+                    enqueue_direct(
+                        db,
+                        alert_type=AlertType.PAYMENT_COMPLETED,
+                        severity=AlertSeverity.LOW,
+                        title=f"Payment Completed: {inv.invoice_number}",
+                        message=(
+                            f"R{_amount:,.2f} paid to {_sup_name}. "
+                            f"Invoice {inv.invoice_number} is fully settled."
+                        ),
+                        project_id=project_id,
+                        entity_type="invoice",
+                        entity_id=data.invoice_id,
+                    )
+                    db.commit()
+                elif inv.status == RecordStatus.PARTIALLY_PAID:
+                    enqueue_direct(
+                        db,
+                        alert_type=AlertType.PARTIAL_PAYMENT_RECORDED,
+                        severity=AlertSeverity.LOW,
+                        title=f"Partial Payment: {inv.invoice_number}",
+                        message=(
+                            f"R{_amount:,.2f} paid to {_sup_name}. "
+                            f"Outstanding balance: R{_outstanding:,.2f} on invoice {inv.invoice_number}."
+                        ),
+                        project_id=project_id,
+                        entity_type="invoice",
+                        entity_id=data.invoice_id,
+                    )
+                    db.commit()
+        except Exception:
+            pass  # never block payment operations
+
     return payment
 
 

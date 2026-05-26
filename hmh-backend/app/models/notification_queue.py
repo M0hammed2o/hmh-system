@@ -58,6 +58,11 @@ class NotificationQueue(Base):
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
+    # Phase 3Q.1: entity context for display and deep-linking
+    project_id:  Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True, index=True)
+    entity_type: Mapped[Optional[str]]       = mapped_column(String(50), nullable=True)
+    entity_id:   Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True)
+
     recipient: Mapped[Optional["AlertRecipient"]] = relationship(  # type: ignore[name-defined]
         "AlertRecipient", back_populates="notifications"
     )

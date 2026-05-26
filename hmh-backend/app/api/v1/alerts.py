@@ -17,7 +17,10 @@ from app.schemas.notification import (
     QueueStats,
 )
 from app.core.config import settings
+from app.core.logging_config import get_logger
 from app.services import alert_service, notification_service, recipient_service
+
+logger = get_logger(__name__)
 
 router = APIRouter(prefix="/alerts", tags=["alerts"])
 
@@ -113,7 +116,7 @@ def scan_and_create_alerts(db: DbSession, project_id: Optional[uuid.UUID] = Quer
     Safe to call repeatedly — deduplicates by checking for existing OPEN alerts of the same type.
     """
     role = current_user.role.value if current_user else "unknown"
-    print(f"[ALERT-SCAN] user={getattr(current_user, 'id', None)} role={role} allowed=True project_id={project_id}", flush=True)
+    logger.info("alert_scan user=%s role=%s project_id=%s", getattr(current_user, 'id', None), role, project_id)
     from datetime import datetime, timezone, timedelta
     from app.models.alert import SystemAlert
     from app.models.enums import (
@@ -176,16 +179,24 @@ def scan_and_create_alerts(db: DbSession, project_id: Optional[uuid.UUID] = Quer
                 atype = AlertType.NEGATIVE_STOCK if row["balance"] < 0 else AlertType.LOW_STOCK
                 if not _already_open(pid, row["site_id"], atype):
                     item = db.get(Item, row["item_id"])
-                    _add(SystemAlert(
+                    stock_alert = SystemAlert(
                         project_id=pid, site_id=row["site_id"],
                         alert_type=atype,
                         severity=AlertSeverity.HIGH if row["balance"] < 0 else AlertSeverity.MEDIUM,
                         title=f"{'Negative' if row['balance'] < 0 else 'Low'} stock: {item.name if item else row['item_id']}",
                         message=f"Balance is {row['balance']:.2f} {'(below zero — over-issued)' if row['balance'] < 0 else f'(below threshold {low_threshold})'}.",
                         status=AlertStatus.OPEN,
-                        notification_channel="in_app",
+                        notification_channel="whatsapp",  # Phase 3Q.2: enqueue for WhatsApp
                         created_at=now,
-                    ))
+                    )
+                    _add(stock_alert)
+                    # Phase 3Q.2: enqueue WhatsApp notification (best-effort, after flush)
+                    try:
+                        db.flush()
+                        from app.services import notification_service
+                        notification_service.enqueue_for_alert(db, stock_alert)
+                    except Exception:
+                        pass
         except Exception:
             pass
 
@@ -202,17 +213,71 @@ def scan_and_create_alerts(db: DbSession, project_id: Optional[uuid.UUID] = Quer
         )
         for inv in overdue_invs:
             if not _already_open(pid, None, AlertType.OVERDUE_PAYMENT):
-                _add(SystemAlert(
+                overdue_alert = SystemAlert(
                     project_id=pid,
+                    reference_type="invoice",
+                    reference_id=inv.id,
                     alert_type=AlertType.OVERDUE_PAYMENT,
                     severity=AlertSeverity.HIGH,
                     title=f"Overdue invoice: {inv.invoice_number}",
                     message=f"Invoice {inv.invoice_number} was due {inv.due_date}.",
                     status=AlertStatus.OPEN,
-                    notification_channel="in_app",
+                    notification_channel="whatsapp",  # Phase 3Q.3: upgraded from in_app
                     created_at=now,
-                ))
+                )
+                _add(overdue_alert)
+                # Phase 3Q.3: enqueue WhatsApp notification (best-effort)
+                try:
+                    db.flush()
+                    from app.services import notification_service
+                    notification_service.enqueue_for_alert(db, overdue_alert)
+                except Exception:
+                    pass
                 break  # one alert per project
+
+        # 2b. Payment due soon ─────────────────────────────────────────────────
+        try:
+            due_days = int(getattr(settings, "PAYMENT_DUE_DAYS", 3))
+        except Exception:
+            due_days = 3
+        due_cutoff = now.date() + timedelta(days=due_days)
+        upcoming_invs = (
+            db.query(Invoice)
+            .filter(
+                Invoice.project_id == pid,
+                Invoice.due_date > now.date(),
+                Invoice.due_date <= due_cutoff,
+                Invoice.status.notin_([RecordStatus.PAID, RecordStatus.CANCELLED]),
+            )
+            .all()
+        )
+        for inv in upcoming_invs:
+            if not _already_open(pid, None, AlertType.PAYMENT_DUE):
+                days_left = (inv.due_date - now.date()).days
+                due_alert = SystemAlert(
+                    project_id=pid,
+                    reference_type="invoice",
+                    reference_id=inv.id,
+                    alert_type=AlertType.PAYMENT_DUE,
+                    severity=AlertSeverity.MEDIUM,
+                    title=f"Payment Due Soon: {inv.invoice_number}",
+                    message=(
+                        f"Invoice {inv.invoice_number} "
+                        f"(R{float(inv.total_amount):,.2f}) "
+                        f"is due in {days_left} day(s) on {inv.due_date}."
+                    ),
+                    status=AlertStatus.OPEN,
+                    notification_channel="whatsapp",
+                    created_at=now,
+                )
+                _add(due_alert)
+                try:
+                    db.flush()
+                    from app.services import notification_service
+                    notification_service.enqueue_for_alert(db, due_alert)
+                except Exception:
+                    pass
+                break  # one alert per project per scan
 
         # 3. Material Requests pending too long ────────────────────────────────
         try:
@@ -365,19 +430,11 @@ def send_test_message(recipient_id: uuid.UUID, db: DbSession):
         )
 
     lang = settings.WHATSAPP_ALERT_TEMPLATE_LANGUAGE or "en_US"
-    print(
-        f"[WA-TEST] Sending template='{template_name}' lang={lang}"
-        f" recipient={recipient.name!r} phone={recipient.phone_number}",
-        flush=True,
-    )
+    logger.info("wa_test_send template=%s lang=%s phone=%s", template_name, lang, recipient.phone_number)
     status, msg_id = whatsapp_service.send_template_message(
         recipient.phone_number, template_name, lang
     )
-    print(
-        f"[WA-TEST] Result: status={status} provider_message_id={msg_id}"
-        f" recipient={recipient.name!r}",
-        flush=True,
-    )
+    logger.info("wa_test_result status=%s msg_id=%s recipient=%s", status, msg_id, recipient.name)
     return ApiSuccess(
         data={
             "status": status,

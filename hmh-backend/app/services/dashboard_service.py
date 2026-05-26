@@ -256,35 +256,50 @@ def get_ops_summary(db: Session, project_id: Optional[uuid.UUID] = None) -> dict
     seven_days_ago = today - timedelta(days=7)
 
     # ── Financial ───────────────────────────────────────────────────────────
-    inv_q = db.query(Invoice)
-    pay_q = db.query(Payment)
-    if project_id:
-        inv_q = inv_q.filter(Invoice.project_id == project_id)
-        pay_q = pay_q.filter(Payment.project_id == project_id)
+    # All counts/sums done in SQL — never loads invoice rows into Python
+    proj_filter_inv = [Invoice.project_id == project_id] if project_id else []
+    proj_filter_pay = [Payment.project_id == project_id] if project_id else []
 
     unpaid_statuses = [
         RecordStatus.MATCHED, RecordStatus.RECEIVED, RecordStatus.APPROVED,
         RecordStatus.PARTIALLY_PAID,
     ]
 
-    # Outstanding + overdue (one pass, two accumulators)
-    unpaid_invoices = inv_q.filter(Invoice.status.in_(unpaid_statuses)).all()
-    outstanding_count = len(unpaid_invoices)
-    outstanding_total = sum(float(i.total_amount or 0) for i in unpaid_invoices)
-    overdue_count     = sum(1 for i in unpaid_invoices if i.due_date and i.due_date < today)
-    overdue_total     = sum(float(i.total_amount or 0) for i in unpaid_invoices
-                            if i.due_date and i.due_date < today)
-
-    # Partial + overpaid counts
-    partial_count  = inv_q.filter(Invoice.status == RecordStatus.PARTIALLY_PAID).count()
-    overpaid_count = inv_q.filter(Invoice.status == RecordStatus.OVERPAID).count()
+    outstanding_count = (
+        db.query(func.count(Invoice.id))
+        .filter(*proj_filter_inv, Invoice.status.in_(unpaid_statuses))
+        .scalar() or 0
+    )
+    outstanding_total = float(
+        db.query(func.coalesce(func.sum(Invoice.total_amount), 0))
+        .filter(*proj_filter_inv, Invoice.status.in_(unpaid_statuses))
+        .scalar() or 0
+    )
+    overdue_count = (
+        db.query(func.count(Invoice.id))
+        .filter(*proj_filter_inv, Invoice.status.in_(unpaid_statuses), Invoice.due_date < today)
+        .scalar() or 0
+    )
+    overdue_total = float(
+        db.query(func.coalesce(func.sum(Invoice.total_amount), 0))
+        .filter(*proj_filter_inv, Invoice.status.in_(unpaid_statuses), Invoice.due_date < today)
+        .scalar() or 0
+    )
+    partial_count = (
+        db.query(func.count(Invoice.id))
+        .filter(*proj_filter_inv, Invoice.status == RecordStatus.PARTIALLY_PAID)
+        .scalar() or 0
+    )
+    overpaid_count = (
+        db.query(func.count(Invoice.id))
+        .filter(*proj_filter_inv, Invoice.status == RecordStatus.OVERPAID)
+        .scalar() or 0
+    )
 
     # Payments this month (PAID status only)
     pay_this_month = float(
         db.query(func.coalesce(func.sum(Payment.amount_paid), 0))
-        .filter(*([Payment.project_id == project_id] if project_id else []))
-        .filter(Payment.status == PaymentStatus.PAID)
-        .filter(Payment.payment_date >= first_of_month)
+        .filter(*proj_filter_pay, Payment.status == PaymentStatus.PAID, Payment.payment_date >= first_of_month)
         .scalar() or 0
     )
 

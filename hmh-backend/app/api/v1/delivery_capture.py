@@ -13,6 +13,7 @@ from typing import Optional
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 
+from app.core.upload_validation import DOCUMENT_MIMES, PHOTO_MIMES, validate_upload
 from app.dependencies import ALL_ROLES, CurrentUser, DbSession
 from app.models.delivery import Delivery
 from app.schemas.common import ApiSuccess
@@ -57,10 +58,12 @@ async def capture_delivery(
     if not delivery:
         raise HTTPException(status_code=404, detail="Delivery not found.")
 
-    if delivery_note_image:
+    if delivery_note_image and delivery_note_image.filename:
+        validate_upload(delivery_note_image, DOCUMENT_MIMES)
         delivery.delivery_note_image_url = _save_file(delivery_note_image, "delivery-notes")
 
-    if signature_image:
+    if signature_image and signature_image.filename:
+        validate_upload(signature_image, PHOTO_MIMES)
         delivery.signature_image_url = _save_file(signature_image, "signatures")
 
     if receiver_name:

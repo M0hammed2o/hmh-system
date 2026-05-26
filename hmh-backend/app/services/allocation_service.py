@@ -97,14 +97,54 @@ def get_all_lot_allocations(
     db: Session,
     lot_id: uuid.UUID,
 ) -> list[LotAllocation]:
-    """Return allocation status for every BOQ item linked to this lot."""
-    rows = (
-        db.query(BOQItem.item_id)
+    """Return allocation status for every BOQ item linked to this lot.
+
+    Uses 3 bulk queries instead of 2*N individual queries.
+    """
+    # 1. Allocated quantities per item (one query)
+    alloc_rows = (
+        db.query(BOQItem.item_id, func.coalesce(func.sum(BOQItem.planned_quantity), 0))
         .filter(BOQItem.lot_id == lot_id, BOQItem.item_id.isnot(None), BOQItem.is_active == True)
-        .distinct()
+        .group_by(BOQItem.item_id)
         .all()
     )
-    return [get_lot_allocation(db, lot_id, row.item_id) for row in rows]
+    if not alloc_rows:
+        return []
+
+    item_ids = [r[0] for r in alloc_rows]
+    allocated_map = {r[0]: float(r[1]) for r in alloc_rows}
+
+    # 2. Used quantities per item (one query)
+    used_rows = (
+        db.query(StockLedger.item_id, func.coalesce(func.sum(StockLedger.quantity_out), 0))
+        .filter(StockLedger.lot_id == lot_id, StockLedger.item_id.in_(item_ids))
+        .group_by(StockLedger.item_id)
+        .all()
+    )
+    used_map = {r[0]: float(r[1]) for r in used_rows}
+
+    # 3. Item metadata (one query)
+    items_map = {i.id: i for i in db.query(Item).filter(Item.id.in_(item_ids)).all()}
+
+    result = []
+    for item_id in item_ids:
+        allocated = allocated_map.get(item_id, 0.0)
+        used      = used_map.get(item_id, 0.0)
+        item      = items_map.get(item_id)
+        remaining = max(0.0, allocated - used)
+        over      = max(0.0, used - allocated)
+        result.append(LotAllocation(
+            lot_id=lot_id,
+            item_id=item_id,
+            item_name=item.name if item else str(item_id),
+            item_unit=item.default_unit if item else None,
+            allocated_quantity=allocated,
+            used_quantity=used,
+            remaining_quantity=remaining,
+            over_quantity=over,
+            is_over=used > allocated and allocated > 0,
+        ))
+    return result
 
 
 def check_before_issue(

@@ -88,12 +88,20 @@ def create_invoice(
     # the procurement_matching_service. It is intentionally NOT triggered
     # automatically here to prevent overwriting manual match records.
 
-    # Reactive alert: invoice captured but not yet matched
+    # Resolve supplier name once — used by both the in-app and WhatsApp alerts below
+    _supplier_name = "Unknown supplier"
+    try:
+        from app.models.supplier import Supplier as _Sup
+        _s = db.get(_Sup, data.supplier_id)
+        if _s:
+            _supplier_name = _s.name
+    except Exception:
+        pass
+
+    # Reactive alert: invoice captured but not yet matched (in-app, existing behaviour)
     try:
         from app.models.alert import SystemAlert
         from app.models.enums import AlertType, AlertSeverity, AlertStatus
-        from app.models.supplier import Supplier
-        supplier = db.get(Supplier, data.supplier_id)
         db.add(SystemAlert(
             project_id=project_id,
             reference_type="invoice",
@@ -102,7 +110,7 @@ def create_invoice(
             severity=AlertSeverity.LOW,
             title=f"Invoice captured — not yet matched: {data.invoice_number}",
             message=(
-                f"Invoice {data.invoice_number} from {supplier.name if supplier else 'supplier'} "
+                f"Invoice {data.invoice_number} from {_supplier_name} "
                 f"(R{float(data.total_amount):,.2f}) has been captured and awaits reconciliation."
             ),
             status=AlertStatus.OPEN,
@@ -114,6 +122,28 @@ def create_invoice(
 
     db.commit()
     db.refresh(invoice)
+
+    # Phase 3Q.3: WhatsApp notification — invoice captured (fire-and-forget)
+    try:
+        from app.services.notification_service import enqueue_direct
+        from app.models.enums import AlertSeverity
+        enqueue_direct(
+            db,
+            alert_type=AlertType.INVOICE_CAPTURED,
+            severity=AlertSeverity.LOW,
+            title=f"Invoice Captured: {invoice.invoice_number}",
+            message=(
+                f"Invoice {invoice.invoice_number} from {_supplier_name} "
+                f"(R{float(invoice.total_amount):,.2f}) has been captured."
+            ),
+            project_id=project_id,
+            entity_type="invoice",
+            entity_id=invoice.id,
+        )
+        db.commit()
+    except Exception:
+        pass
+
     return invoice
 
 

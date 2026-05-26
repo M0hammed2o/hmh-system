@@ -9,6 +9,7 @@ from fastapi import APIRouter, File, Form, Query, UploadFile
 from pydantic import BaseModel
 
 from app.core.config import settings
+from app.core.upload_validation import PHOTO_MIMES, validate_upload
 from app.dependencies import ALL_ROLES, CurrentUser, DbSession, OFFICE_AND_ABOVE
 from app.schemas.common import ApiSuccess
 from app.schemas.stock import StockBalanceRead, StockLedgerRead, UsageLogCreate, UsageLogRead
@@ -111,6 +112,7 @@ async def record_usage_with_evidence(
     from app.core.storage import save_upload
     evidence_url: Optional[str] = None
     if evidence_file and evidence_file.filename:
+        validate_upload(evidence_file, PHOTO_MIMES)
         ext     = os.path.splitext(evidence_file.filename)[1] or ".bin"
         fname   = f"{uuid.uuid4().hex}{ext}"
         content = await evidence_file.read()

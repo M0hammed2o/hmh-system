@@ -14,6 +14,8 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
+from app.core.logging_config import get_logger
+
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -26,7 +28,7 @@ from app.models.enums import (
 from app.models.notification_queue import NotificationQueue
 from app.services import whatsapp_service
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 _WINDOW_24H = timedelta(hours=24)
 
@@ -56,12 +58,45 @@ _VEHICLE_TYPES = {
     AlertType.VEHICLE_REPAIR_LOGGED,
     AlertType.FUEL_USAGE_HIGH,
 }
+# Phase 3Q.1 — new operational categories
+_PROCUREMENT_TYPES = {
+    AlertType.MR_APPROVED,
+    AlertType.PO_SENT_ALERT,
+    AlertType.DELIVERY_RECEIVED_ALERT,
+    AlertType.WAREHOUSE_TRANSFER_COMPLETED,
+    AlertType.REQUEST_PENDING_TOO_LONG,
+}
+_MILESTONE_TYPES = {
+    AlertType.MILESTONE_COMPLETED_ALERT,
+    AlertType.MILESTONE_DELAYED_ALERT,
+    AlertType.SITE_DELAY,
+    AlertType.LOT_DELAYED,
+    AlertType.STAGE_DELAYED,
+}
+_PAYMENT_TYPES = {
+    AlertType.INVOICE_CAPTURED,
+    AlertType.PAYMENT_COMPLETED,
+    AlertType.PARTIAL_PAYMENT_RECORDED,
+    AlertType.OVERDUE_PAYMENT,
+    AlertType.PAYMENT_DUE,         # Phase 3Q.3: approaching due date
+}
 
 
 def _should_notify(recipient: AlertRecipient, alert: SystemAlert) -> bool:
-    """Return True if this recipient should receive this alert type."""
+    """
+    Return True if this recipient should receive this alert type.
+
+    Phase 3Q.1: also checks project scope — if recipient.project_id is set,
+    only send alerts for that specific project.
+    """
     at = alert.alert_type
     sev = alert.severity
+
+    # Project scope filter: if recipient is scoped to a project,
+    # skip alerts from other projects
+    if recipient.project_id is not None and alert.project_id is not None:
+        if recipient.project_id != alert.project_id:
+            return False
 
     # Always notify active recipients who get critical
     if sev in (AlertSeverity.CRITICAL, AlertSeverity.HIGH) and recipient.receives_critical_alerts:
@@ -75,6 +110,13 @@ def _should_notify(recipient: AlertRecipient, alert: SystemAlert) -> bool:
     if at in _VEHICLE_TYPES and recipient.receives_vehicle_alerts:
         return True
     if at in (AlertType.DAILY_SUMMARY, AlertType.WEEKLY_SUMMARY) and recipient.receives_daily_summary:
+        return True
+    # Phase 3Q.1 new categories
+    if at in _PROCUREMENT_TYPES and getattr(recipient, "receives_procurement_alerts", False):
+        return True
+    if at in _MILESTONE_TYPES and getattr(recipient, "receives_milestone_alerts", False):
+        return True
+    if at in _PAYMENT_TYPES and getattr(recipient, "receives_payment_alerts", False):
         return True
     return False
 
@@ -97,14 +139,21 @@ def _escalation_minutes(severity: AlertSeverity, attempt: int) -> Optional[int]:
     return None
 
 
-def enqueue_for_alert(db: Session, alert: SystemAlert) -> list[NotificationQueue]:
+def enqueue_for_alert(
+    db: Session,
+    alert: SystemAlert,
+    entity_type: Optional[str] = None,
+    entity_id: Optional[uuid.UUID] = None,
+) -> list[NotificationQueue]:
     """
     Create NotificationQueue records for all matching active recipients.
     Called immediately after a SystemAlert is created.
+
+    Phase 3Q.1: optional entity_type + entity_id for deep-linking in notifications.
     """
     recipients = (
         db.query(AlertRecipient)
-        .filter(AlertRecipient.is_active == True)
+        .filter(AlertRecipient.is_active == True)  # noqa: E712
         .all()
     )
 
@@ -130,12 +179,66 @@ def enqueue_for_alert(db: Session, alert: SystemAlert) -> list[NotificationQueue
             next_attempt_at=now,
             requires_acknowledgement=requires_ack,
             created_at=now,
+            # Phase 3Q.1: entity context
+            project_id=alert.project_id,
+            entity_type=entity_type,
+            entity_id=entity_id,
         )
         db.add(entry)
         queued.append(entry)
 
     db.flush()
     return queued
+
+
+def enqueue_direct(
+    db: Session,
+    *,
+    alert_type: AlertType,
+    severity: AlertSeverity,
+    title: str,
+    message: str,
+    project_id: Optional[uuid.UUID] = None,
+    entity_type: Optional[str] = None,
+    entity_id: Optional[uuid.UUID] = None,
+) -> list[NotificationQueue]:
+    """
+    Phase 3Q.1 helper: create a SystemAlert and immediately enqueue it
+    in one call. Use this from service-layer triggers (MR approve, PO sent, etc.)
+    that need to send a WhatsApp notification but don't otherwise
+    create a dedicated alert record.
+
+    Never raises — notification failures must never block the business operation.
+    Uses a DB savepoint (begin_nested) so that if the notification INSERT fails,
+    only the savepoint rolls back; the parent transaction (business operation) is
+    completely unaffected. Returns the queued entries (empty if no recipients match).
+    """
+    try:
+        from app.models.alert import SystemAlert
+        from app.models.enums import AlertStatus
+
+        now = datetime.now(timezone.utc)
+
+        with db.begin_nested():   # savepoint — isolates notification writes from parent tx
+            alert = SystemAlert(
+                project_id=project_id,
+                alert_type=alert_type,
+                severity=severity,
+                title=title,
+                message=message,
+                status=AlertStatus.OPEN,
+                notification_channel="whatsapp",
+                created_at=now,
+            )
+            db.add(alert)
+            db.flush()
+
+            queued = enqueue_for_alert(db, alert, entity_type=entity_type, entity_id=entity_id)
+
+        return queued
+    except Exception as exc:
+        logger.exception("enqueue_direct failed (non-fatal): %s", exc)
+        return []
 
 
 def _send_for_queue_entry(entry: NotificationQueue, db: Session) -> tuple[str, Optional[str]]:
@@ -154,10 +257,9 @@ def _send_for_queue_entry(entry: NotificationQueue, db: Session) -> tuple[str, O
     # ── Tier 1: approved template ─────────────────────────────────────────────
     if template_name:
         lang = settings.WHATSAPP_ALERT_TEMPLATE_LANGUAGE or "en_US"
-        logger.info("WhatsApp: TEMPLATE '%s' lang=%s → %s", template_name, lang, entry.phone_number)
-        print(f"[WA-SEND] TEMPLATE '{template_name}' lang={lang} | phone={entry.phone_number}", flush=True)
+        logger.info("WA-SEND template='%s' lang=%s phone=%s", template_name, lang, entry.phone_number)
         status, msg_id = whatsapp_service.send_template_message(entry.phone_number, template_name, lang)
-        print(f"[WA-SEND] Result status={status} msg_id={msg_id} | phone={entry.phone_number}", flush=True)
+        logger.info("WA-SEND result status=%s msg_id=%s phone=%s", status, msg_id, entry.phone_number)
         return status, msg_id
 
     # ── Tier 2: no template — check 24h window ────────────────────────────────
@@ -167,8 +269,7 @@ def _send_for_queue_entry(entry: NotificationQueue, db: Session) -> tuple[str, O
     in_window = last_inbound is not None and (now - last_inbound) <= _WINDOW_24H
 
     if in_window:
-        logger.info("WhatsApp: FREE-FORM (in 24h window, last_inbound=%s) → %s", last_inbound.isoformat(), entry.phone_number)
-        print(f"[WA-SEND] FREE-FORM (in 24h window, last_inbound={last_inbound.isoformat()}) | phone={entry.phone_number}", flush=True)
+        logger.info("WA-SEND free-form last_inbound=%s phone=%s", last_inbound.isoformat(), entry.phone_number)
         return whatsapp_service.send_text(entry.phone_number, entry.message_body)
 
     # ── Tier 3: no template, outside window — fail gracefully ─────────────────
@@ -176,8 +277,7 @@ def _send_for_queue_entry(entry: NotificationQueue, db: Session) -> tuple[str, O
         "WhatsApp 24-hour window closed and no template configured. "
         "Set WHATSAPP_ALERT_TEMPLATE_NAME to send alerts at any time."
     )
-    logger.error("WhatsApp send FAILED (no template, window closed): phone=%s last_inbound=%s", entry.phone_number, last_inbound)
-    print(f"[WA-SEND] FAILED — no template, window closed | phone={entry.phone_number} last_inbound={last_inbound}", flush=True)
+    logger.error("WA-SEND FAILED no_template window_closed phone=%s last_inbound=%s", entry.phone_number, last_inbound)
     return ("FAILED", msg)
 
 
@@ -187,12 +287,15 @@ def process_queue(db: Session) -> dict:
     Returns counts: {sent, mock_sent, failed, skipped}.
     """
     now = datetime.now(timezone.utc)
+    # WITH FOR UPDATE SKIP LOCKED: if two workers run simultaneously, each claims
+    # a disjoint set of rows. No duplicate sends possible.
     pending = (
         db.query(NotificationQueue)
         .filter(
             NotificationQueue.status.in_([NotificationStatus.PENDING, NotificationStatus.FAILED]),
             NotificationQueue.next_attempt_at <= now,
         )
+        .with_for_update(skip_locked=True)
         .all()
     )
 
@@ -318,8 +421,30 @@ _SEVERITY_PREFIX_RE = re.compile(
 )
 
 
+_OPERATIONAL_LABELS: dict = {
+    AlertType.MR_APPROVED:                  ("INFO",   "✅"),
+    AlertType.PO_SENT_ALERT:                ("INFO",   "📤"),
+    AlertType.DELIVERY_RECEIVED_ALERT:      ("INFO",   "📦"),
+    AlertType.WAREHOUSE_TRANSFER_COMPLETED: ("INFO",   "🔄"),
+    AlertType.INVOICE_CAPTURED:             ("INFO",   "🧾"),
+    AlertType.PAYMENT_COMPLETED:            ("INFO",   "💰"),
+    AlertType.PARTIAL_PAYMENT_RECORDED:     ("NOTICE", "⚡"),
+    AlertType.MILESTONE_COMPLETED_ALERT:    ("INFO",   "🏁"),
+    AlertType.MILESTONE_DELAYED_ALERT:      ("NOTICE", "⏰"),
+    AlertType.OVERDUE_PAYMENT:              ("HIGH",   "❗"),
+    AlertType.PAYMENT_DUE:                  ("NOTICE", "📅"),
+    AlertType.LOW_STOCK:                    ("NOTICE", "⚠️"),
+    AlertType.FUEL_USAGE_HIGH:              ("NOTICE", "⛽"),
+}
+
+
 def _build_message(alert: SystemAlert) -> str:
-    """Build the WhatsApp message body for an alert."""
+    """
+    Build the WhatsApp message body for an alert.
+
+    Phase 3Q.1: operational alerts get emoji prefixes and concise one-line format.
+    Critical/High alerts keep the action hint for acknowledgment.
+    """
     label = {
         AlertSeverity.CRITICAL: "CRITICAL",
         AlertSeverity.HIGH:     "HIGH",
@@ -327,13 +452,28 @@ def _build_message(alert: SystemAlert) -> str:
         AlertSeverity.LOW:      "INFO",
     }.get(alert.severity, "ALERT")
 
+    # Emoji + label override for operational types
+    if alert.alert_type in _OPERATIONAL_LABELS:
+        op_label, emoji = _OPERATIONAL_LABELS[alert.alert_type]
+        label = op_label
+    else:
+        emoji = ""
+
     # Strip any leading severity prefix from the raw message, take first sentence
     clean = _SEVERITY_PREFIX_RE.sub("", alert.message).strip()
     sentence = clean.split(".")[0].strip()
     if len(sentence) > 120:
         sentence = sentence[:117] + "..."
 
-    return f"{label}: {alert.title}\n{sentence}\n\n{_ACTION_HINT}"
+    prefix = f"{emoji} " if emoji else ""
+    body = f"{prefix}{label}: {alert.title}\n{sentence}"
+
+    # Action hint only for critical/high alerts that need acknowledgment
+    requires_ack = alert.severity in (AlertSeverity.CRITICAL, AlertSeverity.HIGH)
+    if requires_ack:
+        body += f"\n\n{_ACTION_HINT}"
+
+    return body
 
 
 def get_queue(

@@ -18,6 +18,7 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from app.core.config import settings
+from app.core.upload_validation import DOCUMENT_MIMES, validate_upload
 from app.dependencies import ALL_ROLES, CurrentUser, DbSession, OFFICE_AND_ABOVE
 from app.schemas.common import ApiSuccess
 
@@ -50,6 +51,7 @@ async def upload_expense(
     extraction_id: Optional[uuid.UUID] = None
 
     if file and file.filename:
+        validate_upload(file, DOCUMENT_MIMES)
         os.makedirs(_EXPENSE_DIR, exist_ok=True)
         ext = os.path.splitext(file.filename)[1] or ".bin"
         fname = f"{uuid.uuid4().hex}{ext}"

@@ -12,6 +12,7 @@ from app.db.base import Base
 from app.models.base import TimestampMixin
 
 
+
 class AlertRecipient(TimestampMixin, Base):
     __tablename__ = "alert_recipients"
 
@@ -30,14 +31,25 @@ class AlertRecipient(TimestampMixin, Base):
     receives_delivery_alerts: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     receives_vehicle_alerts: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     receives_material_alerts: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # Phase 3Q.1: new operational categories
+    receives_procurement_alerts: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    receives_milestone_alerts: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    receives_payment_alerts: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
     # Tracks when this recipient last sent us a WhatsApp message.
-    # Used to determine whether we're inside the 24-hour conversation window.
     # NULL means they have never messaged us → always use template.
     last_inbound_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+
+    # Phase 3Q.1: scope this recipient to a single project (NULL = all projects)
+    project_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("projects.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
     )
 
     created_by: Mapped[Optional[uuid.UUID]] = mapped_column(

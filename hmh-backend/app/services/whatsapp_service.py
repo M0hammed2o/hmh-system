@@ -14,8 +14,9 @@ from typing import Optional
 import httpx
 
 from app.core.config import settings
+from app.core.logging_config import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
@@ -62,8 +63,7 @@ def _handle_response(resp: httpx.Response) -> tuple[str, Optional[str]]:
     error_text = err.get("message") or err.get("error_data", {}).get("details") or resp.text[:200]
 
     if resp.status_code == 401:
-        logger.error("TOKEN EXPIRED / INVALID — WhatsApp API returned 401. Rotate WHATSAPP_ACCESS_TOKEN.")
-        print("TOKEN EXPIRED / INVALID — WhatsApp API returned 401. Rotate WHATSAPP_ACCESS_TOKEN.", flush=True)
+        logger.error("WA_TOKEN_EXPIRED WhatsApp API returned 401 — rotate WHATSAPP_ACCESS_TOKEN")
 
     logger.error("WhatsApp API error %s: %s", resp.status_code, error_text)
     return ("FAILED", error_text)

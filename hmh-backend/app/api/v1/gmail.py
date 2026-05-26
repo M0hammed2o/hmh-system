@@ -16,8 +16,11 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from app.core.logging_config import get_logger
 from app.dependencies import OFFICE_AND_ABOVE, CurrentUser, DbSession
 from app.schemas.common import ApiSuccess
+
+logger = get_logger(__name__)
 
 gmail_router      = APIRouter(prefix="/gmail",          tags=["gmail"])
 gmail_docs_router = APIRouter(prefix="",                tags=["gmail"])   # for /invoices/from-gmail etc.
@@ -93,7 +96,7 @@ def process_email(email_id: uuid.UUID, db: DbSession):
     from app.models.document_extraction import DocumentExtraction
     from app.services.document_ai_service import extract_document_data
 
-    print(f"[GMAIL-PROCESS] Processing email {email_id}", flush=True)
+    logger.info("gmail_process email_id=%s", email_id)
 
     email = (
         db.query(IncomingEmail)
@@ -113,7 +116,7 @@ def process_email(email_id: uuid.UUID, db: DbSession):
     any_done = False
 
     for att in email.attachments:
-        print(f"[GMAIL-PROCESS] Attachment: {att.filename} ({att.detected_type})", flush=True)
+        logger.debug("gmail_att filename=%s type=%s", att.filename, att.detected_type)
 
         # ── Extract ──────────────────────────────────────────────────────────
         ext_result = extract_document_data(att.file_path, att.detected_type)
@@ -121,13 +124,11 @@ def process_email(email_id: uuid.UUID, db: DbSession):
         fields     = ext_result.get("fields", {})
         items      = ext_result.get("items", [])
 
-        print(f"[GMAIL-PROCESS] Extraction status: {ext_result['status']}", flush=True)
-        if raw_text:
-            print(f"[GMAIL-PROCESS] Extracted text ({len(raw_text)} chars)", flush=True)
+        logger.info("gmail_extract status=%s chars=%d", ext_result['status'], len(raw_text))
 
         # ── Match MR ─────────────────────────────────────────────────────────
         mr_match = _match_mr_from_text(db, raw_text, fields, items)
-        print(f"[GMAIL-PROCESS] MR match: status={mr_match['status']} ref={mr_match.get('mr_number')}", flush=True)
+        logger.debug("gmail_mr_match status=%s ref=%s", mr_match['status'], mr_match.get('mr_number'))
 
         # ── Store/update DocumentExtraction ───────────────────────────────────
         payload = {**ext_result, "mr_match": mr_match}
@@ -189,7 +190,7 @@ def process_email(email_id: uuid.UUID, db: DbSession):
     email.processed_status = "PROCESSED" if any_done else "PROCESSING_FAILED"
     db.commit()
 
-    print(f"[GMAIL-PROCESS] Done — status={email.processed_status}, {len(results)} attachment(s)", flush=True)
+    logger.info("gmail_process done status=%s attachments=%d", email.processed_status, len(results))
     return ApiSuccess(data={
         "email_id":        str(email_id),
         "processed_status": email.processed_status,
@@ -375,13 +376,7 @@ def download_attachment(att_id: uuid.UUID, db: DbSession, inline: bool = False):
     upload_dir = settings.UPLOAD_DIR
     resolved, candidates = _resolve_attachment_path(stored, upload_dir)
 
-    print(
-        f"[GMAIL-DOWNLOAD] att_id={att_id}"
-        f" | stored={stored!r}"
-        f" | UPLOAD_DIR={upload_dir!r}"
-        f" | resolved={resolved!r}",
-        flush=True,
-    )
+    logger.debug("gmail_download att_id=%s stored=%s resolved=%s", att_id, stored, resolved)
 
     if not resolved:
         tried = " | ".join(repr(c) for c in candidates if c)

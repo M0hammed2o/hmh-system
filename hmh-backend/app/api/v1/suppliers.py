@@ -13,6 +13,63 @@ router = APIRouter(prefix="/suppliers", tags=["suppliers"])
 
 
 @router.get(
+    "/suggest",
+    response_model=ApiSuccess[list[dict]],
+    dependencies=[ALL_ROLES],
+)
+def suggest_suppliers(
+    db: DbSession,
+    name: str = Query(..., min_length=2, description="Extracted supplier name to match"),
+    limit: int = Query(3, le=10),
+):
+    """
+    Fuzzy-match an extracted supplier name against known active suppliers.
+
+    Used by OCR review panel to suggest which supplier matches the name found on an invoice.
+    Returns up to `limit` results ranked by similarity.
+    Algorithm: exact > starts-with > word overlap > substring.
+    """
+    from app.models.supplier import Supplier
+    import re as _re
+
+    name_lower = name.strip().lower()
+    name_words = set(_re.split(r"\W+", name_lower)) - {"", "pty", "ltd", "cc", "inc", "the"}
+
+    suppliers = (
+        db.query(Supplier)
+        .filter(Supplier.is_active == True)  # noqa: E712
+        .all()
+    )
+
+    scored = []
+    for s in suppliers:
+        n = s.name.lower()
+        n_words = set(_re.split(r"\W+", n)) - {"", "pty", "ltd", "cc", "inc", "the"}
+
+        if n == name_lower:
+            score = 1.0
+        elif n.startswith(name_lower) or name_lower.startswith(n):
+            score = 0.85
+        elif name_words and n_words:
+            overlap = len(name_words & n_words)
+            union   = len(name_words | n_words)
+            score   = overlap / union  # Jaccard similarity
+        elif name_lower in n or n in name_lower:
+            score = 0.3
+        else:
+            score = 0.0
+
+        if score > 0.1:
+            scored.append((score, s))
+
+    scored.sort(key=lambda x: -x[0])
+    return ApiSuccess(data=[
+        {"id": str(s.id), "name": s.name, "email": s.email, "score": round(score, 3)}
+        for score, s in scored[:limit]
+    ])
+
+
+@router.get(
     "/",
     response_model=ApiSuccess[list[SupplierRead]],
     dependencies=[ALL_ROLES],

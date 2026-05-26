@@ -259,6 +259,8 @@ export default function TimelinePage() {
                         <img
                           src={entry.photo_url}
                           alt="Evidence photo"
+                          loading="lazy"
+                          decoding="async"
                           className="h-20 w-auto rounded-lg border border-border object-cover group-hover:opacity-80 transition-opacity cursor-zoom-in"
                           onError={(e) => { e.currentTarget.style.display = "none"; }}
                         />

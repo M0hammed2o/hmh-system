@@ -32,7 +32,9 @@ from app.core.config import settings
 from app.models.enums import EmailStatus
 from app.models.purchase_order import PoEmailLog, PurchaseOrder
 
-logger = logging.getLogger(__name__)
+from app.core.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 def _in_pytest() -> bool:
@@ -97,20 +99,17 @@ def _send_smtp(
     sender = settings.smtp_sender_address
     if not sender:
         err = "SMTP sender address is empty — check SMTP_USERNAME / SMTP_USER in .env"
-        print(f"[EMAIL] ERROR: {err}", flush=True)
+        logger.error("email_send_error: %s", err)
         return err
     if not settings.SMTP_USERNAME:
         err = "SMTP_USERNAME is empty — check .env (use SMTP_USERNAME= or SMTP_USER=)"
-        print(f"[EMAIL] ERROR: {err}", flush=True)
+        logger.error("email_send_error: %s", err)
         return err
 
     use_ssl = _use_ssl()
     mode    = "SSL" if use_ssl else "STARTTLS"
-    print(f"[EMAIL] Connecting to {settings.SMTP_HOST}:{settings.SMTP_PORT} ({mode})", flush=True)
-    print(f"[EMAIL] Sender  : {sender}", flush=True)
-    print(f"[EMAIL] Username: {settings.SMTP_USERNAME}", flush=True)
-    print(f"[EMAIL] To      : {to_email}", flush=True)
-    print(f"[EMAIL] Subject : {subject[:80]}", flush=True)
+    logger.info("email_send host=%s port=%d mode=%s sender=%s to=%s subject=%.80s",
+                settings.SMTP_HOST, settings.SMTP_PORT, mode, sender, to_email, subject)
 
     try:
         msg = MIMEMultipart("alternative")
@@ -137,11 +136,10 @@ def _send_smtp(
                 server.login(settings.SMTP_USERNAME, settings.SMTP_PASSWORD)
                 server.sendmail(sender, all_recipients, msg.as_string())
 
-        print(f"[EMAIL] SUCCESS — sent to {to_email}", flush=True)
+        logger.info("email_sent to=%s", to_email)
         return None
     except Exception as exc:
-        print(f"[EMAIL] FAILED  — {type(exc).__name__}: {exc}", flush=True)
-        logger.exception("SMTP send failed to %s", to_email)
+        logger.exception("email_send_failed to=%s error=%s", to_email, exc)
         return str(exc)
 
 
@@ -159,19 +157,16 @@ def send_email(
     Generic email sender. Never raises.
     Returns: {"status": "SENT"|"MOCK_SENT"|"FAILED", "error": str|None, ...}
     """
-    print(f"[EMAIL] send_email() called → to={to_email}", flush=True)
-    print(f"[EMAIL] Config: {_smtp_diagnose()}", flush=True)
+    logger.debug("email send_email to=%s", to_email)
 
     if not _smtp_is_real():
         reason = "pytest" if _in_pytest() else ("EMAIL_MOCK_MODE=true" if settings.EMAIL_MOCK_MODE else "SMTP_ENABLED=false")
-        print(f"[EMAIL] MOCK_SENT — reason: {reason}", flush=True)
-        logger.info("[MOCK EMAIL] to=%s subject=%s (reason: %s)", to_email, subject, reason)
+        logger.info("email mock_sent to=%s subject=%.80s reason=%s", to_email, subject, reason)
         return {"status": "MOCK_SENT", "error": None, "provider_message_id": None}
 
     if not settings.SMTP_USERNAME:
         err = "SMTP_USERNAME is empty — set SMTP_USERNAME (or SMTP_USER) in .env"
-        print(f"[EMAIL] FAILED — {err}", flush=True)
-        logger.warning(err)
+        logger.warning("email_config_error: %s", err)
         return {"status": "FAILED", "error": err, "provider_message_id": None}
 
     effective_cc  = cc  if cc  is not None else settings.procurement_cc_list
@@ -282,17 +277,15 @@ def send_po_email(
     now        = datetime.now(timezone.utc)
     error_msg: Optional[str] = None
 
-    print(f"[EMAIL] PO send: {po.po_number} → {to_email or '(no email)'}", flush=True)
-    print(f"[EMAIL] Config: {_smtp_diagnose()}", flush=True)
+    logger.info("email po_send po=%s to=%s", po.po_number, to_email or "(no email)")
 
     if not to_email:
         status    = EmailStatus.failed
         error_msg = f"Supplier '{supplier.name}' has no email address configured."
-        print(f"[EMAIL] FAILED — {error_msg}", flush=True)
+        logger.warning("email po_send_failed po=%s reason=no_supplier_email", po.po_number)
     elif not _smtp_is_real():
         reason = "pytest" if _in_pytest() else ("EMAIL_MOCK_MODE" if settings.EMAIL_MOCK_MODE else "SMTP_ENABLED=false")
-        print(f"[EMAIL] MOCK_SENT — reason: {reason}", flush=True)
-        logger.info("[MOCK EMAIL] PO %s → %s (reason: %s)", po.po_number, to_email, reason)
+        logger.info("email po_mock_sent po=%s to=%s reason=%s", po.po_number, to_email, reason)
         status = EmailStatus.sent
     else:
         cc  = settings.procurement_cc_list
@@ -536,17 +529,15 @@ def send_mr_approval_email(
     error_msg: Optional[str] = None
     status_str: str
 
-    print(f"[EMAIL] MR send: {mr.request_number} → {to_email or '(no email)'}", flush=True)
-    print(f"[EMAIL] Config: {_smtp_diagnose()}", flush=True)
+    logger.info("email mr_send mr=%s to=%s", mr.request_number, to_email or "(no email)")
 
     if not to_email:
         status_str = "FAILED"
         error_msg  = f"Supplier '{supplier.name}' has no email address — add email to supplier record."
-        print(f"[EMAIL] FAILED — {error_msg}", flush=True)
+        logger.warning("email mr_send_failed mr=%s reason=no_supplier_email", mr.request_number)
     elif not _smtp_is_real():
         reason = "pytest" if _in_pytest() else ("EMAIL_MOCK_MODE" if settings.EMAIL_MOCK_MODE else "SMTP_ENABLED=false")
-        print(f"[EMAIL] MOCK_SENT — reason: {reason}", flush=True)
-        logger.info("[MOCK EMAIL] MR %s → %s (reason: %s)", mr.request_number, to_email, reason)
+        logger.info("email mr_mock_sent mr=%s to=%s reason=%s", mr.request_number, to_email, reason)
         status_str = "MOCK_SENT"
     else:
         err = _send_smtp(

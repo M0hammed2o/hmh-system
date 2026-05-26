@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useMemo } from "react";
 import {
   Bell, AlertTriangle, AlertCircle, Info, CheckCircle2, Phone,
   MessageSquare, RefreshCw, Plus, Pencil, UserX, Send, Play,
@@ -630,14 +630,13 @@ export default function AlertsPage() {
     } finally { setProcessingQueue(false); }
   };
 
-  // Filter alerts by current tab
-  const filteredAlerts = (() => {
+  const filteredAlerts = useMemo(() => {
     if (tab === "all") return alerts;
     if (tab === "critical") return alerts.filter((a) => a.severity === "CRITICAL" || a.severity === "HIGH");
     const types = TAB_TYPE_FILTER[tab];
     if (types) return alerts.filter((a) => types.includes(a.alert_type));
     return alerts;
-  })();
+  }, [alerts, tab]);
 
   return (
     <div className="space-y-5 animate-fade-in">

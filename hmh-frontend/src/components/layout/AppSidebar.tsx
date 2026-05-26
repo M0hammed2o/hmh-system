@@ -15,7 +15,8 @@ const navGroups = [
       { title: "Dashboard",       path: "/",               icon: LayoutDashboard },
       { title: "Owner View",      path: "/owner",          icon: Smartphone },
       { title: "Alerts",          path: "/alerts",         icon: Bell },
-      { title: "WhatsApp Queue",  path: "/whatsapp-queue", icon: MessageSquare },
+      { title: "WhatsApp Queue",  path: "/whatsapp-queue",          icon: MessageSquare },
+      { title: "Notifications",   path: "/notification-settings",   icon: Bell },
     ],
   },
   {

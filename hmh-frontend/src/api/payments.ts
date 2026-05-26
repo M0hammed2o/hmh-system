@@ -88,6 +88,33 @@ export interface PaymentActivityEntry {
   is_image?:   boolean;
 }
 
+export interface AgingInvoice {
+  invoice_id:          string;
+  invoice_number:      string;
+  supplier_name:       string | null;
+  total_amount:        number;
+  total_paid:          number;
+  outstanding_balance: number;
+  due_date:            string | null;
+  status:              string;
+}
+
+export interface AgingBand {
+  count:             number;
+  total_outstanding: number;
+  invoices:          AgingInvoice[];
+}
+
+export interface AgingReport {
+  as_of:       string;
+  current:     AgingBand;
+  "1_30":      AgingBand;
+  "31_60":     AgingBand;
+  "61_90":     AgingBand;
+  "90_plus":   AgingBand;
+  grand_total: number;
+}
+
 export const paymentsApi = {
   list: async (projectId: string): Promise<Payment[]> => {
     const res = await client.get<{ data: Payment[] }>(`/projects/${projectId}/payments/`);
@@ -128,6 +155,16 @@ export const paymentsApi = {
       `/projects/${projectId}/payments/report`,
       { params }
     );
+    return res.data.data;
+  },
+
+  approve: async (paymentId: string): Promise<Payment> => {
+    const res = await client.patch<{ data: Payment }>(`/payments/${paymentId}`, { status: "APPROVED" });
+    return res.data.data;
+  },
+
+  getAging: async (projectId: string): Promise<AgingReport> => {
+    const res = await client.get<{ data: AgingReport }>(`/projects/${projectId}/payments/aging`);
     return res.data.data;
   },
 };

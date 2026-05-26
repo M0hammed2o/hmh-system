@@ -12,9 +12,12 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError
 from sqlalchemy.orm import Session
 
+from app.core.logging_config import get_logger
 from app.core.security import decode_token
-from app.db.session import get_db
 from app.models.enums import UserRole
+
+_auth_log = get_logger("hmh.auth")
+from app.db.session import get_db
 from app.models.user import User
 
 # Re-export get_db so route files only need to import from dependencies
@@ -113,15 +116,9 @@ def require_roles(*roles: UserRole):
     def _check(payload: CurrentUserPayload) -> None:
         user_role = payload.get("role")
         if user_role not in allowed:
-            import logging as _log
-            _log.getLogger(__name__).warning(
-                "ACCESS DENIED | role=%r not in allowed=%r | user=%s",
+            _auth_log.warning(
+                "access_denied role=%r allowed=%r user=%s",
                 user_role, allowed, payload.get("sub"),
-            )
-            print(
-                f"[AUTH] 403 DENIED | role={user_role!r} | allowed={allowed!r}"
-                f" | user={payload.get('sub')}",
-                flush=True,
             )
             # Give a clear message to read-only accounts
             if user_role == "READ_ONLY":
@@ -154,3 +151,45 @@ WRITE_ROLES = require_roles(
     UserRole.SITE_MANAGER,
     UserRole.SITE_STAFF,
 )
+
+
+# ── Project isolation helper ──────────────────────────────────────────────────
+
+def check_project_access(
+    db: Session,
+    user: User,
+    project_id: uuid.UUID,
+) -> None:
+    """
+    Raise HTTP 403 if the user does not have access to the given project.
+
+    OWNERs bypass this check — they have system-wide access.
+    All other roles must have an explicit UserProjectAccess record.
+
+    Call this after fetching a resource by ID to enforce project isolation.
+    Example::
+
+        po = _get_po_or_404(db, po_id)
+        check_project_access(db, current_user, po.project_id)
+    """
+    if user.role == UserRole.OWNER:
+        return
+
+    from app.models.access import UserProjectAccess
+    access = (
+        db.query(UserProjectAccess)
+        .filter(
+            UserProjectAccess.user_id == user.id,
+            UserProjectAccess.project_id == project_id,
+        )
+        .first()
+    )
+    if not access:
+        _auth_log.warning(
+            "project_access_denied user=%s project=%s role=%s",
+            user.id, project_id, user.role,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have access to this project's resources.",
+        )

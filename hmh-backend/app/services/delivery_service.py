@@ -59,12 +59,19 @@ def _get_delivery_or_404(db: Session, delivery_id: uuid.UUID) -> Delivery:
 
 # ── CRUD ──────────────────────────────────────────────────────────────────────
 
-def list_deliveries(db: Session, project_id: uuid.UUID) -> list[Delivery]:
+def list_deliveries(
+    db: Session,
+    project_id: uuid.UUID,
+    limit: int = 100,
+    offset: int = 0,
+) -> list[Delivery]:
     return (
         db.query(Delivery)
         .options(joinedload(Delivery.items))
         .filter(Delivery.project_id == project_id)
         .order_by(Delivery.delivery_date.desc())
+        .limit(limit)
+        .offset(offset)
         .all()
     )
 
@@ -251,6 +258,17 @@ def receive_stock(
     delivery = _get_delivery_or_404(db, delivery_id)
     now = datetime.now(timezone.utc)
 
+    # Idempotency guard — prevent double stock write if receive_stock() is called twice.
+    # Check for existing ledger entries with reference_id=delivery_id (written only by this fn).
+    # If any exist, the delivery was already processed; return the current state safely.
+    if delivery.delivery_status in (RecordStatus.RECEIVED, RecordStatus.PARTIALLY_RECEIVED):
+        existing_ledger = db.query(StockLedger).filter(
+            StockLedger.reference_type == "delivery",
+            StockLedger.reference_id  == delivery_id,
+        ).first()
+        if existing_ledger:
+            return delivery  # already processed — idempotent
+
     qty_map: dict[uuid.UUID, float] = {}
     if items_received:
         for ir in items_received:
@@ -361,7 +379,34 @@ def receive_stock(
     )
 
     delivery_id_saved = delivery.id
+    # Capture context before commit while ORM objects are still loaded
+    _notify_project_id  = delivery.project_id
+    _notify_dn          = delivery.delivery_number or str(delivery.id)[:8]
+    _notify_delivery_id = delivery.id
+    _notify_item_count  = len(delivery.items)
     db.commit()
+
+    # WhatsApp notification: full delivery received (not partial — partial already has its own alert)
+    if not is_partial:
+        try:
+            from app.services.notification_service import enqueue_direct
+            from app.models.enums import AlertType, AlertSeverity
+            enqueue_direct(
+                db,
+                alert_type=AlertType.DELIVERY_RECEIVED_ALERT,
+                severity=AlertSeverity.LOW,
+                title=f"Delivery Received: {_notify_dn}",
+                message=(
+                    f"Delivery {_notify_dn} has been received and confirmed. "
+                    f"{_notify_item_count} item{'s' if _notify_item_count != 1 else ''}."
+                ),
+                project_id=_notify_project_id,
+                entity_type="delivery",
+                entity_id=_notify_delivery_id,
+            )
+            db.commit()
+        except Exception:
+            pass
 
     import os as _os
     _in_test = bool(_os.getenv("PYTEST_CURRENT_TEST")) or _os.getenv("APP_ENV", "").lower() == "test"

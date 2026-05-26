@@ -16,6 +16,10 @@ from typing import Optional
 from sqlalchemy import func, insert as _sa_insert
 from sqlalchemy.orm import Session
 
+from app.core.logging_config import get_logger
+
+logger = get_logger(__name__)
+
 from app.core.exceptions import NotFoundError, ValidationError
 from app.models.boq import BOQHeader, BOQItem, BOQSection
 from app.models.enums import AuditAction, BoqStatus, StageStatus
@@ -447,7 +451,7 @@ def clone_template_to_lots(
         db.add(site_header)
         db.flush()
         _clone_sections_into_header(site_header.id, lot.site_id, None)
-        print(f"[BOQ-CLONE] site master header={site_header.id} site={lot.site_id}", flush=True)
+        logger.info("boq_clone site_master header=%s site=%s", site_header.id, lot.site_id)
 
     # ── Freestanding lot master (site_id=NULL, lot_id=NULL) ───────────────────
     # Phase 3B: freestanding lots use site_id=None. A project-level master
@@ -485,7 +489,7 @@ def clone_template_to_lots(
             db.add(proj_header)
             db.flush()
             _clone_sections_into_header(proj_header.id, None, None)
-            print(f"[BOQ-CLONE] project master header={proj_header.id} for {len(freestanding_lots)} freestanding lot(s)", flush=True)
+            logger.info("boq_clone project_master header=%s freestanding_lots=%d", proj_header.id, len(freestanding_lots))
 
     # ── Per-lot BOQ headers ───────────────────────────────────────────────────
     for lot in lots:
@@ -519,12 +523,9 @@ def clone_template_to_lots(
             milestones_created += _seed_milestones(db, project_id, lot, stage_ids, actor_id)
 
     db.commit()
-    print(
-        f"[BOQ-CLONE] Done — {len(created_headers)} lot(s) applied, "
-        f"{len(lots_skipped)} skipped, "
-        f"{milestones_created} milestone(s), {deactivated_count} item(s) replaced "
-        f"(mode={mode})",
-        flush=True,
+    logger.info(
+        "boq_clone done lots_applied=%d skipped=%d milestones=%d replaced=%d mode=%s",
+        len(created_headers), len(lots_skipped), milestones_created, deactivated_count, mode,
     )
     return {
         "created_count":       len(created_headers),
