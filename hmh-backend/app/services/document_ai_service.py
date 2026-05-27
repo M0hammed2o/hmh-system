@@ -185,18 +185,24 @@ def validate_ocr_setup() -> dict:
 # ── Regex patterns ────────────────────────────────────────────────────────────
 
 _PO_RE = re.compile(
-    r"(?:purchase\s+order|p\.?o\.?)[:\s#-]*([A-Z0-9][A-Z0-9\-]{1,20})"
-    r"|(?<!\w)(PO[-/\s]?[A-Z0-9\-]{2,20})(?!\w)",
+    # (?!\w) guards on short abbreviations prevent mid-word false matches (e.g. "POLICY" via p\.?o\.?)
+    # Mandatory separator in fallback alt prevents bare "PO" prefix from matching mid-word tokens
+    r"(?:purchase[ \t]+order(?:[ \t]+(?:no\.?|number|#))?|po[ \t]+(?:no\.?|number|#)|p\.?o\.?(?!\w))[ \t]*[:\-]?[ \t]*([A-Z0-9][A-Z0-9\-]{1,20})"
+    r"|(?<!\w)(PO[-/ \t][A-Z0-9][A-Z0-9\-]{1,19})(?!\w)",
     re.IGNORECASE,
 )
 _INV_RE = re.compile(
-    r"(?:invoice\s+(?:no|number|#)|tax\s+invoice|inv)[:\s#-]*([A-Z0-9][A-Z0-9\-]{1,20})"
-    r"|(?<!\w)(INV[-/\s]?[A-Z0-9\-]{2,20})(?!\w)",
+    # inv\.?(?!\w) prevents "INVOICE" from being consumed by the inv abbreviation sub-alt
+    # Mandatory separator [-/ \t] in fallback alt prevents "INVOICE" from matching as "INV" + "OICE"
+    r"(?:invoice[ \t]+(?:no\.?|number|#)|tax[ \t]+invoice(?:[ \t]+(?:no\.?|number|#))?|inv\.?(?!\w)(?:[ \t]+(?:no\.?|number|#))?)[ \t]*[:\-]?[ \t]*([A-Z0-9][A-Z0-9\-]{1,20})"
+    r"|(?<!\w)(INV[-/ \t][A-Z0-9][A-Z0-9\-]{1,19})(?!\w)",
     re.IGNORECASE,
 )
 _DN_RE = re.compile(
-    r"(?:delivery\s+(?:note|no|number|#)|d\.?n\.?)[:\s#-]*([A-Z0-9][A-Z0-9\-]{1,20})"
-    r"|(?<!\w)(DN[-/\s]?[A-Z0-9\-]{2,20})(?!\w)",
+    # d\.?n\.?(?!\w) prevents false matches on "DNA" etc.
+    # Mandatory separator in fallback alt prevents bare "DN" prefix from matching mid-word tokens
+    r"(?:delivery[ \t]+(?:note|no\.?)(?!\w)(?:[ \t]+(?:no\.?|number|#))?|d\.?n\.?(?!\w)|d/n)[ \t]*[:\-]?[ \t]*([A-Z0-9][A-Z0-9\-]{1,20})"
+    r"|(?<!\w)(DN[-/ \t][A-Z0-9][A-Z0-9\-]{1,19})(?!\w)",
     re.IGNORECASE,
 )
 _EMAIL_RE = re.compile(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+")
@@ -254,6 +260,56 @@ _TOTAL_PATTERNS: list[tuple[re.Pattern, str]] = [
 _LINE_RE = re.compile(
     r"^(.{3,60}?)\s+(\d[\d,]*(?:\.\d+)?)\s+([a-zA-Z]{1,10})\s+(\d[\d,]*(?:\.\d+)?)\s+(\d[\d,]*(?:\.\d+)?)\s*$",
     re.MULTILINE,
+)
+
+# Subtotal (distinct from total — extracted separately for invoices)
+_SUBTOTAL_RE = re.compile(
+    r"subtotal\s*[:\s]\s*R?\s*([\d,]+\.?\d*)",
+    re.IGNORECASE,
+)
+
+# Received / signed by — delivery notes
+_RECEIVED_BY_RE = re.compile(
+    r"(?:received\s+by|signed\s+by|collected\s+by|delivered\s+to)\s*[:\-]?\s*([A-Za-z][A-Za-z\s\.]{1,40})",
+    re.IGNORECASE,
+)
+
+# Delivery note simple items: description  qty  unit (2+ spaces as separator)
+_DELIVERY_ITEM_RE = re.compile(
+    r"^[ \t]*([A-Za-z][A-Za-z0-9 ,./\-]{2,50}?)\s{2,}(\d[\d,]*(?:\.\d+)?)\s+([A-Za-z]{1,15})\s*$",
+    re.MULTILINE,
+)
+
+# ── Fuel slip patterns ────────────────────────────────────────────────────────
+_STATION_RE = re.compile(
+    r"(?:station(?:\s+name)?|forecourt)\s*[:\-]?\s*([A-Za-z][A-Za-z0-9&.,\s\-]{2,50})",
+    re.IGNORECASE,
+)
+_LITRES_RE = re.compile(
+    r"(?:litres?|liters?|fuel\s+qty|qty|volume)\s*[:\-]?\s*([\d,]+\.?\d*)\s*(?:l|litres?|liters?)?",
+    re.IGNORECASE,
+)
+_VEHICLE_REG_RE = re.compile(
+    r"(?:vehicle|registration|reg\.?\s*no\.?|fleet\s*no\.?|rego|plate\s*no\.?)\s*[:\-]?\s*([A-Z]{1,3}\s*\d{1,4}\s*[A-Z0-9]{0,3}(?:\s*[A-Z]{0,2})?)",
+    re.IGNORECASE,
+)
+_ODOMETER_RE = re.compile(
+    r"(?:odometer|odo|mileage|km\s+reading|current\s+km|kms?)\s*[:\-]?\s*([\d,]+\.?\d*)",
+    re.IGNORECASE,
+)
+
+# ── Payment proof patterns ────────────────────────────────────────────────────
+_PAID_AMOUNT_RE = re.compile(
+    r"(?:amount\s+paid|paid\s+amount|payment\s+amount|amount\s+transferred|total\s+payment|debit\s+amount)\s*[:\-]?\s*R?\s*([\d,]+\.?\d*)",
+    re.IGNORECASE,
+)
+_PAYMENT_REF_RE = re.compile(
+    r"(?:reference\s*(?:no\.?|number)?|ref\s*(?:no\.?|#)?|transaction\s*(?:id|ref|reference|number)?|payment\s*ref)\s*[:\-]?\s*([A-Z0-9][A-Z0-9\-/]{1,30})",
+    re.IGNORECASE,
+)
+_BENEFICIARY_RE = re.compile(
+    r"(?:beneficiary|pay\s+to|payee|recipient|credit(?:ed)?\s+to|transferred\s+to|account\s+name)\s*[:\-]?\s*([A-Za-z][A-Za-z0-9&.,\s]{2,50})",
+    re.IGNORECASE,
 )
 
 
@@ -373,7 +429,7 @@ def extract_document_text(file_path: str) -> tuple[str, str]:
         if _ocr_provider() == "google_vision":
             text = extract_text_via_google_vision(file_path)
             if text.strip():
-                return (text, "EXTRACTED")
+                return (text, "OCR_EXTRACTED")
             # Vision failed — fall through to local tesseract
         try:
             from PIL import Image   # type: ignore
@@ -390,7 +446,7 @@ def extract_document_text(file_path: str) -> tuple[str, str]:
                 doc.close()
                 combined = "\n".join(texts)
                 logger.info("pdf ocr extracted chars=%d via fitz+tesseract", len(combined))
-                return (combined, "EXTRACTED") if combined.strip() else ("", "FAILED")
+                return (combined, "OCR_EXTRACTED") if combined.strip() else ("", "EXTRACTION_FAILED")
             except ImportError:
                 logger.debug("pdf fitz not available for OCR rendering")
         except ImportError:
@@ -403,18 +459,18 @@ def extract_document_text(file_path: str) -> tuple[str, str]:
         if _ocr_provider() == "google_vision":
             text = extract_text_via_google_vision(file_path)
             if text.strip():
-                return (text, "EXTRACTED")
+                return (text, "OCR_EXTRACTED")
             # Vision failed — fall through to local
         elif _ocr_provider() == "disabled":
             return ("", "OCR_NOT_AVAILABLE")
 
         text = extract_text_from_image(file_path)
         if text.strip():
-            return (text, "EXTRACTED")
+            return (text, "OCR_EXTRACTED")
         # Check if pytesseract is importable
         try:
             import pytesseract  # type: ignore  # noqa
-            return ("", "FAILED")
+            return ("", "EXTRACTION_FAILED")
         except ImportError:
             return ("", "OCR_NOT_AVAILABLE")
 
@@ -519,13 +575,43 @@ def _parse_line_items(text: str) -> list[dict]:
     return items
 
 
+def _extract_subtotal(text: str) -> Optional[float]:
+    m = _SUBTOTAL_RE.search(text)
+    return _parse_amount(m.group(1)) if m else None
+
+
+def _extract_received_by(text: str) -> Optional[str]:
+    m = _RECEIVED_BY_RE.search(text)
+    if m:
+        name = m.group(1).strip().rstrip(".,")
+        if 2 <= len(name) <= 40:
+            return name
+    return None
+
+
+def _parse_delivery_items(text: str) -> list[dict]:
+    """Parse simple 2-3 column delivery item rows (description, qty, unit)."""
+    items = []
+    for m in _DELIVERY_ITEM_RE.finditer(text):
+        desc, qty_s, unit = m.group(1), m.group(2), m.group(3)
+        qty = _parse_amount(qty_s)
+        if qty is None:
+            continue
+        items.append({
+            "description": desc.strip(),
+            "unit":        unit.strip(),
+            "quantity":    qty,
+            "unit_price":  None,
+            "line_total":  None,
+            "confidence":  0.5,
+        })
+    return items
+
+
 def parse_invoice_text(text: str) -> dict:
     """Extract structured fields from invoice text."""
-    # Find invoice date and due date separately.
-    # Try due date first; the remaining earliest date is the invoice date.
     due_date   = _first_match(_DUE_DATE_RE, text)
     inv_date   = _first_match(_DATE_RE, text)
-
     vat_raw    = _first_match(_VAT_RE, text)
     vat_amount = _parse_amount(vat_raw) if vat_raw else None
 
@@ -538,6 +624,7 @@ def parse_invoice_text(text: str) -> dict:
         "date":                 inv_date,
         "due_date":             due_date,
         "total_amount":         _extract_total(text),
+        "subtotal":             _extract_subtotal(text),
         "vat_amount":           vat_amount,
     }
 
@@ -545,13 +632,14 @@ def parse_invoice_text(text: str) -> dict:
 def parse_delivery_note_text(text: str) -> dict:
     """Extract structured fields from delivery note text."""
     return {
-        "po_number":            _first_match(_PO_RE,  text),
+        "po_number":            _first_match(_PO_RE,    text),
         "invoice_number":       None,
-        "delivery_note_number": _first_match(_DN_RE,  text),
-        "supplier_name":        None,
+        "delivery_note_number": _first_match(_DN_RE,    text),
+        "supplier_name":        _extract_supplier_name(text),
         "supplier_email":       _first_match(_EMAIL_RE, text),
-        "date":                 _first_match(_DATE_RE, text),
+        "date":                 _first_match(_DATE_RE,  text),
         "total_amount":         None,
+        "received_by":          _extract_received_by(text),
     }
 
 
@@ -561,10 +649,78 @@ def parse_quote_text(text: str) -> dict:
         "po_number":            _first_match(_PO_RE,    text),
         "invoice_number":       None,
         "delivery_note_number": None,
-        "supplier_name":        None,
+        "supplier_name":        _extract_supplier_name(text),
         "supplier_email":       _first_match(_EMAIL_RE, text),
         "date":                 _first_match(_DATE_RE,  text),
         "total_amount":         _extract_total(text),
+        "subtotal":             _extract_subtotal(text),
+    }
+
+
+def parse_purchase_order_text(text: str) -> dict:
+    """Extract structured fields from a purchase order document."""
+    vat_raw    = _first_match(_VAT_RE, text)
+    return {
+        "po_number":            _first_match(_PO_RE,    text),
+        "invoice_number":       None,
+        "delivery_note_number": None,
+        "supplier_name":        _extract_supplier_name(text),
+        "supplier_email":       _first_match(_EMAIL_RE, text),
+        "date":                 _first_match(_DATE_RE,  text),
+        "total_amount":         _extract_total(text),
+        "subtotal":             _extract_subtotal(text),
+        "vat_amount":           _parse_amount(vat_raw) if vat_raw else None,
+    }
+
+
+def parse_fuel_slip_text(text: str) -> dict:
+    """
+    Extract structured fields from a fuel slip / petrol station receipt.
+
+    Supports SA stations: BP, Shell, Sasol, Engen, Total, Caltex, Astron Energy.
+    All extracted values are suggestions — NEVER auto-approved.
+    """
+    station = _first_match(_STATION_RE, text) or _extract_supplier_name(text)
+    litres_raw = _first_match(_LITRES_RE, text)
+    odo_raw    = _first_match(_ODOMETER_RE, text)
+
+    return {
+        "po_number":            None,
+        "invoice_number":       None,
+        "delivery_note_number": None,
+        "supplier_name":        station,
+        "supplier_email":       None,
+        "date":                 _first_match(_DATE_RE, text),
+        "total_amount":         _extract_total(text),
+        "station_name":         station,
+        "litres":               _parse_amount(litres_raw),
+        "vehicle_registration": _first_match(_VEHICLE_REG_RE, text),
+        "odometer":             _parse_amount(odo_raw),
+    }
+
+
+def parse_payment_proof_text(text: str) -> dict:
+    """
+    Extract structured fields from a payment proof / EFT confirmation.
+
+    All extracted values are suggestions requiring human review.
+    NEVER auto-approves payments.
+    """
+    paid_raw   = _first_match(_PAID_AMOUNT_RE, text)
+    paid_amount = _parse_amount(paid_raw)
+
+    return {
+        "po_number":            None,
+        "invoice_number":       None,
+        "delivery_note_number": None,
+        "supplier_name":        None,
+        "supplier_email":       _first_match(_EMAIL_RE, text),
+        "date":                 _first_match(_DATE_RE,  text),
+        "total_amount":         paid_amount or _extract_total(text),
+        "payment_date":         _first_match(_DATE_RE,  text),
+        "paid_amount":          paid_amount,
+        "reference_number":     _first_match(_PAYMENT_REF_RE, text),
+        "beneficiary":          _first_match(_BENEFICIARY_RE, text),
     }
 
 
@@ -580,6 +736,7 @@ def extract_document_data(file_path: str, document_type: str = "OTHER") -> dict:
         "document_type": document_type,
         "raw_text":      "",
         "fields":        {
+            # Core fields (all document types)
             "po_number":            None,
             "invoice_number":       None,
             "delivery_note_number": None,
@@ -587,6 +744,22 @@ def extract_document_data(file_path: str, document_type: str = "OTHER") -> dict:
             "supplier_email":       None,
             "date":                 None,
             "total_amount":         None,
+            # Invoice-specific
+            "subtotal":             None,
+            "vat_amount":           None,
+            "due_date":             None,
+            # Delivery note-specific
+            "received_by":          None,
+            # Fuel slip-specific
+            "station_name":         None,
+            "litres":               None,
+            "vehicle_registration": None,
+            "odometer":             None,
+            # Payment proof-specific
+            "payment_date":         None,
+            "paid_amount":          None,
+            "reference_number":     None,
+            "beneficiary":          None,
         },
         "items":    [],
         "warnings": [],
@@ -597,33 +770,57 @@ def extract_document_data(file_path: str, document_type: str = "OTHER") -> dict:
         result["raw_text"] = raw_text
         result["status"]   = status
 
-        if status == "EXTRACTED" and raw_text.strip():
-            doc_type = document_type.upper()
-            if doc_type == "INVOICE":
-                result["fields"] = parse_invoice_text(raw_text)
-            elif doc_type == "DELIVERY_NOTE":
-                result["fields"] = parse_delivery_note_text(raw_text)
-            elif doc_type == "QUOTE":
-                result["fields"] = parse_quote_text(raw_text)
+        if status in ("EXTRACTED", "OCR_EXTRACTED") and raw_text.strip():
+            # EXTRACTION_FAILED if text is too short to contain useful data
+            if len(raw_text.strip()) < 20:
+                result["status"] = "EXTRACTION_FAILED"
+                result["warnings"].append("Extracted text too short — document may be blank or unreadable.")
             else:
-                result["fields"] = parse_invoice_text(raw_text)
+                doc_type = document_type.upper()
+                if doc_type == "INVOICE":
+                    parsed = parse_invoice_text(raw_text)
+                    items  = _parse_line_items(raw_text)
+                elif doc_type == "DELIVERY_NOTE":
+                    parsed = parse_delivery_note_text(raw_text)
+                    items  = _parse_delivery_items(raw_text) or _parse_line_items(raw_text)
+                elif doc_type == "QUOTE":
+                    parsed = parse_quote_text(raw_text)
+                    items  = _parse_line_items(raw_text)
+                elif doc_type == "PURCHASE_ORDER":
+                    parsed = parse_purchase_order_text(raw_text)
+                    items  = _parse_line_items(raw_text)
+                elif doc_type == "FUEL_SLIP":
+                    parsed = parse_fuel_slip_text(raw_text)
+                    items  = []
+                elif doc_type == "PAYMENT_PROOF":
+                    parsed = parse_payment_proof_text(raw_text)
+                    items  = []
+                else:
+                    parsed = parse_invoice_text(raw_text)
+                    items  = _parse_line_items(raw_text)
 
-            result["items"] = _parse_line_items(raw_text)
+                # Merge parsed fields into the full-schema default (additive — new keys win)
+                result["fields"].update(parsed)
+                result["items"] = items
 
-            # Downgrade to NEEDS_REVIEW if key fields missing
-            key = (
-                result["fields"].get("invoice_number") if doc_type == "INVOICE"
-                else result["fields"].get("delivery_note_number") if doc_type == "DELIVERY_NOTE"
-                else None
-            )
-            if not key:
-                result["status"] = "NEEDS_REVIEW"
-                result["warnings"].append("Key reference number could not be extracted — manual review required.")
+                # Determine key reference field per document type
+                key = (
+                    result["fields"].get("invoice_number")       if doc_type == "INVOICE"
+                    else result["fields"].get("delivery_note_number") if doc_type == "DELIVERY_NOTE"
+                    else result["fields"].get("po_number")       if doc_type in ("PURCHASE_ORDER", "QUOTE")
+                    else result["fields"].get("reference_number") if doc_type == "PAYMENT_PROOF"
+                    else None
+                )
+                if not key:
+                    result["status"] = "NEEDS_REVIEW"
+                    result["warnings"].append(
+                        "Key reference number could not be extracted — manual review required."
+                    )
 
         elif status in {"OCR_REQUIRED", "OCR_NOT_AVAILABLE"}:
             result["warnings"].append(f"Text extraction not available ({status}) — manual data entry required.")
 
-        elif status == "FAILED":
+        elif status in ("FAILED", "EXTRACTION_FAILED"):
             result["warnings"].append("Could not read file — check file format and integrity.")
 
     except Exception as exc:
@@ -759,10 +956,53 @@ def compare_po_invoice_delivery(
     }
 
 
-def _similar(a: str, b: str) -> bool:
-    """Rough string similarity — first 10 chars match."""
-    a, b = a.lower().strip()[:10], b.lower().strip()[:10]
-    return a and b and a == b
+def _similar(a: str, b: str, threshold: float = 0.70) -> bool:
+    """
+    Return True if two strings are similar enough to be the same item.
+    Uses exact match after normalization, then prefix check, then difflib ratio.
+    """
+    if not a or not b:
+        return False
+    a_c = re.sub(r"\W+", " ", a.lower()).strip()
+    b_c = re.sub(r"\W+", " ", b.lower()).strip()
+    if a_c == b_c:
+        return True
+    if len(a_c) >= 4 and a_c[:10] == b_c[:10]:
+        return True
+    from difflib import SequenceMatcher
+    return SequenceMatcher(None, a_c, b_c).ratio() >= threshold
+
+
+def fuzzy_match_supplier(extracted_name: str, db) -> Optional[object]:
+    """
+    Find the best-matching Supplier record for an OCR-extracted name.
+    Returns the Supplier with similarity ≥ 0.60, or None.
+    Never raises — all exceptions are swallowed gracefully.
+    """
+    if not extracted_name:
+        return None
+    try:
+        from app.models.supplier import Supplier
+        from difflib import SequenceMatcher
+
+        name_c = re.sub(r"\W+", " ", extracted_name.lower()).strip()
+        suppliers = db.query(Supplier).filter(Supplier.name.isnot(None)).all()
+
+        best, best_score = None, 0.0
+        for s in suppliers:
+            s_c = re.sub(r"\W+", " ", (s.name or "").lower()).strip()
+            score = SequenceMatcher(None, name_c, s_c).ratio()
+            if score > best_score:
+                best_score = score
+                best = s
+
+        if best_score >= 0.60:
+            logger.debug("fuzzy supplier match '%s' → '%s' score=%.2f", extracted_name, best.name, best_score)
+            return best
+        return None
+    except Exception as exc:
+        logger.debug("fuzzy_match_supplier failed for '%s': %s", extracted_name, exc)
+        return None
 
 
 def _create_comparison_alert(db, po, message: str, checks: list) -> None:

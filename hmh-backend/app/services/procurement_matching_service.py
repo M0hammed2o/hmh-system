@@ -20,6 +20,25 @@ logger = logging.getLogger(__name__)
 _PO_RE = re.compile(r"\bPO[-/\s]?([A-Z0-9\-]+)\b", re.IGNORECASE)
 
 
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _normalize_name(name: str) -> str:
+    """Lowercase, strip punctuation/whitespace for fuzzy comparison."""
+    return re.sub(r"\W+", " ", (name or "").lower()).strip()
+
+
+def _amount_match(a: float, b: float) -> bool:
+    """
+    Returns True if amounts are within tolerance.
+    Uses 2% relative tolerance OR R50 absolute, whichever is larger.
+    Handles both zero and non-zero base amounts safely.
+    """
+    if a == 0 and b == 0:
+        return True
+    tolerance = max(max(a, b) * 0.02, 50.0)
+    return abs(a - b) <= tolerance
+
+
 # ── PO number extraction ──────────────────────────────────────────────────────
 
 def _find_po_by_number(db, po_number: str):
@@ -150,18 +169,18 @@ def match_invoice_to_po(invoice_id: uuid.UUID, db: Session) -> dict:
     # Link the invoice to the PO
     invoice.purchase_order_id = po.id
 
-    # Compare amounts
+    # Compare amounts using tolerance (2% relative or R50 absolute)
     po_total = float(po.total_amount or 0)
     inv_total = float(invoice.total_amount or 0)
-    amount_match = abs(po_total - inv_total) < 0.05  # within 5 cents
+    amount_ok = _amount_match(po_total, inv_total)
 
     # Supplier match
     supplier_match = (po.supplier_id == invoice.supplier_id)
 
     # Determine overall match status
-    if amount_match and supplier_match:
+    if amount_ok and supplier_match:
         match_status = InvoiceMatchStatus.MATCHED
-    elif not amount_match:
+    elif not amount_ok:
         match_status = InvoiceMatchStatus.QUANTITY_MISMATCH
         _create_match_alert(
             db,
@@ -174,6 +193,7 @@ def match_invoice_to_po(invoice_id: uuid.UUID, db: Session) -> dict:
         )
     elif not supplier_match:
         match_status = InvoiceMatchStatus.MISMATCH
+    amount_match = amount_ok
 
     existing = db.query(InvoiceMatchingResult).filter(
         InvoiceMatchingResult.invoice_id == invoice_id
@@ -229,8 +249,16 @@ def match_delivery_note_to_po(delivery_id: uuid.UUID, db: Session) -> dict:
 
     po: Optional[PurchaseOrder] = None
 
-    # 1. Try supplier match on recent open POs
-    if delivery.supplier_id:
+    # 1. PO number embedded in delivery number or comments
+    for text_field in [delivery.delivery_number or "", getattr(delivery, "comments", "") or ""]:
+        po_num = _find_po_number(text_field)
+        if po_num:
+            po = _find_po_by_number(db, po_num)
+            if po:
+                break
+
+    # 2. Supplier match on most-recent open PO
+    if not po and delivery.supplier_id:
         po = (
             db.query(PurchaseOrder)
             .filter(
