@@ -162,6 +162,15 @@ def ensure_tables():
             END $$;
         """))
 
+        # migration 0028: Phase E Gmail OCR pipeline alert types
+        for _val in ["DUPLICATE_INVOICE", "OCR_EXTRACTION_FAILED", "SUPPLIER_MISMATCH"]:
+            conn.execute(_t(f"""
+                DO $$ BEGIN
+                    ALTER TYPE alert_type_enum ADD VALUE IF NOT EXISTS '{_val}';
+                EXCEPTION WHEN others THEN NULL;
+                END $$;
+            """))
+
         # migration 0022: alert_recipients new category flags + project_id
         conn.execute(_t("""
             DO $$

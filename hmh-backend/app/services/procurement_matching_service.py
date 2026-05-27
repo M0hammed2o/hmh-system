@@ -316,11 +316,13 @@ def build_proof_pack(invoice_id: uuid.UUID, db: Session) -> dict:
     - Matching result
     - Accounting flags (missing docs, match status)
     """
+    import json as _json
     from app.models.invoice import Invoice, InvoiceMatchingResult
     from app.models.purchase_order import PurchaseOrder, PurchaseOrderItem, PoEmailLog
     from app.models.delivery import Delivery
     from app.models.supplier import Supplier
-    from app.models.incoming_email import IncomingEmail
+    from app.models.incoming_email import IncomingEmail, IncomingEmailAttachment
+    from app.models.document_extraction import DocumentExtraction
     from app.models.user import User
 
     invoice = db.query(Invoice).filter(Invoice.id == invoice_id).first()
@@ -359,6 +361,26 @@ def build_proof_pack(invoice_id: uuid.UUID, db: Session) -> dict:
                 db.query(IncomingEmail)
                 .filter(IncomingEmail.matched_po_number.ilike(f"%{po.po_number.split('-', 1)[-1]}%"))
                 .order_by(IncomingEmail.received_at.desc())
+                .first()
+            )
+
+    # OCR extraction — most recent DocumentExtraction for any attachment on the incoming email
+    extraction = None
+    if incoming_email:
+        att = (
+            db.query(IncomingEmailAttachment)
+            .filter(IncomingEmailAttachment.incoming_email_id == incoming_email.id)
+            .order_by(IncomingEmailAttachment.id.desc())
+            .first()
+        )
+        if att:
+            extraction = (
+                db.query(DocumentExtraction)
+                .filter(
+                    DocumentExtraction.source_type == "GMAIL_ATTACHMENT",
+                    DocumentExtraction.source_id   == att.id,
+                )
+                .order_by(DocumentExtraction.created_at.desc())
                 .first()
             )
 
@@ -459,4 +481,10 @@ def build_proof_pack(invoice_id: uuid.UUID, db: Session) -> dict:
                 and delivery.signature_image_url is not None
             ),
         },
+        "ocr_extraction": {
+            "status":        extraction.status,
+            "document_type": extraction.document_type,
+            "fields":        _json.loads(extraction.extracted_json or "{}").get("fields"),
+            "created_at":    extraction.created_at.isoformat() if extraction.created_at else None,
+        } if extraction else None,
     }

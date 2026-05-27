@@ -36,20 +36,50 @@ logger = get_logger(__name__)
 
 # ── Classification keywords ───────────────────────────────────────────────────
 
-_INVOICE_KEYWORDS = {"invoice", "inv", "tax invoice", "tax_invoice", "proforma"}
+_INVOICE_KEYWORDS  = {"invoice", "inv", "tax invoice", "tax_invoice", "proforma"}
 _DELIVERY_KEYWORDS = {"delivery note", "delivery_note", "dn-", "dn_", "dn ", " dn", "delivery", "receipt note"}
-_QUOTE_KEYWORDS = {"quote", "quotation", "pricing", "proposal"}
+_QUOTE_KEYWORDS    = {"quote", "quotation", "pricing", "proposal"}
+_PO_KEYWORDS       = {"purchase order", "purchase_order", "po-doc", "po_document"}
+_FUEL_KEYWORDS     = {"fuel slip", "fuel_slip", "fuel receipt", "fuel_receipt", "petrol slip",
+                      "diesel slip", "forecourt", "fuel log"}
+_PAYMENT_KEYWORDS  = {"proof of payment", "proof_of_payment", "payment proof", "payment_proof",
+                      "eft confirmation", "eft_confirmation", "bank confirmation", "payment confirmation",
+                      "remittance advice", "remittance"}
 
 # PO number pattern: PO-XXX, PO XXX, PO/XXX
 _PO_RE = re.compile(r"\bPO[-/\s]?([A-Z0-9\-]+)\b", re.IGNORECASE)
 
+# Attachment allowlist — unsupported MIME types are logged and skipped
+_ALLOWED_MIMES = frozenset({
+    "application/pdf",
+    "image/jpeg",
+    "image/jpg",
+    "image/png",
+})
+_MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024  # 10 MB
+
+
+def _is_allowed_attachment(content_type: str, size_bytes: int) -> bool:
+    """Return True when the attachment MIME type and size are within safe limits."""
+    return content_type.lower() in _ALLOWED_MIMES and size_bytes <= _MAX_ATTACHMENT_BYTES
+
 
 def classify_document(filename: str, subject: str = "") -> str:
     """
-    Return INVOICE, DELIVERY_NOTE, QUOTE, or OTHER based on filename + subject keywords.
+    Return INVOICE, DELIVERY_NOTE, PURCHASE_ORDER, FUEL_SLIP, PAYMENT_PROOF,
+    QUOTE, or OTHER based on filename + subject keywords.
     Pure function — no DB or I/O.
+
+    Priority order: PAYMENT_PROOF > FUEL_SLIP > PURCHASE_ORDER >
+                    INVOICE > DELIVERY_NOTE > QUOTE > OTHER
     """
     text = f"{filename} {subject}".lower()
+    if any(k in text for k in _PAYMENT_KEYWORDS):
+        return "PAYMENT_PROOF"
+    if any(k in text for k in _FUEL_KEYWORDS):
+        return "FUEL_SLIP"
+    if any(k in text for k in _PO_KEYWORDS):
+        return "PURCHASE_ORDER"
     if any(k in text for k in _INVOICE_KEYWORDS):
         return "INVOICE"
     if any(k in text for k in _DELIVERY_KEYWORDS):
@@ -68,10 +98,13 @@ def extract_po_number(text: str) -> Optional[str]:
 # ── Subfolder mapping ─────────────────────────────────────────────────────────
 
 _TYPE_DIR = {
-    "INVOICE":       "invoices",
-    "DELIVERY_NOTE": "delivery_notes",
-    "QUOTE":         "quotes",
-    "OTHER":         "other",
+    "INVOICE":        "invoices",
+    "DELIVERY_NOTE":  "delivery_notes",
+    "QUOTE":          "quotes",
+    "PURCHASE_ORDER": "purchase_orders",
+    "FUEL_SLIP":      "fuel_slips",
+    "PAYMENT_PROOF":  "payment_proofs",
+    "OTHER":          "other",
 }
 
 
@@ -210,6 +243,7 @@ def _fetch_via_imap(db: Session, limit: int) -> dict:
 
                 # Process attachments
                 att_count = 0
+                seen_filenames: set = set()  # duplicate detection within same email
                 for part in msg.walk():
                     if part.get_content_maintype() == "multipart":
                         continue
@@ -223,6 +257,21 @@ def _fetch_via_imap(db: Session, limit: int) -> dict:
 
                     payload_bytes = part.get_payload(decode=True)
                     if not payload_bytes:
+                        continue
+
+                    # Duplicate attachment guard (same filename within one email)
+                    if filename in seen_filenames:
+                        logger.info("gmail_att_skip filename=%s reason=duplicate_within_email", filename)
+                        continue
+                    seen_filenames.add(filename)
+
+                    # MIME allowlist + size cap
+                    content_type = part.get_content_type().lower()
+                    if not _is_allowed_attachment(content_type, len(payload_bytes)):
+                        logger.info(
+                            "gmail_att_skip filename=%s content_type=%s size=%d reason=blocked",
+                            filename, content_type, len(payload_bytes),
+                        )
                         continue
 
                     doc_type  = classify_document(filename, subject)
@@ -432,6 +481,9 @@ def _trigger_extraction(db, file_path: str, doc_type: str, source_id: str, now) 
     Run document AI extraction on a saved Gmail attachment.
     Stores result in DocumentExtraction. Never raises — Gmail fetch must not fail
     because of an OCR error.
+
+    On success: logs the best PO candidate (suggestion only — no records created).
+    On failure: creates an OCR_EXTRACTION_FAILED alert for human follow-up.
     """
     import json
     try:
@@ -439,13 +491,14 @@ def _trigger_extraction(db, file_path: str, doc_type: str, source_id: str, now) 
         from app.services.document_ai_service import extract_document_data
 
         result = extract_document_data(file_path, doc_type)
+        status = result["status"]
 
         extraction = DocumentExtraction(
             source_type="GMAIL_ATTACHMENT",
             source_id=uuid.UUID(source_id) if source_id else None,
             file_path=file_path,
             document_type=doc_type,
-            status=result["status"],
+            status=status,
             raw_text=result.get("raw_text", ""),
             extracted_json=json.dumps(result),
             created_at=now,
@@ -453,15 +506,41 @@ def _trigger_extraction(db, file_path: str, doc_type: str, source_id: str, now) 
         db.add(extraction)
         db.flush()
 
-        # If extracted OK, try auto-match to a PO
-        if result["status"] in ("EXTRACTED", "NEEDS_REVIEW"):
+        # Log PO candidate when extraction succeeded (suggestion only)
+        if status in ("EXTRACTED", "OCR_EXTRACTED", "NEEDS_REVIEW"):
             fields = result.get("fields", {})
             po_num = fields.get("po_number")
-            if po_num and doc_type == "INVOICE":
-                from app.services.procurement_matching_service import _find_po_by_number
-                po = _find_po_by_number(db, po_num)
-                if po:
-                    logger.info("[GMAIL] Auto-matched %s to %s", doc_type, po.po_number)
+            if po_num:
+                try:
+                    from app.services.procurement_matching_service import _find_po_by_number
+                    po = _find_po_by_number(db, po_num)
+                    if po:
+                        logger.info("[GMAIL] PO candidate found: %s → %s (human review required)",
+                                    doc_type, po.po_number)
+                except Exception:
+                    pass
+
+        # Alert when OCR could not extract usable text
+        elif status in ("EXTRACTION_FAILED", "OCR_NOT_AVAILABLE", "FAILED"):
+            try:
+                from app.models.alert import SystemAlert
+                from app.models.enums import AlertType, AlertSeverity, AlertStatus
+                import os as _os
+                db.add(SystemAlert(
+                    alert_type=AlertType.OCR_EXTRACTION_FAILED,
+                    severity=AlertSeverity.LOW,
+                    title=f"OCR extraction failed — {_os.path.basename(file_path)}",
+                    message=(
+                        f"Could not extract text from attachment '{_os.path.basename(file_path)}' "
+                        f"(type: {doc_type}, status: {status}). Manual data entry required."
+                    ),
+                    status=AlertStatus.OPEN,
+                    notification_channel="in_app",
+                    created_at=now,
+                ))
+                db.flush()
+            except Exception:
+                logger.exception("OCR failure alert creation failed for %s", file_path)
 
     except Exception:
         logger.exception("_trigger_extraction failed for %s — fetch continues", file_path)

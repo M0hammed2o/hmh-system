@@ -1,13 +1,15 @@
 """
 Gmail procurement inbox endpoints.
 
-POST /gmail/fetch                     — trigger IMAP fetch
-GET  /gmail/incoming                  — list fetched emails
-GET  /gmail/incoming/{id}             — single email + attachments
-GET  /gmail/attachments/{id}          — single attachment metadata
+POST /gmail/fetch                          — trigger IMAP fetch
+GET  /gmail/incoming                       — list fetched emails
+GET  /gmail/incoming/{id}                  — single email + attachments
+POST /gmail/incoming/{id}/process          — extract + classify + match all attachments
+POST /gmail/incoming/{id}/suggest          — OCR → PO matching → reconciliation suggestions
+GET  /gmail/attachments/{id}               — single attachment metadata
 
-POST /invoices/from-gmail/{att_id}    — create Invoice from Gmail attachment
-POST /delivery-notes/from-gmail/{att_id} — link Gmail attachment to a Delivery
+POST /invoices/from-gmail/{att_id}         — create Invoice from Gmail attachment
+POST /delivery-notes/from-gmail/{att_id}   — link Gmail attachment to a Delivery
 """
 
 import uuid
@@ -195,6 +197,53 @@ def process_email(email_id: uuid.UUID, db: DbSession):
         "email_id":        str(email_id),
         "processed_status": email.processed_status,
         "results":         results,
+    })
+
+
+@gmail_router.post("/incoming/{email_id}/suggest", dependencies=[OFFICE_AND_ABOVE])
+def suggest_reconciliation(email_id: uuid.UUID, db: DbSession):
+    """
+    Run the OCR → PO matching pipeline for every attachment on an incoming email
+    and return reconciliation suggestions for human review.
+
+    NEVER creates Invoice, Delivery, Payment, or any business record.
+    Every suggestion includes requires_review=True — human approval is always required.
+    """
+    from sqlalchemy.orm import joinedload
+    from app.models.incoming_email import IncomingEmail
+    from app.services.gmail_ocr_pipeline_service import build_reconciliation_suggestion
+
+    email = (
+        db.query(IncomingEmail)
+        .options(joinedload(IncomingEmail.attachments))
+        .filter(IncomingEmail.id == email_id)
+        .first()
+    )
+    if not email:
+        raise HTTPException(status_code=404, detail="Email not found.")
+
+    if not email.attachments:
+        return ApiSuccess(
+            data={"email_id": str(email_id), "suggestions": []},
+            message="No attachments to process.",
+        )
+
+    suggestions = []
+    for att in email.attachments:
+        suggestion = build_reconciliation_suggestion(db, att.id)
+        suggestions.append(suggestion)
+
+    db.commit()
+
+    logger.info(
+        "gmail_suggest email_id=%s attachments=%d suggestions=%d",
+        email_id, len(email.attachments), len(suggestions),
+    )
+    return ApiSuccess(data={
+        "email_id":    str(email_id),
+        "from_email":  email.from_email,
+        "subject":     email.subject,
+        "suggestions": suggestions,
     })
 
 

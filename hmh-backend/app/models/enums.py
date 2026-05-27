@@ -156,6 +156,10 @@ class AlertType(str, enum.Enum):
     MILESTONE_DELAYED_ALERT      = "MILESTONE_DELAYED_ALERT"
     # Phase 3Q.3 — finance alerts
     PAYMENT_DUE                  = "PAYMENT_DUE"  # approaching due date (scan-based)
+    # Phase E — Gmail OCR pipeline
+    DUPLICATE_INVOICE            = "DUPLICATE_INVOICE"      # same invoice number submitted again
+    OCR_EXTRACTION_FAILED        = "OCR_EXTRACTION_FAILED"  # attachment OCR produced no usable text
+    SUPPLIER_MISMATCH            = "SUPPLIER_MISMATCH"      # supplier in doc ≠ PO supplier
 
 
 class NotificationChannel(str, enum.Enum):
