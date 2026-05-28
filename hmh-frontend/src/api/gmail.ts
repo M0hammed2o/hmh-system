@@ -1,6 +1,14 @@
 import client from "./client";
 
-export type DetectedType = "INVOICE" | "DELIVERY_NOTE" | "QUOTE" | "OTHER";
+export type DetectedType =
+  | "INVOICE"
+  | "DELIVERY_NOTE"
+  | "PURCHASE_ORDER"
+  | "PAYMENT_PROOF"
+  | "FUEL_SLIP"
+  | "QUOTE"
+  | "OTHER";
+
 export type ProcessedStatus = "UNPROCESSED" | "PROCESSED" | "IGNORED";
 
 export interface IncomingEmailAttachment {
@@ -79,6 +87,49 @@ export interface ProcessEmailResult {
   results:          ProcessedAttachment[];
 }
 
+// ── Phase F: OCR reconciliation suggestion types ──────────────────────────────
+
+export interface ReconciliationSuggestion {
+  attachment_id:        string | null;
+  filename:             string;
+  document_type:        string;
+  extraction_status:    string;
+  invoice_number:       string | null;
+  delivery_note_number: string | null;
+  po_number_from_doc:   string | null;
+  supplier_name:        string | null;
+  supplier_email:       string | null;
+  total_amount:         number | null;
+  date:                 string | null;
+  matched_po:           string | null;
+  matched_po_id:        string | null;
+  match_confidence:     number;           // 0.0 – 1.0
+  issues:               string[];
+  requires_review:      true;             // always true — human approval required
+  extraction_warnings:  string[];
+}
+
+export interface SuggestResult {
+  email_id:    string;
+  from_email:  string;
+  subject:     string | null;
+  suggestions: ReconciliationSuggestion[];
+}
+
+export interface CreateInvoiceFromGmailBody {
+  project_id:        string;
+  invoice_number?:   string | null;
+  supplier_id?:      string | null;
+  purchase_order_id?: string | null;
+  total_amount?:     number;
+  notes?:            string | null;
+}
+
+export interface CreateInvoiceFromGmailResult {
+  invoice_id: string;
+  match:      Record<string, unknown>;
+}
+
 export const gmailApi = {
   fetch: async (limit = 20): Promise<FetchResult> => {
     const r = await client.post(`/gmail/fetch?limit=${limit}`);
@@ -113,6 +164,26 @@ export const gmailApi = {
   refetchAttachment: async (attId: string): Promise<{ att_id: string; saved_path: string; exists: boolean; size: number }> => {
     const r = await client.post<{ data: { att_id: string; saved_path: string; exists: boolean; size: number } }>(
       `/gmail/attachments/${attId}/refetch`
+    );
+    return r.data.data;
+  },
+
+  /** Run OCR → PO matching pipeline for all attachments on an email.
+   *  Returns reconciliation suggestions for human review.
+   *  NEVER creates records — requires_review is always true on each suggestion. */
+  suggestReconciliation: async (emailId: string): Promise<SuggestResult> => {
+    const r = await client.post<{ data: SuggestResult }>(`/gmail/incoming/${emailId}/suggest`);
+    return r.data.data;
+  },
+
+  /** Create an Invoice record from a Gmail attachment (human-triggered only). */
+  createInvoiceFromGmail: async (
+    attId: string,
+    body: CreateInvoiceFromGmailBody,
+  ): Promise<CreateInvoiceFromGmailResult> => {
+    const r = await client.post<{ data: CreateInvoiceFromGmailResult }>(
+      `/invoices/from-gmail/${attId}`,
+      body,
     );
     return r.data.data;
   },

@@ -6,7 +6,7 @@
 import { useEffect, useState } from "react";
 import {
   CheckCircle2, AlertTriangle, X, ExternalLink, FileText,
-  Mail, Truck, ArrowLeft, Check, Download,
+  Mail, Truck, ArrowLeft, Check, Download, Sparkles,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -92,6 +92,13 @@ interface ProofPack {
   missing_delivery_note: boolean;
   missing_signature: boolean;
   is_matched: boolean;
+
+  ocr_extraction: {
+    status:        string;
+    document_type: string;
+    fields:        Record<string, unknown> | null;
+    created_at:    string | null;
+  } | null;
 }
 
 interface InvoiceSummary {
@@ -485,6 +492,37 @@ function ProofPackDetail({ proof, onBack, onApproved }: {
           </p>
         )}
       </div>
+
+      {/* OCR extraction summary (Phase E backend data) */}
+      {proof.ocr_extraction && (
+        <div className="bg-card border border-border rounded-xl p-4">
+          <div className="flex items-center gap-2 mb-3">
+            <Sparkles className="w-4 h-4 text-primary" />
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">OCR Extraction</p>
+            <span className={cn(
+              "ml-auto text-[10px] font-semibold px-2 py-0.5 rounded-full border",
+              proof.ocr_extraction.status === "EXTRACTED" || proof.ocr_extraction.status === "OCR_EXTRACTED"
+                ? "bg-green-50 text-green-700 border-green-200"
+                : "bg-amber-50 text-amber-700 border-amber-200",
+            )}>
+              {proof.ocr_extraction.status.replace(/_/g, " ")}
+            </span>
+          </div>
+          <ProofRow label="Document type" value={proof.ocr_extraction.document_type.replace(/_/g, " ")} />
+          {proof.ocr_extraction.fields && Object.entries(proof.ocr_extraction.fields)
+            .filter(([, v]) => v != null && v !== "")
+            .slice(0, 6)
+            .map(([k, v]) => (
+              <ProofRow key={k} label={k.replace(/_/g, " ")} value={String(v)} />
+            ))
+          }
+          {proof.ocr_extraction.created_at && (
+            <p className="text-xs text-muted-foreground mt-2">
+              Extracted {new Date(proof.ocr_extraction.created_at).toLocaleDateString()} via Gmail OCR
+            </p>
+          )}
+        </div>
+      )}
 
       {/* Manual matching panel */}
       <div className="bg-card border border-border rounded-xl p-4 space-y-3">

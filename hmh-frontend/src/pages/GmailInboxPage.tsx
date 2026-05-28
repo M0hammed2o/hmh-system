@@ -2,33 +2,62 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import {
   Mail, RefreshCw, FileText, Truck, MessageSquare, HelpCircle,
   CheckCircle2, Clock, AlertTriangle, ChevronRight, Download,
-  Zap, XCircle, Minus, Eye, RotateCcw, PenSquare,
+  Zap, XCircle, Minus, Eye, RotateCcw, PenSquare, Sparkles,
+  CreditCard, Fuel, ShoppingCart, Info,
 } from "lucide-react";
 import {
   gmailApi,
   type IncomingEmail, type IncomingEmailAttachment, type DetectedType,
-  type ProcessedAttachment, type MatchStatus,
+  type ProcessedAttachment, type MatchStatus, type ReconciliationSuggestion,
 } from "@/api/gmail";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { EmailDraftModal } from "@/components/EmailDraftModal";
+import { CreateInvoiceFromSuggestionModal } from "@/components/gmail/CreateInvoiceFromSuggestionModal";
 
 const AUTO_REFRESH_MS = 3 * 60 * 1000; // 3 minutes
 
 // ── Static maps ───────────────────────────────────────────────────────────────
 
 const TYPE_ICON: Record<DetectedType, React.ElementType> = {
-  INVOICE: FileText, DELIVERY_NOTE: Truck, QUOTE: MessageSquare, OTHER: HelpCircle,
+  INVOICE:        FileText,
+  DELIVERY_NOTE:  Truck,
+  PURCHASE_ORDER: ShoppingCart,
+  PAYMENT_PROOF:  CreditCard,
+  FUEL_SLIP:      Fuel,
+  QUOTE:          MessageSquare,
+  OTHER:          HelpCircle,
 };
 const TYPE_COLOR: Record<DetectedType, string> = {
-  INVOICE:       "text-blue-600 bg-blue-50 border-blue-200",
-  DELIVERY_NOTE: "text-green-600 bg-green-50 border-green-200",
-  QUOTE:         "text-purple-600 bg-purple-50 border-purple-200",
-  OTHER:         "text-gray-500 bg-gray-50 border-gray-200",
+  INVOICE:        "text-blue-600 bg-blue-50 border-blue-200",
+  DELIVERY_NOTE:  "text-green-600 bg-green-50 border-green-200",
+  PURCHASE_ORDER: "text-indigo-600 bg-indigo-50 border-indigo-200",
+  PAYMENT_PROOF:  "text-teal-600 bg-teal-50 border-teal-200",
+  FUEL_SLIP:      "text-orange-600 bg-orange-50 border-orange-200",
+  QUOTE:          "text-purple-600 bg-purple-50 border-purple-200",
+  OTHER:          "text-gray-500 bg-gray-50 border-gray-200",
 };
 const TYPE_LABEL: Record<DetectedType, string> = {
-  INVOICE: "Invoice", DELIVERY_NOTE: "Delivery Note", QUOTE: "Quote", OTHER: "Other",
+  INVOICE:        "Invoice",
+  DELIVERY_NOTE:  "Delivery Note",
+  PURCHASE_ORDER: "Purchase Order",
+  PAYMENT_PROOF:  "Payment Proof",
+  FUEL_SLIP:      "Fuel Slip",
+  QUOTE:          "Quote",
+  OTHER:          "Other",
 };
+
+// Confidence tier helpers
+function confColor(c: number) {
+  if (c >= 0.75) return "text-green-700 bg-green-100 border-green-300";
+  if (c >= 0.40) return "text-amber-700 bg-amber-100 border-amber-300";
+  return "text-red-700 bg-red-100 border-red-300";
+}
+function confLabel(c: number) {
+  if (c >= 0.75) return "High confidence";
+  if (c >= 0.40) return "Medium confidence";
+  return "Low confidence";
+}
 const STATUS_ICON: Record<string, React.ElementType> = {
   PROCESSED: CheckCircle2, UNPROCESSED: Clock, IGNORED: AlertTriangle,
   PROCESSING_FAILED: XCircle,
@@ -50,6 +79,108 @@ const MATCH_CONFIG: Record<MatchStatus | string, { label: string; cls: string; i
 function shortDate(iso: string | null) {
   if (!iso) return "—";
   return new Date(iso).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+}
+
+// ── Reconciliation suggestion card ───────────────────────────────────────────
+
+function SuggestionCard({
+  s,
+  onCreateInvoice,
+}: {
+  s: ReconciliationSuggestion;
+  onCreateInvoice: () => void;
+}) {
+  const conf = s.match_confidence;
+  const ConfIcon = conf >= 0.75 ? CheckCircle2 : AlertTriangle;
+
+  return (
+    <div className="border border-border rounded-xl overflow-hidden text-xs">
+      {/* Header */}
+      <div className="flex items-center justify-between px-3 py-2.5 bg-muted/40 border-b border-border">
+        <span className="font-semibold truncate max-w-[200px]">{s.filename}</span>
+        <span className="shrink-0 font-semibold text-[10px] uppercase tracking-wide text-muted-foreground">
+          {s.document_type.replace("_", " ")}
+        </span>
+      </div>
+
+      {/* Extraction status warning */}
+      {!["EXTRACTED", "OCR_EXTRACTED", "NEEDS_REVIEW"].includes(s.extraction_status) && (
+        <div className="px-3 py-2 bg-amber-50 border-b border-border text-amber-700 flex items-center gap-1.5">
+          <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+          <span>OCR status: <strong>{s.extraction_status.replace(/_/g, " ")}</strong></span>
+        </div>
+      )}
+
+      {/* Confidence badge */}
+      <div className={cn("flex items-center gap-2 px-3 py-2.5 border-b border-border", confColor(conf))}>
+        <ConfIcon className="w-3.5 h-3.5 shrink-0" />
+        <span className="font-semibold">{confLabel(conf)}</span>
+        <span className="ml-auto font-mono font-bold">{(conf * 100).toFixed(0)}%</span>
+      </div>
+
+      {/* Extracted fields */}
+      <div className="px-3 py-2.5 space-y-1 border-b border-border">
+        {s.invoice_number       && <FieldRow label="Invoice #"    value={s.invoice_number} />}
+        {s.delivery_note_number && <FieldRow label="DN #"         value={s.delivery_note_number} />}
+        {s.po_number_from_doc   && <FieldRow label="PO # (doc)"  value={s.po_number_from_doc} />}
+        {s.supplier_name        && <FieldRow label="Supplier"     value={s.supplier_name} />}
+        {s.date                 && <FieldRow label="Date"         value={s.date} />}
+        {s.total_amount != null && (
+          <FieldRow
+            label="Total"
+            value={`R${Number(s.total_amount).toLocaleString("en-ZA", { minimumFractionDigits: 2 })}`}
+            bold
+          />
+        )}
+      </div>
+
+      {/* Matched PO */}
+      {s.matched_po ? (
+        <div className="px-3 py-2.5 border-b border-border flex items-center justify-between">
+          <span className="text-muted-foreground">Matched PO</span>
+          <span className="font-semibold font-mono text-blue-700">{s.matched_po}</span>
+        </div>
+      ) : (
+        <div className="px-3 py-2.5 border-b border-border flex items-center gap-1.5 text-muted-foreground">
+          <Info className="w-3 h-3 shrink-0" />
+          <span>No PO match found</span>
+        </div>
+      )}
+
+      {/* Issues */}
+      {s.issues.length > 0 && (
+        <div className="px-3 py-2.5 border-b border-border space-y-1">
+          <p className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wide mb-1">Issues</p>
+          {s.issues.map((issue, i) => (
+            <div key={i} className="flex items-center gap-1.5 text-amber-700">
+              <AlertTriangle className="w-3 h-3 shrink-0" />
+              <span>{issue.replace(/_/g, " ")}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Warnings */}
+      {s.extraction_warnings.length > 0 && (
+        <div className="px-3 py-2 border-b border-border text-muted-foreground">
+          <p className="text-[10px] font-semibold uppercase tracking-wide mb-0.5">Warnings</p>
+          {s.extraction_warnings.map((w, i) => <p key={i}>{w}</p>)}
+        </div>
+      )}
+
+      {/* Actions */}
+      <div className="px-3 py-2.5 flex items-center gap-2">
+        <p className="text-[10px] text-muted-foreground flex-1 italic">
+          requires_review — human approval required
+        </p>
+        {s.document_type === "INVOICE" && s.attachment_id && (
+          <Button size="sm" className="h-7 text-xs shrink-0" onClick={onCreateInvoice}>
+            <FileText className="w-3.5 h-3.5 mr-1" />Create Invoice
+          </Button>
+        )}
+      </div>
+    </div>
+  );
 }
 
 // ── Extraction result panel ───────────────────────────────────────────────────
@@ -207,11 +338,17 @@ export default function GmailInboxPage() {
 
   const handleSelect = async (e: IncomingEmail) => {
     setExtraction(null);
+    setSuggestions(null);
+    setSuccessMsg("");
     try { setSelected(await gmailApi.getIncoming(e.id)); }
     catch { setSelected(e); }
   };
 
   const [refetchingId, setRefetchingId] = useState<string | null>(null);
+  const [suggestions,  setSuggestions]  = useState<ReconciliationSuggestion[] | null>(null);
+  const [suggesting,   setSuggesting]   = useState(false);
+  const [createModal,  setCreateModal]  = useState<ReconciliationSuggestion | null>(null);
+  const [successMsg,   setSuccessMsg]   = useState("");
 
   /** Open or download an attachment via the authenticated API (preserves auth headers). */
   const handleOpenAttachment = async (attId: string, inline: boolean) => {
@@ -264,6 +401,19 @@ export default function GmailInboxPage() {
       setError("Processing failed. Check backend logs.");
     } finally {
       setProcessing(false);
+    }
+  };
+
+  const handleSuggest = async () => {
+    if (!selected) return;
+    setSuggesting(true); setError(""); setSuggestions(null); setSuccessMsg("");
+    try {
+      const res = await gmailApi.suggestReconciliation(selected.id);
+      setSuggestions(res.suggestions);
+    } catch {
+      setError("Suggestion failed. Try processing the email first, then suggest again.");
+    } finally {
+      setSuggesting(false);
     }
   };
 
@@ -399,17 +549,26 @@ export default function GmailInboxPage() {
               </div>
             </div>
 
-            {/* ── Process Email button ── */}
+            {/* ── Action buttons ── */}
             {canProcess && (
-              <Button
-                className="w-full"
-                onClick={handleProcess}
-                disabled={processing}
-              >
+              <Button className="w-full" onClick={handleProcess} disabled={processing}>
                 <Zap className={cn("w-4 h-4 mr-2", processing && "animate-pulse")} />
                 {processing ? "Processing…" : "Process Email"}
               </Button>
             )}
+
+            {selected.has_attachments && (
+              <Button
+                variant="outline"
+                className="w-full"
+                onClick={handleSuggest}
+                disabled={suggesting}
+              >
+                <Sparkles className={cn("w-4 h-4 mr-2", suggesting && "animate-pulse")} />
+                {suggesting ? "Analysing…" : "Get OCR Suggestions"}
+              </Button>
+            )}
+
             {selected.processed_status !== "UNPROCESSED" && !extraction && (
               <Button variant="outline" className="w-full" size="sm" onClick={handleProcess} disabled={processing}>
                 <RefreshCw className={cn("w-3.5 h-3.5 mr-1.5", processing && "animate-spin")} />
@@ -508,6 +667,38 @@ export default function GmailInboxPage() {
             {extraction && extraction.length === 0 && (
               <p className="text-xs text-muted-foreground">No attachments were processed.</p>
             )}
+
+            {/* ── OCR Reconciliation Suggestions ── */}
+            {suggestions !== null && (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5 text-primary" />
+                    OCR Reconciliation Suggestions
+                  </p>
+                  <span className="text-xs text-muted-foreground">requires_review on all</span>
+                </div>
+
+                {successMsg && (
+                  <div className="flex items-center gap-2 text-xs bg-green-50 border border-green-200 text-green-700 rounded-lg px-3 py-2">
+                    <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                    {successMsg}
+                  </div>
+                )}
+
+                {suggestions.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">No suggestions — email has no processable attachments.</p>
+                ) : (
+                  suggestions.map((s, i) => (
+                    <SuggestionCard
+                      key={s.attachment_id ?? i}
+                      s={s}
+                      onCreateInvoice={() => setCreateModal(s)}
+                    />
+                  ))
+                )}
+              </div>
+            )}
           </div>
         ) : (
           <div className="hidden lg:flex items-center justify-center h-48 bg-muted/20 border border-dashed border-border rounded-xl text-muted-foreground">
@@ -518,6 +709,19 @@ export default function GmailInboxPage() {
           </div>
         )}
       </div>
+
+      {/* Create Invoice from suggestion modal */}
+      {createModal && (
+        <CreateInvoiceFromSuggestionModal
+          open={!!createModal}
+          onClose={() => setCreateModal(null)}
+          suggestion={createModal}
+          onCreated={(invoiceId) => {
+            setSuccessMsg(`Invoice created (ID: ${invoiceId.slice(0, 8)}…). View it in Invoice Reconciliation.`);
+            setCreateModal(null);
+          }}
+        />
+      )}
 
       {/* Compose modal (free mode — no MR/PO attachment) */}
       <EmailDraftModal
