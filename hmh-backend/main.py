@@ -339,9 +339,10 @@ app.include_router(reconciliation_router, prefix="/api/v1")
 from app.api.v1.ops import router as ops_router
 app.include_router(ops_router, prefix="/api/v1")
 
-from app.api.v1.warehouse import router as warehouse_router, project_warehouse_router
+from app.api.v1.warehouse import router as warehouse_router, project_warehouse_router, global_warehouse_router
 app.include_router(warehouse_router, prefix="/api/v1")
 app.include_router(project_warehouse_router, prefix="/api/v1")
+app.include_router(global_warehouse_router, prefix="/api/v1")
 
 from app.api.v1.lot_types import project_lot_types_router, lot_types_router
 app.include_router(project_lot_types_router, prefix="/api/v1")

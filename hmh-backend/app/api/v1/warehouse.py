@@ -1,15 +1,12 @@
 """
-Site Warehouse routes.
+Warehouse routes — three levels:
 
-A Site Warehouse is the stock held at a site level (site_id = X, lot_id = NULL)
-before being allocated/transferred to individual lots.
+  Global Main Warehouse  (GET /warehouse/main/)            — company-wide, no project filter
+  Project Warehouse      (GET /projects/{id}/warehouse/)   — per-project, site_id IS NULL
+  Site Warehouse         (GET /sites/{id}/warehouse/)      — per-site, lot_id IS NULL
 
 Stock flow:
-  Delivery / Main Warehouse → Site Warehouse → Lot
-
-GET  /sites/{site_id}/warehouse          — current on-hand stock per item
-POST /sites/{site_id}/warehouse/transfer  — move items from site warehouse to lot
-GET  /sites/{site_id}/warehouse/history   — recent movements through this warehouse
+  Supplier Delivery → Project Warehouse → Site Warehouse → Lot
 """
 
 import uuid
@@ -35,6 +32,7 @@ from app.models.enums import AuditAction
 
 router = APIRouter(prefix="/sites/{site_id}/warehouse", tags=["warehouse"])
 project_warehouse_router = APIRouter(prefix="/projects/{project_id}/warehouse", tags=["warehouse"])
+global_warehouse_router  = APIRouter(prefix="/warehouse", tags=["warehouse"])
 
 
 # ── On-hand stock ─────────────────────────────────────────────────────────────
@@ -614,6 +612,103 @@ def get_main_warehouse_history(
 
     return ApiSuccess(data=[{
         "id":             str(r["id"]),
+        "movement_type":  r["movement_type"],
+        "item_name":      r["item_name"],
+        "quantity_in":    float(r["quantity_in"] or 0),
+        "quantity_out":   float(r["quantity_out"] or 0),
+        "unit":           r["unit"],
+        "movement_date":  r["movement_date"].isoformat() if r["movement_date"] else None,
+        "notes":          r["notes"],
+        "reference_type": r["reference_type"],
+        "entered_by":     r["entered_by_name"],
+    } for r in rows])
+
+
+# ── Global Main Warehouse — cross-project aggregate view ─────────────────────
+
+@global_warehouse_router.get("/main/", response_model=ApiSuccess[list[dict]], dependencies=[ALL_ROLES])
+def get_global_main_warehouse_stock(db: DbSession, current_user: CurrentUser):
+    """
+    Returns on-hand stock at the main warehouse level (site_id IS NULL, lot_id IS NULL)
+    across ALL projects. No project filter — company-wide view.
+
+    Each row includes project_id and project_name so the frontend can show
+    which project owns each stock line without requiring a project selector.
+    """
+    rows = db.execute(text("""
+        SELECT
+            sl.project_id,
+            p.name                              AS project_name,
+            p.code                              AS project_code,
+            sl.item_id,
+            i.name                              AS item_name,
+            i.default_unit                      AS unit,
+            SUM(sl.quantity_in)                 AS total_in,
+            SUM(sl.quantity_out)                AS total_out,
+            SUM(sl.quantity_in) - SUM(sl.quantity_out) AS on_hand,
+            MAX(sl.movement_date)               AS last_movement
+        FROM stock_ledger sl
+        JOIN items    i ON i.id = sl.item_id
+        JOIN projects p ON p.id = sl.project_id
+        WHERE sl.site_id IS NULL
+          AND sl.lot_id  IS NULL
+        GROUP BY sl.project_id, p.name, p.code, sl.item_id, i.name, i.default_unit
+        HAVING SUM(sl.quantity_in) - SUM(sl.quantity_out) > 0
+        ORDER BY p.name, i.name
+    """)).mappings().all()
+
+    return ApiSuccess(
+        data=[{
+            "project_id":    str(r["project_id"]),
+            "project_name":  r["project_name"],
+            "project_code":  r["project_code"],
+            "item_id":       str(r["item_id"]),
+            "item_name":     r["item_name"],
+            "unit":          r["unit"],
+            "on_hand":       float(r["on_hand"]),
+            "total_in":      float(r["total_in"]),
+            "total_out":     float(r["total_out"]),
+            "last_movement": r["last_movement"].isoformat() if r["last_movement"] else None,
+        } for r in rows],
+        message=f"{len(rows)} item(s) across all project warehouses.",
+    )
+
+
+@global_warehouse_router.get("/main/history", response_model=ApiSuccess[list[dict]], dependencies=[ALL_ROLES])
+def get_global_main_warehouse_history(
+    db: DbSession,
+    current_user: CurrentUser,
+    limit: int = Query(100, le=500),
+):
+    """Recent movements across ALL main warehouses (site_id IS NULL, lot_id IS NULL)."""
+    rows = db.execute(text("""
+        SELECT
+            sl.id,
+            sl.project_id,
+            p.name          AS project_name,
+            sl.movement_type,
+            sl.quantity_in,
+            sl.quantity_out,
+            sl.unit,
+            sl.movement_date,
+            sl.notes,
+            sl.reference_type,
+            i.name          AS item_name,
+            u.full_name     AS entered_by_name
+        FROM stock_ledger sl
+        JOIN items    i ON i.id = sl.item_id
+        JOIN projects p ON p.id = sl.project_id
+        LEFT JOIN users u ON u.id = sl.entered_by
+        WHERE sl.site_id IS NULL
+          AND sl.lot_id  IS NULL
+        ORDER BY sl.movement_date DESC
+        LIMIT :limit
+    """), {"limit": limit}).mappings().all()
+
+    return ApiSuccess(data=[{
+        "id":             str(r["id"]),
+        "project_id":     str(r["project_id"]),
+        "project_name":   r["project_name"],
         "movement_type":  r["movement_type"],
         "item_name":      r["item_name"],
         "quantity_in":    float(r["quantity_in"] or 0),

@@ -322,3 +322,106 @@ def test_legacy_site_warehouse_endpoint_still_works(
     # The endpoint must respond 200 (may return empty if no per-site stock)
     assert r.status_code == 200, r.text
     assert isinstance(r.json()["data"], list)
+
+
+# ── Global Main Warehouse tests ───────────────────────────────────────────────
+
+def test_global_main_warehouse_returns_stock_without_project_filter(
+    db: Session, client: TestClient, wh_setup: dict
+):
+    """GET /warehouse/main/ must return stock across ALL projects (no project selector)."""
+    tok = login(client, wh_setup["office"]["email"], wh_setup["office"]["password"])
+
+    r = client.get("/api/v1/warehouse/main/", headers=auth(tok))
+    assert r.status_code == 200, r.text
+    data = r.json()["data"]
+    assert isinstance(data, list)
+
+    # The item we put in wh_setup (100 units, site_id=None) must appear
+    item_id = wh_setup["item"]["id"]
+    project_id = wh_setup["project"]["id"]
+    matches = [row for row in data if row["item_id"] == item_id and row["project_id"] == project_id]
+    assert len(matches) == 1, f"Expected 1 match for item={item_id}, got {len(matches)}"
+    assert matches[0]["on_hand"] == 100.0
+    # Must include project_name
+    assert "project_name" in matches[0]
+    assert "project_code" in matches[0]
+
+
+def test_global_main_warehouse_includes_project_info(
+    db: Session, client: TestClient, wh_setup: dict
+):
+    """Every row in GET /warehouse/main/ must carry project_id and project_name."""
+    tok = login(client, wh_setup["owner"]["email"], wh_setup["owner"]["password"])
+
+    r = client.get("/api/v1/warehouse/main/", headers=auth(tok))
+    assert r.status_code == 200, r.text
+    for row in r.json()["data"]:
+        assert "project_id"   in row, "project_id missing from global warehouse row"
+        assert "project_name" in row, "project_name missing from global warehouse row"
+        assert "item_id"      in row
+        assert "on_hand"      in row
+
+
+def test_global_main_warehouse_shows_multi_project_stock(
+    db: Session, client: TestClient, wh_setup: dict
+):
+    """When two projects have main warehouse stock, both appear in the global view."""
+    from tests.conftest import make_project, make_item, make_stock
+
+    owner = wh_setup["owner"]
+    # Second project + second item
+    project2 = make_project(db, owner["id"])
+    item2     = make_item(db, "Cement Bags 50kg")
+    make_stock(db, project2["id"], None, item2["id"], qty=50.0)
+    db.flush()
+
+    tok = login(client, owner["email"], owner["password"])
+    r = client.get("/api/v1/warehouse/main/", headers=auth(tok))
+    assert r.status_code == 200, r.text
+    data = r.json()["data"]
+
+    project_ids = {row["project_id"] for row in data}
+    assert wh_setup["project"]["id"] in project_ids, "First project missing from global view"
+    assert project2["id"] in project_ids, "Second project missing from global view"
+
+
+def test_global_main_warehouse_excludes_site_stock(
+    db: Session, client: TestClient, wh_setup: dict
+):
+    """Site-scoped stock (site_id IS NOT NULL) must NOT appear in /warehouse/main/."""
+    tok = login(client, wh_setup["office"]["email"], wh_setup["office"]["password"])
+
+    r = client.get("/api/v1/warehouse/main/", headers=auth(tok))
+    assert r.status_code == 200, r.text
+    data = r.json()["data"]
+
+    # Site-scoped stock: project + site = wh_setup has 20 units at site level
+    # These must NOT be in the global main view
+    item_id = wh_setup["item"]["id"]
+    project_id = wh_setup["project"]["id"]
+
+    # The global view should show 100 (main warehouse), not 120 (main + site)
+    matches = [row for row in data if row["item_id"] == item_id and row["project_id"] == project_id]
+    assert len(matches) == 1
+    assert matches[0]["on_hand"] == 100.0, (
+        f"Expected 100 (main only), got {matches[0]['on_hand']} — "
+        "site-scoped stock is leaking into /warehouse/main/"
+    )
+
+
+def test_global_main_warehouse_history(
+    db: Session, client: TestClient, wh_setup: dict
+):
+    """GET /warehouse/main/history must return movements with project_name."""
+    tok = login(client, wh_setup["office"]["email"], wh_setup["office"]["password"])
+
+    r = client.get("/api/v1/warehouse/main/history", headers=auth(tok))
+    assert r.status_code == 200, r.text
+    data = r.json()["data"]
+    assert isinstance(data, list)
+    # The opening-balance row from wh_setup must be present
+    assert len(data) >= 1
+    for row in data:
+        assert "project_name" in row
+        assert "movement_type" in row

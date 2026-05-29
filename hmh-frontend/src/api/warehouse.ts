@@ -1,16 +1,20 @@
 /**
- * Warehouse API client — covers both Site Warehouse and Main Warehouse.
+ * Warehouse API client — three warehouse levels:
  *
- * Site Warehouse (stock at site level, before lot allocation):
- *   GET  /sites/{siteId}/warehouse/          — on-hand stock
- *   POST /sites/{siteId}/warehouse/transfer  — transfer to lot
- *   GET  /sites/{siteId}/warehouse/history   — movement history
+ * Global Main Warehouse (company-wide, no project filter):
+ *   GET  /warehouse/main/         — on-hand stock across ALL projects
+ *   GET  /warehouse/main/history  — movement history across ALL projects
  *
- * Main Warehouse (central project stock):
+ * Project Warehouse (per-project, site_id IS NULL):
  *   GET  /projects/{projectId}/warehouse/          — on-hand stock
  *   POST /projects/{projectId}/warehouse/transfer  — dispatch to site
  *   POST /projects/{projectId}/warehouse/return    — receive back from site
  *   GET  /projects/{projectId}/warehouse/history   — movement history
+ *
+ * Site Warehouse (per-site, lot_id IS NULL):
+ *   GET  /sites/{siteId}/warehouse/          — on-hand stock
+ *   POST /sites/{siteId}/warehouse/transfer  — transfer to lot
+ *   GET  /sites/{siteId}/warehouse/history   — movement history
  */
 import client from "./client";
 
@@ -56,6 +60,24 @@ export interface ReturnResult {
   unit:             string | null;
   site_name:        string;
   new_main_balance: number;
+}
+
+export interface GlobalWarehouseStockItem {
+  project_id:    string;
+  project_name:  string;
+  project_code:  string;
+  item_id:       string;
+  item_name:     string;
+  unit:          string | null;
+  on_hand:       number;
+  total_in:      number;
+  total_out:     number;
+  last_movement: string | null;
+}
+
+export interface GlobalWarehouseMovement extends WarehouseMovement {
+  project_id:   string;
+  project_name: string;
 }
 
 export const warehouseApi = {
@@ -135,6 +157,23 @@ export const warehouseApi = {
   getMainHistory: async (projectId: string, limit = 100): Promise<WarehouseMovement[]> => {
     const res = await client.get<{ data: WarehouseMovement[] }>(
       `/projects/${projectId}/warehouse/history`,
+      { params: { limit } }
+    );
+    return res.data.data ?? [];
+  },
+
+  // ── Global Main Warehouse (company-wide, no project filter) ──────────────
+
+  /** On-hand stock across ALL project warehouses (site_id IS NULL, lot_id IS NULL). */
+  getGlobalStock: async (): Promise<GlobalWarehouseStockItem[]> => {
+    const res = await client.get<{ data: GlobalWarehouseStockItem[] }>("/warehouse/main/");
+    return res.data.data ?? [];
+  },
+
+  /** Recent movements across ALL main warehouses. */
+  getGlobalHistory: async (limit = 100): Promise<GlobalWarehouseMovement[]> => {
+    const res = await client.get<{ data: GlobalWarehouseMovement[] }>(
+      "/warehouse/main/history",
       { params: { limit } }
     );
     return res.data.data ?? [];
