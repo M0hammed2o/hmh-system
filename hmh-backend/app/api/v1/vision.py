@@ -127,10 +127,20 @@ async def vision_extract(
         }
     elif doc_type == "PAYMENT_PROOF":
         preview = {
-            "amount":    fields.get("total_amount"),
-            "date":      fields.get("date"),
-            "reference": fields.get("invoice_number") or fields.get("po_number"),
-            "supplier":  fields.get("supplier_name"),
+            "amount":           fields.get("paid_amount") or fields.get("total_amount"),
+            "date":             fields.get("payment_date") or fields.get("date"),
+            "reference_number": fields.get("reference_number"),
+            "beneficiary":      fields.get("beneficiary"),
+            "supplier":         fields.get("supplier_name"),
+        }
+    elif doc_type == "FUEL_SLIP":
+        preview = {
+            "station_name":         fields.get("station_name") or fields.get("supplier_name"),
+            "date":                 fields.get("date"),
+            "total_amount":         fields.get("total_amount"),
+            "litres":               fields.get("litres"),
+            "vehicle_registration": fields.get("vehicle_registration"),
+            "odometer":             fields.get("odometer"),
         }
     else:
         preview = fields

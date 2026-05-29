@@ -168,6 +168,17 @@ async def receive_delivery_with_document(
     )
     from app.models.alert import SystemAlert
 
+    # ── Validate destination ──────────────────────────────────────────────────
+    _valid_destinations = {"MAIN_WAREHOUSE", "SITE_STORE", "LOT"}
+    if destination not in _valid_destinations:
+        raise HTTPException(
+            422,
+            f"Invalid destination '{destination}'. "
+            f"Must be one of: {', '.join(sorted(_valid_destinations))}.",
+        )
+    if destination == "LOT" and not lot_id:
+        raise HTTPException(422, "lot_id is required when destination is LOT.")
+
     now = datetime.now(timezone.utc)
 
     # ── Parse items ───────────────────────────────────────────────────────────
@@ -512,7 +523,7 @@ def link_delivery_item(
     from app.models.enums import MovementType
     from sqlalchemy.orm import joinedload
 
-    get_and_check_project_resource(db, current_user, Delivery, delivery_id, "Delivery not found.")
+    delivery = get_and_check_project_resource(db, current_user, Delivery, delivery_id, "Delivery not found.")
 
     d_item = (
         db.query(DeliveryItem)
@@ -538,11 +549,12 @@ def link_delivery_item(
 
     now = datetime.now(timezone.utc)
 
-    # Write the missing stock ledger entry at site level.
-    # (We don't store lot_id on the Delivery record, so we use site-level.)
+    # Write the missing stock ledger entry at Project Warehouse level.
+    # Phase 3B: all warehouse stock at site_id=NULL, lot_id=NULL.
+    # The Delivery.site_id records the physical delivery location for traceability only.
     db.add(StockLedger(
         project_id    = delivery.project_id,
-        site_id       = delivery.site_id,
+        site_id       = None,
         lot_id        = None,
         item_id       = body.item_id,
         boq_item_id   = d_item.boq_item_id,
