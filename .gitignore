@@ -22,3 +22,8 @@ uploads/
 
 # Logs
 *.log
+
+credentials/
+*credentials*.json
+*service-account*.json
+*serviceaccount*.json
