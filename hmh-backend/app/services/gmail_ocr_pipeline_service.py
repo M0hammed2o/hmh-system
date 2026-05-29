@@ -113,6 +113,8 @@ def build_reconciliation_suggestion(db: Session, att_id: uuid.UUID) -> dict:
     if ext_status in ("EXTRACTION_FAILED", "FAILED", "OCR_NOT_AVAILABLE"):
         issues.append(f"extraction_status:{ext_status.lower()}")
 
+    review_status = getattr(extraction, "review_status", "PENDING_REVIEW") if extraction else "PENDING_REVIEW"
+
     return {
         "attachment_id":        str(att_id),
         "filename":             att.filename,
@@ -131,6 +133,7 @@ def build_reconciliation_suggestion(db: Session, att_id: uuid.UUID) -> dict:
         "issues":               issues,
         "requires_review":      True,   # NEVER omit — human confirmation always required
         "extraction_warnings":  result.get("warnings", []),
+        "review_status":        review_status,
     }
 
 

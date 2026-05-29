@@ -584,3 +584,160 @@ class TestProofPackOcrExtraction:
             assert "document_type" in ocr
             assert "fields" in ocr
             assert "created_at" in ocr
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 9. Phase G — review_status tracking
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestReviewStatus:
+    """Tests for DocumentExtraction.review_status lifecycle."""
+
+    def _auth_headers(self, client, db):
+        user  = make_user(db, role="OFFICE_ADMIN")
+        token = login(client, user["email"], user["password"])
+        return {"Authorization": f"Bearer {token}"}
+
+    def test_build_suggestion_includes_review_status_pending(self, db):
+        from app.services.gmail_ocr_pipeline_service import build_reconciliation_suggestion
+        email = _make_incoming_email(db)
+        att   = _make_attachment(db, email)
+        _make_extraction(db, att, status="EXTRACTED")
+
+        with patch("app.services.gmail_ocr_pipeline_service._find_best_po_match", return_value=None):
+            result = build_reconciliation_suggestion(db, att.id)
+
+        assert "review_status" in result
+        assert result["review_status"] == "PENDING_REVIEW"
+
+    def test_build_suggestion_review_status_defaults_when_no_extraction(self, db):
+        from app.services.gmail_ocr_pipeline_service import build_reconciliation_suggestion
+        email = _make_incoming_email(db)
+        att   = _make_attachment(db, email, file_path="/nonexistent/file.pdf")
+
+        with (
+            patch("app.services.document_ai_service.extract_document_data",
+                  return_value={"status": "FAILED", "fields": {}, "items": [], "warnings": []}),
+            patch("app.services.gmail_ocr_pipeline_service._find_best_po_match", return_value=None),
+        ):
+            result = build_reconciliation_suggestion(db, att.id)
+
+        assert result.get("review_status") == "PENDING_REVIEW"
+
+    def test_patch_review_status_dismissed(self, client, db):
+        headers = self._auth_headers(client, db)
+        email   = _make_incoming_email(db)
+        att     = _make_attachment(db, email)
+        _make_extraction(db, att)
+
+        resp = client.patch(
+            f"/api/v1/gmail/attachments/{att.id}/review-status",
+            json={"status": "DISMISSED"},
+            headers=headers,
+        )
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        assert data["review_status"] == "DISMISSED"
+
+    def test_patch_review_status_invoice_created(self, client, db):
+        headers = self._auth_headers(client, db)
+        email   = _make_incoming_email(db)
+        att     = _make_attachment(db, email)
+        _make_extraction(db, att)
+
+        resp = client.patch(
+            f"/api/v1/gmail/attachments/{att.id}/review-status",
+            json={"status": "INVOICE_CREATED"},
+            headers=headers,
+        )
+        assert resp.status_code == 200
+        assert resp.json()["data"]["review_status"] == "INVOICE_CREATED"
+
+    def test_patch_review_status_persisted_to_db(self, client, db):
+        from app.models.document_extraction import DocumentExtraction
+        headers = self._auth_headers(client, db)
+        email   = _make_incoming_email(db)
+        att     = _make_attachment(db, email)
+        _make_extraction(db, att)
+
+        client.patch(
+            f"/api/v1/gmail/attachments/{att.id}/review-status",
+            json={"status": "DELIVERY_LINKED"},
+            headers=headers,
+        )
+        db.expire_all()
+        ext = db.query(DocumentExtraction).filter(
+            DocumentExtraction.source_type == "GMAIL_ATTACHMENT",
+            DocumentExtraction.source_id   == att.id,
+        ).first()
+        assert ext is not None
+        assert ext.review_status == "DELIVERY_LINKED"
+
+    def test_patch_review_status_404_when_no_extraction(self, client, db):
+        headers = self._auth_headers(client, db)
+        email   = _make_incoming_email(db)
+        att     = _make_attachment(db, email)
+        # No extraction created
+
+        resp = client.patch(
+            f"/api/v1/gmail/attachments/{att.id}/review-status",
+            json={"status": "DISMISSED"},
+            headers=headers,
+        )
+        assert resp.status_code == 404
+
+    def test_patch_review_status_422_on_invalid_value(self, client, db):
+        headers = self._auth_headers(client, db)
+        email   = _make_incoming_email(db)
+        att     = _make_attachment(db, email)
+        _make_extraction(db, att)
+
+        resp = client.patch(
+            f"/api/v1/gmail/attachments/{att.id}/review-status",
+            json={"status": "INVALID_STATUS"},
+            headers=headers,
+        )
+        assert resp.status_code == 422
+
+    def test_create_invoice_from_gmail_sets_invoice_created_status(self, client, db):
+        from app.models.document_extraction import DocumentExtraction
+        headers = self._auth_headers(client, db)
+
+        sup  = make_supplier(db)
+        user = make_user(db, role="OFFICE_ADMIN")
+        proj = make_project(db, user["id"])
+        email = _make_incoming_email(db)
+        att   = _make_attachment(db, email)
+        _make_extraction(db, att, status="EXTRACTED")
+
+        resp = client.post(
+            f"/api/v1/invoices/from-gmail/{att.id}",
+            json={"project_id": proj["id"], "supplier_id": sup["id"], "total_amount": 1000.0},
+            headers=headers,
+        )
+        assert resp.status_code == 201
+        db.expire_all()
+        ext = db.query(DocumentExtraction).filter(
+            DocumentExtraction.source_type == "GMAIL_ATTACHMENT",
+            DocumentExtraction.source_id   == att.id,
+        ).first()
+        assert ext is not None
+        assert ext.review_status == "INVOICE_CREATED"
+
+    def test_suggest_endpoint_includes_review_status_in_each_suggestion(self, client, db):
+        headers = self._auth_headers(client, db)
+        email   = _make_incoming_email(db)
+        att     = _make_attachment(db, email)
+        _make_extraction(db, att, status="EXTRACTED")
+
+        with patch("app.services.gmail_ocr_pipeline_service._find_best_po_match", return_value=None):
+            resp = client.post(
+                f"/api/v1/gmail/incoming/{email.id}/suggest",
+                headers=headers,
+            )
+
+        assert resp.status_code == 200
+        suggestions = resp.json()["data"]["suggestions"]
+        assert len(suggestions) >= 1
+        for s in suggestions:
+            assert "review_status" in s

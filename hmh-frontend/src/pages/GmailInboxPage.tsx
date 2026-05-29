@@ -14,6 +14,8 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { EmailDraftModal } from "@/components/EmailDraftModal";
 import { CreateInvoiceFromSuggestionModal } from "@/components/gmail/CreateInvoiceFromSuggestionModal";
+import { LinkDeliveryFromSuggestionModal } from "@/components/gmail/LinkDeliveryFromSuggestionModal";
+import type { ReviewStatus } from "@/api/gmail";
 
 const AUTO_REFRESH_MS = 3 * 60 * 1000; // 3 minutes
 
@@ -83,24 +85,45 @@ function shortDate(iso: string | null) {
 
 // ── Reconciliation suggestion card ───────────────────────────────────────────
 
+const REVIEW_STATUS_CONFIG: Record<ReviewStatus, { label: string; cls: string }> = {
+  PENDING_REVIEW:   { label: "Pending Review",    cls: "bg-amber-50 text-amber-700 border-amber-200" },
+  INVOICE_CREATED:  { label: "Invoice Created",   cls: "bg-green-50 text-green-700 border-green-200" },
+  DELIVERY_LINKED:  { label: "Delivery Linked",   cls: "bg-blue-50 text-blue-700 border-blue-200" },
+  DISMISSED:        { label: "Dismissed",         cls: "bg-muted text-muted-foreground border-border" },
+};
+
 function SuggestionCard({
   s,
   onCreateInvoice,
+  onLinkDelivery,
+  onDismiss,
+  dismissing,
 }: {
   s: ReconciliationSuggestion;
   onCreateInvoice: () => void;
+  onLinkDelivery: () => void;
+  onDismiss: () => void;
+  dismissing: boolean;
 }) {
   const conf = s.match_confidence;
   const ConfIcon = conf >= 0.75 ? CheckCircle2 : AlertTriangle;
+  const rs = s.review_status ?? "PENDING_REVIEW";
+  const rsConfig = REVIEW_STATUS_CONFIG[rs as ReviewStatus] ?? REVIEW_STATUS_CONFIG.PENDING_REVIEW;
+  const isActedOn = rs === "INVOICE_CREATED" || rs === "DELIVERY_LINKED" || rs === "DISMISSED";
 
   return (
-    <div className="border border-border rounded-xl overflow-hidden text-xs">
+    <div className={cn("border border-border rounded-xl overflow-hidden text-xs", isActedOn && "opacity-70")}>
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-2.5 bg-muted/40 border-b border-border">
         <span className="font-semibold truncate max-w-[200px]">{s.filename}</span>
-        <span className="shrink-0 font-semibold text-[10px] uppercase tracking-wide text-muted-foreground">
-          {s.document_type.replace("_", " ")}
-        </span>
+        <div className="flex items-center gap-2 shrink-0">
+          <span className={cn("text-[10px] font-semibold px-1.5 py-0.5 rounded border", rsConfig.cls)}>
+            {rsConfig.label}
+          </span>
+          <span className="font-semibold text-[10px] uppercase tracking-wide text-muted-foreground">
+            {s.document_type.replace("_", " ")}
+          </span>
+        </div>
       </div>
 
       {/* Extraction status warning */}
@@ -169,13 +192,29 @@ function SuggestionCard({
       )}
 
       {/* Actions */}
-      <div className="px-3 py-2.5 flex items-center gap-2">
-        <p className="text-[10px] text-muted-foreground flex-1 italic">
+      <div className="px-3 py-2.5 flex items-center gap-2 flex-wrap">
+        <p className="text-[10px] text-muted-foreground flex-1 italic min-w-0">
           requires_review — human approval required
         </p>
-        {s.document_type === "INVOICE" && s.attachment_id && (
+        {!isActedOn && (
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 text-xs shrink-0 text-muted-foreground"
+            onClick={onDismiss}
+            disabled={dismissing}
+          >
+            <XCircle className="w-3.5 h-3.5 mr-1" />{dismissing ? "…" : "Dismiss"}
+          </Button>
+        )}
+        {s.document_type === "INVOICE" && s.attachment_id && rs === "PENDING_REVIEW" && (
           <Button size="sm" className="h-7 text-xs shrink-0" onClick={onCreateInvoice}>
             <FileText className="w-3.5 h-3.5 mr-1" />Create Invoice
+          </Button>
+        )}
+        {s.document_type === "DELIVERY_NOTE" && s.attachment_id && rs === "PENDING_REVIEW" && (
+          <Button size="sm" variant="outline" className="h-7 text-xs shrink-0" onClick={onLinkDelivery}>
+            <Truck className="w-3.5 h-3.5 mr-1" />Link to Delivery
           </Button>
         )}
       </div>
@@ -344,11 +383,34 @@ export default function GmailInboxPage() {
     catch { setSelected(e); }
   };
 
-  const [refetchingId, setRefetchingId] = useState<string | null>(null);
-  const [suggestions,  setSuggestions]  = useState<ReconciliationSuggestion[] | null>(null);
-  const [suggesting,   setSuggesting]   = useState(false);
-  const [createModal,  setCreateModal]  = useState<ReconciliationSuggestion | null>(null);
-  const [successMsg,   setSuccessMsg]   = useState("");
+  const [refetchingId,      setRefetchingId]      = useState<string | null>(null);
+  const [suggestions,       setSuggestions]       = useState<ReconciliationSuggestion[] | null>(null);
+  const [suggesting,        setSuggesting]        = useState(false);
+  const [createModal,       setCreateModal]       = useState<ReconciliationSuggestion | null>(null);
+  const [linkDeliveryModal, setLinkDeliveryModal] = useState<ReconciliationSuggestion | null>(null);
+  const [dismissingId,      setDismissingId]      = useState<string | null>(null);
+  const [successMsg,        setSuccessMsg]        = useState("");
+
+  /** Update a single suggestion's review_status in local state. */
+  const _patchSuggestionStatus = (attId: string, status: ReviewStatus) => {
+    setSuggestions(prev => prev
+      ? prev.map(s => s.attachment_id === attId ? { ...s, review_status: status } : s)
+      : prev
+    );
+  };
+
+  const handleDismiss = async (s: ReconciliationSuggestion) => {
+    if (!s.attachment_id) return;
+    setDismissingId(s.attachment_id);
+    try {
+      await gmailApi.updateReviewStatus(s.attachment_id, "DISMISSED");
+      _patchSuggestionStatus(s.attachment_id, "DISMISSED");
+    } catch {
+      setError("Failed to dismiss suggestion.");
+    } finally {
+      setDismissingId(null);
+    }
+  };
 
   /** Open or download an attachment via the authenticated API (preserves auth headers). */
   const handleOpenAttachment = async (attId: string, inline: boolean) => {
@@ -694,6 +756,9 @@ export default function GmailInboxPage() {
                       key={s.attachment_id ?? i}
                       s={s}
                       onCreateInvoice={() => setCreateModal(s)}
+                      onLinkDelivery={() => setLinkDeliveryModal(s)}
+                      onDismiss={() => handleDismiss(s)}
+                      dismissing={dismissingId === s.attachment_id}
                     />
                   ))
                 )}
@@ -717,8 +782,23 @@ export default function GmailInboxPage() {
           onClose={() => setCreateModal(null)}
           suggestion={createModal}
           onCreated={(invoiceId) => {
+            if (createModal.attachment_id) _patchSuggestionStatus(createModal.attachment_id, "INVOICE_CREATED");
             setSuccessMsg(`Invoice created (ID: ${invoiceId.slice(0, 8)}…). View it in Invoice Reconciliation.`);
             setCreateModal(null);
+          }}
+        />
+      )}
+
+      {/* Link Delivery Note from suggestion modal */}
+      {linkDeliveryModal && (
+        <LinkDeliveryFromSuggestionModal
+          open={!!linkDeliveryModal}
+          onClose={() => setLinkDeliveryModal(null)}
+          suggestion={linkDeliveryModal}
+          onLinked={(deliveryId) => {
+            if (linkDeliveryModal.attachment_id) _patchSuggestionStatus(linkDeliveryModal.attachment_id, "DELIVERY_LINKED");
+            setSuccessMsg(`Delivery note linked (delivery ID: ${deliveryId.slice(0, 8)}…). View it in Deliveries.`);
+            setLinkDeliveryModal(null);
           }}
         />
       )}

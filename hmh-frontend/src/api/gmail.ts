@@ -89,6 +89,8 @@ export interface ProcessEmailResult {
 
 // ── Phase F: OCR reconciliation suggestion types ──────────────────────────────
 
+export type ReviewStatus = "PENDING_REVIEW" | "INVOICE_CREATED" | "DELIVERY_LINKED" | "DISMISSED";
+
 export interface ReconciliationSuggestion {
   attachment_id:        string | null;
   filename:             string;
@@ -107,6 +109,7 @@ export interface ReconciliationSuggestion {
   issues:               string[];
   requires_review:      true;             // always true — human approval required
   extraction_warnings:  string[];
+  review_status:        ReviewStatus;
 }
 
 export interface SuggestResult {
@@ -184,6 +187,24 @@ export const gmailApi = {
     const r = await client.post<{ data: CreateInvoiceFromGmailResult }>(
       `/invoices/from-gmail/${attId}`,
       body,
+    );
+    return r.data.data;
+  },
+
+  /** Update the review_status of the DocumentExtraction linked to an attachment. */
+  updateReviewStatus: async (attId: string, status: ReviewStatus): Promise<{ att_id: string; review_status: ReviewStatus }> => {
+    const r = await client.patch<{ data: { att_id: string; review_status: ReviewStatus } }>(
+      `/gmail/attachments/${attId}/review-status`,
+      { status },
+    );
+    return r.data.data;
+  },
+
+  /** Link a Gmail attachment to an existing Delivery as its delivery note image. */
+  linkDeliveryFromGmail: async (attId: string, deliveryId: string): Promise<{ delivery_id: string; match: Record<string, unknown> }> => {
+    const r = await client.post<{ data: { delivery_id: string; match: Record<string, unknown> } }>(
+      `/delivery-notes/from-gmail/${attId}`,
+      { delivery_id: deliveryId },
     );
     return r.data.data;
   },

@@ -353,6 +353,42 @@ def refetch_attachment(att_id: uuid.UUID, db: DbSession):
         raise HTTPException(status_code=422, detail="Attachment re-fetch failed. Check server logs for details.")
 
 
+class ReviewStatusBody(BaseModel):
+    status: str  # PENDING_REVIEW | INVOICE_CREATED | DELIVERY_LINKED | DISMISSED
+
+
+_VALID_REVIEW_STATUSES = {"PENDING_REVIEW", "INVOICE_CREATED", "DELIVERY_LINKED", "DISMISSED"}
+
+
+@gmail_router.patch("/attachments/{att_id}/review-status", dependencies=[OFFICE_AND_ABOVE])
+def update_review_status(att_id: uuid.UUID, body: ReviewStatusBody, db: DbSession):
+    """Update the review_status of the DocumentExtraction linked to this attachment."""
+    from app.models.document_extraction import DocumentExtraction
+
+    if body.status not in _VALID_REVIEW_STATUSES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid review status. Must be one of: {', '.join(sorted(_VALID_REVIEW_STATUSES))}",
+        )
+
+    extraction = (
+        db.query(DocumentExtraction)
+        .filter(
+            DocumentExtraction.source_type == "GMAIL_ATTACHMENT",
+            DocumentExtraction.source_id   == att_id,
+        )
+        .order_by(DocumentExtraction.created_at.desc())
+        .first()
+    )
+    if not extraction:
+        raise HTTPException(status_code=404, detail="No extraction found for this attachment.")
+
+    extraction.review_status = body.status
+    db.commit()
+
+    return ApiSuccess(data={"att_id": str(att_id), "review_status": extraction.review_status})
+
+
 @gmail_router.get("/attachments/{att_id}", dependencies=[OFFICE_AND_ABOVE])
 def get_attachment(att_id: uuid.UUID, db: DbSession):
     from app.models.incoming_email import IncomingEmailAttachment
@@ -509,8 +545,16 @@ def create_invoice_from_gmail(
     db.add(invoice)
     db.flush()
 
-    # Mark email attachment as processed
+    # Mark email attachment as processed and update extraction review_status
     att.email.processed_status = "PROCESSED"
+    from app.models.document_extraction import DocumentExtraction as _DE
+    _ext = (
+        db.query(_DE)
+        .filter(_DE.source_type == "GMAIL_ATTACHMENT", _DE.source_id == att.id)
+        .order_by(_DE.created_at.desc()).first()
+    )
+    if _ext:
+        _ext.review_status = "INVOICE_CREATED"
     db.commit()
 
     # Auto-match to PO
@@ -555,6 +599,14 @@ def link_delivery_note_from_gmail(
 
     delivery.delivery_note_image_url = att.file_path
     att.email.processed_status = "PROCESSED"
+    from app.models.document_extraction import DocumentExtraction as _DE2
+    _ext2 = (
+        db.query(_DE2)
+        .filter(_DE2.source_type == "GMAIL_ATTACHMENT", _DE2.source_id == att.id)
+        .order_by(_DE2.created_at.desc()).first()
+    )
+    if _ext2:
+        _ext2.review_status = "DELIVERY_LINKED"
     db.commit()
 
     match_result = match_delivery_note_to_po(delivery.id, db)

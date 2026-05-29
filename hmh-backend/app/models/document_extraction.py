@@ -41,6 +41,9 @@ class DocumentExtraction(Base):
     # EXTRACTED | OCR_REQUIRED | OCR_NOT_AVAILABLE | FAILED | NEEDS_REVIEW
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="NEEDS_REVIEW", index=True)
 
+    # PENDING_REVIEW | INVOICE_CREATED | DELIVERY_LINKED | DISMISSED
+    review_status: Mapped[str] = mapped_column(String(50), nullable=False, default="PENDING_REVIEW", index=True)
+
     raw_text:               Mapped[Optional[str]] = mapped_column(Text)
     extracted_json:         Mapped[Optional[str]] = mapped_column(Text)       # JSON string
     manually_corrected_json: Mapped[Optional[str]] = mapped_column(Text)      # JSON string
