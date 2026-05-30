@@ -22,8 +22,10 @@ import os
 import smtplib
 import uuid
 from datetime import datetime, timezone
+from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from email import encoders
 from typing import Optional
 
 from sqlalchemy.orm import Session
@@ -85,6 +87,7 @@ def _send_smtp(
     body_html: str,
     cc: list[str] | None = None,
     bcc: list[str] | None = None,
+    attachments: list[tuple[str, bytes, str]] | None = None,
 ) -> Optional[str]:
     """
     Send via SMTP. Returns None on success, error string on failure.
@@ -95,6 +98,9 @@ def _send_smtp(
 
     Timeout is 30 seconds for both connect and send.
     Prints diagnostics to stdout so they appear in the backend CMD window.
+
+    attachments: list of (filename, file_bytes, mime_type) tuples e.g.
+        [("invoice.pdf", b"...", "application/pdf")]
     """
     sender = settings.smtp_sender_address
     if not sender:
@@ -112,13 +118,29 @@ def _send_smtp(
                 settings.SMTP_HOST, settings.SMTP_PORT, mode, sender, to_email, subject)
 
     try:
-        msg = MIMEMultipart("alternative")
+        if attachments:
+            # Mixed container: body + file attachments
+            outer = MIMEMultipart("mixed")
+            alt   = MIMEMultipart("alternative")
+            alt.attach(MIMEText(body_html, "html"))
+            outer.attach(alt)
+            for filename, file_bytes, mime_type in attachments:
+                main_type, sub_type = (mime_type.split("/", 1) if "/" in mime_type else ("application", "octet-stream"))
+                part = MIMEBase(main_type, sub_type)
+                part.set_payload(file_bytes)
+                encoders.encode_base64(part)
+                part.add_header("Content-Disposition", "attachment", filename=filename)
+                outer.attach(part)
+            msg = outer
+        else:
+            msg = MIMEMultipart("alternative")
+            msg.attach(MIMEText(body_html, "html"))
+
         msg["Subject"] = subject
         msg["From"]    = f"{settings.SMTP_FROM_NAME} <{sender}>"
         msg["To"]      = to_email
         if cc:
             msg["Cc"] = ", ".join(cc)
-        msg.attach(MIMEText(body_html, "html"))
 
         all_recipients = [to_email] + (cc or []) + (bcc or [])
 
@@ -136,7 +158,7 @@ def _send_smtp(
                 server.login(settings.SMTP_USERNAME, settings.SMTP_PASSWORD)
                 server.sendmail(sender, all_recipients, msg.as_string())
 
-        logger.info("email_sent to=%s", to_email)
+        logger.info("email_sent to=%s attachments=%d", to_email, len(attachments or []))
         return None
     except Exception as exc:
         logger.exception("email_send_failed to=%s error=%s", to_email, exc)
@@ -172,7 +194,11 @@ def send_email(
     effective_cc  = cc  if cc  is not None else settings.procurement_cc_list
     effective_bcc = bcc if bcc is not None else settings.procurement_bcc_list
 
-    error = _send_smtp(to_email, subject, body, cc=effective_cc or None, bcc=effective_bcc or None)
+    error = _send_smtp(
+        to_email, subject, body,
+        cc=effective_cc or None, bcc=effective_bcc or None,
+        attachments=attachments or None,
+    )
     if error:
         return {"status": "FAILED", "error": error, "provider_message_id": None}
     return {"status": "SENT", "error": None, "provider_message_id": None}

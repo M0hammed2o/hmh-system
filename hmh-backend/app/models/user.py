@@ -28,6 +28,7 @@ class User(TimestampMixin, Base):
     )
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     must_reset_password: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    pin_hash: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # bcrypt-hashed 4-6 digit PIN
     last_login_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

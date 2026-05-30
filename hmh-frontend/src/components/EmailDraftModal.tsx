@@ -8,13 +8,17 @@
  *
  * Status lifecycle: DRAFT (queued) → SENT | MANUAL_SENT | FAILED
  */
-import { useEffect, useState } from "react";
-import { Mail, Send, Check, X, Copy, RefreshCw } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Mail, Send, Check, X, Copy, RefreshCw, Paperclip, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Modal } from "@/components/shared/Modal";
 import client from "@/api/client";
+import { gmailApi } from "@/api/gmail";
+
+const ALLOWED_EXTS = [".pdf", ".jpg", ".jpeg", ".png", ".gif", ".xls", ".xlsx", ".csv"];
+const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
 
 export type EmailDraftMode = "mr" | "po" | "free";
 
@@ -50,6 +54,8 @@ export function EmailDraftModal({
   const [copied,    setCopied]    = useState(false);
   const [msg,       setMsg]       = useState("");
   const [error,     setError]     = useState("");
+  const [files,     setFiles]     = useState<File[]>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const baseUrl = mode === "mr"
     ? `/material-requests/${entityId}/prepare-email`
@@ -136,9 +142,14 @@ export function EmailDraftModal({
           : `Email ${d.status} (may be mock mode — body saved in system).`);
         setDraft(prev => prev ? { ...prev, status: d.status } : null);
       } else {
-        // Free-mode: just mark as sent manually
-        setMsg("Email marked as sent (free mode — use SMTP for real sending).");
-        setDraft(prev => prev ? { ...prev, status: "MANUAL_SENT" } : null);
+        // Free-mode: use compose-send endpoint (supports real SMTP + attachments)
+        const d = await gmailApi.composeSend(draft.to, draft.subject, draft.body, files);
+        const attNote = files.length > 0 ? ` (${d.attachment_count} attachment${d.attachment_count !== 1 ? "s" : ""})` : "";
+        setMsg(d.status === "SENT"
+          ? `Email sent to ${draft.to}${attNote}.`
+          : `Email ${d.status}${attNote} (SMTP not configured — body recorded only).`);
+        setDraft(prev => prev ? { ...prev, status: d.status === "SENT" ? "sent" : "MOCK_SENT" } : null);
+        setFiles([]);
       }
     } catch (e: unknown) {
       const detail = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
@@ -224,6 +235,58 @@ export function EmailDraftModal({
               />
               <p className="text-[10px] text-muted-foreground">HTML is supported. Preview in a browser before sending.</p>
             </div>
+
+            {/* File attachments — free mode only */}
+            {mode === "free" && (
+              <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <Label className="text-xs">Attachments</Label>
+                  <span className="text-[10px] text-muted-foreground">(PDF, JPEG, PNG, GIF, XLS, XLSX, CSV — max 10 MB each)</span>
+                </div>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  multiple
+                  accept=".pdf,.jpg,.jpeg,.png,.gif,.xls,.xlsx,.csv"
+                  className="hidden"
+                  onChange={e => {
+                    const selected = Array.from(e.target.files ?? []);
+                    const valid = selected.filter(f => {
+                      const ext = "." + f.name.split(".").pop()!.toLowerCase();
+                      return ALLOWED_EXTS.includes(ext) && f.size <= MAX_FILE_SIZE;
+                    });
+                    const rejected = selected.length - valid.length;
+                    if (rejected > 0) setError(`${rejected} file(s) rejected (type or size limit).`);
+                    setFiles(prev => {
+                      const combined = [...prev, ...valid];
+                      return combined.slice(0, 5);
+                    });
+                    e.target.value = "";
+                  }}
+                />
+                <div className="flex flex-wrap gap-1.5">
+                  {files.map((f, i) => (
+                    <div key={i} className="flex items-center gap-1 bg-muted/60 border border-border rounded px-2 py-1 text-xs">
+                      <Paperclip className="w-3 h-3 text-muted-foreground shrink-0" />
+                      <span className="max-w-[120px] truncate">{f.name}</span>
+                      <span className="text-muted-foreground">({(f.size / 1024).toFixed(0)} KB)</span>
+                      <button onClick={() => setFiles(prev => prev.filter((_, j) => j !== i))}
+                        className="ml-1 text-muted-foreground hover:text-destructive">
+                        <Trash2 className="w-3 h-3" />
+                      </button>
+                    </div>
+                  ))}
+                  {files.length < 5 && (
+                    <Button size="sm" variant="outline" type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      className="text-xs h-7 px-2 gap-1">
+                      <Paperclip className="w-3 h-3" />
+                      Add file
+                    </Button>
+                  )}
+                </div>
+              </div>
+            )}
 
             {msg   && <p className="text-xs text-green-600 bg-green-50 border border-green-200 rounded-lg px-3 py-2">{msg}</p>}
             {error && <p className="text-xs text-destructive bg-destructive/10 border border-destructive/20 rounded-lg px-3 py-2">{error}</p>}

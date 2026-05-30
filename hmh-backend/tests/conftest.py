@@ -442,6 +442,48 @@ def ensure_tables():
                 END $$;
             """))
 
+    # migration 0031: stock_ledger.project_id nullable
+    with engine.begin() as conn:
+        conn.execute(_t("""
+            DO $$ BEGIN
+                IF EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name='stock_ledger'
+                    AND column_name='project_id' AND is_nullable='NO'
+                ) THEN
+                    ALTER TABLE stock_ledger ALTER COLUMN project_id DROP NOT NULL;
+                END IF;
+            END $$;
+        """))
+
+    # migration 0032: notification_queue.is_test
+    with engine.begin() as conn:
+        conn.execute(_t("""
+            DO $$ BEGIN
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                    WHERE table_name='notification_queue' AND column_name='is_test')
+                THEN ALTER TABLE notification_queue ADD COLUMN is_test BOOLEAN NOT NULL DEFAULT FALSE;
+                END IF;
+            END $$;
+        """))
+
+    # migration 0033: users.pin_hash + SITE_MANAGER_VIEW role enum value
+    with engine.begin() as conn:
+        conn.execute(_t("""
+            DO $$ BEGIN
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                    WHERE table_name='users' AND column_name='pin_hash')
+                THEN ALTER TABLE users ADD COLUMN pin_hash TEXT;
+                END IF;
+            END $$;
+        """))
+        conn.execute(_t("""
+            DO $$ BEGIN
+                ALTER TYPE user_role_enum ADD VALUE IF NOT EXISTS 'SITE_MANAGER_VIEW';
+            EXCEPTION WHEN others THEN NULL;
+            END $$;
+        """))
+
     yield
 
 

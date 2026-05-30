@@ -11,6 +11,7 @@ class UserRole(str, enum.Enum):
     OFFICE_ADMIN = "OFFICE_ADMIN"
     OFFICE_USER = "OFFICE_USER"
     SITE_MANAGER = "SITE_MANAGER"
+    SITE_MANAGER_VIEW = "SITE_MANAGER_VIEW"  # View-only site manager: can see site data, cannot write
     SITE_STAFF = "SITE_STAFF"
     READ_ONLY = "READ_ONLY"   # View-only owner: can see everything, cannot write
 

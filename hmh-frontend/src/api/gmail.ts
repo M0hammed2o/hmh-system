@@ -216,6 +216,29 @@ export const gmailApi = {
   },
 
   /**
+   * Send a free-form email with optional file attachments (PDF/JPEG/PNG/GIF/XLS/XLSX/CSV).
+   * Uses multipart/form-data so files can be included.
+   */
+  composeSend: async (
+    toEmail: string,
+    subject: string,
+    bodyHtml: string,
+    files: File[] = [],
+  ): Promise<{ status: string; attachment_count: number }> => {
+    const form = new FormData();
+    form.append("to_email", toEmail);
+    form.append("subject", subject);
+    form.append("body_html", bodyHtml);
+    for (const f of files) form.append("attachments", f);
+    const r = await client.post<{ data: { status: string; attachment_count: number } }>(
+      "/gmail/compose-send",
+      form,
+      { headers: { "Content-Type": "multipart/form-data" } },
+    );
+    return r.data.data;
+  },
+
+  /**
    * Fetch an attachment file as a Blob (includes auth headers automatically).
    * inline=true  → browser can render PDF/image inline
    * inline=false → triggers download

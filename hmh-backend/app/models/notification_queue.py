@@ -57,6 +57,7 @@ class NotificationQueue(Base):
         DateTime(timezone=True), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    is_test: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     # Phase 3Q.1: entity context for display and deep-linking
     project_id:  Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), nullable=True, index=True)

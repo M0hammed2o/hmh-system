@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import {
   ArrowLeft, Plus, MapPin, Calendar, Building2, Pencil, Layers, Wand2,
-  FileSpreadsheet, ChevronRight, Copy, Trash2, Tag, X, Check, Zap,
+  FileSpreadsheet, ChevronRight, Copy, Trash2, Tag, X, Check, Zap, Warehouse,
 } from "lucide-react";
 import { SitesBulkCreateModal } from "@/components/SitesBulkCreateModal";
 import { LotsGeneratorModal } from "@/components/LotsGeneratorModal";
@@ -23,6 +23,7 @@ import { stagesApi, type ProjectStageStatus, type StageMaster, type StageStatus 
 import { lotTypesApi, type LotType, type LotTypeCreate, type LotTypeUpdate } from "@/api/lotTypes";
 import { BulkPropagateModal } from "@/components/BulkPropagateModal";
 import { boqApi, type BOQTemplate } from "@/api/boq";
+import { warehouseApi, type WarehouseStockItem } from "@/api/warehouse";
 import { formatDate } from "@/lib/format";
 
 // ── Status display maps ───────────────────────────────────────────────────────
@@ -951,6 +952,10 @@ export default function ProjectDetailPage() {
   const [stageStatuses, setStageStatuses] = useState<ProjectStageStatus[]>([]);
   const [stagesLoading, setStagesLoading] = useState(false);
 
+  // Warehouse summary — loaded for Overview tab
+  const [warehouseStock, setWarehouseStock] = useState<WarehouseStockItem[]>([]);
+  const [warehouseLoading, setWarehouseLoading] = useState(false);
+
   // ── Load project ────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!projectId) return;
@@ -1019,6 +1024,22 @@ export default function ProjectDetailPage() {
       })
       .catch(() => {})
       .finally(() => setStagesLoading(false));
+  }, [tab, projectId]);
+
+  // ── Load warehouse summary + sites for Overview tab ─────────────────────────
+  useEffect(() => {
+    if (tab !== "overview" || !projectId) return;
+    setWarehouseLoading(true);
+    Promise.all([
+      warehouseApi.getMainStock(projectId),
+      sitesApi.list(projectId, false),
+    ])
+      .then(([stock, activeSites]) => {
+        setWarehouseStock(stock);
+        setSites(activeSites);
+      })
+      .catch(() => setWarehouseStock([]))
+      .finally(() => setWarehouseLoading(false));
   }, [tab, projectId]);
 
   // ── Render guards ───────────────────────────────────────────────────────────
@@ -1171,6 +1192,59 @@ export default function ProjectDetailPage() {
                 </div>
               ))}
             </div>
+          </div>
+
+          {/* Project Warehouse card */}
+          <div className="bg-card border border-border rounded-xl p-5 space-y-3 sm:col-span-2 lg:col-span-1">
+            <div className="flex items-center justify-between">
+              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
+                <Warehouse className="w-3.5 h-3.5" />
+                Project Warehouse
+              </p>
+              <Link
+                to={`/project-warehouse?project=${projectId}`}
+                className="text-xs text-primary hover:underline font-medium"
+              >
+                Open →
+              </Link>
+            </div>
+            {warehouseLoading ? (
+              <div className="space-y-2">
+                {[1, 2, 3].map(i => <div key={i} className="h-8 bg-muted/50 rounded animate-pulse" />)}
+              </div>
+            ) : warehouseStock.length === 0 ? (
+              <p className="text-sm text-muted-foreground italic">No stock on hand.</p>
+            ) : (
+              <div className="grid grid-cols-2 gap-3">
+                <div className="text-center p-3 bg-muted/50 rounded-lg">
+                  <p className="text-2xl font-bold">{warehouseStock.length}</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">SKUs on hand</p>
+                </div>
+                <div className="text-center p-3 bg-primary/10 rounded-lg">
+                  <p className="text-2xl font-bold text-primary">
+                    {warehouseStock.reduce((s, i) => s + i.on_hand, 0).toLocaleString()}
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-0.5">Total units</p>
+                </div>
+                <div className="col-span-2 text-xs text-muted-foreground pt-1 border-t border-border">
+                  {(() => {
+                    const latest = warehouseStock
+                      .map(i => i.last_movement)
+                      .filter(Boolean)
+                      .sort()
+                      .at(-1);
+                    return latest ? `Last movement: ${formatDate(latest)}` : "No movements yet";
+                  })()}
+                </div>
+              </div>
+            )}
+            {sites.filter(s => s.is_active).length > 0 && (
+              <div className="pt-1 border-t border-border">
+                <p className="text-xs text-muted-foreground">
+                  {sites.filter(s => s.is_active).length} active site{sites.filter(s => s.is_active).length !== 1 ? "s" : ""}
+                </p>
+              </div>
+            )}
           </div>
         </div>
       )}

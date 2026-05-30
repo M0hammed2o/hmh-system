@@ -90,8 +90,8 @@ def get_user(user_id: uuid.UUID, db: DbSession):
     response_model=ApiSuccess[UserRead],
     dependencies=[OWNER_ONLY],
 )
-def update_user(user_id: uuid.UUID, body: UserUpdate, db: DbSession):
-    user = user_service.update_user(db, user_id, body)
+def update_user(user_id: uuid.UUID, body: UserUpdate, db: DbSession, current_user: CurrentUser):
+    user = user_service.update_user(db, user_id, body, actor_id=current_user.id)
     return ApiSuccess(data=UserRead.model_validate(user))
 
 
@@ -156,6 +156,21 @@ def reset_user_password(user_id: uuid.UUID, db: DbSession):
         ),
         message="Password reset. Share the temp_password with the user — it will not be shown again.",
     )
+
+
+@router.post(
+    "/{user_id}/set-pin",
+    response_model=ApiSuccess[UserRead],
+    dependencies=[OWNER_ONLY],
+)
+def set_user_pin(user_id: uuid.UUID, body: dict, db: DbSession, current_user: CurrentUser):
+    """
+    Set a 4–6 digit PIN for a user (stored bcrypt-hashed, never plain text).
+    Body: {"pin": "1234"}
+    """
+    raw_pin = str(body.get("pin", "")).strip()
+    user = user_service.set_pin(db, user_id, raw_pin, actor_id=current_user.id)
+    return ApiSuccess(data=UserRead.model_validate(user), message="PIN set successfully.")
 
 
 # ── Project access ────────────────────────────────────────────────────────────

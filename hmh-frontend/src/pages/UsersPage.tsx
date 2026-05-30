@@ -9,19 +9,21 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { formatDate } from "@/lib/format";
 import { useAuthContext, ADMIN_ROLES } from "@/context/AuthContext";
 
-const ROLES: UserRole[] = ["OWNER", "OFFICE_ADMIN", "OFFICE_USER", "SITE_MANAGER", "SITE_STAFF", "READ_ONLY"];
+const ROLES: UserRole[] = ["OWNER", "OFFICE_ADMIN", "OFFICE_USER", "SITE_MANAGER", "SITE_MANAGER_VIEW", "SITE_STAFF", "READ_ONLY"];
 
 const roleLabel: Record<UserRole, string> = {
-  OWNER:        "Owner",
-  OFFICE_ADMIN: "Office Admin",
-  OFFICE_USER:  "Office User",
-  SITE_MANAGER: "Site Manager",
-  SITE_STAFF:   "Site Staff",
-  READ_ONLY:    "Owner View Only",
+  OWNER:             "Owner",
+  OFFICE_ADMIN:      "Office Admin",
+  OFFICE_USER:       "Office User",
+  SITE_MANAGER:      "Site Manager",
+  SITE_MANAGER_VIEW: "Site Manager View Only",
+  SITE_STAFF:        "Site Staff",
+  READ_ONLY:         "Owner View Only",
 };
 
 const roleDescription: Partial<Record<UserRole, string>> = {
-  READ_ONLY: "View dashboards and reports only — cannot create, edit, or approve anything.",
+  READ_ONLY:         "View dashboards and reports only — cannot create, edit, or approve anything.",
+  SITE_MANAGER_VIEW: "Can view site data, reports, and progress — cannot create, edit, or approve anything.",
 };
 
 function roleBadgeVariant(role: UserRole) {
@@ -172,6 +174,9 @@ function EditUserModal({ user, onClose, onSaved }: EditModalProps) {
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [error, setError] = useState("");
   const [tempPwd, setTempPwd] = useState<string | null>(null);
+  const [pin, setPin] = useState("");
+  const [pinLoading, setPinLoading] = useState(false);
+  const [pinMsg, setPinMsg] = useState("");
   const isLocked = !!(user.locked_until && new Date(user.locked_until) > new Date());
 
   const submit = async (e: React.FormEvent) => {
@@ -243,6 +248,24 @@ function EditUserModal({ user, onClose, onSaved }: EditModalProps) {
     }
   };
 
+  const handleSetPin = async () => {
+    if (!pin || !/^\d{4,6}$/.test(pin)) {
+      setPinMsg("PIN must be 4–6 digits.");
+      return;
+    }
+    setPinLoading(true); setPinMsg("");
+    try {
+      await usersApi.setPin(user.id, pin);
+      setPin("");
+      setPinMsg("PIN set successfully. Never stored in plain text.");
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { message?: string; detail?: string } } })?.response?.data?.message
+        || (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+        || "Failed to set PIN.";
+      setPinMsg(msg);
+    } finally { setPinLoading(false); }
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-foreground/40">
       <div className="bg-card border border-border rounded-xl w-full max-w-md p-6 animate-fade-in">
@@ -309,6 +332,30 @@ function EditUserModal({ user, onClose, onSaved }: EditModalProps) {
                   </Button>
                 )}
               </div>
+            )}
+          </div>
+
+          {/* PIN section */}
+          <div className="border border-border rounded-lg p-3 space-y-2">
+            <p className="text-xs font-medium text-muted-foreground">Device PIN</p>
+            <p className="text-xs text-muted-foreground">Set a 4–6 digit PIN for quick device access. Stored bcrypt-hashed, never in plain text.</p>
+            <div className="flex gap-2 items-center">
+              <Input
+                type="password"
+                inputMode="numeric"
+                pattern="\d{4,6}"
+                maxLength={6}
+                placeholder="4–6 digits"
+                value={pin}
+                onChange={(e) => { setPin(e.target.value.replace(/\D/g, "").slice(0, 6)); setPinMsg(""); }}
+                className="w-32 font-mono tracking-widest"
+              />
+              <Button type="button" variant="outline" size="sm" onClick={handleSetPin} disabled={pinLoading}>
+                {pinLoading ? "Setting…" : "Set PIN"}
+              </Button>
+            </div>
+            {pinMsg && (
+              <p className={`text-xs ${pinMsg.startsWith("PIN set") ? "text-green-700" : "text-destructive"}`}>{pinMsg}</p>
             )}
           </div>
 

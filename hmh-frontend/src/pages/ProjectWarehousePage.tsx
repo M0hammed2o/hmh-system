@@ -21,6 +21,7 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
   Package, ArrowRight, ArrowLeft, RefreshCw, History,
   AlertTriangle, X, Truck, ChevronDown, ChevronUp,
@@ -470,9 +471,10 @@ function ShortageAlerts({
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function ProjectWarehousePage() {
+  const [searchParams] = useSearchParams();
   const [projects,   setProjects]   = useState<Project[]>([]);
   const [sites,      setSites]      = useState<Site[]>([]);
-  const [projectId,  setProjectId]  = useState("");
+  const [projectId,  setProjectId]  = useState(searchParams.get("project") ?? "");
 
   const [stock,      setStock]      = useState<WarehouseStockItem[]>([]);
   const [deliveries, setDeliveries] = useState<Delivery[]>([]);
@@ -489,9 +491,10 @@ export default function ProjectWarehousePage() {
   useEffect(() => {
     projectsApi.list(1, 100, "ACTIVE").then(r => {
       setProjects(r.items);
-      if (r.items.length > 0) setProjectId(r.items[0].id);
+      // Only auto-select first project when no ?project= param provided
+      if (!searchParams.get("project") && r.items.length > 0) setProjectId(r.items[0].id);
     }).catch(() => {});
-  }, []);
+  }, [searchParams]);
 
   useEffect(() => {
     if (!projectId) { setSites([]); return; }

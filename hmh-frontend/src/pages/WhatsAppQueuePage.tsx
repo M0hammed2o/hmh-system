@@ -52,6 +52,11 @@ function QueueEntryCard({ entry }: { entry: NotificationQueueEntry }) {
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-sm font-medium font-mono">{entry.phone_number}</span>
             <Badge variant={cfg.badge} className="text-xs">{cfg.label}</Badge>
+            {entry.is_test && (
+              <Badge variant="outline" className="text-xs border-amber-400 text-amber-600 bg-amber-50 dark:bg-amber-950/30 dark:text-amber-400">
+                TEST
+              </Badge>
+            )}
             {entry.requires_acknowledgement && (
               <Badge variant={entry.acknowledged_at ? "success" : "secondary"} className="text-xs">
                 {entry.acknowledged_at ? "ACK'd" : "Awaiting ACK"}

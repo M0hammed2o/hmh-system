@@ -98,6 +98,7 @@ class NotificationQueueRead(BaseModel):
     requires_acknowledgement: bool
     acknowledged_at: Optional[datetime] = None
     created_at: datetime
+    is_test: bool = False
 
 
 class QueueStats(BaseModel):

@@ -1,14 +1,17 @@
 """User management service — CRUD and access control."""
 
 import uuid
+from typing import Optional
 
 from sqlalchemy.orm import Session
 
-from app.core.exceptions import ConflictError, NotFoundError
+from app.core.exceptions import ConflictError, NotFoundError, ValidationError
 from app.core.security import generate_temp_password, hash_password
 from app.models.access import UserProjectAccess, UserSiteAccess
 from app.models.user import User
 from app.schemas.user import ProjectAccessGrant, SiteAccessGrant, UserCreate, UserUpdate
+from app.services import audit_service
+from app.models.enums import AuditAction
 
 _MAX_PAGE_SIZE = 100
 
@@ -29,6 +32,12 @@ def create_user(db: Session, data: UserCreate, created_by_id: uuid.UUID) -> tupl
         created_by=created_by_id,
     )
     db.add(user)
+    db.flush()
+    audit_service.write_event(
+        db, AuditAction.CREATE, "User",
+        actor_id=created_by_id, entity_id=user.id,
+        after_value={"email": user.email, "role": user.role.value},
+    )
     db.commit()
     db.refresh(user)
     return user, temp_pwd
@@ -55,8 +64,14 @@ def list_users(db: Session, page: int, limit: int) -> tuple[list[User], int]:
     return users, total
 
 
-def update_user(db: Session, user_id: uuid.UUID, data: UserUpdate) -> User:
+def update_user(
+    db: Session,
+    user_id: uuid.UUID,
+    data: UserUpdate,
+    actor_id: Optional[uuid.UUID] = None,
+) -> User:
     user = get_user(db, user_id)
+    before = {"role": user.role.value, "is_active": user.is_active}
     if data.full_name is not None:
         user.full_name = data.full_name.strip()
     if data.phone is not None:
@@ -65,6 +80,30 @@ def update_user(db: Session, user_id: uuid.UUID, data: UserUpdate) -> User:
         user.role = data.role
     if data.is_active is not None:
         user.is_active = data.is_active
+    after = {"role": user.role.value, "is_active": user.is_active}
+    audit_service.write_event(
+        db, AuditAction.UPDATE, "User",
+        actor_id=actor_id, entity_id=user.id,
+        before_value=before, after_value=after,
+    )
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+def set_pin(db: Session, user_id: uuid.UUID, raw_pin: str, actor_id: Optional[uuid.UUID] = None) -> User:
+    """Set or clear a bcrypt-hashed PIN for a user. PIN is never stored in plain text."""
+    user = get_user(db, user_id)
+    if not raw_pin:
+        raise ValidationError("PIN must not be empty.")
+    if not raw_pin.isdigit() or not (4 <= len(raw_pin) <= 6):
+        raise ValidationError("PIN must be 4–6 digits.")
+    user.pin_hash = hash_password(raw_pin)
+    audit_service.write_event(
+        db, AuditAction.UPDATE, "User",
+        actor_id=actor_id, entity_id=user.id,
+        notes="PIN updated (hash stored, plain text never saved)",
+    )
     db.commit()
     db.refresh(user)
     return user

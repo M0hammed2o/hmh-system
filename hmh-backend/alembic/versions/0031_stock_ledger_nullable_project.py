@@ -14,16 +14,25 @@ depends_on = None
 
 
 def upgrade() -> None:
-    # Drop the NOT NULL constraint so global (non-project) stock is supported
-    op.alter_column("stock_ledger", "project_id", existing_type=sa.UUID(), nullable=True)
-    # Also update the on-delete behaviour to SET NULL (was CASCADE)
-    op.drop_constraint("stock_ledger_project_id_fkey", "stock_ledger", type_="foreignkey")
-    op.create_foreign_key(
-        "stock_ledger_project_id_fkey",
-        "stock_ledger", "projects",
-        ["project_id"], ["id"],
-        ondelete="SET NULL",
-    )
+    # Make nullable (no-op if already nullable)
+    op.execute("ALTER TABLE stock_ledger ALTER COLUMN project_id DROP NOT NULL")
+    # Recreate FK with SET NULL only if it exists with the old behaviour
+    op.execute("""
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1 FROM information_schema.referential_constraints
+                WHERE constraint_name = 'stock_ledger_project_id_fkey'
+            ) THEN
+                ALTER TABLE stock_ledger DROP CONSTRAINT stock_ledger_project_id_fkey;
+            END IF;
+            ALTER TABLE stock_ledger
+                ADD CONSTRAINT stock_ledger_project_id_fkey
+                FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE SET NULL;
+        EXCEPTION WHEN duplicate_object THEN NULL;
+        END
+        $$
+    """)
 
 
 def downgrade() -> None:

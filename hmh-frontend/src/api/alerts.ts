@@ -104,6 +104,7 @@ export interface NotificationQueueEntry {
   requires_acknowledgement: boolean;
   acknowledged_at: string | null;
   created_at: string;
+  is_test: boolean;
 }
 
 export interface QueueStats {

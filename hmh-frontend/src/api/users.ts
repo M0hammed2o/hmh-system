@@ -1,6 +1,6 @@
 import client from "./client";
 
-export type UserRole = "OWNER" | "OFFICE_ADMIN" | "OFFICE_USER" | "SITE_MANAGER" | "SITE_STAFF" | "READ_ONLY";
+export type UserRole = "OWNER" | "OFFICE_ADMIN" | "OFFICE_USER" | "SITE_MANAGER" | "SITE_MANAGER_VIEW" | "SITE_STAFF" | "READ_ONLY";
 
 export interface User {
   id: string;
@@ -82,6 +82,11 @@ export const usersApi = {
 
   reactivateUser: async (id: string): Promise<User> => {
     const res = await client.post<{ data: User }>(`/users/${id}/reactivate`);
+    return res.data.data;
+  },
+
+  setPin: async (id: string, pin: string): Promise<User> => {
+    const res = await client.post<{ data: User }>(`/users/${id}/set-pin`, { pin });
     return res.data.data;
   },
 };

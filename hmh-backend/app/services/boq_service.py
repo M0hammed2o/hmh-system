@@ -989,9 +989,16 @@ def get_project_master_summary(db: Session, project_id: uuid.UUID) -> dict:
     )
 
     # ── Bulk-fetch all data in 3 queries instead of N×3 queries ─────────────
-    # Query 1: all site-level BOQ items for this project (site_id may be NULL for freestanding)
-    all_site_items = (
-        db.query(BOQItem)
+    # Query 1: site-level BOQ items joined to their header so we can deduplicate.
+    # When multiple active headers have items for the same site (e.g. a manually
+    # created BOQ + a template-clone site-master both active), keep only items
+    # from the most-recently-uploaded header per site_id.  Without this guard
+    # unit_total is multiplied by the number of active headers, causing the
+    # reported project total to be a multiple of the correct value.
+    _raw_site_rows = (
+        db.query(BOQItem, BOQHeader.id.label("hid"), BOQHeader.uploaded_at.label("hts"))
+        .join(BOQSection, BOQItem.boq_section_id == BOQSection.id)
+        .join(BOQHeader, BOQSection.boq_header_id == BOQHeader.id)
         .filter(
             BOQItem.project_id == project_id,
             BOQItem.lot_id.is_(None),
@@ -999,6 +1006,16 @@ def get_project_master_summary(db: Session, project_id: uuid.UUID) -> dict:
         )
         .all()
     )
+    # Per site_id: find the header with the maximum uploaded_at
+    _latest: dict = {}  # site_id → (uploaded_at, header_id)
+    for _item, _hid, _hts in _raw_site_rows:
+        _key = _item.site_id
+        if _key not in _latest or _hts > _latest[_key][0]:
+            _latest[_key] = (_hts, _hid)
+    all_site_items = [
+        _item for _item, _hid, _hts in _raw_site_rows
+        if _hid == _latest.get(_item.site_id, (None, None))[1]
+    ]
     site_items_by_site: dict = {}
     for item in all_site_items:
         # Key is site_id (may be None for project-level freestanding items)
@@ -1185,11 +1202,21 @@ def get_site_boq_summary(db: Session, site_id: uuid.UUID) -> dict:
     if not site:
         return {}
 
-    site_items = (
-        db.query(BOQItem)
+    # Join through sections → header to deduplicate: if multiple active headers
+    # have site-level items (lot_id IS NULL) for this site, keep only the items
+    # from the most-recently-uploaded header to prevent multiplied totals.
+    _raw_rows = (
+        db.query(BOQItem, BOQHeader.id.label("hid"), BOQHeader.uploaded_at.label("hts"))
+        .join(BOQSection, BOQItem.boq_section_id == BOQSection.id)
+        .join(BOQHeader, BOQSection.boq_header_id == BOQHeader.id)
         .filter(BOQItem.site_id == site_id, BOQItem.lot_id.is_(None), BOQItem.is_active == True)
         .all()
     )
+    _latest_ts, _latest_hid = None, None
+    for _, _hid, _hts in _raw_rows:
+        if _latest_ts is None or _hts > _latest_ts:
+            _latest_ts, _latest_hid = _hts, _hid
+    site_items = [_item for _item, _hid, _ in _raw_rows if _hid == _latest_hid]
     derived_from_lots = False
 
     if not site_items:

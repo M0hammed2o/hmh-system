@@ -456,6 +456,33 @@ def send_test_message(recipient_id: uuid.UUID, db: DbSession):
         recipient.phone_number, template_name, lang, components=components
     )
     logger.info("wa_test_result status=%s msg_id=%s recipient=%s", status, msg_id, recipient.name)
+
+    # Record in the notification queue so test results are visible in the queue UI
+    # with a clear TEST marker — this does NOT send another message.
+    from app.models.notification_queue import NotificationQueue
+    from app.models.enums import NotificationChannel, NotificationStatus
+    from datetime import datetime, timezone as _tz
+    _now = datetime.now(_tz.utc)
+    _queue_status = NotificationStatus.SENT if status == "SENT" else NotificationStatus.FAILED
+    _entry = NotificationQueue(
+        channel=NotificationChannel.WHATSAPP,
+        phone_number=recipient.phone_number,
+        message_body=(
+            "[TEST] Test Alert\n"
+            "This is a test notification from HMH System. No action required."
+        ),
+        status=_queue_status,
+        attempt_count=1,
+        last_attempt_at=_now,
+        provider_message_id=msg_id or None,
+        error_message=msg_id if status == "FAILED" else None,
+        is_test=True,
+        recipient_id=recipient.id,
+        created_at=_now,
+    )
+    db.add(_entry)
+    db.commit()
+
     return ApiSuccess(
         data={
             "status": status,
@@ -463,6 +490,7 @@ def send_test_message(recipient_id: uuid.UUID, db: DbSession):
             "method": "template",
             "template_used": template_name,
             "body_vars_sent": var_count,
+            "queue_entry_id": str(_entry.id),
         },
         message=f"Test queued to WhatsApp API: {status}",
     )

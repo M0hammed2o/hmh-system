@@ -15,7 +15,7 @@ POST /delivery-notes/from-gmail/{att_id}   — link Gmail attachment to a Delive
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from app.core.logging_config import get_logger
@@ -626,6 +626,78 @@ def link_delivery_note_from_gmail(
         data={"delivery_id": str(delivery.id), "match": match_result},
         message="Delivery note linked.",
     )
+
+
+# ── Compose + send with optional file attachments ────────────────────────────
+
+ALLOWED_COMPOSE_MIME = {
+    "application/pdf",
+    "image/jpeg",
+    "image/png",
+    "image/gif",
+    "application/vnd.ms-excel",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "text/csv",
+}
+ALLOWED_COMPOSE_EXT = {".pdf", ".jpg", ".jpeg", ".png", ".gif", ".xls", ".xlsx", ".csv"}
+_MAX_ATTACHMENT_SIZE = 10 * 1024 * 1024  # 10 MB per file
+
+
+@gmail_router.post("/compose-send", dependencies=[OFFICE_AND_ABOVE])
+async def compose_send(
+    to_email:  str = Form(...),
+    subject:   str = Form(...),
+    body_html: str = Form(...),
+    attachments: list[UploadFile] = File(default=[]),
+):
+    """
+    Send a free-form email with optional file attachments.
+
+    Accepted attachment MIME types: PDF, JPEG, PNG, GIF, XLS, XLSX, CSV.
+    Max 10 MB per file. Up to 5 attachments.
+
+    Returns {"status": "SENT"|"MOCK_SENT"|"FAILED", "attachment_count": N}.
+    """
+    import os
+    from app.services.email_service import send_email
+
+    if len(attachments) > 5:
+        raise HTTPException(status_code=400, detail="Maximum 5 attachments per email.")
+
+    att_data: list[tuple[str, bytes, str]] = []
+    for f in attachments:
+        if not f.filename:
+            continue
+        ext = os.path.splitext(f.filename)[1].lower()
+        if ext not in ALLOWED_COMPOSE_EXT:
+            raise HTTPException(
+                status_code=400,
+                detail=f"File type '{ext}' not allowed. Accepted: PDF, JPEG, PNG, GIF, XLS, XLSX, CSV."
+            )
+        data = await f.read()
+        if len(data) > _MAX_ATTACHMENT_SIZE:
+            raise HTTPException(status_code=400, detail=f"File '{f.filename}' exceeds 10 MB limit.")
+        mime = f.content_type or "application/octet-stream"
+        if mime not in ALLOWED_COMPOSE_MIME:
+            # Derive from extension as fallback
+            ext_to_mime = {
+                ".pdf": "application/pdf",
+                ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+                ".png": "image/png", ".gif": "image/gif",
+                ".xls": "application/vnd.ms-excel",
+                ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                ".csv": "text/csv",
+            }
+            mime = ext_to_mime.get(ext, "application/octet-stream")
+        att_data.append((f.filename, data, mime))
+
+    result = send_email(
+        to_email=to_email,
+        subject=subject,
+        body=body_html,
+        attachments=att_data or None,
+    )
+    return ApiSuccess(data={**result, "attachment_count": len(att_data)})
 
 
 # ── Serialisers ───────────────────────────────────────────────────────────────
