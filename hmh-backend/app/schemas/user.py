@@ -28,6 +28,7 @@ class UserRead(BaseModel):
     created_by: Optional[uuid.UUID] = None
     created_at: datetime
     updated_at: datetime
+    project_access_count: int = 0
 
 
 class UserSummary(BaseModel):
@@ -48,6 +49,7 @@ class UserCreate(BaseModel):
     email: EmailStr
     phone: Optional[str] = None
     role: UserRole
+    project_ids: list[uuid.UUID] = []
 
     @field_validator("full_name")
     @classmethod

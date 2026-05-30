@@ -175,6 +175,22 @@ def set_user_pin(user_id: uuid.UUID, body: dict, db: DbSession, current_user: Cu
 
 # ── Project access ────────────────────────────────────────────────────────────
 
+@router.get(
+    "/{user_id}/project-access",
+    response_model=ApiSuccess[list[UserProjectAccessRead]],
+    dependencies=[OFFICE_ADMIN_AND_ABOVE],
+)
+def list_project_access(user_id: uuid.UUID, db: DbSession):
+    """List all project access records for a user."""
+    from app.models.access import UserProjectAccess
+    records = (
+        db.query(UserProjectAccess)
+        .filter(UserProjectAccess.user_id == user_id)
+        .all()
+    )
+    return ApiSuccess(data=[UserProjectAccessRead.model_validate(r) for r in records])
+
+
 @router.post(
     "/{user_id}/project-access",
     response_model=ApiSuccess[UserProjectAccessRead],

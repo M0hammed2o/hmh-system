@@ -3,7 +3,7 @@
 import uuid
 from typing import Optional
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.core.exceptions import ConflictError, NotFoundError, ValidationError
 from app.core.security import generate_temp_password, hash_password
@@ -11,14 +11,22 @@ from app.models.access import UserProjectAccess, UserSiteAccess
 from app.models.user import User
 from app.schemas.user import ProjectAccessGrant, SiteAccessGrant, UserCreate, UserUpdate
 from app.services import audit_service
-from app.models.enums import AuditAction
+from app.models.enums import AuditAction, UserRole
 
 _MAX_PAGE_SIZE = 100
+
+_SITE_ROLES = {UserRole.SITE_MANAGER, UserRole.SITE_MANAGER_VIEW, UserRole.SITE_STAFF}
 
 
 def create_user(db: Session, data: UserCreate, created_by_id: uuid.UUID) -> tuple[User, str]:
     if db.query(User).filter(User.email == data.email).first():
         raise ConflictError(f"A user with email '{data.email}' already exists.")
+
+    if data.role in _SITE_ROLES and not data.project_ids:
+        raise ValidationError(
+            f"Role '{data.role.value}' requires at least one project assignment. "
+            "Provide project_ids when creating this user."
+        )
 
     temp_pwd = generate_temp_password()
     user = User(
@@ -33,10 +41,24 @@ def create_user(db: Session, data: UserCreate, created_by_id: uuid.UUID) -> tupl
     )
     db.add(user)
     db.flush()
+
+    for project_id in data.project_ids:
+        db.add(UserProjectAccess(
+            user_id=user.id,
+            project_id=project_id,
+            can_view=True,
+            can_edit=False,
+            can_approve=False,
+        ))
+
     audit_service.write_event(
         db, AuditAction.CREATE, "User",
         actor_id=created_by_id, entity_id=user.id,
-        after_value={"email": user.email, "role": user.role.value},
+        after_value={
+            "email": user.email,
+            "role": user.role.value,
+            "project_ids": [str(p) for p in data.project_ids],
+        },
     )
     db.commit()
     db.refresh(user)
@@ -56,6 +78,7 @@ def list_users(db: Session, page: int, limit: int) -> tuple[list[User], int]:
     total = db.query(User).count()
     users = (
         db.query(User)
+        .options(joinedload(User.project_access))
         .order_by(User.created_at.desc())
         .offset(offset)
         .limit(limit)
@@ -77,6 +100,15 @@ def update_user(
     if data.phone is not None:
         user.phone = data.phone
     if data.role is not None:
+        if data.role in _SITE_ROLES:
+            existing_count = db.query(UserProjectAccess).filter(
+                UserProjectAccess.user_id == user_id
+            ).count()
+            if existing_count == 0:
+                raise ValidationError(
+                    f"Cannot set role to '{data.role.value}': user has no project assignments. "
+                    "Assign at least one project first via the project access endpoint."
+                )
         user.role = data.role
     if data.is_active is not None:
         user.is_active = data.is_active

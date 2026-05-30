@@ -2,6 +2,8 @@ import client from "./client";
 
 export type UserRole = "OWNER" | "OFFICE_ADMIN" | "OFFICE_USER" | "SITE_MANAGER" | "SITE_MANAGER_VIEW" | "SITE_STAFF" | "READ_ONLY";
 
+export const SITE_REQUIRING_ROLES: ReadonlySet<UserRole> = new Set(["SITE_MANAGER", "SITE_MANAGER_VIEW", "SITE_STAFF"]);
+
 export interface User {
   id: string;
   full_name: string;
@@ -16,6 +18,7 @@ export interface User {
   created_by: string | null;
   created_at: string;
   updated_at: string;
+  project_access_count: number;
 }
 
 export interface UserCreate {
@@ -23,6 +26,7 @@ export interface UserCreate {
   email: string;
   phone?: string;
   role: UserRole;
+  project_ids?: string[];
 }
 
 export interface UserUpdate {
@@ -38,6 +42,16 @@ export interface PaginatedUsers {
   page: number;
   limit: number;
   total_pages: number;
+}
+
+export interface UserProjectAccess {
+  id: string;
+  user_id: string;
+  project_id: string;
+  can_view: boolean;
+  can_edit: boolean;
+  can_approve: boolean;
+  created_at: string;
 }
 
 export const usersApi = {
@@ -88,5 +102,24 @@ export const usersApi = {
   setPin: async (id: string, pin: string): Promise<User> => {
     const res = await client.post<{ data: User }>(`/users/${id}/set-pin`, { pin });
     return res.data.data;
+  },
+
+  getProjectAccess: async (id: string): Promise<UserProjectAccess[]> => {
+    const res = await client.get<{ data: UserProjectAccess[] }>(`/users/${id}/project-access`);
+    return res.data.data;
+  },
+
+  grantProjectAccess: async (id: string, projectId: string): Promise<UserProjectAccess> => {
+    const res = await client.post<{ data: UserProjectAccess }>(`/users/${id}/project-access`, {
+      project_id: projectId,
+      can_view: true,
+      can_edit: false,
+      can_approve: false,
+    });
+    return res.data.data;
+  },
+
+  revokeProjectAccess: async (id: string, projectId: string): Promise<void> => {
+    await client.delete(`/users/${id}/project-access/${projectId}`);
   },
 };

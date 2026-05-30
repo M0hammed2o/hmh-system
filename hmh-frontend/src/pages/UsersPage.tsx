@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { Plus, UserX, Pencil, ShieldOff, Copy, Check } from "lucide-react";
-import { usersApi, type User, type UserCreate, type UserRole } from "@/api/users";
+import { Plus, UserX, Pencil, ShieldOff, Copy, Check, FolderOpen, X as XIcon } from "lucide-react";
+import { usersApi, type User, type UserCreate, type UserRole, type UserProjectAccess, SITE_REQUIRING_ROLES } from "@/api/users";
+import { projectsApi, type Project } from "@/api/projects";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -35,19 +36,32 @@ function roleBadgeVariant(role: UserRole) {
 interface CreateModalProps {
   onClose: () => void;
   onCreated: (user: User, tempPwd: string) => void;
+  projects: Project[];
 }
 
-function CreateUserModal({ onClose, onCreated }: CreateModalProps) {
+function CreateUserModal({ onClose, onCreated, projects }: CreateModalProps) {
   const [form, setForm] = useState<UserCreate>({ full_name: "", email: "", role: "OFFICE_USER" });
+  const [selectedProjectIds, setSelectedProjectIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const needsProject = SITE_REQUIRING_ROLES.has(form.role);
+
+  const toggleProject = (id: string) =>
+    setSelectedProjectIds(prev => prev.includes(id) ? prev.filter(p => p !== id) : [...prev, id]);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (needsProject && selectedProjectIds.length === 0) {
+      setError(`Role '${roleLabel[form.role]}' requires at least one assigned project.`);
+      return;
+    }
     setLoading(true);
     setError("");
     try {
-      const { user, temp_password } = await usersApi.create(form);
+      const { user, temp_password } = await usersApi.create({
+        ...form,
+        project_ids: selectedProjectIds,
+      });
       onCreated(user, temp_password);
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Failed to create user.";
@@ -59,7 +73,7 @@ function CreateUserModal({ onClose, onCreated }: CreateModalProps) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-foreground/40">
-      <div className="bg-card border border-border rounded-xl w-full max-w-md p-6 animate-fade-in">
+      <div className="bg-card border border-border rounded-xl w-full max-w-md p-6 animate-fade-in overflow-y-auto max-h-[90vh]">
         <h2 className="text-base font-semibold mb-5">Create User</h2>
         <form onSubmit={submit} className="space-y-4">
           <div className="space-y-2">
@@ -78,7 +92,7 @@ function CreateUserModal({ onClose, onCreated }: CreateModalProps) {
             <Label>Role</Label>
             <select
               value={form.role}
-              onChange={(e) => setForm({ ...form, role: e.target.value as UserRole })}
+              onChange={(e) => { setForm({ ...form, role: e.target.value as UserRole }); setSelectedProjectIds([]); }}
               className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
             >
               {ROLES.map((r) => <option key={r} value={r}>{roleLabel[r]}</option>)}
@@ -87,6 +101,37 @@ function CreateUserModal({ onClose, onCreated }: CreateModalProps) {
               <p className="text-xs text-muted-foreground">{roleDescription[form.role]}</p>
             )}
           </div>
+
+          {needsProject && (
+            <div className="border border-border rounded-lg p-3 space-y-2">
+              <p className="text-xs font-medium text-muted-foreground flex items-center gap-1.5">
+                <FolderOpen className="w-3.5 h-3.5" />
+                Assigned Projects <span className="text-destructive">*</span>
+              </p>
+              {projects.length === 0 ? (
+                <p className="text-xs text-muted-foreground italic">No projects available.</p>
+              ) : (
+                <div className="space-y-1 max-h-36 overflow-y-auto">
+                  {projects.map(p => (
+                    <label key={p.id} className="flex items-center gap-2 cursor-pointer text-sm hover:bg-muted/50 rounded px-1 py-0.5">
+                      <input
+                        type="checkbox"
+                        checked={selectedProjectIds.includes(p.id)}
+                        onChange={() => toggleProject(p.id)}
+                        className="rounded"
+                      />
+                      <span className="font-mono text-xs text-muted-foreground">{p.code}</span>
+                      <span>{p.name}</span>
+                    </label>
+                  ))}
+                </div>
+              )}
+              {selectedProjectIds.length > 0 && (
+                <p className="text-xs text-primary">{selectedProjectIds.length} project{selectedProjectIds.length !== 1 ? "s" : ""} selected</p>
+              )}
+            </div>
+          )}
+
           {error && (
             <p className="text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-lg px-3 py-2">{error}</p>
           )}
@@ -164,9 +209,10 @@ interface EditModalProps {
   user: User;
   onClose: () => void;
   onSaved: () => void;
+  projects: Project[];
 }
 
-function EditUserModal({ user, onClose, onSaved }: EditModalProps) {
+function EditUserModal({ user, onClose, onSaved, projects }: EditModalProps) {
   const [form, setForm] = useState({ full_name: user.full_name, phone: user.phone ?? "", role: user.role });
   const [loading, setLoading] = useState(false);
   const [resetLoading, setResetLoading] = useState(false);
@@ -177,7 +223,47 @@ function EditUserModal({ user, onClose, onSaved }: EditModalProps) {
   const [pin, setPin] = useState("");
   const [pinLoading, setPinLoading] = useState(false);
   const [pinMsg, setPinMsg] = useState("");
+  const [projectAccess, setProjectAccess] = useState<UserProjectAccess[]>([]);
+  const [projectAccessLoading, setProjectAccessLoading] = useState(false);
+  const [addingProject, setAddingProject] = useState("");
+  const [projectActionLoading, setProjectActionLoading] = useState(false);
   const isLocked = !!(user.locked_until && new Date(user.locked_until) > new Date());
+  const showProjectSection = SITE_REQUIRING_ROLES.has(form.role);
+
+  useEffect(() => {
+    setProjectAccessLoading(true);
+    usersApi.getProjectAccess(user.id)
+      .then(setProjectAccess)
+      .catch(() => {})
+      .finally(() => setProjectAccessLoading(false));
+  }, [user.id]);
+
+  const assignedProjectIds = new Set(projectAccess.map(pa => pa.project_id));
+  const unassignedProjects = projects.filter(p => !assignedProjectIds.has(p.id));
+
+  const handleAddProject = async () => {
+    if (!addingProject) return;
+    setProjectActionLoading(true);
+    try {
+      const access = await usersApi.grantProjectAccess(user.id, addingProject);
+      setProjectAccess(prev => [...prev, access]);
+      setAddingProject("");
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Failed to add project.";
+      setError(msg);
+    } finally { setProjectActionLoading(false); }
+  };
+
+  const handleRemoveProject = async (projectId: string) => {
+    setProjectActionLoading(true);
+    try {
+      await usersApi.revokeProjectAccess(user.id, projectId);
+      setProjectAccess(prev => prev.filter(pa => pa.project_id !== projectId));
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Failed to remove project.";
+      setError(msg);
+    } finally { setProjectActionLoading(false); }
+  };
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -268,7 +354,7 @@ function EditUserModal({ user, onClose, onSaved }: EditModalProps) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-foreground/40">
-      <div className="bg-card border border-border rounded-xl w-full max-w-md p-6 animate-fade-in">
+      <div className="bg-card border border-border rounded-xl w-full max-w-md p-6 animate-fade-in overflow-y-auto max-h-[90vh]">
         <div className="flex items-center justify-between mb-5">
           <h2 className="text-base font-semibold">Edit User</h2>
           <div className="flex gap-1.5 flex-wrap justify-end">
@@ -335,6 +421,69 @@ function EditUserModal({ user, onClose, onSaved }: EditModalProps) {
             )}
           </div>
 
+          {/* Project assignment section — required for site roles */}
+          {showProjectSection && (
+            <div className="border border-border rounded-lg p-3 space-y-2">
+              <p className="text-xs font-medium text-muted-foreground flex items-center gap-1.5">
+                <FolderOpen className="w-3.5 h-3.5" />
+                Assigned Projects
+                {projectAccess.length === 0 && (
+                  <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 font-medium ml-1">No project assigned</span>
+                )}
+              </p>
+              {projectAccessLoading ? (
+                <div className="h-6 bg-muted/50 rounded animate-pulse" />
+              ) : projectAccess.length === 0 ? (
+                <p className="text-xs text-muted-foreground italic">No projects assigned yet.</p>
+              ) : (
+                <div className="flex flex-wrap gap-1.5">
+                  {projectAccess.map(pa => {
+                    const proj = projects.find(p => p.id === pa.project_id);
+                    return (
+                      <span key={pa.id} className="flex items-center gap-1 text-xs bg-primary/10 text-primary rounded-full px-2 py-0.5">
+                        <span className="font-mono text-[10px]">{proj?.code ?? "—"}</span>
+                        {proj?.name ?? pa.project_id.slice(0, 8)}
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveProject(pa.project_id)}
+                          disabled={projectActionLoading}
+                          className="hover:text-destructive ml-0.5"
+                          title="Remove project"
+                        >
+                          <XIcon className="w-2.5 h-2.5" />
+                        </button>
+                      </span>
+                    );
+                  })}
+                </div>
+              )}
+              {unassignedProjects.length > 0 && (
+                <div className="flex gap-2 items-center pt-1">
+                  <select
+                    value={addingProject}
+                    onChange={e => setAddingProject(e.target.value)}
+                    className="h-8 flex-1 rounded-md border border-input bg-background px-2 text-xs"
+                  >
+                    <option value="">Add project…</option>
+                    {unassignedProjects.map(p => (
+                      <option key={p.id} value={p.id}>{p.code} — {p.name}</option>
+                    ))}
+                  </select>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={handleAddProject}
+                    disabled={!addingProject || projectActionLoading}
+                    className="h-8 text-xs"
+                  >
+                    Add
+                  </Button>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* PIN section */}
           <div className="border border-border rounded-lg p-3 space-y-2">
             <p className="text-xs font-medium text-muted-foreground">Device PIN</p>
@@ -400,11 +549,16 @@ export default function UsersPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [created, setCreated] = useState<{ user: User; password: string } | null>(null);
   const [editingUser, setEditingUser] = useState<User | null>(null);
+  const [projects, setProjects] = useState<Project[]>([]);
 
   const [error, setError] = useState("");
 
   // Don't fetch if the user's role doesn't have permission — avoids the 403
   const canAccess = !authLoading && role !== null && ADMIN_ROLES.includes(role);
+
+  useEffect(() => {
+    projectsApi.list(1, 100).then(res => setProjects(res.items)).catch(() => {});
+  }, []);
 
   useEffect(() => {
     if (!canAccess) {
@@ -538,7 +692,12 @@ export default function UsersPage() {
                   <td className="px-4 py-3 font-medium">{u.full_name}</td>
                   <td className="px-4 py-3 text-muted-foreground">{u.email}</td>
                   <td className="px-4 py-3">
-                    <Badge variant={roleBadgeVariant(u.role)}>{roleLabel[u.role]}</Badge>
+                    <div className="flex flex-col gap-1">
+                      <Badge variant={roleBadgeVariant(u.role)}>{roleLabel[u.role]}</Badge>
+                      {SITE_REQUIRING_ROLES.has(u.role) && u.project_access_count === 0 && (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 font-medium w-fit">No project assigned</span>
+                      )}
+                    </div>
                   </td>
                   <td className="px-4 py-3">
                     <Badge variant={u.is_active ? "success" : "destructive"}>
@@ -594,6 +753,7 @@ export default function UsersPage() {
 
       {showCreate && (
         <CreateUserModal
+          projects={projects}
           onClose={() => setShowCreate(false)}
           onCreated={(user, password) => {
             setShowCreate(false);
@@ -607,6 +767,7 @@ export default function UsersPage() {
       {editingUser && (
         <EditUserModal
           user={editingUser}
+          projects={projects}
           onClose={() => setEditingUser(null)}
           onSaved={() => fetchUsers()}
         />

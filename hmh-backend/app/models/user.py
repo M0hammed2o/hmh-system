@@ -50,5 +50,9 @@ class User(TimestampMixin, Base):
         "UserSiteAccess", back_populates="user", cascade="all, delete-orphan"
     )
 
+    @property
+    def project_access_count(self) -> int:
+        return len(self.project_access)
+
     def __repr__(self) -> str:
         return f"<User {self.email} [{self.role}]>"
