@@ -13,24 +13,23 @@
  * Deliveries are received per-project on the Deliveries page.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
-  Package, ArrowRight, RefreshCw, History,
+  ArrowRight, RefreshCw, History,
   AlertTriangle, X, ChevronDown, ChevronUp, Warehouse,
   PackagePlus, SlidersHorizontal,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PageHeader } from "@/components/shared/PageHeader";
-import { sitesApi, type Site } from "@/api/sites";
 import {
   warehouseApi,
   type GlobalWarehouseStockItem,
   type GlobalWarehouseMovement,
+  type GlobalWarehouseSite,
 } from "@/api/warehouse";
 import { cn } from "@/lib/utils";
 import { formatDate } from "@/lib/format";
-import { projectsApi, type Project } from "@/api/projects";
 import client from "@/api/client";
 
 interface CatalogItem { id: string; name: string; default_unit: string | null; }
@@ -65,30 +64,29 @@ const MOVEMENT_COLOR: Record<string, string> = {
 
 function ReceiveStockModal({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
   const today = new Date().toISOString().slice(0, 10);
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [items,    setItems]    = useState<CatalogItem[]>([]);
-  const [projectId, setProjectId] = useState("");
-  const [itemId,    setItemId]    = useState("");
-  const [quantity,  setQuantity]  = useState("");
-  const [unitCost,  setUnitCost]  = useState("");
+  const [items,       setItems]       = useState<CatalogItem[]>([]);
+  const [itemId,      setItemId]      = useState("");
+  const [quantity,    setQuantity]    = useState("");
+  const [unitCost,    setUnitCost]    = useState("");
   const [supplierRef, setSupplierRef] = useState("");
-  const [date,      setDate]      = useState(today);
-  const [notes,     setNotes]     = useState("");
-  const [saving,    setSaving]    = useState(false);
-  const [error,     setError]     = useState("");
+  const [date,        setDate]        = useState(today);
+  const [notes,       setNotes]       = useState("");
+  const [saving,      setSaving]      = useState(false);
+  const [error,       setError]       = useState("");
 
   useEffect(() => {
-    projectsApi.list(1, 100).then(r => { setProjects(r.items); if (r.items.length > 0) setProjectId(r.items[0].id); }).catch(() => {});
-    client.get<{ data: CatalogItem[] }>("/items/").then(r => { setItems(r.data.data ?? []); if (r.data.data?.[0]) setItemId(r.data.data[0].id); }).catch(() => {});
+    client.get<{ data: CatalogItem[] }>("/items/").then(r => {
+      setItems(r.data.data ?? []);
+      if (r.data.data?.[0]) setItemId(r.data.data[0].id);
+    }).catch(() => {});
   }, []);
 
   const submit = async () => {
     const qty = parseFloat(quantity);
-    if (!projectId || !itemId || !qty || qty <= 0) { setError("Project, item, and quantity are required."); return; }
+    if (!itemId || !qty || qty <= 0) { setError("Material and quantity are required."); return; }
     setSaving(true); setError("");
     try {
       await warehouseApi.receiveStock({
-        project_id:   projectId,
         item_id:      itemId,
         quantity:     qty,
         unit_cost:    unitCost ? parseFloat(unitCost) : undefined,
@@ -111,23 +109,24 @@ function ReceiveStockModal({ onClose, onDone }: { onClose: () => void; onDone: (
           <h3 className="font-semibold text-base">Receive Stock</h3>
           <button onClick={onClose}><X className="w-4 h-4 text-muted-foreground" /></button>
         </div>
+
+        {/* Destination banner */}
+        <div className="bg-primary/5 border border-primary/20 rounded-xl px-3 py-2 text-xs text-muted-foreground">
+          Destination: <span className="font-medium text-foreground">Global Main Warehouse</span> — stock is company-wide until transferred to a site.
+        </div>
+
         <div className="space-y-3">
-          <div>
-            <label className="text-xs text-muted-foreground block mb-1">Project *</label>
-            <select value={projectId} onChange={e => setProjectId(e.target.value)} className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm">
-              {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-            </select>
-          </div>
           <div>
             <label className="text-xs text-muted-foreground block mb-1">Material *</label>
             <select value={itemId} onChange={e => setItemId(e.target.value)} className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm">
+              <option value="">Select material…</option>
               {items.map(i => <option key={i.id} value={i.id}>{i.name}</option>)}
             </select>
           </div>
           <div className="grid grid-cols-2 gap-2">
             <div>
               <label className="text-xs text-muted-foreground block mb-1">Quantity *</label>
-              <input type="number" min="0.001" step="any" value={quantity} onChange={e => setQuantity(e.target.value)} placeholder="0" className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm" />
+              <input type="number" min="0.001" step="any" value={quantity} onChange={e => setQuantity(e.target.value)} placeholder="0" className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm" autoFocus />
             </div>
             <div>
               <label className="text-xs text-muted-foreground block mb-1">Unit Cost (R)</label>
@@ -135,12 +134,12 @@ function ReceiveStockModal({ onClose, onDone }: { onClose: () => void; onDone: (
             </div>
           </div>
           <div>
-            <label className="text-xs text-muted-foreground block mb-1">Supplier / Reference</label>
-            <input type="text" value={supplierRef} onChange={e => setSupplierRef(e.target.value)} placeholder="e.g. ABC Suppliers INV-001" className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm" />
+            <label className="text-xs text-muted-foreground block mb-1">Supplier / Invoice Ref</label>
+            <input type="text" value={supplierRef} onChange={e => setSupplierRef(e.target.value)} placeholder="e.g. ABC Suppliers — INV-001" className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm" />
           </div>
           <div className="grid grid-cols-2 gap-2">
             <div>
-              <label className="text-xs text-muted-foreground block mb-1">Date</label>
+              <label className="text-xs text-muted-foreground block mb-1">Delivery Date</label>
               <input type="date" value={date} onChange={e => setDate(e.target.value)} className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm" />
             </div>
             <div>
@@ -173,28 +172,34 @@ const ADJUSTMENT_OPTIONS: { value: string; label: string }[] = [
 
 function AdjustStockModal({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
   const today = new Date().toISOString().slice(0, 10);
-  const [projects,   setProjects]   = useState<Project[]>([]);
-  const [items,      setItems]      = useState<CatalogItem[]>([]);
-  const [projectId,  setProjectId]  = useState("");
-  const [itemId,     setItemId]     = useState("");
-  const [adjType,    setAdjType]    = useState("DAMAGED");
-  const [quantity,   setQuantity]   = useState("");
-  const [date,       setDate]       = useState(today);
-  const [notes,      setNotes]      = useState("");
-  const [saving,     setSaving]     = useState(false);
-  const [error,      setError]      = useState("");
+  const [items,    setItems]    = useState<CatalogItem[]>([]);
+  const [itemId,   setItemId]   = useState("");
+  const [adjType,  setAdjType]  = useState("DAMAGED");
+  const [quantity, setQuantity] = useState("");
+  const [date,     setDate]     = useState(today);
+  const [notes,    setNotes]    = useState("");
+  const [saving,   setSaving]   = useState(false);
+  const [error,    setError]    = useState("");
 
   useEffect(() => {
-    projectsApi.list(1, 100).then(r => { setProjects(r.items); if (r.items.length > 0) setProjectId(r.items[0].id); }).catch(() => {});
-    client.get<{ data: CatalogItem[] }>("/items/").then(r => { setItems(r.data.data ?? []); if (r.data.data?.[0]) setItemId(r.data.data[0].id); }).catch(() => {});
+    client.get<{ data: CatalogItem[] }>("/items/").then(r => {
+      setItems(r.data.data ?? []);
+      if (r.data.data?.[0]) setItemId(r.data.data[0].id);
+    }).catch(() => {});
   }, []);
 
   const submit = async () => {
     const qty = parseFloat(quantity);
-    if (!projectId || !itemId || !qty || qty <= 0) { setError("Project, item, and quantity are required."); return; }
+    if (!itemId || !qty || qty <= 0) { setError("Material and quantity are required."); return; }
     setSaving(true); setError("");
     try {
-      await warehouseApi.adjustStock({ project_id: projectId, item_id: itemId, adjustment_type: adjType, quantity: qty, movement_date: date || undefined, notes: notes || undefined });
+      await warehouseApi.adjustStock({
+        item_id: itemId,
+        adjustment_type: adjType,
+        quantity: qty,
+        movement_date: date || undefined,
+        notes: notes || undefined,
+      });
       onDone();
       onClose();
     } catch (err: unknown) {
@@ -210,16 +215,17 @@ function AdjustStockModal({ onClose, onDone }: { onClose: () => void; onDone: ()
           <h3 className="font-semibold text-base">Stock Adjustment</h3>
           <button onClick={onClose}><X className="w-4 h-4 text-muted-foreground" /></button>
         </div>
+
+        {/* Scope banner */}
+        <div className="bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 text-xs text-amber-800">
+          Adjusting <span className="font-medium">Global Main Warehouse</span> stock (project_id = null).
+        </div>
+
         <div className="space-y-3">
-          <div>
-            <label className="text-xs text-muted-foreground block mb-1">Project *</label>
-            <select value={projectId} onChange={e => setProjectId(e.target.value)} className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm">
-              {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-            </select>
-          </div>
           <div>
             <label className="text-xs text-muted-foreground block mb-1">Material *</label>
             <select value={itemId} onChange={e => setItemId(e.target.value)} className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm">
+              <option value="">Select material…</option>
               {items.map(i => <option key={i.id} value={i.id}>{i.name}</option>)}
             </select>
           </div>
@@ -232,7 +238,7 @@ function AdjustStockModal({ onClose, onDone }: { onClose: () => void; onDone: ()
           <div className="grid grid-cols-2 gap-2">
             <div>
               <label className="text-xs text-muted-foreground block mb-1">Quantity *</label>
-              <input type="number" min="0.001" step="any" value={quantity} onChange={e => setQuantity(e.target.value)} placeholder="0" className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm" />
+              <input type="number" min="0.001" step="any" value={quantity} onChange={e => setQuantity(e.target.value)} placeholder="0" className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm" autoFocus />
             </div>
             <div>
               <label className="text-xs text-muted-foreground block mb-1">Date</label>
@@ -255,7 +261,8 @@ function AdjustStockModal({ onClose, onDone }: { onClose: () => void; onDone: ()
 }
 
 // ── Transfer-to-Site Modal ────────────────────────────────────────────────────
-// Self-contained: loads its own sites for the item's project.
+// Handles both project-scoped stock and global stock (project_id = null).
+// For global stock, loads all sites company-wide and uses the global transfer endpoint.
 
 function TransferModal({
   item,
@@ -266,25 +273,44 @@ function TransferModal({
   onClose: () => void;
   onDone:  () => void;
 }) {
-  const [sites,    setSites]    = useState<Site[]>([]);
-  const [siteId,   setSiteId]   = useState("");
-  const [quantity, setQuantity] = useState("");
-  const [notes,    setNotes]    = useState("");
-  const [loading,  setLoading]  = useState(false);
+  const isGlobal = item.project_id === null;
+
+  // For global stock: list of all sites across all projects
+  const [allSites,     setAllSites]     = useState<GlobalWarehouseSite[]>([]);
+  // For project-scoped stock: sites within the item's project
+  const [projectSites, setProjectSites] = useState<{ id: string; name: string }[]>([]);
+
+  const [siteId,       setSiteId]       = useState("");
+  const [quantity,     setQuantity]     = useState("");
+  const [notes,        setNotes]        = useState("");
+  const [loading,      setLoading]      = useState(false);
   const [sitesLoading, setSitesLoading] = useState(true);
-  const [error,    setError]    = useState("");
+  const [error,        setError]        = useState("");
 
   useEffect(() => {
     setSitesLoading(true);
-    sitesApi.list(item.project_id)
-      .then(s => {
-        setSites(s);
-        if (s.length > 0) setSiteId(s[0].id);
-      })
-      .catch(() => setSites([]))
-      .finally(() => setSitesLoading(false));
-  }, [item.project_id]);
+    if (isGlobal) {
+      warehouseApi.listAllSites()
+        .then(s => {
+          setAllSites(s);
+          if (s.length > 0) setSiteId(s[0].id);
+        })
+        .catch(() => setAllSites([]))
+        .finally(() => setSitesLoading(false));
+    } else {
+      import("@/api/sites").then(({ sitesApi }) =>
+        sitesApi.list(item.project_id!)
+          .then(s => {
+            setProjectSites(s);
+            if (s.length > 0) setSiteId(s[0].id);
+          })
+          .catch(() => setProjectSites([]))
+          .finally(() => setSitesLoading(false))
+      );
+    }
+  }, [isGlobal, item.project_id]);
 
+  const sites = isGlobal ? allSites : projectSites;
   const selectedSite = sites.find(s => s.id === siteId);
 
   const submit = async () => {
@@ -297,7 +323,11 @@ function TransferModal({
     }
     setLoading(true); setError("");
     try {
-      await warehouseApi.transferToSite(item.project_id, item.item_id, siteId, qty, notes || undefined);
+      if (isGlobal) {
+        await warehouseApi.transferGlobalToSite(item.item_id, siteId, qty, notes || undefined);
+      } else {
+        await warehouseApi.transferToSite(item.project_id!, item.item_id, siteId, qty, notes || undefined);
+      }
       onDone();
       onClose();
     } catch (err: unknown) {
@@ -314,23 +344,29 @@ function TransferModal({
           <button onClick={onClose}><X className="w-4 h-4 text-muted-foreground" /></button>
         </div>
 
-        {/* Item + project context */}
+        {/* Item context */}
         <div className="bg-primary/5 border border-primary/20 rounded-xl px-4 py-3 space-y-0.5">
           <p className="font-medium text-sm">{item.item_name}</p>
           <p className="text-xs text-muted-foreground">
             Available: <strong>{fmt(item.on_hand)} {item.unit ?? ""}</strong>
-            {" · "}{item.project_code} {item.project_name}
+            {" · "}
+            {isGlobal
+              ? <span className="text-primary font-medium">Global Stock</span>
+              : <>{item.project_code} {item.project_name}</>
+            }
           </p>
         </div>
 
         <div className="space-y-3">
           <div>
-            <label className="text-xs text-muted-foreground block mb-1">Destination site</label>
+            <label className="text-xs text-muted-foreground block mb-1">
+              Destination site{isGlobal ? " (any project)" : ""}
+            </label>
             {sitesLoading ? (
               <div className="h-10 rounded-md border border-input bg-muted animate-pulse" />
             ) : sites.length === 0 ? (
               <p className="text-xs text-muted-foreground bg-muted/40 rounded-md px-3 py-2.5">
-                No sites in {item.project_name}.
+                {isGlobal ? "No active sites found." : `No sites in ${item.project_name}.`}
               </p>
             ) : (
               <select
@@ -338,7 +374,16 @@ function TransferModal({
                 onChange={e => setSiteId(e.target.value)}
                 className="w-full h-10 rounded-md border border-input bg-background px-3 text-sm"
               >
-                {sites.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                {isGlobal
+                  ? allSites.map(s => (
+                      <option key={s.id} value={s.id}>
+                        {s.project_code} — {s.name}
+                      </option>
+                    ))
+                  : projectSites.map(s => (
+                      <option key={s.id} value={s.id}>{s.name}</option>
+                    ))
+                }
               </select>
             )}
           </div>
@@ -467,9 +512,10 @@ export default function MainWarehousePage() {
   };
 
   // Derived KPIs
-  const totalSkus     = stock.length;
-  const totalOnHand   = stock.reduce((s, i) => s + i.on_hand, 0);
-  const projectCount  = new Set(stock.map(i => i.project_id)).size;
+  const totalSkus    = stock.length;
+  const totalOnHand  = stock.reduce((s, i) => s + i.on_hand, 0);
+  const globalCount  = stock.filter(i => i.project_id === null).length;
+  const projectCount = new Set(stock.filter(i => i.project_id !== null).map(i => i.project_id)).size;
 
   return (
     <div className="space-y-5 animate-fade-in">
@@ -511,6 +557,9 @@ export default function MainWarehousePage() {
           <div className="bg-card border border-border rounded-xl p-4">
             <p className="text-xs text-muted-foreground">Projects</p>
             <p className="text-2xl font-bold mt-0.5">{projectCount}</p>
+            {globalCount > 0 && (
+              <p className="text-xs text-primary mt-0.5">{globalCount} global SKU{globalCount !== 1 ? "s" : ""}</p>
+            )}
           </div>
         </div>
       )}
@@ -549,9 +598,15 @@ export default function MainWarehousePage() {
             >
               <p className="text-sm font-medium truncate pr-3">{item.item_name}</p>
               <p className="text-xs text-muted-foreground truncate">
-                <span className="font-mono">{item.project_code}</span>
-                {" "}
-                <span className="hidden sm:inline">{item.project_name}</span>
+                {item.project_id === null ? (
+                  <span className="text-primary font-medium">Global</span>
+                ) : (
+                  <>
+                    <span className="font-mono">{item.project_code}</span>
+                    {" "}
+                    <span className="hidden sm:inline">{item.project_name}</span>
+                  </>
+                )}
               </p>
               <p className="text-sm font-semibold text-right tabular-nums">{fmt(item.on_hand)}</p>
               <p className="text-xs text-muted-foreground text-right">{item.unit ?? "—"}</p>

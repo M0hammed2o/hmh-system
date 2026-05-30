@@ -63,7 +63,7 @@ export interface ReturnResult {
 }
 
 export interface GlobalWarehouseStockItem {
-  project_id:    string;
+  project_id:    string | null;  // null = global stock (no project assigned)
   project_name:  string;
   project_code:  string;
   item_id:       string;
@@ -73,6 +73,14 @@ export interface GlobalWarehouseStockItem {
   total_in:      number;
   total_out:     number;
   last_movement: string | null;
+}
+
+export interface GlobalWarehouseSite {
+  id:           string;
+  name:         string;
+  project_id:   string;
+  project_name: string;
+  project_code: string;
 }
 
 export interface GlobalWarehouseMovement extends WarehouseMovement {
@@ -179,9 +187,8 @@ export const warehouseApi = {
     return res.data.data ?? [];
   },
 
-  /** Receive stock from supplier into the global main warehouse (project-level). */
+  /** Receive stock from supplier into the global main warehouse (no project required). */
   receiveStock: async (body: {
-    project_id: string;
     item_id: string;
     quantity: number;
     unit?: string;
@@ -199,7 +206,6 @@ export const warehouseApi = {
 
   /** Create a stock adjustment in the global main warehouse. */
   adjustStock: async (body: {
-    project_id: string;
     item_id: string;
     adjustment_type: string;
     quantity: number;
@@ -209,6 +215,26 @@ export const warehouseApi = {
     const res = await client.post<{ data: { id: string; item_name: string; adjustment_type: string; quantity: number } }>(
       "/warehouse/main/adjust",
       body
+    );
+    return res.data.data;
+  },
+
+  /** All active sites across all projects (for global warehouse transfer modal). */
+  listAllSites: async (): Promise<GlobalWarehouseSite[]> => {
+    const res = await client.get<{ data: GlobalWarehouseSite[] }>("/warehouse/main/sites");
+    return res.data.data ?? [];
+  },
+
+  /** Transfer global stock (project_id=null) to a specific site. */
+  transferGlobalToSite: async (
+    itemId:   string,
+    siteId:   string,
+    quantity: number,
+    notes?:   string,
+  ): Promise<TransferResult> => {
+    const res = await client.post<{ data: TransferResult }>(
+      "/warehouse/main/transfer-to-site",
+      { item_id: itemId, site_id: siteId, quantity, notes: notes || null }
     );
     return res.data.data;
   },

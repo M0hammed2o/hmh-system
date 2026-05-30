@@ -630,10 +630,7 @@ def get_main_warehouse_history(
 def get_global_main_warehouse_stock(db: DbSession, current_user: CurrentUser):
     """
     Returns on-hand stock at the main warehouse level (site_id IS NULL, lot_id IS NULL)
-    across ALL projects. No project filter — company-wide view.
-
-    Each row includes project_id and project_name so the frontend can show
-    which project owns each stock line without requiring a project selector.
+    across ALL projects + global (unassigned) stock. No project filter — company-wide view.
     """
     rows = db.execute(text("""
         SELECT
@@ -649,19 +646,19 @@ def get_global_main_warehouse_stock(db: DbSession, current_user: CurrentUser):
             MAX(sl.movement_date)               AS last_movement
         FROM stock_ledger sl
         JOIN items    i ON i.id = sl.item_id
-        JOIN projects p ON p.id = sl.project_id
+        LEFT JOIN projects p ON p.id = sl.project_id
         WHERE sl.site_id IS NULL
           AND sl.lot_id  IS NULL
         GROUP BY sl.project_id, p.name, p.code, sl.item_id, i.name, i.default_unit
         HAVING SUM(sl.quantity_in) - SUM(sl.quantity_out) > 0
-        ORDER BY p.name, i.name
+        ORDER BY COALESCE(p.name, ''), i.name
     """)).mappings().all()
 
     return ApiSuccess(
         data=[{
-            "project_id":    str(r["project_id"]),
-            "project_name":  r["project_name"],
-            "project_code":  r["project_code"],
+            "project_id":    str(r["project_id"]) if r["project_id"] else None,
+            "project_name":  r["project_name"] or "Global",
+            "project_code":  r["project_code"] or "GLOBAL",
             "item_id":       str(r["item_id"]),
             "item_name":     r["item_name"],
             "unit":          r["unit"],
@@ -670,7 +667,7 @@ def get_global_main_warehouse_stock(db: DbSession, current_user: CurrentUser):
             "total_out":     float(r["total_out"]),
             "last_movement": r["last_movement"].isoformat() if r["last_movement"] else None,
         } for r in rows],
-        message=f"{len(rows)} item(s) across all project warehouses.",
+        message=f"{len(rows)} item(s) in main warehouse.",
     )
 
 
@@ -697,7 +694,7 @@ def get_global_main_warehouse_history(
             u.full_name     AS entered_by_name
         FROM stock_ledger sl
         JOIN items    i ON i.id = sl.item_id
-        JOIN projects p ON p.id = sl.project_id
+        LEFT JOIN projects p ON p.id = sl.project_id
         LEFT JOIN users u ON u.id = sl.entered_by
         WHERE sl.site_id IS NULL
           AND sl.lot_id  IS NULL
@@ -707,8 +704,8 @@ def get_global_main_warehouse_history(
 
     return ApiSuccess(data=[{
         "id":             str(r["id"]),
-        "project_id":     str(r["project_id"]),
-        "project_name":   r["project_name"],
+        "project_id":     str(r["project_id"]) if r["project_id"] else None,
+        "project_name":   r["project_name"] or "Global",
         "movement_type":  r["movement_type"],
         "item_name":      r["item_name"],
         "quantity_in":    float(r["quantity_in"] or 0),
@@ -724,14 +721,13 @@ def get_global_main_warehouse_history(
 # ── Main Warehouse: receive stock from supplier ───────────────────────────────
 
 class ReceiveStockBody(BaseModel):
-    project_id:  uuid.UUID
-    item_id:     uuid.UUID
-    quantity:    float
-    unit:        Optional[str] = None
-    unit_cost:   Optional[float] = None
+    item_id:      uuid.UUID
+    quantity:     float
+    unit:         Optional[str] = None
+    unit_cost:    Optional[float] = None
     supplier_ref: Optional[str] = None
     movement_date: Optional[str] = None  # ISO date "YYYY-MM-DD"; defaults to today
-    notes:       Optional[str] = None
+    notes:        Optional[str] = None
 
 
 @global_warehouse_router.post(
@@ -746,15 +742,10 @@ def receive_main_warehouse_stock(
     current_user: CurrentUser,
 ):
     """
-    Receive stock from a supplier into the main warehouse.
-    Creates a DELIVERY_RECEIVED ledger entry at project level (site_id=NULL, lot_id=NULL).
+    Receive stock from a supplier into the global main warehouse.
+    No project assignment — stock is company-wide until transferred to a site.
+    Creates a DELIVERY_RECEIVED ledger entry with project_id=NULL, site_id=NULL, lot_id=NULL.
     """
-    from app.models.project import Project
-    project = db.get(Project, body.project_id)
-    if not project:
-        raise HTTPException(404, "Project not found.")
-    check_project_access(db, current_user, body.project_id)
-
     item = db.get(Item, body.item_id)
     if not item:
         raise HTTPException(404, "Item not found.")
@@ -772,7 +763,7 @@ def receive_main_warehouse_stock(
             raise HTTPException(422, "Invalid movement_date format.")
 
     entry = StockLedger(
-        project_id=body.project_id,
+        project_id=None,
         site_id=None,
         lot_id=None,
         item_id=body.item_id,
@@ -795,7 +786,8 @@ def receive_main_warehouse_stock(
         db, current_user.id,
         AuditAction.CREATE,
         "stock_ledger", str(entry.id),
-        {"movement": "MAIN_WAREHOUSE_RECEIVE", "item": item.name, "qty": body.quantity, "project": str(body.project_id)},
+        {"movement": "MAIN_WAREHOUSE_RECEIVE", "item": item.name, "qty": body.quantity,
+         "supplier_ref": body.supplier_ref},
     )
 
     return ApiSuccess(
@@ -808,19 +800,18 @@ def receive_main_warehouse_stock(
 # ── Main Warehouse: stock adjustment ─────────────────────────────────────────
 
 ADJUSTMENT_TYPE_MAP = {
-    "DAMAGED":    (MovementType.ADJUSTMENT_SUBTRACT, "quantity_out"),
-    "LOST":       (MovementType.ADJUSTMENT_SUBTRACT, "quantity_out"),
-    "RETURNED":   (MovementType.ADJUSTMENT_ADD,      "quantity_in"),
-    "CORRECTION_ADD": (MovementType.ADJUSTMENT_ADD,  "quantity_in"),
+    "DAMAGED":        (MovementType.ADJUSTMENT_SUBTRACT, "quantity_out"),
+    "LOST":           (MovementType.ADJUSTMENT_SUBTRACT, "quantity_out"),
+    "RETURNED":       (MovementType.ADJUSTMENT_ADD,      "quantity_in"),
+    "CORRECTION_ADD": (MovementType.ADJUSTMENT_ADD,      "quantity_in"),
     "CORRECTION_SUB": (MovementType.ADJUSTMENT_SUBTRACT, "quantity_out"),
-    "OTHER_ADD":  (MovementType.ADJUSTMENT_ADD,      "quantity_in"),
-    "OTHER_SUB":  (MovementType.ADJUSTMENT_SUBTRACT, "quantity_out"),
+    "OTHER_ADD":      (MovementType.ADJUSTMENT_ADD,      "quantity_in"),
+    "OTHER_SUB":      (MovementType.ADJUSTMENT_SUBTRACT, "quantity_out"),
 }
 VALID_ADJUSTMENT_TYPES = list(ADJUSTMENT_TYPE_MAP.keys())
 
 
 class AdjustStockBody(BaseModel):
-    project_id:      uuid.UUID
     item_id:         uuid.UUID
     adjustment_type: str
     quantity:        float
@@ -840,15 +831,9 @@ def adjust_main_warehouse_stock(
     current_user: CurrentUser,
 ):
     """
-    Create a stock adjustment in the main warehouse.
+    Create a stock adjustment in the global main warehouse (project_id=NULL).
     adjustment_type: DAMAGED | LOST | RETURNED | CORRECTION_ADD | CORRECTION_SUB | OTHER_ADD | OTHER_SUB
     """
-    from app.models.project import Project
-    project = db.get(Project, body.project_id)
-    if not project:
-        raise HTTPException(404, "Project not found.")
-    check_project_access(db, current_user, body.project_id)
-
     if body.adjustment_type not in ADJUSTMENT_TYPE_MAP:
         raise HTTPException(422, f"Invalid adjustment_type. Must be one of: {VALID_ADJUSTMENT_TYPES}")
     if body.quantity <= 0:
@@ -870,7 +855,7 @@ def adjust_main_warehouse_stock(
             raise HTTPException(422, "Invalid movement_date format.")
 
     entry = StockLedger(
-        project_id=body.project_id,
+        project_id=None,
         site_id=None,
         lot_id=None,
         item_id=body.item_id,
@@ -899,4 +884,145 @@ def adjust_main_warehouse_stock(
         data={"id": str(entry.id), "item_name": item.name, "adjustment_type": body.adjustment_type, "quantity": body.quantity},
         message=f"Stock adjusted: {body.adjustment_type} {body.quantity} {item.default_unit or ''} of {item.name}.",
         status_code=201,
+    )
+
+
+# ── Global Main Warehouse: transfer to site (for stock with no project) ───────
+
+@global_warehouse_router.get("/main/sites", response_model=ApiSuccess[list[dict]], dependencies=[ALL_ROLES])
+def list_all_sites_for_global_transfer(db: DbSession, current_user: CurrentUser):
+    """Return all active sites across all projects for the global transfer modal."""
+    rows = db.execute(text("""
+        SELECT s.id, s.name, s.project_id, p.name AS project_name, p.code AS project_code
+        FROM sites s
+        JOIN projects p ON p.id = s.project_id
+        WHERE s.is_active = TRUE
+        ORDER BY p.name, s.name
+    """)).mappings().all()
+    return ApiSuccess(data=[{
+        "id":           str(r["id"]),
+        "name":         r["name"],
+        "project_id":   str(r["project_id"]),
+        "project_name": r["project_name"],
+        "project_code": r["project_code"],
+    } for r in rows])
+
+
+class GlobalTransferToSiteRequest(BaseModel):
+    item_id:  uuid.UUID
+    site_id:  uuid.UUID
+    quantity: float
+    notes:    Optional[str] = None
+
+
+@global_warehouse_router.post(
+    "/main/transfer-to-site",
+    response_model=ApiSuccess[dict],
+    dependencies=[WRITE_ROLES],
+)
+def transfer_global_stock_to_site(
+    body: GlobalTransferToSiteRequest,
+    db: DbSession,
+    current_user: CurrentUser,
+):
+    """
+    Transfer stock from the global main warehouse (project_id=NULL) to a site warehouse.
+
+    TRANSFER_OUT — project_id=NULL, site_id=NULL, lot_id=NULL  (leaves global pool)
+    TRANSFER_IN  — project_id=site.project_id, site_id=X, lot_id=NULL  (enters site scope)
+    """
+    site = db.get(Site, body.site_id)
+    if not site:
+        raise HTTPException(404, "Site not found.")
+
+    item = db.get(Item, body.item_id)
+    if not item:
+        raise HTTPException(404, "Item not found.")
+
+    if body.quantity <= 0:
+        raise HTTPException(422, "Transfer quantity must be greater than zero.")
+
+    # Check available balance in global pool (project_id IS NULL)
+    balance_row = db.execute(text("""
+        SELECT SUM(quantity_in) - SUM(quantity_out) AS balance
+        FROM stock_ledger
+        WHERE project_id IS NULL
+          AND site_id   IS NULL
+          AND lot_id    IS NULL
+          AND item_id    = :item_id
+    """), {"item_id": str(body.item_id)}).fetchone()
+
+    available = float(balance_row[0] or 0)
+    if body.quantity > available:
+        raise HTTPException(422,
+            f"Insufficient global warehouse stock. "
+            f"Available: {available:.3g} {item.default_unit or ''} of {item.name}; "
+            f"requested {body.quantity:.3g}."
+        )
+
+    now = datetime.now(timezone.utc)
+    transfer_ref = uuid.uuid4()
+
+    db.add(StockLedger(
+        project_id     = None,
+        site_id        = None,
+        lot_id         = None,
+        item_id        = body.item_id,
+        movement_type  = MovementType.TRANSFER_OUT,
+        reference_type = "global_to_site_transfer",
+        reference_id   = transfer_ref,
+        quantity_in    = 0,
+        quantity_out   = body.quantity,
+        unit           = item.default_unit,
+        movement_date  = now,
+        entered_by     = current_user.id,
+        notes          = body.notes or f"Transferred to {site.name}",
+        created_at     = now,
+    ))
+
+    db.add(StockLedger(
+        project_id     = site.project_id,
+        site_id        = body.site_id,
+        lot_id         = None,
+        item_id        = body.item_id,
+        movement_type  = MovementType.TRANSFER_IN,
+        reference_type = "global_to_site_transfer",
+        reference_id   = transfer_ref,
+        quantity_in    = body.quantity,
+        quantity_out   = 0,
+        unit           = item.default_unit,
+        movement_date  = now,
+        entered_by     = current_user.id,
+        notes          = body.notes or f"Received from Global Warehouse",
+        created_at     = now,
+    ))
+
+    audit_service.write_event(
+        db,
+        action=AuditAction.TRANSFER,
+        entity_type="global_warehouse",
+        actor_id=current_user.id,
+        entity_id=transfer_ref,
+        after_value={
+            "item": item.name,
+            "quantity": body.quantity,
+            "unit": item.default_unit,
+            "site": site.name,
+            "transfer_ref": str(transfer_ref),
+        },
+    )
+
+    db.commit()
+
+    return ApiSuccess(
+        data={
+            "transfer_ref": str(transfer_ref),
+            "item_id":      str(body.item_id),
+            "item_name":    item.name,
+            "quantity":     body.quantity,
+            "unit":         item.default_unit,
+            "site_name":    site.name,
+            "new_balance":  available - body.quantity,
+        },
+        message=f"Transferred {body.quantity} {item.default_unit or ''} of {item.name} to {site.name}.",
     )
