@@ -212,6 +212,15 @@ export default function FuelPage() {
   const [loading,           setLoading]           = useState(false);
   const [showLog,           setShowLog]           = useState(false);
   const [expandedFuelId,    setExpandedFuelId]    = useState<string | null>(null);
+  const [vehicleMap,        setVehicleMap]        = useState<Record<string, Vehicle>>({});
+
+  useEffect(() => {
+    vehiclesApi.list().then(vs => {
+      const m: Record<string, Vehicle> = {};
+      vs.forEach(v => { m[v.id] = v; });
+      setVehicleMap(m);
+    }).catch(() => {});
+  }, []);
 
   useEffect(() => {
     projectsApi.list(1, 100)
@@ -303,6 +312,14 @@ export default function FuelPage() {
                   const odoUrl  = fuelPhotoUrl(log.photo_odometer);
                   const pumpUrl = fuelPhotoUrl(log.photo_pump);
                   const invUrl  = fuelPhotoUrl(log.photo_invoice);
+                  const vehicle = log.vehicle_id ? vehicleMap[log.vehicle_id] : null;
+                  const expectedKm = (vehicle?.fuel_consumption_per_100km && log.litres)
+                    ? Math.round(log.litres * 100 / vehicle.fuel_consumption_per_100km)
+                    : null;
+                  const variancePct = (expectedKm && log.distance_km)
+                    ? Math.abs(log.distance_km - expectedKm) / expectedKm * 100
+                    : null;
+                  const highVariance = variancePct != null && variancePct > 25;
                   return (
                     <>
                     <tr key={log.id}
@@ -329,8 +346,20 @@ export default function FuelPage() {
                       <td className="px-3 py-2.5 text-right text-xs text-muted-foreground">
                         {log.odometer_reading != null ? `${log.odometer_reading.toLocaleString("en-ZA")} km` : "—"}
                       </td>
-                      <td className="px-3 py-2.5 text-right text-xs text-muted-foreground">
-                        {log.distance_km != null ? `${log.distance_km.toLocaleString("en-ZA", {maximumFractionDigits:0})} km` : "—"}
+                      <td className="px-3 py-2.5 text-right text-xs">
+                        {log.distance_km != null ? (
+                          <span className={highVariance ? "text-destructive font-medium" : "text-muted-foreground"}>
+                            {log.distance_km.toLocaleString("en-ZA", {maximumFractionDigits:0})} km
+                          </span>
+                        ) : expectedKm != null ? (
+                          <span className="text-muted-foreground/60 italic">~{expectedKm} km</span>
+                        ) : "—"}
+                        {expectedKm != null && log.distance_km != null && (
+                          <span className={`block text-[10px] ${highVariance ? "text-destructive" : "text-muted-foreground"}`}
+                                title={`Expected ~${expectedKm} km based on ${vehicle?.fuel_consumption_per_100km} L/100km`}>
+                            {highVariance && "⚠ "}exp ~{expectedKm} km
+                          </span>
+                        )}
                       </td>
                       <td className="px-3 py-2.5 text-right text-xs">
                         {log.efficiency_kpl != null ? (

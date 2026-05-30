@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
-import { Plus, Car, Wrench, Fuel, MoreHorizontal, Trash2, Droplet, AlertTriangle } from "lucide-react";
+import { Plus, Car, Wrench, Fuel, Trash2, Droplet, AlertTriangle, Pencil } from "lucide-react";
 import { fuelApi, fuelPhotoUrl, type FuelLog, FUEL_TYPE_LABELS } from "@/api/fuel";
 import { formatCurrency } from "@/lib/format";
-import { vehiclesApi, type Vehicle, type VehicleCost, type VehicleCreate, type VehicleCostCreate, type VehicleType, type VehicleCostType } from "@/api/vehicles";
+import { vehiclesApi, type Vehicle, type VehicleCost, type VehicleCreate, type VehicleCostCreate, type VehicleType, type VehicleCostType, type FuelType } from "@/api/vehicles";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -24,11 +24,111 @@ const costTypeLabels: Record<VehicleCostType, string> = {
   LICENCE: "Licence", INSURANCE: "Insurance", OTHER: "Other",
 };
 
+const fuelTypeLabels: Record<FuelType, string> = {
+  DIESEL: "Diesel", PETROL: "Petrol", PARAFFIN: "Paraffin", OTHER: "Other",
+};
+
 const costTypeOptions: VehicleCostType[] = ["FUEL", "TYRE", "REPAIR", "SERVICE", "LICENCE", "INSURANCE", "OTHER"];
 const vehicleTypeOptions: VehicleType[] = ["BAKKIE", "TRUCK", "TLB", "EXCAVATOR", "CRANE", "VAN", "OTHER"];
+const fuelTypeOptions: FuelType[] = ["DIESEL", "PETROL", "PARAFFIN", "OTHER"];
+
+function VehicleFormFields({
+  form,
+  onChange,
+}: {
+  form: VehicleCreate;
+  onChange: (patch: Partial<VehicleCreate>) => void;
+}) {
+  return (
+    <>
+      <div className="grid grid-cols-2 gap-3">
+        <div className="space-y-2">
+          <Label>Registration *</Label>
+          <Input value={form.registration} onChange={(e) => onChange({ registration: e.target.value })} placeholder="e.g. CA 123-456" required />
+        </div>
+        <div className="space-y-2">
+          <Label>Display Name *</Label>
+          <Input value={form.name} onChange={(e) => onChange({ name: e.target.value })} placeholder="e.g. Site Hilux" required />
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <div className="space-y-2">
+          <Label>Type</Label>
+          <select
+            value={form.vehicle_type ?? "BAKKIE"}
+            onChange={(e) => onChange({ vehicle_type: e.target.value as VehicleType })}
+            className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+          >
+            {vehicleTypeOptions.map((t) => <option key={t} value={t}>{vehicleTypeLabels[t]}</option>)}
+          </select>
+        </div>
+        <div className="space-y-2">
+          <Label>Status</Label>
+          <select
+            value={form.status ?? "ACTIVE"}
+            onChange={(e) => onChange({ status: e.target.value as VehicleCreate["status"] })}
+            className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+          >
+            <option value="ACTIVE">Active</option>
+            <option value="MAINTENANCE">Maintenance</option>
+            <option value="RETIRED">Retired</option>
+          </select>
+        </div>
+      </div>
+      <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide pt-1">Identification</p>
+      <div className="grid grid-cols-3 gap-3">
+        <div className="space-y-2">
+          <Label>Make</Label>
+          <Input value={form.make ?? ""} onChange={(e) => onChange({ make: e.target.value || undefined })} placeholder="Toyota" />
+        </div>
+        <div className="space-y-2">
+          <Label>Model</Label>
+          <Input value={form.model ?? ""} onChange={(e) => onChange({ model: e.target.value || undefined })} placeholder="Hilux" />
+        </div>
+        <div className="space-y-2">
+          <Label>Year</Label>
+          <Input type="number" min="1990" max="2099" value={form.year ?? ""} onChange={(e) => onChange({ year: e.target.value ? parseInt(e.target.value) : undefined })} placeholder="2022" />
+        </div>
+      </div>
+      <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide pt-1">Fuel &amp; Consumption</p>
+      <div className="grid grid-cols-3 gap-3">
+        <div className="space-y-2">
+          <Label>Fuel Type</Label>
+          <select
+            value={form.fuel_type ?? ""}
+            onChange={(e) => onChange({ fuel_type: (e.target.value as FuelType) || undefined })}
+            className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+          >
+            <option value="">— None —</option>
+            {fuelTypeOptions.map((f) => <option key={f} value={f}>{fuelTypeLabels[f]}</option>)}
+          </select>
+        </div>
+        <div className="space-y-2">
+          <Label>Tank (L)</Label>
+          <Input type="number" min="0" step="0.5" value={form.tank_capacity_l ?? ""} onChange={(e) => onChange({ tank_capacity_l: e.target.value ? parseFloat(e.target.value) : undefined })} placeholder="80" />
+        </div>
+        <div className="space-y-2">
+          <Label>L/100km</Label>
+          <Input type="number" min="0" step="0.1" value={form.fuel_consumption_per_100km ?? ""} onChange={(e) => onChange({ fuel_consumption_per_100km: e.target.value ? parseFloat(e.target.value) : undefined })} placeholder="12.5" />
+        </div>
+      </div>
+      <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide pt-1">Odometer &amp; Service</p>
+      <div className="grid grid-cols-2 gap-3">
+        <div className="space-y-2">
+          <Label>Current Odometer (km)</Label>
+          <Input type="number" min="0" step="1" value={form.current_odometer_km ?? ""} onChange={(e) => onChange({ current_odometer_km: e.target.value ? parseFloat(e.target.value) : undefined })} placeholder="45000" />
+        </div>
+        <div className="space-y-2">
+          <Label>Service Interval (km)</Label>
+          <Input type="number" min="0" step="500" value={form.service_interval_km ?? ""} onChange={(e) => onChange({ service_interval_km: e.target.value ? parseInt(e.target.value) : undefined })} placeholder="10000" />
+        </div>
+      </div>
+    </>
+  );
+}
 
 function AddVehicleModal({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
-  const [form, setForm] = useState<VehicleCreate>({ registration: "", name: "", vehicle_type: "BAKKIE" });
+  const [form, setForm] = useState<VehicleCreate>({ registration: "", name: "", vehicle_type: "BAKKIE", status: "ACTIVE" });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -47,31 +147,67 @@ function AddVehicleModal({ onClose, onCreated }: { onClose: () => void; onCreate
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-foreground/40">
-      <div className="bg-card border border-border rounded-xl w-full max-w-md p-6 animate-fade-in">
+    <div className="fixed inset-0 z-50 flex items-start justify-center p-4 bg-foreground/40 overflow-y-auto">
+      <div className="bg-card border border-border rounded-xl w-full max-w-lg p-6 animate-fade-in my-6">
         <h2 className="text-base font-semibold mb-5">Add Vehicle</h2>
-        <form onSubmit={submit} className="space-y-4">
-          <div className="space-y-2">
-            <Label>Registration</Label>
-            <Input value={form.registration} onChange={(e) => setForm({ ...form, registration: e.target.value })} placeholder="e.g. CA 123-456" required />
-          </div>
-          <div className="space-y-2">
-            <Label>Name</Label>
-            <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="e.g. Site Hilux" required />
-          </div>
-          <div className="space-y-2">
-            <Label>Type</Label>
-            <select
-              value={form.vehicle_type}
-              onChange={(e) => setForm({ ...form, vehicle_type: e.target.value as VehicleType })}
-              className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
-            >
-              {vehicleTypeOptions.map((t) => <option key={t} value={t}>{vehicleTypeLabels[t]}</option>)}
-            </select>
-          </div>
+        <form onSubmit={submit} className="space-y-3">
+          <VehicleFormFields form={form} onChange={(patch) => setForm((prev) => ({ ...prev, ...patch }))} />
           {error && <p className="text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-lg px-3 py-2">{error}</p>}
           <div className="flex gap-2 pt-1">
             <Button type="submit" disabled={loading} className="flex-1">{loading ? "Adding…" : "Add Vehicle"}</Button>
+            <Button type="button" variant="outline" onClick={onClose} className="flex-1">Cancel</Button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function EditVehicleModal({ vehicle, onClose, onSaved }: { vehicle: Vehicle; onClose: () => void; onSaved: (v: Vehicle) => void }) {
+  const [form, setForm] = useState<VehicleCreate>({
+    registration: vehicle.registration,
+    name: vehicle.name,
+    vehicle_type: vehicle.vehicle_type,
+    status: vehicle.status,
+    make: vehicle.make ?? undefined,
+    model: vehicle.model ?? undefined,
+    year: vehicle.year ?? undefined,
+    fuel_type: vehicle.fuel_type ?? undefined,
+    tank_capacity_l: vehicle.tank_capacity_l ?? undefined,
+    fuel_consumption_per_100km: vehicle.fuel_consumption_per_100km ?? undefined,
+    current_odometer_km: vehicle.current_odometer_km ?? undefined,
+    service_interval_km: vehicle.service_interval_km ?? undefined,
+    last_service_date: vehicle.last_service_date ?? undefined,
+    next_service_date: vehicle.next_service_date ?? undefined,
+    notes: vehicle.notes ?? undefined,
+  });
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    setError("");
+    try {
+      const updated = await vehiclesApi.update(vehicle.id, form);
+      onSaved(updated);
+      onClose();
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Failed to update vehicle.";
+      setError(msg);
+    } finally { setLoading(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center p-4 bg-foreground/40 overflow-y-auto">
+      <div className="bg-card border border-border rounded-xl w-full max-w-lg p-6 animate-fade-in my-6">
+        <h2 className="text-base font-semibold mb-1">Edit Vehicle</h2>
+        <p className="text-sm text-muted-foreground mb-5">{vehicle.registration}</p>
+        <form onSubmit={submit} className="space-y-3">
+          <VehicleFormFields form={form} onChange={(patch) => setForm((prev) => ({ ...prev, ...patch }))} />
+          {error && <p className="text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-lg px-3 py-2">{error}</p>}
+          <div className="flex gap-2 pt-1">
+            <Button type="submit" disabled={loading} className="flex-1">{loading ? "Saving…" : "Save Changes"}</Button>
             <Button type="button" variant="outline" onClick={onClose} className="flex-1">Cancel</Button>
           </div>
         </form>
@@ -181,10 +317,11 @@ export default function VehiclesPage() {
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
   const [logCostFor, setLogCostFor] = useState<Vehicle | null>(null);
+  const [editVehicle, setEditVehicle] = useState<Vehicle | null>(null);
   const [expanded,      setExpanded]      = useState<string | null>(null);
   const [error,         setError]         = useState("");
   const [fuelLogs,      setFuelLogs]      = useState<Record<string, FuelLog[]>>({});
-  const [activeTab,     setActiveTab]     = useState<Record<string, "costs" | "fuel">>({});
+  const [activeTab,     setActiveTab]     = useState<Record<string, "costs" | "fuel" | "details">>({});
 
   const loadVehicles = () => {
     setLoading(true);
@@ -230,12 +367,10 @@ export default function VehiclesPage() {
     setExpanded(id);
     loadCosts(id);
     loadFuelLogs(id);
-    if (!activeTab[id]) setActiveTab(prev => ({ ...prev, [id]: "costs" }));
+    if (!activeTab[id]) setActiveTab(prev => ({ ...prev, [id]: "details" }));
   };
 
   useEffect(() => { loadVehicles(); }, []);
-
-  const totalMonthCost = Object.values(costs).flat().reduce((sum, c) => sum + c.amount, 0);
 
   return (
     <div className="space-y-5 animate-fade-in">
@@ -287,6 +422,15 @@ export default function VehiclesPage() {
                 <Button
                   size="sm"
                   variant="outline"
+                  onClick={(e) => { e.stopPropagation(); setEditVehicle(v); }}
+                  className="shrink-0"
+                  title="Edit vehicle"
+                >
+                  <Pencil className="w-3.5 h-3.5" />
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
                   onClick={(e) => { e.stopPropagation(); setLogCostFor(v); }}
                   className="shrink-0"
                 >
@@ -315,23 +459,67 @@ export default function VehiclesPage() {
                 <div className="border-t border-border bg-muted/20">
                   {/* Tab switcher */}
                   <div className="flex border-b border-border/50">
-                    {(["costs", "fuel"] as const).map(tab => (
+                    {(["details", "costs", "fuel"] as const).map(tab => (
                       <button
                         key={tab}
                         onClick={() => setActiveTab(prev => ({ ...prev, [v.id]: tab }))}
                         className={`px-4 py-2 text-xs font-medium transition-colors flex items-center gap-1.5
-                          ${(activeTab[v.id] ?? "costs") === tab
+                          ${(activeTab[v.id] ?? "details") === tab
                             ? "border-b-2 border-primary text-primary"
                             : "text-muted-foreground hover:text-foreground"}`}
                       >
-                        {tab === "costs" ? <Wrench className="w-3 h-3" /> : <Droplet className="w-3 h-3" />}
-                        {tab === "costs" ? `Costs (${costs[v.id]?.length ?? 0})` : `Fuel (${fuelLogs[v.id]?.length ?? 0})`}
+                        {tab === "details" ? <Car className="w-3 h-3" /> : tab === "costs" ? <Wrench className="w-3 h-3" /> : <Droplet className="w-3 h-3" />}
+                        {tab === "details" ? "Details" : tab === "costs" ? `Costs (${costs[v.id]?.length ?? 0})` : `Fuel (${fuelLogs[v.id]?.length ?? 0})`}
                       </button>
                     ))}
                   </div>
 
+                  {/* Details tab */}
+                  {(activeTab[v.id] ?? "details") === "details" && (
+                    <div className="px-4 py-3">
+                      <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-xs">
+                        {(v.make || v.model || v.year) && (
+                          <div className="col-span-2 pb-1 border-b border-border/40 mb-1">
+                            <span className="text-muted-foreground">Vehicle: </span>
+                            <span className="font-medium">{[v.year, v.make, v.model].filter(Boolean).join(" ")}</span>
+                          </div>
+                        )}
+                        {v.fuel_type && (
+                          <div><span className="text-muted-foreground">Fuel type: </span><span className="font-medium">{fuelTypeLabels[v.fuel_type]}</span></div>
+                        )}
+                        {v.tank_capacity_l != null && (
+                          <div><span className="text-muted-foreground">Tank: </span><span className="font-medium">{v.tank_capacity_l} L</span></div>
+                        )}
+                        {v.fuel_consumption_per_100km != null && (
+                          <div>
+                            <span className="text-muted-foreground">Consumption: </span>
+                            <span className="font-medium">{v.fuel_consumption_per_100km} L/100km</span>
+                            {v.tank_capacity_l && (
+                              <span className="text-muted-foreground"> (~{Math.round(v.tank_capacity_l * 100 / v.fuel_consumption_per_100km)} km range)</span>
+                            )}
+                          </div>
+                        )}
+                        {v.current_odometer_km != null && (
+                          <div><span className="text-muted-foreground">Odometer: </span><span className="font-medium">{v.current_odometer_km.toLocaleString()} km</span></div>
+                        )}
+                        {v.service_interval_km != null && (
+                          <div><span className="text-muted-foreground">Service every: </span><span className="font-medium">{v.service_interval_km.toLocaleString()} km</span></div>
+                        )}
+                        {v.last_service_date && (
+                          <div><span className="text-muted-foreground">Last service: </span><span className="font-medium">{formatDate(v.last_service_date)}</span></div>
+                        )}
+                        {v.next_service_date && (
+                          <div><span className="text-muted-foreground">Next service: </span><span className="font-medium">{formatDate(v.next_service_date)}</span></div>
+                        )}
+                        {!v.make && !v.model && !v.year && !v.fuel_type && !v.tank_capacity_l && !v.current_odometer_km && (
+                          <p className="col-span-2 text-muted-foreground">No additional details recorded. Click the edit button to add vehicle specs.</p>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
                   {/* Costs tab */}
-                  {(activeTab[v.id] ?? "costs") === "costs" && costs[v.id] && (
+                  {(activeTab[v.id] ?? "details") === "costs" && costs[v.id] && (
                     <div className="px-4 py-3 space-y-2">
                       {costs[v.id].length > 0 && (
                         <div className="flex gap-4 text-xs text-muted-foreground pb-1 border-b border-border/50">
@@ -360,7 +548,7 @@ export default function VehiclesPage() {
                   )}
 
                   {/* Fuel logs tab */}
-                  {(activeTab[v.id] ?? "costs") === "fuel" && (
+                  {(activeTab[v.id] ?? "details") === "fuel" && (
                     <div className="px-4 py-3 space-y-2">
                       {!fuelLogs[v.id] ? (
                         <p className="text-xs text-muted-foreground">Loading fuel logs…</p>
@@ -414,6 +602,17 @@ export default function VehiclesPage() {
         <AddVehicleModal
           onClose={() => setShowAdd(false)}
           onCreated={loadVehicles}
+        />
+      )}
+
+      {editVehicle && (
+        <EditVehicleModal
+          vehicle={editVehicle}
+          onClose={() => setEditVehicle(null)}
+          onSaved={(updated) => {
+            setVehicles(prev => prev.map(v => v.id === updated.id ? updated : v));
+            setEditVehicle(null);
+          }}
         />
       )}
 

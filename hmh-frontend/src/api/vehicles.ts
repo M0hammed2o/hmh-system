@@ -1,8 +1,10 @@
 import client from "./client";
+import type { FuelType } from "./fuel";
 
 export type VehicleType = "BAKKIE" | "TRUCK" | "TLB" | "EXCAVATOR" | "CRANE" | "VAN" | "OTHER";
 export type VehicleStatus = "ACTIVE" | "MAINTENANCE" | "RETIRED";
 export type VehicleCostType = "FUEL" | "TYRE" | "REPAIR" | "SERVICE" | "LICENCE" | "INSURANCE" | "OTHER";
+export type { FuelType };
 
 export interface Vehicle {
   id: string;
@@ -12,6 +14,14 @@ export interface Vehicle {
   status: VehicleStatus;
   assigned_project_id: string | null;
   assigned_site_id: string | null;
+  make: string | null;
+  model: string | null;
+  year: number | null;
+  fuel_type: FuelType | null;
+  tank_capacity_l: number | null;
+  fuel_consumption_per_100km: number | null;
+  current_odometer_km: number | null;
+  service_interval_km: number | null;
   last_service_date: string | null;
   next_service_date: string | null;
   notes: string | null;
@@ -26,6 +36,14 @@ export interface VehicleCreate {
   status?: VehicleStatus;
   assigned_project_id?: string;
   assigned_site_id?: string;
+  make?: string;
+  model?: string;
+  year?: number;
+  fuel_type?: FuelType;
+  tank_capacity_l?: number;
+  fuel_consumption_per_100km?: number;
+  current_odometer_km?: number;
+  service_interval_km?: number;
   last_service_date?: string;
   next_service_date?: string;
   notes?: string;

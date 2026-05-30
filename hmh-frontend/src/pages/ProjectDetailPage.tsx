@@ -566,13 +566,16 @@ function LotTypesTab({
   return (
     <div className="space-y-4">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
+      <div className="flex items-start justify-between gap-4">
+        <div className="space-y-1 max-w-xl">
           <p className="text-sm text-muted-foreground">
             Define unit types for bulk BOQ management and milestone propagation.
           </p>
+          <p className="text-xs text-muted-foreground bg-muted/50 border border-border rounded-lg px-3 py-2">
+            <strong>What are Lot Types?</strong> A Lot Type is a reusable template for a category of work — for example "3-bedroom house" or "single garage". Each type stores a Bill of Quantities (BOQ) and a set of milestone stages. When you assign a Lot Type to a lot, it copies that BOQ and stage checklist to the lot so you only define them once and reuse across the project.
+          </p>
         </div>
-        <Button size="sm" onClick={onShowCreate}>
+        <Button size="sm" onClick={onShowCreate} className="shrink-0">
           <Plus className="w-4 h-4" />New Type
         </Button>
       </div>
@@ -1540,18 +1543,56 @@ export default function ProjectDetailPage() {
                             {status?.notes ?? "—"}
                           </td>
                           <td className="px-4 py-3">
-                            <button
-                              onClick={() => {
-                                if (isUpdating) { setUpdatingStage(null); return; }
-                                setUpdatingStage(master.id);
-                                setStageUpdateStatus(currentStatus);
-                                setStageUpdateNotes(status?.notes ?? "");
-                                setStageUpdateDelay("");
-                              }}
-                              className="text-xs text-primary hover:underline"
-                            >
-                              {isUpdating ? "Cancel" : "Update"}
-                            </button>
+                            <div className="flex items-center gap-2">
+                              <button
+                                onClick={() => {
+                                  if (isUpdating) { setUpdatingStage(null); return; }
+                                  setUpdatingStage(master.id);
+                                  setStageUpdateStatus(currentStatus);
+                                  setStageUpdateNotes(status?.notes ?? "");
+                                  setStageUpdateDelay("");
+                                }}
+                                className="text-xs text-primary hover:underline"
+                              >
+                                {isUpdating ? "Cancel" : "Update"}
+                              </button>
+                              <button
+                                onClick={() => {
+                                  const newName = window.prompt("Rename this stage:", master.name);
+                                  if (!newName || newName.trim() === master.name) return;
+                                  stagesApi.renameMaster(master.id, newName.trim())
+                                    .then(updated => setStageMasters(prev => prev.map(m => m.id === updated.id ? updated : m)))
+                                    .catch(() => alert("Failed to rename stage."));
+                                }}
+                                className="text-xs text-muted-foreground hover:text-foreground"
+                                title="Rename stage"
+                              >
+                                Rename
+                              </button>
+                              {status && (
+                                <button
+                                  onClick={async () => {
+                                    const blocked = currentStatus === "COMPLETED" || currentStatus === "CERTIFIED";
+                                    if (blocked) {
+                                      alert(`Cannot remove a ${currentStatus.toLowerCase()} stage. Reset its status first.`);
+                                      return;
+                                    }
+                                    if (!window.confirm(`Remove "${master.name}" from this project's stage tracking?\n\nThis only removes the tracking entry — the stage definition remains.`)) return;
+                                    try {
+                                      await stagesApi.deleteStatus(project!.id, status.id);
+                                      setStageStatuses(prev => prev.filter(s => s.id !== status.id));
+                                    } catch (err: unknown) {
+                                      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+                                      alert(detail ?? "Failed to remove stage.");
+                                    }
+                                  }}
+                                  className="text-xs text-muted-foreground hover:text-destructive"
+                                  title="Remove from project tracking"
+                                >
+                                  Remove
+                                </button>
+                              )}
+                            </div>
                           </td>
                         </tr>
                         {isUpdating && (

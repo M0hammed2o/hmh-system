@@ -6,7 +6,7 @@ from typing import Optional
 
 from pydantic import BaseModel, ConfigDict
 
-from app.models.enums import VehicleCostType, VehicleStatus, VehicleType
+from app.models.enums import FuelType, VehicleCostType, VehicleStatus, VehicleType
 
 
 class VehicleCreate(BaseModel):
@@ -14,6 +14,14 @@ class VehicleCreate(BaseModel):
     name: str
     vehicle_type: VehicleType = VehicleType.OTHER
     status: VehicleStatus = VehicleStatus.ACTIVE
+    make: Optional[str] = None
+    model: Optional[str] = None
+    year: Optional[int] = None
+    fuel_type: Optional[FuelType] = None
+    tank_capacity_l: Optional[float] = None
+    fuel_consumption_per_100km: Optional[float] = None
+    current_odometer_km: Optional[float] = None
+    service_interval_km: Optional[int] = None
     assigned_project_id: Optional[uuid.UUID] = None
     assigned_site_id: Optional[uuid.UUID] = None
     last_service_date: Optional[date] = None
@@ -25,6 +33,14 @@ class VehicleUpdate(BaseModel):
     name: Optional[str] = None
     vehicle_type: Optional[VehicleType] = None
     status: Optional[VehicleStatus] = None
+    make: Optional[str] = None
+    model: Optional[str] = None
+    year: Optional[int] = None
+    fuel_type: Optional[FuelType] = None
+    tank_capacity_l: Optional[float] = None
+    fuel_consumption_per_100km: Optional[float] = None
+    current_odometer_km: Optional[float] = None
+    service_interval_km: Optional[int] = None
     assigned_project_id: Optional[uuid.UUID] = None
     assigned_site_id: Optional[uuid.UUID] = None
     last_service_date: Optional[date] = None
@@ -40,6 +56,14 @@ class VehicleRead(BaseModel):
     name: str
     vehicle_type: VehicleType
     status: VehicleStatus
+    make: Optional[str] = None
+    model: Optional[str] = None
+    year: Optional[int] = None
+    fuel_type: Optional[FuelType] = None
+    tank_capacity_l: Optional[float] = None
+    fuel_consumption_per_100km: Optional[float] = None
+    current_odometer_km: Optional[float] = None
+    service_interval_km: Optional[int] = None
     assigned_project_id: Optional[uuid.UUID] = None
     assigned_site_id: Optional[uuid.UUID] = None
     last_service_date: Optional[date] = None

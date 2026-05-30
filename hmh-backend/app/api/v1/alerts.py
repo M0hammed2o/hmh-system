@@ -430,9 +430,30 @@ def send_test_message(recipient_id: uuid.UUID, db: DbSession):
         )
 
     lang = settings.WHATSAPP_ALERT_TEMPLATE_LANGUAGE or "en_US"
-    logger.info("wa_test_send template=%s lang=%s phone=%s", template_name, lang, recipient.phone_number)
+
+    # Build body components so the param count matches the approved Meta template.
+    # The number of variables is controlled by WHATSAPP_ALERT_TEMPLATE_BODY_VAR_COUNT.
+    # Most templates use {{1}}=title, {{2}}=body — adjust the env var if yours differs.
+    var_count = max(0, int(getattr(settings, "WHATSAPP_ALERT_TEMPLATE_BODY_VAR_COUNT", 2)))
+    test_params = [
+        "Test Alert",
+        "This is a test notification from HMH System. No action required.",
+        "HMH Group",    # fallback third var if template has 3
+    ]
+    components: list | None = None
+    if var_count > 0:
+        parameters = [
+            {"type": "text", "text": test_params[i] if i < len(test_params) else f"param{i+1}"}
+            for i in range(var_count)
+        ]
+        components = [{"type": "body", "parameters": parameters}]
+
+    logger.info(
+        "wa_test_send template=%s lang=%s phone=%s var_count=%d",
+        template_name, lang, recipient.phone_number, var_count,
+    )
     status, msg_id = whatsapp_service.send_template_message(
-        recipient.phone_number, template_name, lang
+        recipient.phone_number, template_name, lang, components=components
     )
     logger.info("wa_test_result status=%s msg_id=%s recipient=%s", status, msg_id, recipient.name)
     return ApiSuccess(
@@ -441,6 +462,7 @@ def send_test_message(recipient_id: uuid.UUID, db: DbSession):
             "provider_message_id": msg_id,
             "method": "template",
             "template_used": template_name,
+            "body_vars_sent": var_count,
         },
         message=f"Test queued to WhatsApp API: {status}",
     )

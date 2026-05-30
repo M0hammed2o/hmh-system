@@ -108,13 +108,16 @@ function CreateMRModal({ projectId, sites, onClose, onCreated }: {
   const updateItem = (i: number, field: keyof MRItemCreate, value: string | number) =>
     setItems(items.map((it, idx) => idx === i ? { ...it, [field]: value } : it));
 
+  const isMainWarehouse = destination === "MAIN_WAREHOUSE";
+
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!siteId) return;
+    if (!isMainWarehouse && !siteId) { setError("Select a site, or choose Main Warehouse as the destination."); return; }
     setLoading(true); setError("");
     try {
       await procurementApi.createMR(projectId, {
-        site_id: siteId, priority, delivery_destination: destination,
+        site_id: isMainWarehouse ? undefined : siteId,
+        priority, delivery_destination: destination,
         notes: notes || undefined, needed_by_date: neededBy || undefined,
         items: items.filter((i) => i.description.trim()),
       } as MRCreate);
@@ -134,10 +137,16 @@ function CreateMRModal({ projectId, sites, onClose, onCreated }: {
         <form onSubmit={submit} className="flex-1 overflow-y-auto p-5 space-y-4">
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
-              <Label>Site *</Label>
-              <select value={siteId} onChange={(e) => setSiteId(e.target.value)} className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm" required>
-                {sites.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-              </select>
+              <Label>{isMainWarehouse ? "Requesting Site" : "Site *"}</Label>
+              {isMainWarehouse ? (
+                <div className="h-9 flex items-center px-3 rounded-md border border-dashed border-border text-xs text-muted-foreground bg-muted/30">
+                  Main Warehouse (no site required)
+                </div>
+              ) : (
+                <select value={siteId} onChange={(e) => setSiteId(e.target.value)} className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm">
+                  {sites.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                </select>
+              )}
             </div>
             <div className="space-y-1.5">
               <Label>Priority</Label>

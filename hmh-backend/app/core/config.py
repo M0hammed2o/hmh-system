@@ -100,6 +100,12 @@ class Settings(BaseSettings):
     WHATSAPP_MAX_ALERTS_PER_HOUR_PER_RECIPIENT: int = 10
     WHATSAPP_TEST_PHONE_NUMBER: str = ""             # used by scripts/test_whatsapp_template.py
 
+    # Number of {{body}} variables in the alert template.
+    # Set this to match your approved Meta template exactly.
+    # 0 = template has no body variables (send without components).
+    # 2 = template has {{1}} and {{2}} (title + message) — most common.
+    WHATSAPP_ALERT_TEMPLATE_BODY_VAR_COUNT: int = 2
+
     # Internal cron secret — used by the /api/v1/internal/process-notifications endpoint.
     # Set this to a strong random string in Render env vars; used by the Render cron job.
     # If empty, the internal cron endpoint is disabled.

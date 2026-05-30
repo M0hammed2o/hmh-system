@@ -9,14 +9,19 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { formatDate } from "@/lib/format";
 import { useAuthContext, ADMIN_ROLES } from "@/context/AuthContext";
 
-const ROLES: UserRole[] = ["OWNER", "OFFICE_ADMIN", "OFFICE_USER", "SITE_MANAGER", "SITE_STAFF"];
+const ROLES: UserRole[] = ["OWNER", "OFFICE_ADMIN", "OFFICE_USER", "SITE_MANAGER", "SITE_STAFF", "READ_ONLY"];
 
 const roleLabel: Record<UserRole, string> = {
-  OWNER: "Owner",
+  OWNER:        "Owner",
   OFFICE_ADMIN: "Office Admin",
-  OFFICE_USER: "Office User",
+  OFFICE_USER:  "Office User",
   SITE_MANAGER: "Site Manager",
-  SITE_STAFF: "Site Staff",
+  SITE_STAFF:   "Site Staff",
+  READ_ONLY:    "Owner View Only",
+};
+
+const roleDescription: Partial<Record<UserRole, string>> = {
+  READ_ONLY: "View dashboards and reports only — cannot create, edit, or approve anything.",
 };
 
 function roleBadgeVariant(role: UserRole) {
@@ -76,6 +81,9 @@ function CreateUserModal({ onClose, onCreated }: CreateModalProps) {
             >
               {ROLES.map((r) => <option key={r} value={r}>{roleLabel[r]}</option>)}
             </select>
+            {roleDescription[form.role] && (
+              <p className="text-xs text-muted-foreground">{roleDescription[form.role]}</p>
+            )}
           </div>
           {error && (
             <p className="text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-lg px-3 py-2">{error}</p>

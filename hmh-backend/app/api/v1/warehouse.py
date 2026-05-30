@@ -719,3 +719,184 @@ def get_global_main_warehouse_history(
         "reference_type": r["reference_type"],
         "entered_by":     r["entered_by_name"],
     } for r in rows])
+
+
+# ── Main Warehouse: receive stock from supplier ───────────────────────────────
+
+class ReceiveStockBody(BaseModel):
+    project_id:  uuid.UUID
+    item_id:     uuid.UUID
+    quantity:    float
+    unit:        Optional[str] = None
+    unit_cost:   Optional[float] = None
+    supplier_ref: Optional[str] = None
+    movement_date: Optional[str] = None  # ISO date "YYYY-MM-DD"; defaults to today
+    notes:       Optional[str] = None
+
+
+@global_warehouse_router.post(
+    "/main/receive",
+    response_model=ApiSuccess[dict],
+    status_code=201,
+    dependencies=[WRITE_ROLES],
+)
+def receive_main_warehouse_stock(
+    body: ReceiveStockBody,
+    db: DbSession,
+    current_user: CurrentUser,
+):
+    """
+    Receive stock from a supplier into the main warehouse.
+    Creates a DELIVERY_RECEIVED ledger entry at project level (site_id=NULL, lot_id=NULL).
+    """
+    from app.models.project import Project
+    project = db.get(Project, body.project_id)
+    if not project:
+        raise HTTPException(404, "Project not found.")
+    check_project_access(db, current_user, body.project_id)
+
+    item = db.get(Item, body.item_id)
+    if not item:
+        raise HTTPException(404, "Item not found.")
+
+    if body.quantity <= 0:
+        raise HTTPException(422, "Quantity must be greater than zero.")
+
+    from datetime import date
+    movement_dt = datetime.now(timezone.utc)
+    if body.movement_date:
+        try:
+            d = date.fromisoformat(body.movement_date)
+            movement_dt = datetime(d.year, d.month, d.day, 12, 0, 0, tzinfo=timezone.utc)
+        except ValueError:
+            raise HTTPException(422, "Invalid movement_date format.")
+
+    entry = StockLedger(
+        project_id=body.project_id,
+        site_id=None,
+        lot_id=None,
+        item_id=body.item_id,
+        movement_type=MovementType.DELIVERY_RECEIVED,
+        reference_type="MAIN_WAREHOUSE_RECEIVE",
+        quantity_in=body.quantity,
+        quantity_out=0,
+        unit=body.unit or item.default_unit,
+        unit_cost=body.unit_cost,
+        movement_date=movement_dt,
+        entered_by=current_user.id,
+        notes=body.notes or (f"Received from supplier: {body.supplier_ref}" if body.supplier_ref else None),
+        created_at=datetime.now(timezone.utc),
+    )
+    db.add(entry)
+    db.commit()
+    db.refresh(entry)
+
+    audit_service.log(
+        db, current_user.id,
+        AuditAction.CREATE,
+        "stock_ledger", str(entry.id),
+        {"movement": "MAIN_WAREHOUSE_RECEIVE", "item": item.name, "qty": body.quantity, "project": str(body.project_id)},
+    )
+
+    return ApiSuccess(
+        data={"id": str(entry.id), "item_name": item.name, "quantity_in": body.quantity},
+        message=f"Received {body.quantity} {entry.unit or ''} of {item.name}.",
+        status_code=201,
+    )
+
+
+# ── Main Warehouse: stock adjustment ─────────────────────────────────────────
+
+ADJUSTMENT_TYPE_MAP = {
+    "DAMAGED":    (MovementType.ADJUSTMENT_SUBTRACT, "quantity_out"),
+    "LOST":       (MovementType.ADJUSTMENT_SUBTRACT, "quantity_out"),
+    "RETURNED":   (MovementType.ADJUSTMENT_ADD,      "quantity_in"),
+    "CORRECTION_ADD": (MovementType.ADJUSTMENT_ADD,  "quantity_in"),
+    "CORRECTION_SUB": (MovementType.ADJUSTMENT_SUBTRACT, "quantity_out"),
+    "OTHER_ADD":  (MovementType.ADJUSTMENT_ADD,      "quantity_in"),
+    "OTHER_SUB":  (MovementType.ADJUSTMENT_SUBTRACT, "quantity_out"),
+}
+VALID_ADJUSTMENT_TYPES = list(ADJUSTMENT_TYPE_MAP.keys())
+
+
+class AdjustStockBody(BaseModel):
+    project_id:      uuid.UUID
+    item_id:         uuid.UUID
+    adjustment_type: str
+    quantity:        float
+    movement_date:   Optional[str] = None
+    notes:           Optional[str] = None
+
+
+@global_warehouse_router.post(
+    "/main/adjust",
+    response_model=ApiSuccess[dict],
+    status_code=201,
+    dependencies=[WRITE_ROLES],
+)
+def adjust_main_warehouse_stock(
+    body: AdjustStockBody,
+    db: DbSession,
+    current_user: CurrentUser,
+):
+    """
+    Create a stock adjustment in the main warehouse.
+    adjustment_type: DAMAGED | LOST | RETURNED | CORRECTION_ADD | CORRECTION_SUB | OTHER_ADD | OTHER_SUB
+    """
+    from app.models.project import Project
+    project = db.get(Project, body.project_id)
+    if not project:
+        raise HTTPException(404, "Project not found.")
+    check_project_access(db, current_user, body.project_id)
+
+    if body.adjustment_type not in ADJUSTMENT_TYPE_MAP:
+        raise HTTPException(422, f"Invalid adjustment_type. Must be one of: {VALID_ADJUSTMENT_TYPES}")
+    if body.quantity <= 0:
+        raise HTTPException(422, "Quantity must be greater than zero.")
+
+    item = db.get(Item, body.item_id)
+    if not item:
+        raise HTTPException(404, "Item not found.")
+
+    movement_type, qty_field = ADJUSTMENT_TYPE_MAP[body.adjustment_type]
+
+    from datetime import date
+    movement_dt = datetime.now(timezone.utc)
+    if body.movement_date:
+        try:
+            d = date.fromisoformat(body.movement_date)
+            movement_dt = datetime(d.year, d.month, d.day, 12, 0, 0, tzinfo=timezone.utc)
+        except ValueError:
+            raise HTTPException(422, "Invalid movement_date format.")
+
+    entry = StockLedger(
+        project_id=body.project_id,
+        site_id=None,
+        lot_id=None,
+        item_id=body.item_id,
+        movement_type=movement_type,
+        reference_type=f"ADJUSTMENT_{body.adjustment_type}",
+        quantity_in=body.quantity if qty_field == "quantity_in" else 0,
+        quantity_out=body.quantity if qty_field == "quantity_out" else 0,
+        unit=item.default_unit,
+        movement_date=movement_dt,
+        entered_by=current_user.id,
+        notes=body.notes,
+        created_at=datetime.now(timezone.utc),
+    )
+    db.add(entry)
+    db.commit()
+    db.refresh(entry)
+
+    audit_service.log(
+        db, current_user.id,
+        AuditAction.CREATE,
+        "stock_ledger", str(entry.id),
+        {"movement": f"ADJUSTMENT_{body.adjustment_type}", "item": item.name, "qty": body.quantity},
+    )
+
+    return ApiSuccess(
+        data={"id": str(entry.id), "item_name": item.name, "adjustment_type": body.adjustment_type, "quantity": body.quantity},
+        message=f"Stock adjusted: {body.adjustment_type} {body.quantity} {item.default_unit or ''} of {item.name}.",
+        status_code=201,
+    )

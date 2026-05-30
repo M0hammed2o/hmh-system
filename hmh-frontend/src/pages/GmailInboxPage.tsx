@@ -326,6 +326,7 @@ export default function GmailInboxPage() {
   const [filter,     setFilter]     = useState<string>("");
   const [extraction, setExtraction] = useState<ProcessedAttachment[] | null>(null);
   const [composeOpen, setComposeOpen] = useState(false);
+  const [smtpEnabled, setSmtpEnabled] = useState<boolean | null>(null);
   const autoRefreshTimer = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const load = useCallback(async () => {
@@ -337,7 +338,10 @@ export default function GmailInboxPage() {
     finally   { setLoading(false); }
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    load();
+    gmailApi.getEmailConfig().then(cfg => setSmtpEnabled(cfg.smtp_enabled)).catch(() => {});
+  }, [load]);
 
   // Auto-refresh every 3 minutes; pauses when tab is hidden to avoid waking a sleeping browser tab.
   useEffect(() => {
@@ -525,6 +529,12 @@ export default function GmailInboxPage() {
         </div>
       </div>
 
+      {smtpEnabled === false && (
+        <div className="flex items-center gap-2 text-sm bg-amber-50 border border-amber-200 text-amber-800 rounded-lg px-3 py-2 dark:bg-amber-950/30 dark:border-amber-800 dark:text-amber-300">
+          <AlertTriangle className="w-4 h-4 shrink-0" />
+          <span>SMTP is not configured. Sending emails will only mark them as sent in the system — no real email will be delivered. Set <code className="font-mono text-xs bg-amber-100 dark:bg-amber-900 px-1 rounded">SMTP_ENABLED=true</code> in the backend to enable real sending.</span>
+        </div>
+      )}
       {notice && <div className="text-sm bg-primary/10 border border-primary/20 text-primary rounded-lg px-3 py-2">{notice}</div>}
       {error  && <div className="text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-lg px-3 py-2">{error}</div>}
 

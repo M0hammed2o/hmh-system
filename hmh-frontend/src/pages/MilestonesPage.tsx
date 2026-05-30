@@ -13,7 +13,7 @@ import { useSearchParams } from "react-router-dom";
 import {
   CheckCircle2, Circle, Clock, AlertTriangle, Camera,
   ChevronDown, ChevronUp, Plus, X as XIcon,
-  RefreshCw, Package, HardHat, Ban, PlayCircle, History, CalendarClock,
+  RefreshCw, HardHat, Ban, PlayCircle, History, CalendarClock,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -579,18 +579,6 @@ function MilestoneCard({
             ) : (
               <p className="text-xs text-muted-foreground">Start the milestone to upload photos.</p>
             )}
-          </div>
-
-          {/* Material summary — lot-level budget shared across all milestones */}
-          <div>
-            <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-1 flex items-center gap-1.5">
-              <Package className="w-3.5 h-3.5" />
-              Lot Material Budget
-            </h4>
-            <p className="text-[10px] text-muted-foreground mb-2">
-              All materials allocated to this unit — shared across all milestones.
-            </p>
-            <MaterialSummaryTable items={materials} lotSelected={lotSelected} />
           </div>
 
           {/* Labour */}

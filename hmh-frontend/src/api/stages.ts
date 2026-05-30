@@ -185,4 +185,13 @@ export const stagesApi = {
   deletePhoto: async (projectId: string, statusId: string, photoId: string): Promise<void> => {
     await client.delete(`/projects/${projectId}/stage-statuses/${statusId}/photos/${photoId}`);
   },
+
+  deleteStatus: async (projectId: string, statusId: string): Promise<void> => {
+    await client.delete(`/projects/${projectId}/stage-statuses/${statusId}`);
+  },
+
+  renameMaster: async (stageId: string, name: string): Promise<StageMaster> => {
+    const res = await client.patch<{ data: StageMaster }>(`/stages/${stageId}`, { name });
+    return res.data.data;
+  },
 };

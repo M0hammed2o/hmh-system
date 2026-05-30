@@ -17,6 +17,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Package, ArrowRight, RefreshCw, History,
   AlertTriangle, X, ChevronDown, ChevronUp, Warehouse,
+  PackagePlus, SlidersHorizontal,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -29,6 +30,10 @@ import {
 } from "@/api/warehouse";
 import { cn } from "@/lib/utils";
 import { formatDate } from "@/lib/format";
+import { projectsApi, type Project } from "@/api/projects";
+import client from "@/api/client";
+
+interface CatalogItem { id: string; name: string; default_unit: string | null; }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -55,6 +60,199 @@ const MOVEMENT_COLOR: Record<string, string> = {
   TRANSFER_OUT:        "text-amber-600",
   ADJUSTMENT_SUBTRACT: "text-destructive",
 };
+
+// ── Receive Stock Modal ───────────────────────────────────────────────────────
+
+function ReceiveStockModal({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
+  const today = new Date().toISOString().slice(0, 10);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [items,    setItems]    = useState<CatalogItem[]>([]);
+  const [projectId, setProjectId] = useState("");
+  const [itemId,    setItemId]    = useState("");
+  const [quantity,  setQuantity]  = useState("");
+  const [unitCost,  setUnitCost]  = useState("");
+  const [supplierRef, setSupplierRef] = useState("");
+  const [date,      setDate]      = useState(today);
+  const [notes,     setNotes]     = useState("");
+  const [saving,    setSaving]    = useState(false);
+  const [error,     setError]     = useState("");
+
+  useEffect(() => {
+    projectsApi.list(1, 100).then(r => { setProjects(r.items); if (r.items.length > 0) setProjectId(r.items[0].id); }).catch(() => {});
+    client.get<{ data: CatalogItem[] }>("/items/").then(r => { setItems(r.data.data ?? []); if (r.data.data?.[0]) setItemId(r.data.data[0].id); }).catch(() => {});
+  }, []);
+
+  const submit = async () => {
+    const qty = parseFloat(quantity);
+    if (!projectId || !itemId || !qty || qty <= 0) { setError("Project, item, and quantity are required."); return; }
+    setSaving(true); setError("");
+    try {
+      await warehouseApi.receiveStock({
+        project_id:   projectId,
+        item_id:      itemId,
+        quantity:     qty,
+        unit_cost:    unitCost ? parseFloat(unitCost) : undefined,
+        supplier_ref: supplierRef || undefined,
+        movement_date: date || undefined,
+        notes:        notes || undefined,
+      });
+      onDone();
+      onClose();
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      setError(detail ?? "Failed to receive stock.");
+    } finally { setSaving(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
+      <div className="bg-card border border-border rounded-2xl w-full max-w-sm p-6 space-y-4" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between">
+          <h3 className="font-semibold text-base">Receive Stock</h3>
+          <button onClick={onClose}><X className="w-4 h-4 text-muted-foreground" /></button>
+        </div>
+        <div className="space-y-3">
+          <div>
+            <label className="text-xs text-muted-foreground block mb-1">Project *</label>
+            <select value={projectId} onChange={e => setProjectId(e.target.value)} className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm">
+              {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="text-xs text-muted-foreground block mb-1">Material *</label>
+            <select value={itemId} onChange={e => setItemId(e.target.value)} className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm">
+              {items.map(i => <option key={i.id} value={i.id}>{i.name}</option>)}
+            </select>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="text-xs text-muted-foreground block mb-1">Quantity *</label>
+              <input type="number" min="0.001" step="any" value={quantity} onChange={e => setQuantity(e.target.value)} placeholder="0" className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm" />
+            </div>
+            <div>
+              <label className="text-xs text-muted-foreground block mb-1">Unit Cost (R)</label>
+              <input type="number" min="0" step="0.01" value={unitCost} onChange={e => setUnitCost(e.target.value)} placeholder="0.00" className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm" />
+            </div>
+          </div>
+          <div>
+            <label className="text-xs text-muted-foreground block mb-1">Supplier / Reference</label>
+            <input type="text" value={supplierRef} onChange={e => setSupplierRef(e.target.value)} placeholder="e.g. ABC Suppliers INV-001" className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm" />
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="text-xs text-muted-foreground block mb-1">Date</label>
+              <input type="date" value={date} onChange={e => setDate(e.target.value)} className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm" />
+            </div>
+            <div>
+              <label className="text-xs text-muted-foreground block mb-1">Notes</label>
+              <input type="text" value={notes} onChange={e => setNotes(e.target.value)} placeholder="Optional" className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm" />
+            </div>
+          </div>
+        </div>
+        {error && <p className="text-xs text-destructive bg-destructive/10 rounded-lg px-3 py-2">{error}</p>}
+        <div className="flex gap-2">
+          <Button onClick={submit} disabled={saving} className="flex-1">{saving ? "Receiving…" : "Receive Stock"}</Button>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Adjust Stock Modal ────────────────────────────────────────────────────────
+
+const ADJUSTMENT_OPTIONS: { value: string; label: string }[] = [
+  { value: "DAMAGED",        label: "Damaged (remove)" },
+  { value: "LOST",           label: "Lost (remove)" },
+  { value: "RETURNED",       label: "Returned to stock (add)" },
+  { value: "CORRECTION_ADD", label: "Correction + (add)" },
+  { value: "CORRECTION_SUB", label: "Correction − (remove)" },
+  { value: "OTHER_ADD",      label: "Other + (add)" },
+  { value: "OTHER_SUB",      label: "Other − (remove)" },
+];
+
+function AdjustStockModal({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
+  const today = new Date().toISOString().slice(0, 10);
+  const [projects,   setProjects]   = useState<Project[]>([]);
+  const [items,      setItems]      = useState<CatalogItem[]>([]);
+  const [projectId,  setProjectId]  = useState("");
+  const [itemId,     setItemId]     = useState("");
+  const [adjType,    setAdjType]    = useState("DAMAGED");
+  const [quantity,   setQuantity]   = useState("");
+  const [date,       setDate]       = useState(today);
+  const [notes,      setNotes]      = useState("");
+  const [saving,     setSaving]     = useState(false);
+  const [error,      setError]      = useState("");
+
+  useEffect(() => {
+    projectsApi.list(1, 100).then(r => { setProjects(r.items); if (r.items.length > 0) setProjectId(r.items[0].id); }).catch(() => {});
+    client.get<{ data: CatalogItem[] }>("/items/").then(r => { setItems(r.data.data ?? []); if (r.data.data?.[0]) setItemId(r.data.data[0].id); }).catch(() => {});
+  }, []);
+
+  const submit = async () => {
+    const qty = parseFloat(quantity);
+    if (!projectId || !itemId || !qty || qty <= 0) { setError("Project, item, and quantity are required."); return; }
+    setSaving(true); setError("");
+    try {
+      await warehouseApi.adjustStock({ project_id: projectId, item_id: itemId, adjustment_type: adjType, quantity: qty, movement_date: date || undefined, notes: notes || undefined });
+      onDone();
+      onClose();
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      setError(detail ?? "Failed to adjust stock.");
+    } finally { setSaving(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
+      <div className="bg-card border border-border rounded-2xl w-full max-w-sm p-6 space-y-4" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between">
+          <h3 className="font-semibold text-base">Stock Adjustment</h3>
+          <button onClick={onClose}><X className="w-4 h-4 text-muted-foreground" /></button>
+        </div>
+        <div className="space-y-3">
+          <div>
+            <label className="text-xs text-muted-foreground block mb-1">Project *</label>
+            <select value={projectId} onChange={e => setProjectId(e.target.value)} className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm">
+              {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="text-xs text-muted-foreground block mb-1">Material *</label>
+            <select value={itemId} onChange={e => setItemId(e.target.value)} className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm">
+              {items.map(i => <option key={i.id} value={i.id}>{i.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="text-xs text-muted-foreground block mb-1">Adjustment Type *</label>
+            <select value={adjType} onChange={e => setAdjType(e.target.value)} className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm">
+              {ADJUSTMENT_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+            </select>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="text-xs text-muted-foreground block mb-1">Quantity *</label>
+              <input type="number" min="0.001" step="any" value={quantity} onChange={e => setQuantity(e.target.value)} placeholder="0" className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm" />
+            </div>
+            <div>
+              <label className="text-xs text-muted-foreground block mb-1">Date</label>
+              <input type="date" value={date} onChange={e => setDate(e.target.value)} className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm" />
+            </div>
+          </div>
+          <div>
+            <label className="text-xs text-muted-foreground block mb-1">Reason / Notes</label>
+            <input type="text" value={notes} onChange={e => setNotes(e.target.value)} placeholder="Explain the adjustment" className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm" />
+          </div>
+        </div>
+        {error && <p className="text-xs text-destructive bg-destructive/10 rounded-lg px-3 py-2">{error}</p>}
+        <div className="flex gap-2">
+          <Button onClick={submit} disabled={saving} className="flex-1">{saving ? "Saving…" : "Save Adjustment"}</Button>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 // ── Transfer-to-Site Modal ────────────────────────────────────────────────────
 // Self-contained: loads its own sites for the item's project.
@@ -236,7 +434,9 @@ export default function MainWarehousePage() {
   const [showHistory, setShowHistory] = useState(false);
   const [error,       setError]       = useState("");
 
-  const [transferItem, setTransferItem] = useState<GlobalWarehouseStockItem | null>(null);
+  const [transferItem,  setTransferItem]  = useState<GlobalWarehouseStockItem | null>(null);
+  const [showReceive,   setShowReceive]   = useState(false);
+  const [showAdjust,    setShowAdjust]    = useState(false);
 
   const loadStock = useCallback(async () => {
     setLoading(true); setError("");
@@ -258,8 +458,12 @@ export default function MainWarehousePage() {
   }, []);
 
   const toggleHistory = () => {
-    setShowHistory(p => !p);
-    if (!showHistory && history.length === 0) loadHistory();
+    if (!showHistory) {
+      setShowHistory(true);
+      if (history.length === 0) loadHistory();
+    } else {
+      setShowHistory(false);
+    }
   };
 
   // Derived KPIs
@@ -273,10 +477,17 @@ export default function MainWarehousePage() {
         title="Main Warehouse"
         description="Company-wide stock across all projects — view on-hand, transfer to sites, track movements."
         actions={
-          <Button size="sm" variant="outline" onClick={loadStock} disabled={loading}>
-            <RefreshCw className={cn("w-4 h-4", loading && "animate-spin")} />
-            Refresh
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button size="sm" onClick={() => setShowReceive(true)}>
+              <PackagePlus className="w-4 h-4" />Receive Stock
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => setShowAdjust(true)}>
+              <SlidersHorizontal className="w-4 h-4" />Adjust
+            </Button>
+            <Button size="sm" variant="outline" onClick={loadStock} disabled={loading}>
+              <RefreshCw className={cn("w-4 h-4", loading && "animate-spin")} />
+            </Button>
+          </div>
         }
       />
 
@@ -410,6 +621,20 @@ export default function MainWarehousePage() {
           item={transferItem}
           onClose={() => setTransferItem(null)}
           onDone={loadStock}
+        />
+      )}
+
+      {showReceive && (
+        <ReceiveStockModal
+          onClose={() => setShowReceive(false)}
+          onDone={() => { loadStock(); loadHistory(); }}
+        />
+      )}
+
+      {showAdjust && (
+        <AdjustStockModal
+          onClose={() => setShowAdjust(false)}
+          onDone={() => { loadStock(); loadHistory(); }}
         />
       )}
     </div>

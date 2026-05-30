@@ -290,7 +290,7 @@ export default function AuditPage() {
   const userName = (id: string | null) => {
     if (!id) return "System";
     const u = users.find(u => u.id === id);
-    return u ? u.full_name : "Unknown User";
+    return u ? u.full_name : "System / Deleted User";
   };
 
   // Client-side search over visible fields

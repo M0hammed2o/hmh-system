@@ -28,6 +28,18 @@ gmail_router      = APIRouter(prefix="/gmail",          tags=["gmail"])
 gmail_docs_router = APIRouter(prefix="",                tags=["gmail"])   # for /invoices/from-gmail etc.
 
 
+# ── Email config status ───────────────────────────────────────────────────────
+
+@gmail_router.get("/email-config", dependencies=[OFFICE_AND_ABOVE])
+def get_email_config():
+    """Return whether SMTP and IMAP are configured."""
+    from app.core.config import settings
+    return ApiSuccess(data={
+        "smtp_enabled": bool(getattr(settings, "SMTP_ENABLED", False)),
+        "imap_enabled": bool(getattr(settings, "IMAP_ENABLED", False)),
+    })
+
+
 # ── Fetch trigger ─────────────────────────────────────────────────────────────
 
 @gmail_router.post("/fetch", dependencies=[OFFICE_AND_ABOVE])

@@ -1,23 +1,34 @@
 /**
- * Owner Mobile Dashboard — phone-first view of the entire business.
- * Large cards, tap targets, real data from existing APIs.
+ * Owner View — project-focused snapshot.
+ *
+ * Sections:
+ *   1. Project selector
+ *   2. Project details card (name, sites, lots, status, progress)
+ *   3. Fuel total for the year
+ *   4. Quick Access (Deliveries, Warehouse, Reconciliation, WhatsApp Queue, Milestones)
+ *
+ * Removed: Vehicle Costs Today/Month, Open Alerts card, Pending Invoices,
+ *          Open POs, Active Sites, Active Projects, Total Paid, Pending Approvals.
  */
-import { useEffect, useState, useCallback } from "react";
+
+import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import {
-  TrendingUp, Bell, Clock, Car, FileText, BarChart3,
-  RefreshCw, ChevronRight, AlertTriangle, CheckCircle2,
-  HardHat, MessageSquare, Package,
+  RefreshCw, ChevronRight, AlertTriangle,
+  Truck, Warehouse, FileCheck2, MessageSquare, Flag,
+  Droplet, FolderKanban, CheckCircle2,
 } from "lucide-react";
-import { dashboardApi, type DashboardStats } from "@/api/dashboard";
-import { alertsApi, type AlertStats } from "@/api/alerts";
+import { dashboardApi, type ProjectOperation, type DashboardStats } from "@/api/dashboard";
+import { sitesApi } from "@/api/sites";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import client from "@/api/client";
 
-function fmt(n: number) {
+// ── helpers ────────────────────────────────────────────────────────────────────
+
+function fmtR(n: number) {
   if (n >= 1_000_000) return `R${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `R${(n / 1_000).toFixed(0)}K`;
+  if (n >= 1_000)     return `R${(n / 1_000).toFixed(0)}K`;
   return `R${n.toFixed(0)}`;
 }
 
@@ -28,275 +39,278 @@ function timeGreeting() {
   return "Good evening";
 }
 
-interface BigCard {
-  label: string;
-  value: string | number;
-  icon: React.ElementType;
-  to: string;
-  variant?: "default" | "warn" | "danger" | "success";
-  sub?: string;
-}
+// ── Quick-access tile ─────────────────────────────────────────────────────────
 
-function BigCard({ label, value, icon: Icon, to, variant = "default", sub }: BigCard) {
-  const colors = {
-    default: "bg-card border-border",
-    warn:    "bg-amber-500/10 border-amber-500/40",
-    danger:  "bg-destructive/10 border-destructive/40",
-    success: "bg-green-500/10 border-green-500/40",
-  };
-  const textColors = {
-    default: "text-foreground",
-    warn:    "text-amber-600 dark:text-amber-400",
-    danger:  "text-destructive",
-    success: "text-green-600 dark:text-green-400",
-  };
-  const iconColors = {
-    default: "bg-primary/10 text-primary",
-    warn:    "bg-amber-500/20 text-amber-500",
-    danger:  "bg-destructive/20 text-destructive",
-    success: "bg-green-500/20 text-green-600 dark:text-green-400",
-  };
+function QuickTile({
+  label, to, icon: Icon,
+}: { label: string; to: string; icon: React.ElementType }) {
   return (
-    <Link to={to} className="block">
-      <div className={cn("border rounded-2xl p-4 flex items-center gap-4 active:scale-95 transition-transform", colors[variant])}>
-        <div className={cn("flex items-center justify-center w-12 h-12 rounded-xl shrink-0", iconColors[variant])}>
-          <Icon className="w-6 h-6" />
-        </div>
-        <div className="flex-1 min-w-0">
-          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide leading-tight">{label}</p>
-          <p className={cn("text-3xl font-bold leading-tight mt-0.5", textColors[variant])}>{value}</p>
-          {sub && <p className="text-xs text-muted-foreground mt-0.5">{sub}</p>}
-        </div>
-        <ChevronRight className="w-5 h-5 text-muted-foreground shrink-0" />
+    <Link to={to}>
+      <div className="bg-card border border-border rounded-xl p-3 flex items-center gap-3 hover:bg-muted/40 active:scale-95 transition-all">
+        <Icon className="w-5 h-5 text-muted-foreground shrink-0" />
+        <span className="text-sm font-medium">{label}</span>
+        <ChevronRight className="w-4 h-4 text-muted-foreground ml-auto shrink-0" />
       </div>
     </Link>
   );
 }
 
-interface VehicleSpend { today: number; month: number; }
+// ── Status badge ──────────────────────────────────────────────────────────────
+
+function StatusBadge({ status }: { status: string }) {
+  const colors: Record<string, string> = {
+    ACTIVE:    "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400",
+    PLANNED:   "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400",
+    PAUSED:    "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400",
+    COMPLETED: "bg-muted text-muted-foreground",
+  };
+  return (
+    <span className={cn("text-[11px] font-semibold px-2 py-0.5 rounded-full", colors[status] ?? colors.PLANNED)}>
+      {status}
+    </span>
+  );
+}
+
+// ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function OwnerDashboardPage() {
-  const [stats, setStats] = useState<DashboardStats | null>(null);
-  const [alertStats, setAlertStats] = useState<AlertStats | null>(null);
-  const [vehicleSpend, setVehicleSpend] = useState<VehicleSpend>({ today: 0, month: 0 });
-  const [labourPending, setLabourPending] = useState<{ count: number; amount: number }>({ count: 0, amount: 0 });
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [userName, setUserName] = useState("");
+  const [operations,   setOperations]   = useState<ProjectOperation[]>([]);
+  const [stats,        setStats]        = useState<DashboardStats | null>(null);
+  const [selectedId,   setSelectedId]   = useState<string>("");
+  const [siteCount,    setSiteCount]    = useState<number | null>(null);
+  const [projectStatus, setProjectStatus] = useState<string>("ACTIVE");
+  const [fuelYear,     setFuelYear]     = useState<number | null>(null);
+  const [userName,     setUserName]     = useState("");
+  const [loading,      setLoading]      = useState(true);
+  const [refreshing,   setRefreshing]   = useState(false);
 
   const load = useCallback(async (quiet = false) => {
-    if (!quiet) setLoading(true);
-    else setRefreshing(true);
+    if (!quiet) setLoading(true); else setRefreshing(true);
     try {
-      const [dashRes, alertRes] = await Promise.allSettled([
+      const [ops, st] = await Promise.allSettled([
+        dashboardApi.getProjectOperations(),
         dashboardApi.getStats(),
-        alertsApi.stats(),
       ]);
-      if (dashRes.status === "fulfilled") setStats(dashRes.value);
-      if (alertRes.status === "fulfilled") setAlertStats(alertRes.value);
 
-      // Vehicle costs (sum all costs today and this month)
-      try {
-        const vcRes = await client.get<{ data: Array<{ amount: number; cost_date: string }> }>("/vehicles/");
-        const vehicles = vcRes.data.data as Array<{ id: string }>;
-        let todayCost = 0, monthCost = 0;
-        const today = new Date().toISOString().split("T")[0];
-        const monthStart = today.substring(0, 7);
-        for (const v of vehicles.slice(0, 5)) {
-          try {
-            const costsRes = await client.get<{ data: Array<{ amount: number; cost_date: string }> }>(`/vehicles/${v.id}/costs`);
-            for (const c of costsRes.data.data || []) {
-              if (c.cost_date === today) todayCost += c.amount;
-              if (c.cost_date?.startsWith(monthStart)) monthCost += c.amount;
-            }
-          } catch { /* ignore */ }
-        }
-        setVehicleSpend({ today: todayCost, month: monthCost });
-      } catch { /* ignore */ }
+      const opList: ProjectOperation[] = ops.status === "fulfilled" ? ops.value : [];
+      const statsVal: DashboardStats | null = st.status === "fulfilled" ? st.value : null;
 
-      // Labour pending
-      try {
-        const projRes = await client.get<{ data: Array<{ id: string }> }>("/projects/", { params: { limit: 1 } });
-        const projs = projRes.data.data;
-        if (projs?.length) {
-          const jcRes = await client.get<{ data: { pending_payment_count: number; pending_payment_amount: number } }>(
-            `/projects/${projs[0].id}/job-cards/summary`
-          );
-          const d = jcRes.data.data;
-          setLabourPending({ count: d.pending_payment_count, amount: d.pending_payment_amount });
-        }
-      } catch { /* ignore */ }
+      setOperations(opList);
+      setStats(statsVal);
+
+      if (opList.length > 0 && !selectedId) {
+        setSelectedId(opList[0].project_id);
+      }
+
+      // Fuel total for the year — use stats aggregate
+      if (statsVal) setFuelYear(statsVal.fuel_total_cost ?? null);
 
       // User name
       try {
-        const meRes = await client.get<{ data: { full_name: string } }>("/users/me");
-        setUserName(meRes.data.data.full_name.split(" ")[0]);
+        const me = await client.get<{ data: { full_name: string } }>("/users/me");
+        setUserName(me.data.data.full_name.split(" ")[0]);
       } catch { /* ignore */ }
 
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [selectedId]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { load(); }, []);   // intentionally run once on mount
 
-  const criticalAlerts = alertStats?.critical_open || 0;
-  const openAlerts = alertStats?.open || 0;
-  const pendingWhatsApp = alertStats?.pending_whatsapp_ack || 0;
+  // When selected project changes, fetch site count and project status
+  useEffect(() => {
+    if (!selectedId) return;
+    setSiteCount(null);
+    setProjectStatus("ACTIVE");
+
+    sitesApi.list(selectedId)
+      .then(s => setSiteCount(s.length))
+      .catch(() => setSiteCount(0));
+
+    // Fetch project status from the project list
+    client.get<{ data: { status?: string }[] }>("/projects/", { params: { limit: 100 } })
+      .then(res => {
+        const proj = (res.data.data as Array<{ id?: string; status?: string }>)
+          .find(p => p.id === selectedId);
+        if (proj?.status) setProjectStatus(proj.status);
+      })
+      .catch(() => {});
+  }, [selectedId]);
+
+  const selected = operations.find(op => op.project_id === selectedId);
+
+  const progressColor =
+    (selected?.progress_pct ?? 0) >= 75 ? "bg-green-500"
+    : (selected?.progress_pct ?? 0) >= 40 ? "bg-blue-500"
+    : (selected?.progress_pct ?? 0) > 0 ? "bg-amber-500"
+    : "bg-muted-foreground/30";
 
   if (loading) {
     return (
       <div className="space-y-4 max-w-lg mx-auto animate-fade-in">
         <Skeleton className="h-8 w-52 rounded-xl" />
-        {[1,2,3,4,5,6].map((i) => <Skeleton key={i} className="h-20 rounded-2xl" />)}
+        <Skeleton className="h-10 rounded-xl" />
+        <Skeleton className="h-48 rounded-2xl" />
+        <Skeleton className="h-20 rounded-2xl" />
+        {[1, 2, 3, 4, 5].map(i => <Skeleton key={i} className="h-12 rounded-xl" />)}
       </div>
     );
   }
 
   return (
     <div className="space-y-5 animate-fade-in max-w-lg mx-auto">
-      {/* Greeting */}
+
+      {/* ── Greeting ── */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-bold">{timeGreeting()}{userName ? `, ${userName}` : ""} 👋</h1>
+          <h1 className="text-xl font-bold">
+            {timeGreeting()}{userName ? `, ${userName}` : ""} 👋
+          </h1>
           <p className="text-sm text-muted-foreground">
-            {new Date().toLocaleDateString("en-ZA", { weekday: "long", day: "numeric", month: "long" })}
+            {new Date().toLocaleDateString("en-ZA", {
+              weekday: "long", day: "numeric", month: "long",
+            })}
           </p>
         </div>
-        <button onClick={() => load(true)} disabled={refreshing} className="p-2 rounded-lg hover:bg-muted">
+        <button
+          onClick={() => load(true)}
+          disabled={refreshing}
+          className="p-2 rounded-lg hover:bg-muted disabled:opacity-50"
+        >
           <RefreshCw className={cn("w-4 h-4", refreshing && "animate-spin")} />
         </button>
       </div>
 
-      {/* Critical banner */}
-      {criticalAlerts > 0 && (
-        <Link to="/alerts">
-          <div className="bg-destructive/10 border border-destructive/40 rounded-2xl p-4 flex items-center gap-3 active:scale-95 transition-transform">
-            <AlertTriangle className="w-6 h-6 text-destructive shrink-0" />
-            <div className="flex-1">
-              <p className="font-semibold text-destructive text-sm">{criticalAlerts} critical alert{criticalAlerts !== 1 ? "s" : ""} require attention</p>
-              <p className="text-xs text-destructive/80">Tap to view and acknowledge</p>
-            </div>
-            <ChevronRight className="w-5 h-5 text-destructive" />
-          </div>
-        </Link>
+      {/* ── Project selector ── */}
+      {operations.length > 0 && (
+        <div>
+          <label className="text-xs font-semibold text-muted-foreground uppercase tracking-wide block mb-1.5">
+            Select Project
+          </label>
+          <select
+            value={selectedId}
+            onChange={e => setSelectedId(e.target.value)}
+            className="w-full h-10 rounded-xl border border-border bg-card px-3 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-primary/30"
+          >
+            {operations.map(op => (
+              <option key={op.project_id} value={op.project_id}>
+                {op.project_code ? `${op.project_code} — ` : ""}{op.project_name}
+              </option>
+            ))}
+          </select>
+        </div>
       )}
 
-      {/* Spend section */}
-      <div>
-        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3">Spend</p>
-        <div className="grid grid-cols-1 gap-3">
-          <BigCard
-            label="Total Paid (Project)"
-            value={fmt(stats?.total_paid_amount || 0)}
-            icon={TrendingUp}
-            to="/payments"
-            variant="default"
-          />
-          <div className="grid grid-cols-2 gap-3">
-            <BigCard label="Vehicle Costs Today" value={fmt(vehicleSpend.today)} icon={Car} to="/vehicles" />
-            <BigCard label="Vehicle Costs Month" value={fmt(vehicleSpend.month)} icon={BarChart3} to="/vehicles" />
-          </div>
-        </div>
-      </div>
-
-      {/* Operations section */}
-      <div>
-        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3">Operations</p>
-        <div className="grid grid-cols-1 gap-3">
-          <BigCard
-            label="Open Alerts"
-            value={openAlerts}
-            icon={Bell}
-            to="/alerts"
-            variant={openAlerts > 0 ? "warn" : "default"}
-            sub={criticalAlerts > 0 ? `${criticalAlerts} critical` : "All clear"}
-          />
-          <div className="grid grid-cols-2 gap-3">
-            <BigCard
-              label="Active Projects"
-              value={stats?.active_projects || 0}
-              icon={BarChart3}
-              to="/projects"
-            />
-            <BigCard
-              label="Pending Invoices"
-              value={stats?.pending_invoices || 0}
-              icon={FileText}
-              to="/reconciliation"
-              variant={(stats?.pending_invoices || 0) > 0 ? "warn" : "default"}
-            />
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <BigCard
-              label="Open POs"
-              value={stats?.open_purchase_orders || 0}
-              icon={Package}
-              to="/procurement"
-            />
-            <BigCard
-              label="Active Sites"
-              value={stats?.active_sites || 0}
-              icon={HardHat}
-              to="/projects"
-            />
-          </div>
-        </div>
-      </div>
-
-      {/* Approvals section */}
-      <div>
-        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3">Pending Approvals</p>
-        <div className="grid grid-cols-1 gap-3">
-          {labourPending.count > 0 && (
-            <BigCard
-              label="Labour Awaiting Payment"
-              value={`${labourPending.count} job card${labourPending.count !== 1 ? "s" : ""}`}
-              icon={HardHat}
-              to="/labour"
-              variant="warn"
-              sub={fmt(labourPending.amount) + " total"}
-            />
-          )}
-          {pendingWhatsApp > 0 && (
-            <BigCard
-              label="WhatsApp ACK Pending"
-              value={pendingWhatsApp}
-              icon={MessageSquare}
-              to="/whatsapp-queue"
-              variant="warn"
-              sub="Awaiting owner acknowledgement"
-            />
-          )}
-          {labourPending.count === 0 && pendingWhatsApp === 0 && (
-            <div className="bg-green-500/10 border border-green-500/30 rounded-2xl p-4 flex items-center gap-3">
-              <CheckCircle2 className="w-6 h-6 text-green-500 shrink-0" />
-              <p className="text-sm font-medium text-green-600 dark:text-green-400">No pending approvals</p>
+      {/* ── Project details card ── */}
+      {selected ? (
+        <Link to="/projects" className="block">
+          <div className="bg-card border border-border rounded-2xl p-5 space-y-4 hover:bg-muted/20 active:scale-[0.98] transition-all">
+            {/* Header */}
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <p className="font-bold text-base leading-tight truncate">{selected.project_name}</p>
+                {selected.project_code && (
+                  <p className="text-xs text-muted-foreground mt-0.5">{selected.project_code}</p>
+                )}
+              </div>
+              <StatusBadge status={projectStatus} />
             </div>
-          )}
+
+            {/* Stats row */}
+            <div className="grid grid-cols-3 gap-3 text-center">
+              <div className="bg-muted/40 rounded-xl py-2.5 px-2">
+                <p className="text-xl font-bold leading-none">
+                  {siteCount !== null ? siteCount : "—"}
+                </p>
+                <p className="text-[11px] text-muted-foreground mt-0.5">Sites</p>
+              </div>
+              <div className="bg-muted/40 rounded-xl py-2.5 px-2">
+                <p className="text-xl font-bold leading-none">{selected.total_lots}</p>
+                <p className="text-[11px] text-muted-foreground mt-0.5">Lots</p>
+              </div>
+              <div className="bg-green-500/10 rounded-xl py-2.5 px-2">
+                <p className="text-xl font-bold leading-none text-green-600">{selected.lots_completed}</p>
+                <p className="text-[11px] text-muted-foreground mt-0.5">Completed</p>
+              </div>
+            </div>
+
+            {/* Progress */}
+            <div className="space-y-1.5">
+              <div className="flex justify-between text-xs text-muted-foreground">
+                <span>Overall progress</span>
+                <span className="font-semibold text-foreground">{selected.progress_pct}%</span>
+              </div>
+              <div className="h-2 bg-muted rounded-full overflow-hidden">
+                <div
+                  className={cn("h-full rounded-full transition-all duration-700", progressColor)}
+                  style={{ width: `${selected.progress_pct}%` }}
+                />
+              </div>
+            </div>
+
+            {/* Milestones summary */}
+            <div className="flex items-center justify-between text-xs border-t border-border/50 pt-3">
+              <span className="text-muted-foreground flex items-center gap-1">
+                <Flag className="w-3 h-3" />
+                <strong className="text-foreground">{selected.milestones_completed}</strong>
+                /{selected.total_milestones} milestones done
+              </span>
+              {selected.open_alerts > 0 && (
+                <span className="flex items-center gap-1 text-destructive font-medium">
+                  <AlertTriangle className="w-3 h-3" />
+                  {selected.open_alerts} alert{selected.open_alerts !== 1 ? "s" : ""}
+                </span>
+              )}
+              {selected.open_alerts === 0 && (
+                <span className="flex items-center gap-1 text-green-600">
+                  <CheckCircle2 className="w-3 h-3" />
+                  No open alerts
+                </span>
+              )}
+            </div>
+          </div>
+        </Link>
+      ) : (
+        <div className="bg-card border border-border rounded-2xl p-6 text-center text-sm text-muted-foreground">
+          <FolderKanban className="w-8 h-8 mx-auto mb-2 opacity-30" />
+          No projects found.{" "}
+          <Link to="/projects" className="text-primary hover:underline">Create one →</Link>
         </div>
+      )}
+
+      {/* ── Fuel total (year-to-date) ── */}
+      <div className="bg-card border border-border rounded-2xl p-4 flex items-center gap-4">
+        <div className="w-11 h-11 rounded-xl bg-amber-500/10 flex items-center justify-center shrink-0">
+          <Droplet className="w-5 h-5 text-amber-500" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Fuel Cost (Year-to-date)</p>
+          <p className="text-2xl font-bold leading-tight mt-0.5">
+            {fuelYear != null ? fmtR(fuelYear) : "—"}
+          </p>
+          <p className="text-[11px] text-muted-foreground mt-0.5">
+            {fuelYear == null ? "Live data unavailable" : "Aggregate across all projects"}
+          </p>
+        </div>
+        <Link to="/fuel" className="shrink-0 p-1.5 rounded-lg hover:bg-muted">
+          <ChevronRight className="w-5 h-5 text-muted-foreground" />
+        </Link>
       </div>
 
-      {/* Quick access */}
+      {/* ── Quick Access ── */}
       <div>
         <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3">Quick Access</p>
-        <div className="grid grid-cols-2 gap-2">
-          {[
-            { label: "Deliveries",     to: "/deliveries",    icon: Package },
-            { label: "Stock",          to: "/stock",         icon: Package },
-            { label: "Reconciliation", to: "/reconciliation",icon: FileText },
-            { label: "WhatsApp Queue", to: "/whatsapp-queue",icon: MessageSquare },
-          ].map(({ label, to, icon: Icon }) => (
-            <Link key={to} to={to}>
-              <div className="bg-card border border-border rounded-xl p-3 flex items-center gap-3 hover:bg-muted/40 active:scale-95 transition-all">
-                <Icon className="w-5 h-5 text-muted-foreground shrink-0" />
-                <span className="text-sm font-medium">{label}</span>
-              </div>
-            </Link>
-          ))}
+        <div className="space-y-2">
+          <QuickTile label="Deliveries"     to="/deliveries"        icon={Truck} />
+          <QuickTile label="Stock / Warehouse" to="/warehouse"      icon={Warehouse} />
+          <QuickTile label="Reconciliation" to="/reconciliation"    icon={FileCheck2} />
+          <QuickTile label="WhatsApp Queue" to="/whatsapp-queue"    icon={MessageSquare} />
+          <QuickTile label="Milestones"     to="/milestones"        icon={Flag} />
         </div>
       </div>
+
     </div>
   );
 }

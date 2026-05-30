@@ -178,4 +178,38 @@ export const warehouseApi = {
     );
     return res.data.data ?? [];
   },
+
+  /** Receive stock from supplier into the global main warehouse (project-level). */
+  receiveStock: async (body: {
+    project_id: string;
+    item_id: string;
+    quantity: number;
+    unit?: string;
+    unit_cost?: number;
+    supplier_ref?: string;
+    movement_date?: string;
+    notes?: string;
+  }): Promise<{ id: string; item_name: string; quantity_in: number }> => {
+    const res = await client.post<{ data: { id: string; item_name: string; quantity_in: number } }>(
+      "/warehouse/main/receive",
+      body
+    );
+    return res.data.data;
+  },
+
+  /** Create a stock adjustment in the global main warehouse. */
+  adjustStock: async (body: {
+    project_id: string;
+    item_id: string;
+    adjustment_type: string;
+    quantity: number;
+    movement_date?: string;
+    notes?: string;
+  }): Promise<{ id: string; item_name: string; adjustment_type: string; quantity: number }> => {
+    const res = await client.post<{ data: { id: string; item_name: string; adjustment_type: string; quantity: number } }>(
+      "/warehouse/main/adjust",
+      body
+    );
+    return res.data.data;
+  },
 };

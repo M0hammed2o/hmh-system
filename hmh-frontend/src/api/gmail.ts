@@ -209,6 +209,12 @@ export const gmailApi = {
     return r.data.data;
   },
 
+  /** Returns whether SMTP and IMAP are configured on the server. */
+  getEmailConfig: async (): Promise<{ smtp_enabled: boolean; imap_enabled: boolean }> => {
+    const r = await client.get<{ data: { smtp_enabled: boolean; imap_enabled: boolean } }>("/gmail/email-config");
+    return r.data.data;
+  },
+
   /**
    * Fetch an attachment file as a Blob (includes auth headers automatically).
    * inline=true  → browser can render PDF/image inline

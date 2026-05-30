@@ -344,8 +344,26 @@ def _send_for_queue_entry(entry: NotificationQueue, db: Session) -> tuple[str, O
     # ── Tier 1: approved template ─────────────────────────────────────────────
     if template_name:
         lang = settings.WHATSAPP_ALERT_TEMPLATE_LANGUAGE or "en_US"
+
+        # Build body components from queue entry so param count matches the template.
+        var_count = max(0, int(getattr(settings, "WHATSAPP_ALERT_TEMPLATE_BODY_VAR_COUNT", 2)))
+        components: list | None = None
+        if var_count > 0:
+            # Derive title and first sentence of body from the queued message
+            msg_lines = (entry.message_body or "").split("\n")
+            title_line = msg_lines[0][:100] if msg_lines else "Alert"
+            body_line  = msg_lines[1][:200] if len(msg_lines) > 1 else title_line
+            live_params = [title_line, body_line, "HMH Group"]
+            parameters = [
+                {"type": "text", "text": live_params[i] if i < len(live_params) else f"param{i+1}"}
+                for i in range(var_count)
+            ]
+            components = [{"type": "body", "parameters": parameters}]
+
         logger.info("WA-SEND template='%s' lang=%s phone=%s", template_name, lang, entry.phone_number)
-        status, msg_id = whatsapp_service.send_template_message(entry.phone_number, template_name, lang)
+        status, msg_id = whatsapp_service.send_template_message(
+            entry.phone_number, template_name, lang, components=components
+        )
         if status == "FAILED":
             logger.error(
                 "WA-TEMPLATE-FAILED template='%s' phone=%s error=%s — "

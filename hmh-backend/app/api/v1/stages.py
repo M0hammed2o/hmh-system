@@ -303,6 +303,62 @@ def set_milestone_progress(
     return ApiSuccess(data=stage_service._enrich(pss), message=f"Progress set to {pct}%.")
 
 
+@project_stages_router.delete(
+    "/{status_id}",
+    response_model=ApiSuccess[dict],
+    dependencies=[WRITE_ROLES],
+)
+def delete_stage_status(
+    project_id: uuid.UUID,
+    status_id:  uuid.UUID,
+    db: DbSession,
+    current_user: CurrentUser,
+):
+    """Remove a stage tracking entry from a project. Blocked if stage is COMPLETED or CERTIFIED."""
+    check_project_access(db, current_user, project_id)
+    from app.models.stage import ProjectStageStatus
+    from app.models.enums import StageStatus
+    pss = db.get(ProjectStageStatus, status_id)
+    if not pss or pss.project_id != project_id:
+        raise HTTPException(404, "Stage status not found.")
+    if pss.status in (StageStatus.COMPLETED, StageStatus.CERTIFIED):
+        raise HTTPException(
+            409,
+            f"Cannot remove a {pss.status.value.lower()} stage. Reset its status first or archive the project.",
+        )
+    db.delete(pss)
+    db.commit()
+    return ApiSuccess(data={"id": str(status_id)}, message="Stage removed from project tracking.")
+
+
+class RenameStageMasterBody(BaseModel):
+    name: str
+
+
+@stages_router.patch(
+    "/{stage_id}",
+    response_model=ApiSuccess[StageMasterRead],
+    dependencies=[OFFICE_AND_ABOVE],
+)
+def rename_stage_master(
+    stage_id: uuid.UUID,
+    body: RenameStageMasterBody,
+    db: DbSession,
+):
+    """Rename a stage master definition. Affects all projects using this stage."""
+    from app.models.stage import StageMaster
+    master = db.get(StageMaster, stage_id)
+    if not master:
+        raise HTTPException(404, "Stage not found.")
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(422, "Name cannot be blank.")
+    master.name = name
+    db.commit()
+    db.refresh(master)
+    return ApiSuccess(data=StageMasterRead.model_validate(master), message="Stage renamed.")
+
+
 @project_stages_router.get(
     "/{status_id}/activity",
     response_model=ApiSuccess[list[dict]],

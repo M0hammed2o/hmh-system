@@ -4,13 +4,13 @@ import uuid
 from datetime import date, datetime
 from typing import Optional
 
-from sqlalchemy import Date, DateTime, Enum, ForeignKey, Numeric, String, Text
+from sqlalchemy import Date, DateTime, Enum, ForeignKey, Integer, Numeric, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
 from app.models.base import TimestampMixin
-from app.models.enums import VehicleCostType, VehicleStatus, VehicleType
+from app.models.enums import FuelType, VehicleCostType, VehicleStatus, VehicleType
 
 
 class Vehicle(TimestampMixin, Base):
@@ -42,6 +42,23 @@ class Vehicle(TimestampMixin, Base):
         ForeignKey("sites.id", ondelete="SET NULL"),
         nullable=True,
     )
+    # Identification
+    make: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    model: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    year: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+    # Fuel / consumption
+    fuel_type: Mapped[Optional[FuelType]] = mapped_column(
+        Enum(FuelType, name="fuel_type_enum", create_type=False),
+        nullable=True,
+    )
+    tank_capacity_l: Mapped[Optional[float]] = mapped_column(Numeric(8, 1), nullable=True)
+    fuel_consumption_per_100km: Mapped[Optional[float]] = mapped_column(Numeric(6, 2), nullable=True)
+
+    # Odometer / service
+    current_odometer_km: Mapped[Optional[float]] = mapped_column(Numeric(10, 1), nullable=True)
+    service_interval_km: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
     last_service_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     next_service_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
