@@ -3,7 +3,7 @@
  * retry count, and message body preview. Supports manual queue processing.
  */
 import { useEffect, useState, useCallback } from "react";
-import { MessageSquare, RefreshCw, Play, CheckCircle2, X, AlertTriangle, Clock } from "lucide-react";
+import { MessageSquare, RefreshCw, Play, CheckCircle2, X, AlertTriangle, Clock, CheckCheck, BookOpen } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -21,6 +21,8 @@ function timeAgo(iso: string) {
 
 const STATUS_CONFIG: Record<NotificationStatus, { label: string; icon: React.ElementType; color: string; badge: "success" | "destructive" | "secondary" | "outline" }> = {
   SENT:        { label: "Sent",        icon: CheckCircle2, color: "text-green-600 dark:text-green-400",  badge: "success"     },
+  DELIVERED:   { label: "Delivered",   icon: CheckCheck,   color: "text-green-700 dark:text-green-300",  badge: "success"     },
+  READ:        { label: "Read",        icon: BookOpen,     color: "text-blue-600 dark:text-blue-400",    badge: "success"     },
   MOCK_SENT:   { label: "Mock Sent",   icon: CheckCircle2, color: "text-blue-500",                       badge: "secondary"   },
   PENDING:     { label: "Pending",     icon: Clock,        color: "text-amber-500",                       badge: "secondary"   },
   FAILED:      { label: "Failed",      icon: AlertTriangle,color: "text-destructive",                    badge: "destructive" },
@@ -33,6 +35,8 @@ const STATUS_TABS: Array<{ key: NotificationStatus | "ALL"; label: string }> = [
   { key: "PENDING",      label: "Pending"     },
   { key: "MOCK_SENT",    label: "Mock Sent"   },
   { key: "SENT",         label: "Sent"        },
+  { key: "DELIVERED",    label: "Delivered"   },
+  { key: "READ",         label: "Read"        },
   { key: "FAILED",       label: "Failed"      },
   { key: "ACKNOWLEDGED", label: "Acknowledged"},
   { key: "CANCELLED",    label: "Cancelled"   },

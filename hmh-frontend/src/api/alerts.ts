@@ -3,7 +3,7 @@ import client from "./client";
 export type AlertStatus = "OPEN" | "ACKNOWLEDGED" | "RESOLVED";
 export type AlertSeverity = "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
 export type AlertType = string;
-export type NotificationStatus = "PENDING" | "SENT" | "FAILED" | "MOCK_SENT" | "ACKNOWLEDGED" | "CANCELLED";
+export type NotificationStatus = "PENDING" | "SENT" | "DELIVERED" | "READ" | "FAILED" | "MOCK_SENT" | "ACKNOWLEDGED" | "CANCELLED";
 
 export interface Alert {
   id: string;

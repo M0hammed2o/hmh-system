@@ -484,6 +484,21 @@ def ensure_tables():
             END $$;
         """))
 
+    # migration 0034: DELIVERED + READ notification_status_enum values
+    with engine.begin() as conn:
+        conn.execute(_t("""
+            DO $$ BEGIN
+                ALTER TYPE notification_status_enum ADD VALUE IF NOT EXISTS 'DELIVERED';
+            EXCEPTION WHEN others THEN NULL;
+            END $$;
+        """))
+        conn.execute(_t("""
+            DO $$ BEGIN
+                ALTER TYPE notification_status_enum ADD VALUE IF NOT EXISTS 'READ';
+            EXCEPTION WHEN others THEN NULL;
+            END $$;
+        """))
+
     yield
 
 

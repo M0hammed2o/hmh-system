@@ -608,21 +608,26 @@ def _handle_delivery_status(db, status: dict) -> None:
             logger.debug("wa_status no_queue_record msg_id=%s", msg_id)
             return
         # Idempotency guards — Meta retries webhooks on timeout; skip terminal-state rewrites
-        if wa_status == "read" and record.status == NotificationStatus.ACKNOWLEDGED:
+        if wa_status == "read" and record.status in (NotificationStatus.READ, NotificationStatus.ACKNOWLEDGED):
             logger.debug("wa_status already_acknowledged msg_id=%s", msg_id)
             return
         if wa_status == "failed" and record.status == NotificationStatus.FAILED:
             logger.debug("wa_status already_failed msg_id=%s", msg_id)
             return
-        if wa_status in ("sent", "delivered"):
-            logger.debug("wa_status %s msg_id=%s recipient=%s", wa_status, msg_id, recipient)
-            # No DB update — Meta confirming delivery progress; record stays SENT
+        if wa_status == "sent":
+            logger.debug("wa_status sent msg_id=%s recipient=%s", msg_id, recipient)
+            # Meta confirming the message reached their servers; stay SENT
+        elif wa_status == "delivered":
+            from datetime import datetime, timezone
+            record.status = NotificationStatus.DELIVERED
+            db.commit()
+            logger.info("wa_status delivered msg_id=%s recipient=%s", msg_id, recipient)
         elif wa_status == "read":
             from datetime import datetime, timezone
-            record.status = NotificationStatus.ACKNOWLEDGED
+            record.status = NotificationStatus.READ
             record.acknowledged_at = datetime.now(timezone.utc)
             db.commit()
-            logger.info("wa_status acknowledged msg_id=%s", msg_id)
+            logger.info("wa_status read msg_id=%s", msg_id)
         elif wa_status == "failed":
             errs      = status.get("errors", [])
             err       = errs[0] if errs else {}

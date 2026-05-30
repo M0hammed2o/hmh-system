@@ -172,6 +172,8 @@ class NotificationChannel(str, enum.Enum):
 class NotificationStatus(str, enum.Enum):
     PENDING = "PENDING"
     SENT = "SENT"
+    DELIVERED = "DELIVERED"
+    READ = "READ"
     FAILED = "FAILED"
     MOCK_SENT = "MOCK_SENT"
     ACKNOWLEDGED = "ACKNOWLEDGED"

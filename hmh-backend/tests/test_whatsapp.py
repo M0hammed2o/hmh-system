@@ -304,8 +304,8 @@ class TestQueueProcessing:
 
 class TestDeliveryStatus:
 
-    def test_read_status_marks_acknowledged(self, client, db):
-        """Delivery status 'read' from Meta marks the queue entry as ACKNOWLEDGED."""
+    def test_read_status_marks_read(self, client, db):
+        """Delivery status 'read' from Meta marks the queue entry as READ with acknowledged_at set."""
         from app.models.notification_queue import NotificationQueue
         from app.models.enums import NotificationStatus
 
@@ -329,7 +329,7 @@ class TestDeliveryStatus:
 
         assert resp.status_code == 200
         db.refresh(entry)
-        assert entry.status == NotificationStatus.ACKNOWLEDGED
+        assert entry.status == NotificationStatus.READ
         assert entry.acknowledged_at is not None
 
     def test_failed_status_marks_failed(self, client, db):
