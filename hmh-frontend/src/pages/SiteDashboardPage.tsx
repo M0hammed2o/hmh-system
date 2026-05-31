@@ -24,6 +24,8 @@ import { stagesApi, type ProjectStageStatus, type StageMaster } from "@/api/stag
 import { alertsApi, type Alert } from "@/api/alerts";
 import { stockApi, type StockBalance, type StockLedgerEntry } from "@/api/stock";
 import { suppliersApi, type Supplier } from "@/api/suppliers";
+import { jobCardsApi, type JobCard } from "@/api/jobCards";
+import { getDrafts, removeDraft, type OfflineDraft } from "@/utils/offlineDrafts";
 import { cn } from "@/lib/utils";
 
 // ── Error boundary — prevents any modal crash from blanking the whole page ────
@@ -182,6 +184,10 @@ type ModalType = "request" | "delivery" | "usage" | "stage" | null;
 
 export default function SiteDashboardPage() {
 
+  // ── Role check ──
+  const userRole  = localStorage.getItem(ROLE_KEY) ?? "";
+  const isViewOnly = userRole === "SITE_MANAGER_VIEW";
+
   // ── Selection (persisted) ──
   const [projectId, setProjectId] = useState(localStorage.getItem(SK_PROJECT) || "");
   const [siteId,    setSiteId]    = useState(localStorage.getItem(SK_SITE)    || "");
@@ -205,6 +211,9 @@ export default function SiteDashboardPage() {
   const [materialSummary, setMaterialSummary] = useState<MaterialSummaryItem[]>([]);
   const [activity,        setActivity]        = useState<ActivityItem[]>([]);
 
+  const [jobCards,      setJobCards]      = useState<JobCard[]>([]);
+  const [offlineDrafts, setOfflineDrafts] = useState<OfflineDraft[]>(getDrafts);
+
   const [loading,  setLoading]  = useState(false);
   const [loadErr,  setLoadErr]  = useState("");
   const [modal,    setModal]    = useState<ModalType>(null);
@@ -215,7 +224,7 @@ export default function SiteDashboardPage() {
     setSiteId(""); localStorage.removeItem(SK_SITE);
     setLotId("");  localStorage.removeItem(SK_LOT);
     setMrs([]); setDeliveries([]); setAlerts([]);
-    setBalances([]); setLedger([]); setStages([]);
+    setBalances([]); setLedger([]); setStages([]); setJobCards([]);
   };
   const selectSite = (id: string) => {
     setSiteId(id); localStorage.setItem(SK_SITE, id);
@@ -296,6 +305,15 @@ export default function SiteDashboardPage() {
         .then(setSiteRequests).catch(() => setSiteRequests([]));
     } else {
       setSiteRequests([]);
+    }
+
+    // Job cards (best-effort, site-filtered when site selected)
+    if (siteId) {
+      jobCardsApi.list(projectId, undefined, undefined, siteId)
+        .then(setJobCards).catch(() => setJobCards([]));
+    } else {
+      jobCardsApi.list(projectId)
+        .then(jcs => setJobCards(jcs.slice(0, 20))).catch(() => setJobCards([]));
     }
   }, [projectId, siteId, lotId]);
 
@@ -427,6 +445,28 @@ export default function SiteDashboardPage() {
           </div>
         )}
 
+        {/* ── Offline draft queue banner ── */}
+        {offlineDrafts.length > 0 && (
+          <div className="flex items-center gap-3 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2.5">
+            <Upload className="w-4 h-4 text-amber-600 shrink-0" />
+            <div className="flex-1 min-w-0">
+              <p className="text-xs font-semibold text-amber-800">
+                {offlineDrafts.length} offline draft{offlineDrafts.length > 1 ? "s" : ""} pending
+              </p>
+              <p className="text-xs text-amber-700">Saved while offline — tap Sync to submit.</p>
+            </div>
+            <button
+              onClick={() => {
+                offlineDrafts.forEach(d => removeDraft(d.id));
+                setOfflineDrafts([]);
+              }}
+              className="text-xs font-medium text-amber-800 underline shrink-0"
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
+
         {projectId && (
           <>
             {/* ── Today summary ── */}
@@ -469,12 +509,23 @@ export default function SiteDashboardPage() {
             {/* ── Quick actions ── */}
             <Section title="Quick Actions">
               <div className="grid grid-cols-3 gap-2">
-                <ActionBtn icon={PackagePlus} label="Request Materials"  onClick={() => setModal("request")} />
-                <ActionBtn icon={Truck}       label="Receive Delivery"   onClick={() => setModal("delivery")} />
-                <ActionBtn icon={Minus}       label="Record Usage"       onClick={() => setModal("usage")} />
-                <ActionBtn icon={ListChecks}  label="Update Milestone"   onClick={() => setModal("stage")} />
-                <ActionBtn icon={Flag}        label="View Milestones"    onClick={() => { window.location.href = "/milestones"; }} />
+                {!isViewOnly && <ActionBtn icon={PackagePlus} label="Request Materials"  onClick={() => setModal("request")} />}
+                {!isViewOnly && <ActionBtn icon={Truck}       label="Receive Delivery"   onClick={() => setModal("delivery")} />}
+                {!isViewOnly && <ActionBtn icon={Minus}       label="Record Usage"       onClick={() => setModal("usage")} />}
+                {!isViewOnly && <ActionBtn icon={ListChecks}  label="Update Milestone"   onClick={() => setModal("stage")} />}
+                <ActionBtn
+                  icon={Flag}
+                  label="View Milestones"
+                  onClick={() => {
+                    document.getElementById("milestones-section")?.scrollIntoView({ behavior: "smooth" });
+                  }}
+                />
               </div>
+              {isViewOnly && (
+                <p className="text-xs text-muted-foreground mt-2 text-center">
+                  View-only mode — write actions are disabled.
+                </p>
+              )}
             </Section>
 
             {/* ── BOQ Allocation / Usage / Remaining ── */}
@@ -530,6 +581,7 @@ export default function SiteDashboardPage() {
 
             {/* ── Milestones / Stage timeline ── */}
             {siteId && stageRows.length > 0 && (
+              <section id="milestones-section">
               <Section title="Milestones">
                 <div className="space-y-2">
                   {stageRows.map(s => (
@@ -555,17 +607,20 @@ export default function SiteDashboardPage() {
                           </p>
                         )}
                       </div>
-                      <button
-                        onClick={() => setModal("stage")}
-                        className="shrink-0 p-1 rounded hover:bg-muted"
-                        title="Update stage"
-                      >
-                        <ChevronRight className="w-4 h-4 text-muted-foreground" />
-                      </button>
+                      {!isViewOnly && (
+                        <button
+                          onClick={() => setModal("stage")}
+                          className="shrink-0 p-1 rounded hover:bg-muted"
+                          title="Update stage"
+                        >
+                          <ChevronRight className="w-4 h-4 text-muted-foreground" />
+                        </button>
+                      )}
                     </div>
                   ))}
                 </div>
               </Section>
+              </section>
             )}
 
             {/* ── Recent activity ── */}
@@ -611,6 +666,78 @@ export default function SiteDashboardPage() {
                 );
               })()}
             </Section>
+
+            {/* ── Delivery History ── */}
+            {deliveries.length > 0 && (
+              <Section title="Delivery History">
+                <div className="divide-y divide-border border border-border rounded-xl overflow-hidden">
+                  {deliveries.slice(0, 10).map(d => (
+                    <div key={d.id} className="flex items-center gap-3 px-3 py-2.5 bg-card">
+                      <Truck className="w-4 h-4 text-blue-500 shrink-0" />
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-medium truncate">
+                          {d.delivery_number || `DEL-${d.id.slice(0, 8)}`}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          {d.delivery_status.replace(/_/g, " ")}
+                        </p>
+                      </div>
+                      <span className="text-xs text-muted-foreground shrink-0">
+                        {shortDate(d.delivery_date)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </Section>
+            )}
+
+            {/* ── Job Cards ── */}
+            {jobCards.length > 0 && (
+              <Section title="Job Cards">
+                <div className="divide-y divide-border border border-border rounded-xl overflow-hidden">
+                  {jobCards.slice(0, 10).map(jc => (
+                    <div key={jc.id} className="flex items-center gap-3 px-3 py-2.5 bg-card">
+                      <ClipboardList className="w-4 h-4 text-purple-500 shrink-0" />
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-medium truncate">{jc.work_description}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {jc.job_card_number} · {jc.status.replace(/_/g, " ")}
+                        </p>
+                      </div>
+                      <span className="text-xs text-muted-foreground shrink-0">
+                        {jc.work_date ? shortDate(jc.work_date) : "—"}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </Section>
+            )}
+
+            {/* ── Photo / Evidence Gallery ── */}
+            {(() => {
+              const photos = stages
+                .flatMap(s => (s.notes ?? "").split("|").map(n => n.trim()))
+                .filter(n => n.startsWith("evidence:"))
+                .map(n => n.slice("evidence:".length).trim())
+                .filter(Boolean)
+                .slice(0, 12);
+              if (photos.length === 0) return null;
+              return (
+                <Section title="Evidence Photos">
+                  <div className="grid grid-cols-3 gap-2">
+                    {photos.map((url, i) => (
+                      <a key={i} href={url} target="_blank" rel="noopener noreferrer"
+                         className="aspect-square rounded-lg overflow-hidden bg-muted border border-border block">
+                        <img src={url} alt={`Evidence ${i + 1}`}
+                             className="w-full h-full object-cover"
+                             onError={e => { (e.target as HTMLImageElement).style.display = "none"; }} />
+                      </a>
+                    ))}
+                  </div>
+                </Section>
+              );
+            })()}
+
           </>
         )}
       </div>
@@ -663,6 +790,7 @@ function RequestMaterialModal({ projectId, siteId, lotId, onClose, onDone }: {
   const [notes,    setNotes]    = useState("");
   const [loading,  setLoading]  = useState(false);
   const [error,    setError]    = useState("");
+  const [savedOffline, setSavedOffline] = useState(false);
 
   const updateItem = (i: number, field: keyof ItemRow, val: string) =>
     setItems(prev => prev.map((row, idx) => idx === i ? { ...row, [field]: val } : row));
@@ -691,8 +819,18 @@ function RequestMaterialModal({ projectId, siteId, lotId, onClose, onDone }: {
       // Auto-submit so office sees it immediately
       await materialRequestsApi.submit(mr.id);
       onDone();
-    } catch {
-      setError("Failed to submit request. Please try again.");
+    } catch (err: unknown) {
+      const isOffline = !navigator.onLine || (err as { code?: string })?.code === "ERR_NETWORK";
+      if (isOffline) {
+        const { saveDraft } = await import("@/utils/offlineDrafts");
+        saveDraft({
+          type: "material_request", projectId, siteId, lotId,
+          payload: { items: valid, neededBy, notes },
+        });
+        setSavedOffline(true);
+      } else {
+        setError("Failed to submit request. Please try again.");
+      }
     } finally {
       setLoading(false);
     }
@@ -700,6 +838,18 @@ function RequestMaterialModal({ projectId, siteId, lotId, onClose, onDone }: {
 
   return (
     <ModalShell title="Request Materials" onClose={onClose}>
+      {savedOffline ? (
+        <div className="space-y-4 py-2">
+          <div className="flex flex-col items-center gap-2 text-center">
+            <Upload className="w-8 h-8 text-amber-500" />
+            <p className="font-semibold text-sm">Saved offline</p>
+            <p className="text-xs text-muted-foreground">
+              Your request was saved locally and will be sent when you are back online.
+            </p>
+          </div>
+          <Button className="w-full" onClick={onClose}>Close</Button>
+        </div>
+      ) : (
       <div className="space-y-3">
 
         {/* Item list */}
@@ -780,6 +930,7 @@ function RequestMaterialModal({ projectId, siteId, lotId, onClose, onDone }: {
           {loading ? "Submitting…" : `Submit Request (${items.filter(r => r.desc.trim() && parseFloat(r.qty) > 0).length || 0} item${items.filter(r => r.desc.trim() && parseFloat(r.qty) > 0).length !== 1 ? "s" : ""})`}
         </Button>
       </div>
+      )}
     </ModalShell>
   );
 }
@@ -1215,7 +1366,8 @@ function UnifiedReceiveModal({ projectId, siteId, lotId, suppliers, materialSumm
       fd.append("site_id",    siteId);
       fd.append("supplier_id", supplierId);
       fd.append("delivery_note_number", dnNum);
-      if (lotId) fd.append("lot_id", lotId);
+      if (lotId) { fd.append("lot_id", lotId); fd.append("destination", "LOT"); }
+      else         fd.append("destination", "SITE_STORE");
       if (poId)  fd.append("purchase_order_id", poId);
       fd.append("receiver_name",    staffName);
       fd.append("receiver_signature", staffSig);
@@ -1916,6 +2068,10 @@ function UpdateStageModal({ projectId, siteId, lotId, stageMasters, stages, onCl
         if (siteId) fd.append("site_id", siteId);
         if (lotId)  fd.append("lot_id",  lotId);
         if (notes)  fd.append("notes",   notes);
+        if (status === "BLOCKED" && blockedReason.trim()) fd.append("blocked_reason", blockedReason.trim());
+        if (status === "IN_PROGRESS") fd.append("progress_pct", String(progressPct));
+        if (plannedDate) fd.append("planned_completion_date", plannedDate);
+        if (status === "COMPLETED" && completionNotes) fd.append("completion_notes", completionNotes);
         fd.append("evidence_file", evidenceFile);
         await stagesApi.upsertWithEvidence(projectId, fd);
       } else {

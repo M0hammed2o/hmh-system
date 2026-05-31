@@ -67,7 +67,7 @@ def update_material_request(mr_id: uuid.UUID, body: MaterialRequestUpdate, db: D
 
 # ── Workflow actions ──────────────────────────────────────────────────────────
 
-@mr_router.post("/{mr_id}/submit", response_model=ApiSuccess[MaterialRequestRead], dependencies=[ALL_ROLES])
+@mr_router.post("/{mr_id}/submit", response_model=ApiSuccess[MaterialRequestRead], dependencies=[WRITE_ROLES])
 def submit_request(mr_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
     get_and_check_project_resource(db, current_user, MaterialRequest, mr_id, "Material request not found.")
     mr = mr_service.submit_request(db, mr_id, current_user.id)

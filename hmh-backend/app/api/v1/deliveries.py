@@ -14,7 +14,7 @@ from app.core.config import settings
 from app.core.logging_config import get_logger
 from app.core.upload_validation import DOCUMENT_MIMES, validate_upload
 from app.core.resource_access import get_and_check_project_resource, secure_project_lookup
-from app.dependencies import ALL_ROLES, CurrentUser, DbSession, OFFICE_AND_ABOVE, check_project_access
+from app.dependencies import ALL_ROLES, CurrentUser, DbSession, OFFICE_AND_ABOVE, WRITE_ROLES, check_project_access
 from app.models.delivery import Delivery
 
 logger = get_logger(__name__)
@@ -51,7 +51,7 @@ def list_deliveries(
     "/",
     response_model=ApiSuccess[DeliveryRead],
     status_code=201,
-    dependencies=[ALL_ROLES],
+    dependencies=[WRITE_ROLES],
 )
 def create_delivery(
     project_id: uuid.UUID,
@@ -98,7 +98,7 @@ class ReceiveStockBody(BaseModel):
 @delivery_router.post(
     "/{delivery_id}/receive-stock",
     response_model=ApiSuccess[DeliveryRead],
-    dependencies=[ALL_ROLES],
+    dependencies=[WRITE_ROLES],
 )
 def receive_stock(delivery_id: uuid.UUID, body: ReceiveStockBody, db: DbSession, current_user: CurrentUser):
     get_and_check_project_resource(db, current_user, Delivery, delivery_id, "Delivery not found.")
@@ -119,7 +119,7 @@ def receive_stock(delivery_id: uuid.UUID, body: ReceiveStockBody, db: DbSession,
 @delivery_router.post(
     "/receive-with-document",
     status_code=201,
-    dependencies=[ALL_ROLES],
+    dependencies=[WRITE_ROLES],
 )
 async def receive_delivery_with_document(
     db:             DbSession,

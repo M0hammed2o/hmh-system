@@ -7,7 +7,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, ConfigDict
 
-from app.dependencies import ALL_ROLES, CurrentUser, DbSession, OFFICE_AND_ABOVE, check_project_access
+from app.dependencies import ALL_ROLES, CurrentUser, DbSession, OFFICE_AND_ABOVE, WRITE_ROLES, check_project_access
 from app.models.job_card import JobCard
 from app.models.enums import JobCardStatus, JobCardWorkType
 from app.schemas.common import ApiSuccess
@@ -84,7 +84,7 @@ def list_job_cards(
     return ApiSuccess(data=[JobCardRead.model_validate(j) for j in jcs])
 
 
-@project_jc_router.post("/", response_model=ApiSuccess[JobCardRead], status_code=201, dependencies=[ALL_ROLES])
+@project_jc_router.post("/", response_model=ApiSuccess[JobCardRead], status_code=201, dependencies=[WRITE_ROLES])
 def create_job_card(project_id: uuid.UUID, body: JobCardCreate, db: DbSession, current_user: CurrentUser):
     check_project_access(db, current_user, project_id)
     from datetime import date
@@ -112,14 +112,14 @@ def get_job_card(jc_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
     return ApiSuccess(data=JobCardRead.model_validate(jc))
 
 
-@jc_router.post("/{jc_id}/submit", response_model=ApiSuccess[JobCardRead], dependencies=[ALL_ROLES])
+@jc_router.post("/{jc_id}/submit", response_model=ApiSuccess[JobCardRead], dependencies=[WRITE_ROLES])
 def submit(jc_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
     check_project_access(db, current_user, job_card_service._get_or_404(db, jc_id).project_id)
     jc = job_card_service.submit(db, jc_id, current_user.id)
     return ApiSuccess(data=JobCardRead.model_validate(jc), message="Submitted.")
 
 
-@jc_router.post("/{jc_id}/site-approve", response_model=ApiSuccess[JobCardRead], dependencies=[ALL_ROLES])
+@jc_router.post("/{jc_id}/site-approve", response_model=ApiSuccess[JobCardRead], dependencies=[WRITE_ROLES])
 def site_approve(jc_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
     check_project_access(db, current_user, job_card_service._get_or_404(db, jc_id).project_id)
     jc = job_card_service.site_approve(db, jc_id, current_user.id)
@@ -133,7 +133,7 @@ def office_approve(jc_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
     return ApiSuccess(data=JobCardRead.model_validate(jc), message="Office approved.")
 
 
-@jc_router.post("/{jc_id}/owner-approve", response_model=ApiSuccess[JobCardRead], dependencies=[ALL_ROLES])
+@jc_router.post("/{jc_id}/owner-approve", response_model=ApiSuccess[JobCardRead], dependencies=[WRITE_ROLES])
 def owner_approve(jc_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
     check_project_access(db, current_user, job_card_service._get_or_404(db, jc_id).project_id)
     jc = job_card_service.owner_approve(db, jc_id, current_user.id)
@@ -154,7 +154,7 @@ def mark_paid(jc_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
     return ApiSuccess(data=JobCardRead.model_validate(jc), message="Marked as paid.")
 
 
-@jc_router.post("/{jc_id}/reject", response_model=ApiSuccess[JobCardRead], dependencies=[ALL_ROLES])
+@jc_router.post("/{jc_id}/reject", response_model=ApiSuccess[JobCardRead], dependencies=[WRITE_ROLES])
 def reject(jc_id: uuid.UUID, body: RejectBody, db: DbSession, current_user: CurrentUser):
     check_project_access(db, current_user, job_card_service._get_or_404(db, jc_id).project_id)
     jc = job_card_service.reject(db, jc_id, current_user.id, body.reason)

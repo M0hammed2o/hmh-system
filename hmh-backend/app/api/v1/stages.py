@@ -75,7 +75,7 @@ def list_project_stage_statuses(
 @project_stages_router.post(
     "/",
     response_model=ApiSuccess[ProjectStageStatusRead],
-    dependencies=[ALL_ROLES],   # site managers must be able to update stage progress
+    dependencies=[WRITE_ROLES],
 )
 def upsert_stage_status(
     project_id: uuid.UUID,
@@ -101,23 +101,28 @@ def upsert_stage_status(
     "/with-evidence",
     response_model=ApiSuccess[ProjectStageStatusRead],
     status_code=201,
-    dependencies=[ALL_ROLES],
+    dependencies=[WRITE_ROLES],
 )
 async def upsert_stage_status_with_evidence(
-    project_id: uuid.UUID,
-    db:          DbSession,
-    current_user: CurrentUser,
-    stage_id:    str           = Form(...),
-    status:      Optional[str] = Form(None),
-    site_id:     Optional[str] = Form(None),
-    lot_id:      Optional[str] = Form(None),
-    notes:       Optional[str] = Form(None),
-    delay_reason: Optional[str] = Form(None),
-    evidence_file: Optional[UploadFile] = File(None),
+    project_id:              uuid.UUID,
+    db:                      DbSession,
+    current_user:            CurrentUser,
+    stage_id:                str           = Form(...),
+    status:                  Optional[str] = Form(None),
+    site_id:                 Optional[str] = Form(None),
+    lot_id:                  Optional[str] = Form(None),
+    notes:                   Optional[str] = Form(None),
+    delay_reason:            Optional[str] = Form(None),
+    progress_pct:            Optional[int] = Form(None),
+    planned_completion_date: Optional[str] = Form(None),
+    blocked_reason:          Optional[str] = Form(None),
+    completion_notes:        Optional[str] = Form(None),
+    evidence_file:           Optional[UploadFile] = File(None),
 ):
     """Update a stage status and optionally upload a progress photo."""
     check_project_access(db, current_user, project_id)
     from app.models.enums import StageStatus
+    from datetime import date as _date
 
     # Save evidence photo (Supabase Storage when configured, else local disk)
     from app.core.storage import save_upload
@@ -134,13 +139,24 @@ async def upsert_stage_status_with_evidence(
     if evidence_url:
         combined_notes = f"evidence:{evidence_url}" + (f" | {combined_notes}" if combined_notes else "")
 
+    planned_date = None
+    if planned_completion_date:
+        try:
+            planned_date = _date.fromisoformat(planned_completion_date)
+        except ValueError:
+            pass
+
     body = StageStatusUpsert(
-        stage_id     = uuid.UUID(stage_id),
-        site_id      = uuid.UUID(site_id) if site_id else None,
-        lot_id       = uuid.UUID(lot_id)  if lot_id  else None,
-        status       = StageStatus(status) if status else None,
-        notes        = combined_notes or None,
-        delay_reason = delay_reason,
+        stage_id                 = uuid.UUID(stage_id),
+        site_id                  = uuid.UUID(site_id) if site_id else None,
+        lot_id                   = uuid.UUID(lot_id)  if lot_id  else None,
+        status                   = StageStatus(status) if status else None,
+        notes                    = combined_notes or None,
+        delay_reason             = delay_reason,
+        progress_pct             = progress_pct,
+        planned_completion_date  = planned_date,
+        blocked_reason           = blocked_reason,
+        completion_notes         = completion_notes,
     )
     try:
         pss = stage_service.upsert_stage_status(
