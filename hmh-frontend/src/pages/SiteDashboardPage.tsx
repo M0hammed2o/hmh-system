@@ -271,7 +271,7 @@ export default function SiteDashboardPage() {
 
     Promise.all([
       materialRequestsApi.list(projectId).catch((): MaterialRequest[]    => []),
-      deliveriesApi.list(projectId).catch(():    Delivery[]              => []),
+      deliveriesApi.list(projectId, siteId || undefined).catch((): Delivery[] => []),
       alertsApi.list({ project_id: projectId, limit: 50 }).catch((): Alert[] => []),
       siteId
         ? stockApi.getBalances(projectId, siteId).catch((): StockBalance[] => [])
@@ -663,31 +663,44 @@ export default function SiteDashboardPage() {
             )}
 
             {/* ── Milestones / Stage timeline ── */}
-            {siteId && stageRows.length > 0 && (
+            {siteId && stageMasters.length > 0 && (
               <section id="milestones-section">
               <Section title="Milestones">
                 <div className="space-y-2">
-                  {stageRows.map(s => (
-                    <div key={s.id} className="flex items-center gap-3 p-3 bg-card border border-border rounded-xl">
+                  {stageMasters.map(m => {
+                    const s = stageRows.find(r => r.stage_id === m.id);
+                    const status   = s?.status ?? "NOT_STARTED";
+                    const progress = s?.progress_pct ?? 0;
+                    return (
+                    <div key={m.id} className="flex items-center gap-3 p-3 bg-card border border-border rounded-xl">
                       <div className="shrink-0">
-                        {s.status === "COMPLETED" || s.status === "CERTIFIED"
+                        {status === "COMPLETED" || status === "CERTIFIED"
                           ? <CheckCircle2 className="w-5 h-5 text-green-500" />
-                          : s.status === "IN_PROGRESS"
+                          : status === "IN_PROGRESS"
                           ? <Clock className="w-5 h-5 text-blue-500" />
-                          : s.status === "AWAITING_INSPECTION"
+                          : status === "AWAITING_INSPECTION"
                           ? <AlertTriangle className="w-5 h-5 text-amber-500" />
                           : <Circle className="w-5 h-5 text-muted-foreground/50" />
                         }
                       </div>
                       <div className="min-w-0 flex-1">
-                        <p className="text-sm font-medium truncate">{s.stage_name ?? "Stage"}</p>
-                        <p className={cn("text-xs", STAGE_COLOR[s.status] ?? "text-muted-foreground")}>
-                          {STAGE_LABEL[s.status] ?? s.status}
+                        <p className="text-sm font-medium truncate">{m.name}</p>
+                        <p className={cn("text-xs", STAGE_COLOR[status] ?? "text-muted-foreground")}>
+                          {STAGE_LABEL[status] ?? status}
+                          {status === "IN_PROGRESS" && progress > 0 && ` · ${progress}%`}
                         </p>
-                        {s.started_at && (
+                        {s?.started_at && (
                           <p className="text-xs text-muted-foreground">
                             Started {shortDate(s.started_at)}
                           </p>
+                        )}
+                        {status === "IN_PROGRESS" && progress > 0 && (
+                          <div className="mt-1.5 h-1.5 w-full bg-muted rounded-full overflow-hidden">
+                            <div
+                              className="h-full bg-blue-500 rounded-full transition-all"
+                              style={{ width: `${progress}%` }}
+                            />
+                          </div>
                         )}
                       </div>
                       {!isViewOnly && (
@@ -700,7 +713,7 @@ export default function SiteDashboardPage() {
                         </button>
                       )}
                     </div>
-                  ))}
+                  ); })}
                 </div>
               </Section>
               </section>

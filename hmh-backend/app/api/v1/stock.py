@@ -10,7 +10,7 @@ from pydantic import BaseModel
 
 from app.core.config import settings
 from app.core.upload_validation import PHOTO_MIMES, validate_upload
-from app.dependencies import ALL_ROLES, CurrentUser, DbSession, OFFICE_AND_ABOVE
+from app.dependencies import ALL_ROLES, CurrentUser, DbSession, OFFICE_AND_ABOVE, WRITE_ROLES
 from app.schemas.common import ApiSuccess
 from app.schemas.stock import StockBalanceRead, StockLedgerRead, UsageLogCreate, UsageLogRead
 from app.services import stock_service
@@ -52,7 +52,7 @@ def get_ledger(
     "/usage",
     response_model=ApiSuccess[UsageLogRead],
     status_code=201,
-    dependencies=[ALL_ROLES],
+    dependencies=[WRITE_ROLES],
 )
 def record_usage(
     body: UsageLogCreate,
@@ -87,7 +87,7 @@ def refresh_stock_balances(db: DbSession):
     "/usage-with-evidence",
     response_model=ApiSuccess[UsageLogRead],
     status_code=201,
-    dependencies=[ALL_ROLES],
+    dependencies=[WRITE_ROLES],
 )
 async def record_usage_with_evidence(
     db:              DbSession,
@@ -108,21 +108,20 @@ async def record_usage_with_evidence(
     """Record usage and optionally save an evidence photo."""
     from app.schemas.stock import UsageLogCreate
 
-    # Save evidence file (Supabase Storage when configured, else local disk)
     from app.core.storage import save_upload
-    evidence_url: Optional[str] = None
+    evidence_url:   Optional[str] = None
+    evidence_fname: Optional[str] = None
+    evidence_mime:  Optional[str] = None
+    evidence_size:  int           = 0
     if evidence_file and evidence_file.filename:
         validate_upload(evidence_file, PHOTO_MIMES)
-        ext     = os.path.splitext(evidence_file.filename)[1] or ".bin"
-        fname   = f"{uuid.uuid4().hex}{ext}"
-        content = await evidence_file.read()
-        evidence_url = save_upload(content, f"site_evidence/usage/{fname}")
-
-    note_parts = []
-    if comments:
-        note_parts.append(comments)
-    if evidence_url:
-        note_parts.append(f"evidence:{evidence_url}")
+        ext          = os.path.splitext(evidence_file.filename)[1] or ".bin"
+        fname        = f"{uuid.uuid4().hex}{ext}"
+        content      = await evidence_file.read()
+        evidence_url   = save_upload(content, f"site_evidence/usage/{fname}")
+        evidence_fname = evidence_file.filename
+        evidence_mime  = evidence_file.content_type or "image/jpeg"
+        evidence_size  = len(content)
 
     body = UsageLogCreate(
         site_id             = uuid.UUID(site_id),
@@ -134,16 +133,33 @@ async def record_usage_with_evidence(
         used_by_person_name = used_by_person_name,
         used_by_team_name   = used_by_team_name,
         usage_date          = datetime.now(timezone.utc),
-        comments            = " | ".join(note_parts) or None,
+        comments            = comments or None,
         overrun_reason      = overrun_reason,
     )
     usage = stock_service.record_usage(
         db, uuid.UUID(project_id), body, current_user.id,
         overrun_reason=overrun_reason,
     )
+    if evidence_url:
+        from app.models.attachment import Attachment
+        from app.models.enums import AttachmentEntity, AttachmentType
+        db.add(Attachment(
+            entity_type    = AttachmentEntity.USAGE_LOG,
+            entity_id      = usage.id,
+            file_name      = evidence_fname,
+            stored_path    = evidence_url,
+            file_url       = evidence_url,
+            mime_type      = evidence_mime,
+            file_size_bytes= evidence_size,
+            attachment_type= AttachmentType.PHOTO,
+            uploaded_by    = current_user.id,
+            uploaded_at    = datetime.now(timezone.utc),
+            is_active      = True,
+        ))
+        db.commit()
     return ApiSuccess(
         data=UsageLogRead.model_validate(usage),
-        message="Usage recorded." + (f" Evidence saved: {evidence_url}" if evidence_url else ""),
+        message="Usage recorded.",
     )
 
 
@@ -162,7 +178,7 @@ class IssueToLotBody(BaseModel):
     "/issue-to-lot",
     response_model=ApiSuccess[dict],
     status_code=201,
-    dependencies=[ALL_ROLES],
+    dependencies=[WRITE_ROLES],
 )
 def issue_to_lot(body: IssueToLotBody, db: DbSession, current_user: CurrentUser):
     """
@@ -202,7 +218,7 @@ class SiteTransferBody(BaseModel):
     "/site-transfer",
     response_model=ApiSuccess[dict],
     status_code=201,
-    dependencies=[ALL_ROLES],
+    dependencies=[WRITE_ROLES],
 )
 def site_transfer(body: SiteTransferBody, db: DbSession, current_user: CurrentUser):
     """Transfer stock between two sites (e.g. main warehouse → site store)."""

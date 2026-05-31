@@ -62,18 +62,18 @@ def _get_delivery_or_404(db: Session, delivery_id: uuid.UUID) -> Delivery:
 def list_deliveries(
     db: Session,
     project_id: uuid.UUID,
+    site_id: Optional[uuid.UUID] = None,
     limit: int = 100,
     offset: int = 0,
 ) -> list[Delivery]:
-    return (
+    q = (
         db.query(Delivery)
         .options(joinedload(Delivery.items))
         .filter(Delivery.project_id == project_id)
-        .order_by(Delivery.delivery_date.desc())
-        .limit(limit)
-        .offset(offset)
-        .all()
     )
+    if site_id:
+        q = q.filter(Delivery.site_id == site_id)
+    return q.order_by(Delivery.delivery_date.desc()).limit(limit).offset(offset).all()
 
 
 def get_delivery(db: Session, delivery_id: uuid.UUID) -> Delivery:

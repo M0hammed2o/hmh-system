@@ -39,11 +39,12 @@ def list_deliveries(
     project_id: uuid.UUID,
     db: DbSession,
     current_user: CurrentUser,
+    site_id: Optional[uuid.UUID] = Query(None),
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
 ):
     check_project_access(db, current_user, project_id)
-    deliveries = delivery_service.list_deliveries(db, project_id, limit=limit, offset=offset)
+    deliveries = delivery_service.list_deliveries(db, project_id, site_id=site_id, limit=limit, offset=offset)
     return ApiSuccess(data=[DeliveryRead.model_validate(d) for d in deliveries])
 
 

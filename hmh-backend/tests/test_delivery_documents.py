@@ -267,8 +267,17 @@ def test_record_usage_with_evidence_saves_file(db, client):
     assert r.status_code == 201, r.text
     usage = r.json()["data"]
     assert usage["quantity_used"] == 5.0
-    # Evidence URL is encoded into comments
-    assert "evidence:/uploads/site_evidence/usage/" in (usage.get("comments") or r.json().get("message", ""))
+    # Evidence is stored as an Attachment record, not embedded in comments
+    attachment = (
+        db.query(Attachment)
+        .filter(
+            Attachment.entity_type == AttachmentEntity.USAGE_LOG,
+            Attachment.entity_id == usage["id"],
+        )
+        .first()
+    )
+    assert attachment is not None
+    assert "/uploads/site_evidence/usage/" in attachment.stored_path
 
 
 # ── Issue 3: Stage evidence ──────────────────────────────────────────────────

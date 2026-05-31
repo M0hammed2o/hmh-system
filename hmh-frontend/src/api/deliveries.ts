@@ -72,9 +72,11 @@ export interface DeliveryUpdate {
 }
 
 export const deliveriesApi = {
-  list: async (projectId: string): Promise<Delivery[]> => {
+  list: async (projectId: string, siteId?: string): Promise<Delivery[]> => {
+    const params = siteId ? { site_id: siteId } : {};
     const res = await client.get<{ data: Delivery[] }>(
-      `/projects/${projectId}/deliveries/`
+      `/projects/${projectId}/deliveries/`,
+      { params }
     );
     return res.data.data;
   },
