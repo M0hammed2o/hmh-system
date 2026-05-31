@@ -63,6 +63,76 @@ def create_boq_header(
 
 
 @project_boq_router.get(
+    "/items/search",
+    response_model=ApiSuccess[list[dict]],
+    dependencies=[ALL_ROLES],
+)
+def search_boq_items(
+    project_id: uuid.UUID,
+    db: DbSession,
+    current_user: CurrentUser,
+    q: str = Query("", description="Search term"),
+):
+    """
+    Search MATERIAL BOQ items for a project by description.
+    Deduplicates by raw_description+unit and returns up to 20 results.
+    Used by the MR creation modal to look up BOQ allocations and assigned suppliers.
+    """
+    from app.models.enums import ItemType
+    from app.models.supplier import Supplier as SupplierModel
+    from sqlalchemy import true as _true
+
+    check_project_access(db, current_user, project_id)
+
+    q_stripped = q.strip()
+    q_clause = BOQItem.raw_description.ilike(f"%{q_stripped}%") if q_stripped else _true()
+
+    rows = (
+        db.query(BOQItem)
+        .filter(
+            BOQItem.project_id == project_id,
+            BOQItem.is_active.is_(True),
+            BOQItem.item_type == ItemType.MATERIAL,
+            q_clause,
+        )
+        .order_by(BOQItem.raw_description)
+        .limit(100)
+        .all()
+    )
+
+    seen: set[tuple] = set()
+    results: list[dict] = []
+    for item in rows:
+        key = (item.raw_description.lower().strip(), (item.unit or "").lower())
+        if key in seen:
+            continue
+        seen.add(key)
+
+        supplier_name: str | None = None
+        if item.supplier_id:
+            sup = db.get(SupplierModel, item.supplier_id)
+            if sup:
+                supplier_name = sup.name
+
+        results.append({
+            "id":                   str(item.id),
+            "description":          item.raw_description,
+            "unit":                 item.unit,
+            "planned_quantity":     float(item.planned_quantity) if item.planned_quantity is not None else None,
+            "preferred_supplier_id": str(item.supplier_id) if item.supplier_id else None,
+            "supplier_name":        supplier_name,
+            "lot_id":               str(item.lot_id) if item.lot_id else None,
+            "site_id":              str(item.site_id) if item.site_id else None,
+            "item_id":              str(item.item_id) if item.item_id else None,
+        })
+
+        if len(results) >= 20:
+            break
+
+    return ApiSuccess(data=results)
+
+
+@project_boq_router.get(
     "/{header_id}",
     response_model=ApiSuccess[BOQHeaderRead],
     dependencies=[ALL_ROLES],

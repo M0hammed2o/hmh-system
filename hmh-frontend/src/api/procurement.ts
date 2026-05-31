@@ -56,19 +56,33 @@ export interface MaterialRequest {
 
 export interface MRItemCreate {
   item_id?: string;
+  boq_item_id?: string;
   description: string;
   requested_quantity: number;
   unit?: string;
   remarks?: string;
 }
 
+export interface BOQSearchResult {
+  id: string;
+  description: string;
+  unit: string | null;
+  planned_quantity: number | null;
+  preferred_supplier_id: string | null;
+  supplier_name: string | null;
+  lot_id: string | null;
+  site_id: string | null;
+  item_id: string | null;
+}
+
 export interface MRCreate {
-  site_id: string;
+  site_id?: string | null;
   lot_id?: string;
   priority?: MRPriority;
   delivery_destination?: DeliveryDestination;
   needed_by_date?: string;
   notes?: string;
+  preferred_supplier_id?: string | null;
   items: MRItemCreate[];
 }
 
@@ -238,6 +252,14 @@ export const procurementApi = {
   },
 
   // ── Activity timelines ──────────────────────────────────────────────────
+
+  searchBOQItems: async (projectId: string, q: string): Promise<BOQSearchResult[]> => {
+    const res = await client.get<{ data: BOQSearchResult[] }>(
+      `/projects/${projectId}/boq/items/search`,
+      { params: { q } },
+    );
+    return res.data.data ?? [];
+  },
 
   getMRActivity: async (mrId: string): Promise<ProcurementActivityEntry[]> => {
     const res = await client.get<{ data: ProcurementActivityEntry[] }>(

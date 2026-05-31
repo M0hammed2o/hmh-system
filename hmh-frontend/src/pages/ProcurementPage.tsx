@@ -1,13 +1,16 @@
 /**
  * Procurement Page — MR → Approve → PO → Email workflow.
  */
-import { useEffect, useState, useCallback, useMemo } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { WriteGuard } from "@/components/shared/WriteGuard";
 import {
   Plus, Check, X, ChevronRight, AlertTriangle, Mail,
   MailCheck, RefreshCw, FileText, ShoppingCart, Warehouse, ArrowRight,
   CheckCircle2, Circle, Clock, Package, Receipt, CreditCard,
+  Search, Lock, Unlock, AlertCircle,
 } from "lucide-react";
+import { useAuthContext } from "@/context/AuthContext";
+import { suppliersApi } from "@/api/suppliers";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -16,7 +19,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { projectsApi, type Project } from "@/api/projects";
 import {
   procurementApi,
-  type MaterialRequest, type MRCreate, type MRItemCreate,
+  type MaterialRequest, type MRCreate, type MRItemCreate, type BOQSearchResult,
   type MRQuote, type PurchaseOrder, type MRPriority, type DeliveryDestination,
 } from "@/api/procurement";
 import { purchaseOrdersApi, type POLinkedDocs } from "@/api/purchaseOrders";
@@ -89,107 +92,435 @@ function ProcurementActivityRow({ entry }: { entry: ProcurementActivityEntry }) 
   );
 }
 
-// ── Create MR Modal ───────────────────────────────────────────────────────────
+// ── Create MR Modal (BOQ-driven, step-based) ─────────────────────────────────
+
+interface MRCartItem {
+  description: string;
+  unit: string;
+  quantity: number;
+  boq_item_id?: string;
+  item_id?: string;
+  is_boq: boolean;
+  boq_supplier_id: string | null;
+  boq_supplier_name: string | null;
+  boq_planned_qty: number | null;
+}
+
+type MRModalStage = "location" | "items" | "supplier";
+
+const OFFICE_ROLES = ["OWNER", "OFFICE_ADMIN", "OFFICE_USER"];
 
 function CreateMRModal({ projectId, sites, onClose, onCreated }: {
   projectId: string; sites: Site[]; onClose: () => void; onCreated: () => void;
 }) {
+  const { role } = useAuthContext();
+  const isOfficeRole = OFFICE_ROLES.includes(role ?? "");
+
+  const [stage, setStage] = useState<MRModalStage>("location");
+
+  // Stage 1: location + meta
   const [siteId, setSiteId] = useState(sites[0]?.id || "");
   const [priority, setPriority] = useState<MRPriority>("NORMAL");
   const [destination, setDestination] = useState<DeliveryDestination>("SITE_STORE");
-  const [notes, setNotes] = useState("");
   const [neededBy, setNeededBy] = useState("");
-  const [items, setItems] = useState<MRItemCreate[]>([{ description: "", requested_quantity: 1, unit: "" }]);
+  const [notes, setNotes] = useState("");
+
+  // Stage 2: item search + cart
+  const [searchQ, setSearchQ] = useState("");
+  const [searchResults, setSearchResults] = useState<BOQSearchResult[]>([]);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [cart, setCart] = useState<MRCartItem[]>([]);
+  const [customDesc, setCustomDesc] = useState("");
+  const [customUnit, setCustomUnit] = useState("");
+  const [customQty, setCustomQty] = useState("1");
+  const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Stage 3: supplier
+  const [allSuppliers, setAllSuppliers] = useState<Array<{ id: string; name: string }>>([]);
+  const [preferredSupplierId, setPreferredSupplierId] = useState<string>("");
+  const [supplierOverridden, setSupplierOverridden] = useState(false);
+
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
-  const addItem = () => setItems([...items, { description: "", requested_quantity: 1, unit: "" }]);
-  const removeItem = (i: number) => setItems(items.filter((_, idx) => idx !== i));
-  const updateItem = (i: number, field: keyof MRItemCreate, value: string | number) =>
-    setItems(items.map((it, idx) => idx === i ? { ...it, [field]: value } : it));
+  // ── Derived supplier scenario ─────────────────────────────────────────────
+  const firstBOQSupplier = cart.find((i) => i.is_boq && i.boq_supplier_id);
+  const hasBOQItems = cart.some((i) => i.is_boq);
+  const allOutsideBOQ = cart.length > 0 && cart.every((i) => !i.is_boq);
 
-  const isMainWarehouse = destination === "MAIN_WAREHOUSE";
+  // A: BOQ+supplier auto-selected; B: BOQ+no supplier → must select; C: outside BOQ → must select
+  const scenario: "A" | "B" | "C" = firstBOQSupplier ? "A" : hasBOQItems ? "B" : "C";
 
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!isMainWarehouse && !siteId) { setError("Select a site, or choose Main Warehouse as the destination."); return; }
+  // ── Load suppliers when entering supplier stage ───────────────────────────
+  useEffect(() => {
+    if (stage !== "supplier") return;
+    suppliersApi.list(false).then((list) => setAllSuppliers(list.map((s) => ({ id: s.id, name: s.name })))).catch(() => {});
+    if (scenario === "A" && firstBOQSupplier?.boq_supplier_id && !supplierOverridden) {
+      setPreferredSupplierId(firstBOQSupplier.boq_supplier_id);
+    }
+  }, [stage]);
+
+  // ── BOQ search with 300ms debounce ────────────────────────────────────────
+  const triggerSearch = (q: string) => {
+    setSearchQ(q);
+    if (searchTimer.current) clearTimeout(searchTimer.current);
+    if (!q.trim()) { setSearchResults([]); return; }
+    searchTimer.current = setTimeout(async () => {
+      setSearchLoading(true);
+      try {
+        const results = await procurementApi.searchBOQItems(projectId, q);
+        setSearchResults(results);
+      } catch { setSearchResults([]); }
+      finally { setSearchLoading(false); }
+    }, 300);
+  };
+
+  const addBOQItem = (r: BOQSearchResult) => {
+    setCart((prev) => [...prev, {
+      description: r.description,
+      unit: r.unit || "",
+      quantity: r.planned_quantity ?? 1,
+      boq_item_id: r.id,
+      item_id: r.item_id || undefined,
+      is_boq: true,
+      boq_supplier_id: r.preferred_supplier_id,
+      boq_supplier_name: r.supplier_name,
+      boq_planned_qty: r.planned_quantity,
+    }]);
+    setSearchQ(""); setSearchResults([]);
+  };
+
+  const addCustomItem = () => {
+    if (!customDesc.trim()) return;
+    setCart((prev) => [...prev, {
+      description: customDesc.trim(),
+      unit: customUnit.trim(),
+      quantity: parseFloat(customQty) || 1,
+      is_boq: false,
+      boq_supplier_id: null,
+      boq_supplier_name: null,
+      boq_planned_qty: null,
+    }]);
+    setCustomDesc(""); setCustomUnit(""); setCustomQty("1");
+  };
+
+  const removeCartItem = (i: number) => setCart((prev) => prev.filter((_, idx) => idx !== i));
+  const updateCartQty = (i: number, v: string) =>
+    setCart((prev) => prev.map((item, idx) => idx === i ? { ...item, quantity: parseFloat(v) || 1 } : item));
+
+  // ── Submit ─────────────────────────────────────────────────────────────────
+  const handleSubmit = async () => {
+    if (!preferredSupplierId && (scenario !== "A" || supplierOverridden)) {
+      setError("Please select a supplier."); return;
+    }
     setLoading(true); setError("");
     try {
       await procurementApi.createMR(projectId, {
-        site_id: isMainWarehouse ? undefined : siteId,
-        priority, delivery_destination: destination,
-        notes: notes || undefined, needed_by_date: neededBy || undefined,
-        items: items.filter((i) => i.description.trim()),
+        site_id: siteId || undefined,
+        priority,
+        delivery_destination: destination,
+        notes: notes || undefined,
+        needed_by_date: neededBy || undefined,
+        preferred_supplier_id: preferredSupplierId || undefined,
+        items: cart.map((item) => ({
+          description: item.description,
+          requested_quantity: item.quantity,
+          unit: item.unit || undefined,
+          boq_item_id: item.boq_item_id,
+          item_id: item.item_id,
+          remarks: !item.is_boq ? "Outside BOQ — one-time purchase" : undefined,
+        })),
       } as MRCreate);
       onCreated(); onClose();
     } catch (err: unknown) {
-      setError((err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Failed.");
+      const msg = (err as { response?: { data?: { message?: string; detail?: string } } })?.response?.data;
+      setError(msg?.message || msg?.detail || "Failed to create request.");
     } finally { setLoading(false); }
   };
 
+  // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-foreground/40">
-      <div className="bg-card border border-border rounded-t-2xl sm:rounded-2xl w-full sm:max-w-xl max-h-[90vh] flex flex-col">
+      <div className="bg-card border border-border rounded-t-2xl sm:rounded-2xl w-full sm:max-w-lg max-h-[92vh] flex flex-col">
+
+        {/* Header */}
         <div className="flex items-center justify-between px-5 pt-5 pb-4 border-b border-border shrink-0">
-          <h2 className="text-base font-semibold">New Material Request</h2>
+          <div>
+            <h2 className="text-base font-semibold">New Material Request</h2>
+            <div className="flex items-center gap-2 mt-1">
+              {(["location", "items", "supplier"] as MRModalStage[]).map((s, i) => (
+                <div key={s} className="flex items-center gap-1.5">
+                  {i > 0 && <ChevronRight className="w-3 h-3 text-muted-foreground" />}
+                  <span className={cn(
+                    "text-[10px] font-medium rounded-full px-2 py-0.5",
+                    stage === s ? "bg-primary text-primary-foreground" :
+                    (["location", "items", "supplier"].indexOf(stage) > i) ? "bg-success/20 text-success" :
+                    "text-muted-foreground"
+                  )}>
+                    {s === "location" ? "Location" : s === "items" ? "Materials" : "Supplier"}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
           <button onClick={onClose}><X className="w-4 h-4 text-muted-foreground" /></button>
         </div>
-        <form onSubmit={submit} className="flex-1 overflow-y-auto p-5 space-y-4">
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <Label>{isMainWarehouse ? "Requesting Site" : "Site *"}</Label>
-              {isMainWarehouse ? (
-                <div className="h-9 flex items-center px-3 rounded-md border border-dashed border-border text-xs text-muted-foreground bg-muted/30">
-                  Main Warehouse (no site required)
-                </div>
-              ) : (
+
+        {/* Content */}
+        <div className="flex-1 overflow-y-auto p-5">
+
+          {/* ── Stage 1: Location & Meta ── */}
+          {stage === "location" && (
+            <div className="space-y-4">
+              <div className="space-y-1.5">
+                <Label>Location *</Label>
                 <select value={siteId} onChange={(e) => setSiteId(e.target.value)} className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm">
                   {sites.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
                 </select>
-              )}
-            </div>
-            <div className="space-y-1.5">
-              <Label>Priority</Label>
-              <select value={priority} onChange={(e) => setPriority(e.target.value as MRPriority)} className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm">
-                {(["URGENT", "HIGH", "NORMAL", "LOW"] as MRPriority[]).map((p) => <option key={p} value={p}>{p}</option>)}
-              </select>
-            </div>
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <Label>Delivery Destination</Label>
-              <select value={destination} onChange={(e) => setDestination(e.target.value as DeliveryDestination)} className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm">
-                <option value="SITE_STORE">Project Warehouse (from supplier)</option>
-                <option value="MAIN_WAREHOUSE">Main Warehouse (bulk purchase only)</option>
-                <option value="LOT">Direct to Lot</option>
-              </select>
-            </div>
-            <div className="space-y-1.5">
-              <Label>Needed By</Label>
-              <Input type="date" value={neededBy} onChange={(e) => setNeededBy(e.target.value)} />
-            </div>
-          </div>
-          <div className="space-y-1.5">
-            <Label>Notes</Label>
-            <Input value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Reason or additional info" />
-          </div>
-          <div className="space-y-2">
-            <Label>Items *</Label>
-            {items.map((item, i) => (
-              <div key={i} className="grid grid-cols-[1fr_80px_60px_20px] gap-2 items-center">
-                <Input value={item.description} onChange={(e) => updateItem(i, "description", e.target.value)} placeholder="Description *" className="h-8 text-sm" />
-                <Input type="number" min="0.01" step="any" value={item.requested_quantity} onChange={(e) => updateItem(i, "requested_quantity", parseFloat(e.target.value) || 1)} className="h-8 text-sm" />
-                <Input value={item.unit || ""} onChange={(e) => updateItem(i, "unit", e.target.value)} placeholder="Unit" className="h-8 text-sm" />
-                {items.length > 1 && <button type="button" onClick={() => removeItem(i)} className="text-muted-foreground hover:text-destructive"><X className="w-3.5 h-3.5" /></button>}
+                <p className="text-[10px] text-muted-foreground">Select Project Warehouse for procurement that delivers to the warehouse first.</p>
               </div>
-            ))}
-            <button type="button" onClick={addItem} className="text-xs text-primary hover:underline flex items-center gap-1"><Plus className="w-3 h-3" />Add item</button>
-          </div>
-          {error && <p className="text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-lg px-3 py-2">{error}</p>}
-        </form>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <Label>Priority</Label>
+                  <select value={priority} onChange={(e) => setPriority(e.target.value as MRPriority)} className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm">
+                    {(["URGENT", "HIGH", "NORMAL", "LOW"] as MRPriority[]).map((p) => <option key={p} value={p}>{p}</option>)}
+                  </select>
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Delivery Destination</Label>
+                  <select value={destination} onChange={(e) => setDestination(e.target.value as DeliveryDestination)} className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm">
+                    <option value="SITE_STORE">Project Warehouse</option>
+                    <option value="MAIN_WAREHOUSE">Main Warehouse</option>
+                    <option value="LOT">Direct to Lot</option>
+                  </select>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <Label>Required By</Label>
+                  <Input type="date" value={neededBy} onChange={(e) => setNeededBy(e.target.value)} className="h-9" />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Notes</Label>
+                  <Input value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Optional" className="h-9" />
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ── Stage 2: Material Search ── */}
+          {stage === "items" && (
+            <div className="space-y-4">
+              {/* BOQ search */}
+              <div className="space-y-1.5">
+                <Label>Search BOQ Materials</Label>
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
+                  <Input
+                    value={searchQ}
+                    onChange={(e) => triggerSearch(e.target.value)}
+                    placeholder="e.g. External Door, Cement…"
+                    className="h-9 pl-8 text-sm"
+                  />
+                </div>
+                {searchLoading && <p className="text-xs text-muted-foreground">Searching…</p>}
+                {searchResults.length > 0 && (
+                  <div className="border border-border rounded-lg divide-y divide-border/60 max-h-48 overflow-y-auto">
+                    {searchResults.map((r) => (
+                      <button
+                        key={r.id}
+                        onClick={() => addBOQItem(r)}
+                        className="w-full text-left px-3 py-2.5 hover:bg-muted/40 transition-colors"
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-sm font-medium">{r.description}</span>
+                          <span className="text-xs text-muted-foreground shrink-0">{r.planned_quantity} {r.unit}</span>
+                        </div>
+                        {r.supplier_name && (
+                          <p className="text-[10px] text-muted-foreground mt-0.5">Supplier: {r.supplier_name}</p>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {searchQ.trim() && !searchLoading && searchResults.length === 0 && (
+                  <p className="text-xs text-muted-foreground">No BOQ match found for "{searchQ}".</p>
+                )}
+              </div>
+
+              {/* Cart */}
+              {cart.length > 0 && (
+                <div className="space-y-1.5">
+                  <Label>Added Items ({cart.length})</Label>
+                  <div className="border border-border rounded-lg divide-y divide-border/60">
+                    {cart.map((item, i) => (
+                      <div key={i} className="flex items-center gap-2 px-3 py-2">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-sm font-medium truncate">{item.description}</span>
+                            {item.is_boq ? (
+                              <span className="text-[9px] bg-primary/10 text-primary rounded px-1 py-0.5 shrink-0">BOQ</span>
+                            ) : (
+                              <span className="text-[9px] bg-amber-500/10 text-amber-600 rounded px-1 py-0.5 shrink-0">Outside BOQ</span>
+                            )}
+                          </div>
+                          {item.boq_planned_qty != null && (
+                            <p className="text-[10px] text-muted-foreground">BOQ allocation: {item.boq_planned_qty} {item.unit}</p>
+                          )}
+                        </div>
+                        <Input
+                          type="number"
+                          min="0.01"
+                          step="any"
+                          value={item.quantity}
+                          onChange={(e) => updateCartQty(i, e.target.value)}
+                          className="h-7 w-20 text-xs text-right"
+                        />
+                        <span className="text-xs text-muted-foreground w-10">{item.unit || "—"}</span>
+                        <button onClick={() => removeCartItem(i)} className="text-muted-foreground hover:text-destructive">
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Add custom item */}
+              <div className="border border-dashed border-border rounded-lg p-3 space-y-2">
+                <p className="text-xs text-muted-foreground font-medium">Add item not in BOQ</p>
+                <div className="grid grid-cols-[1fr_70px_70px_auto] gap-2 items-center">
+                  <Input value={customDesc} onChange={(e) => setCustomDesc(e.target.value)} placeholder="Description *" className="h-8 text-sm" />
+                  <Input value={customQty} onChange={(e) => setCustomQty(e.target.value)} type="number" min="0.01" step="any" placeholder="Qty" className="h-8 text-sm" />
+                  <Input value={customUnit} onChange={(e) => setCustomUnit(e.target.value)} placeholder="Unit" className="h-8 text-sm" />
+                  <Button type="button" size="sm" variant="outline" onClick={addCustomItem} disabled={!customDesc.trim()} className="h-8 px-2">
+                    <Plus className="w-3.5 h-3.5" />
+                  </Button>
+                </div>
+                {cart.some((i) => !i.is_boq) && (
+                  <p className="text-[10px] text-amber-600 flex items-center gap-1">
+                    <AlertCircle className="w-3 h-3" />Outside-BOQ items are flagged for audit and require manager approval.
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* ── Stage 3: Supplier ── */}
+          {stage === "supplier" && (
+            <div className="space-y-4">
+              {/* Scenario banner */}
+              {scenario === "A" && !supplierOverridden && (
+                <div className="flex items-start gap-2.5 bg-primary/5 border border-primary/20 rounded-lg px-3 py-2.5">
+                  <Lock className="w-3.5 h-3.5 text-primary mt-0.5 shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-medium">Supplier auto-selected from BOQ</p>
+                    <p className="text-[10px] text-muted-foreground mt-0.5">
+                      {firstBOQSupplier?.boq_supplier_name || "Assigned supplier"} is the designated supplier for this material.
+                    </p>
+                  </div>
+                  {isOfficeRole && (
+                    <button onClick={() => { setSupplierOverridden(true); setPreferredSupplierId(""); }}
+                      className="text-[10px] text-primary hover:underline flex items-center gap-1 shrink-0">
+                      <Unlock className="w-3 h-3" />Override
+                    </button>
+                  )}
+                </div>
+              )}
+              {scenario === "B" && (
+                <div className="flex items-start gap-2.5 bg-amber-500/5 border border-amber-500/20 rounded-lg px-3 py-2.5">
+                  <AlertTriangle className="w-3.5 h-3.5 text-amber-500 mt-0.5 shrink-0" />
+                  <p className="text-xs text-amber-700 dark:text-amber-400">
+                    No supplier is assigned to this BOQ item. Please select one below.
+                  </p>
+                </div>
+              )}
+              {(scenario === "C" || allOutsideBOQ) && (
+                <div className="flex items-start gap-2.5 bg-amber-500/5 border border-amber-500/20 rounded-lg px-3 py-2.5">
+                  <AlertCircle className="w-3.5 h-3.5 text-amber-500 mt-0.5 shrink-0" />
+                  <p className="text-xs text-amber-700 dark:text-amber-400">
+                    One or more items are outside the BOQ. A supplier is required. An audit record will be created.
+                  </p>
+                </div>
+              )}
+
+              {/* Supplier selector */}
+              <div className="space-y-1.5">
+                <Label>Preferred Supplier {scenario !== "A" || supplierOverridden ? "*" : ""}</Label>
+                {scenario === "A" && !supplierOverridden ? (
+                  <div className="h-9 flex items-center gap-2 px-3 rounded-md border border-input bg-muted/30">
+                    <CheckCircle2 className="w-4 h-4 text-success shrink-0" />
+                    <span className="text-sm">{firstBOQSupplier?.boq_supplier_name || "—"}</span>
+                  </div>
+                ) : (
+                  <select
+                    value={preferredSupplierId}
+                    onChange={(e) => setPreferredSupplierId(e.target.value)}
+                    className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+                  >
+                    <option value="">— Select supplier —</option>
+                    {allSuppliers.map((s) => (
+                      <option key={s.id} value={s.id}>{s.name}</option>
+                    ))}
+                  </select>
+                )}
+              </div>
+
+              {/* Request summary */}
+              <div className="bg-muted/30 rounded-lg p-3 space-y-1.5">
+                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Summary</p>
+                <div className="text-xs space-y-1">
+                  <div className="flex justify-between"><span className="text-muted-foreground">Location</span><span>{sites.find((s) => s.id === siteId)?.name ?? siteId}</span></div>
+                  <div className="flex justify-between"><span className="text-muted-foreground">Destination</span><span>{DEST_LABEL[destination]}</span></div>
+                  <div className="flex justify-between"><span className="text-muted-foreground">Priority</span><span>{priority}</span></div>
+                  <div className="flex justify-between"><span className="text-muted-foreground">Items</span><span>{cart.length}</span></div>
+                  {neededBy && <div className="flex justify-between"><span className="text-muted-foreground">Required by</span><span>{neededBy}</span></div>}
+                </div>
+              </div>
+
+              {error && <p className="text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-lg px-3 py-2">{error}</p>}
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
         <div className="px-5 pb-5 pt-3 border-t border-border shrink-0 flex gap-2">
-          <Button disabled={loading} onClick={submit} className="flex-1">{loading ? "Creating…" : "Create Request"}</Button>
-          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          {stage === "location" && (
+            <>
+              <Button
+                className="flex-1"
+                disabled={!siteId}
+                onClick={() => setStage("items")}
+              >
+                Next: Add Materials
+              </Button>
+              <Button variant="outline" onClick={onClose}>Cancel</Button>
+            </>
+          )}
+          {stage === "items" && (
+            <>
+              <Button
+                className="flex-1"
+                disabled={cart.length === 0}
+                onClick={() => setStage("supplier")}
+              >
+                Next: Select Supplier
+              </Button>
+              <Button variant="outline" onClick={() => setStage("location")}>Back</Button>
+            </>
+          )}
+          {stage === "supplier" && (
+            <>
+              <Button
+                className="flex-1"
+                disabled={loading || ((scenario !== "A" || supplierOverridden) && !preferredSupplierId)}
+                onClick={handleSubmit}
+              >
+                {loading ? "Creating…" : "Create Request"}
+              </Button>
+              <Button variant="outline" onClick={() => setStage("items")}>Back</Button>
+            </>
+          )}
         </div>
       </div>
     </div>
