@@ -16,6 +16,8 @@ from tests.conftest import (
     make_user, make_project, make_site, make_supplier, make_item, make_stock,
     make_user_project_access,
 )
+from app.models.attachment import Attachment
+from app.models.enums import AttachmentEntity
 
 
 # ── Issue 1: DeliveryRead exposes delivery_note_image_url + signature fields ──
@@ -304,5 +306,15 @@ def test_update_stage_with_evidence_saves_file(db, client):
     assert r2.status_code == 201, r2.text
     pss = r2.json()["data"]
     assert pss["status"] == "IN_PROGRESS"
-    # Evidence URL is embedded in notes
-    assert "evidence:/uploads/site_evidence/stages/" in (pss.get("notes") or "")
+    assert pss.get("notes") == "Foundation started"
+    # Evidence is stored as an Attachment record, not embedded in notes
+    attachment = (
+        db.query(Attachment)
+        .filter(
+            Attachment.entity_type == AttachmentEntity.STAGE_STATUS,
+            Attachment.entity_id == pss["id"],
+        )
+        .first()
+    )
+    assert attachment is not None
+    assert "/uploads/site_evidence/stages/" in attachment.stored_path

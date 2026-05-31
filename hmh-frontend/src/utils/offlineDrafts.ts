@@ -1,6 +1,7 @@
 /**
  * Offline draft queue backed by localStorage.
- * Used by SiteDashboardPage to persist failed submissions and retry them.
+ * Stores failed submissions when the device loses connectivity.
+ * Sync logic lives in the calling page (to avoid circular imports).
  */
 
 export type DraftType = "material_request" | "stage_update" | "usage";

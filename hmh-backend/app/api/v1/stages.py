@@ -126,18 +126,19 @@ async def upsert_stage_status_with_evidence(
 
     # Save evidence photo (Supabase Storage when configured, else local disk)
     from app.core.storage import save_upload
-    evidence_url: Optional[str] = None
+    evidence_url:   Optional[str] = None
+    evidence_fname: Optional[str] = None
+    evidence_mime:  Optional[str] = None
+    evidence_size:  int           = 0
     if evidence_file and evidence_file.filename:
         validate_upload(evidence_file, PHOTO_MIMES)
-        ext     = os.path.splitext(evidence_file.filename)[1] or ".bin"
-        fname   = f"{uuid.uuid4().hex}{ext}"
-        content = await evidence_file.read()
-        evidence_url = save_upload(content, f"site_evidence/stages/{fname}")
-
-    # Append evidence URL to notes so it's linked to the record
-    combined_notes = notes or ""
-    if evidence_url:
-        combined_notes = f"evidence:{evidence_url}" + (f" | {combined_notes}" if combined_notes else "")
+        ext          = os.path.splitext(evidence_file.filename)[1] or ".bin"
+        fname        = f"{uuid.uuid4().hex}{ext}"
+        content      = await evidence_file.read()
+        evidence_url   = save_upload(content, f"site_evidence/stages/{fname}")
+        evidence_fname = evidence_file.filename
+        evidence_mime  = evidence_file.content_type or "image/jpeg"
+        evidence_size  = len(content)
 
     planned_date = None
     if planned_completion_date:
@@ -151,7 +152,7 @@ async def upsert_stage_status_with_evidence(
         site_id                  = uuid.UUID(site_id) if site_id else None,
         lot_id                   = uuid.UUID(lot_id)  if lot_id  else None,
         status                   = StageStatus(status) if status else None,
-        notes                    = combined_notes or None,
+        notes                    = notes or None,
         delay_reason             = delay_reason,
         progress_pct             = progress_pct,
         planned_completion_date  = planned_date,
@@ -164,9 +165,28 @@ async def upsert_stage_status_with_evidence(
         )
     except ForbiddenError as exc:
         raise HTTPException(status_code=403, detail=exc.message)
+
+    # Store evidence photo as a proper Attachment record (not embedded in notes)
+    if evidence_url:
+        from app.models.enums import AttachmentType
+        db.add(Attachment(
+            entity_type     = AttachmentEntity.STAGE_STATUS,
+            entity_id       = pss.id,
+            file_name       = evidence_fname,
+            stored_path     = evidence_url,
+            file_url        = evidence_url,
+            mime_type       = evidence_mime,
+            file_size_bytes = evidence_size,
+            attachment_type = AttachmentType.PHOTO,
+            uploaded_by     = current_user.id,
+            uploaded_at     = datetime.now(timezone.utc),
+            is_active       = True,
+        ))
+        db.commit()
+
     return ApiSuccess(
         data=stage_service._enrich(pss),
-        message="Stage updated." + (f" Photo saved: {evidence_url}" if evidence_url else ""),
+        message="Stage updated." + (" Photo saved." if evidence_url else ""),
     )
 
 

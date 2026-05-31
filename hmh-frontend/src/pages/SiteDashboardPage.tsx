@@ -5,6 +5,7 @@ import {
   ListChecks, Upload, PenLine, AlertTriangle, CheckCircle2,
   Clock, Circle, ChevronRight, Box, Bell, Camera, Image, X,
   Plus, Trash2, ClipboardList, Flag, Ban, Lock, CalendarClock,
+  ShieldOff, Briefcase, RotateCcw,
 } from "lucide-react";
 import { siteCaptureApi, type ExtractedItem } from "@/api/siteCapture";
 import { siteDashboardApi, type MaterialSummaryItem, type ActivityItem } from "@/api/siteDashboard";
@@ -20,7 +21,7 @@ import { sitesApi, type Site } from "@/api/sites";
 import { lotsApi, type Lot } from "@/api/lots";
 import { materialRequestsApi, type MaterialRequest } from "@/api/materialRequests";
 import { deliveriesApi, type Delivery } from "@/api/deliveries";
-import { stagesApi, type ProjectStageStatus, type StageMaster } from "@/api/stages";
+import { stagesApi, type ProjectStageStatus, type StageMaster, type MilestonePhoto } from "@/api/stages";
 import { alertsApi, type Alert } from "@/api/alerts";
 import { stockApi, type StockBalance, type StockLedgerEntry } from "@/api/stock";
 import { suppliersApi, type Supplier } from "@/api/suppliers";
@@ -180,7 +181,7 @@ function ModalShell({ title, onClose, children }: {
 }
 
 // ── Main page ─────────────────────────────────────────────────────────────────
-type ModalType = "request" | "delivery" | "usage" | "stage" | null;
+type ModalType = "request" | "delivery" | "usage" | "stage" | "jobcard" | null;
 
 export default function SiteDashboardPage() {
 
@@ -212,7 +213,10 @@ export default function SiteDashboardPage() {
   const [activity,        setActivity]        = useState<ActivityItem[]>([]);
 
   const [jobCards,      setJobCards]      = useState<JobCard[]>([]);
+  const [stagePhotos,   setStagePhotos]   = useState<MilestonePhoto[]>([]);
   const [offlineDrafts, setOfflineDrafts] = useState<OfflineDraft[]>(getDrafts);
+  const [discardConfirm, setDiscardConfirm] = useState(false);
+  const [syncingDrafts, setSyncingDrafts] = useState(false);
 
   const [loading,  setLoading]  = useState(false);
   const [loadErr,  setLoadErr]  = useState("");
@@ -319,6 +323,53 @@ export default function SiteDashboardPage() {
 
   useEffect(() => { loadData(); }, [loadData]);
 
+  // ── Load stage photos whenever stages change ──
+  useEffect(() => {
+    if (!projectId || stages.length === 0) { setStagePhotos([]); return; }
+    Promise.all(stages.map(s => stagesApi.listPhotos(projectId, s.id).catch(() => [])))
+      .then(results => setStagePhotos(results.flat()))
+      .catch(() => setStagePhotos([]));
+  }, [stages, projectId]);
+
+  // ── Sync offline drafts ──
+  const syncDrafts = async () => {
+    if (offlineDrafts.length === 0) return;
+    setSyncingDrafts(true);
+    const { removeDraft: _remove } = await import("@/utils/offlineDrafts");
+    const remaining: OfflineDraft[] = [];
+    for (const draft of offlineDrafts) {
+      try {
+        if (draft.type === "material_request") {
+          const { items, neededBy, notes } = draft.payload as {
+            items: Array<{ desc: string; qty: string; unit: string }>;
+            neededBy: string; notes: string;
+          };
+          const mr = await materialRequestsApi.create(draft.projectId, {
+            site_id: draft.siteId || null,
+            lot_id:  draft.lotId  || null,
+            delivery_destination: "SITE_STORE",
+            needed_by_date: neededBy || null,
+            notes:          notes    || null,
+            items: items.map(r => ({
+              description:        r.desc.trim(),
+              requested_quantity: parseFloat(r.qty),
+              unit:               r.unit.trim() || null,
+            })),
+          });
+          await materialRequestsApi.submit(mr.id);
+          _remove(draft.id);
+        } else {
+          remaining.push(draft);
+        }
+      } catch {
+        remaining.push(draft);
+      }
+    }
+    setOfflineDrafts(getDrafts());
+    setSyncingDrafts(false);
+    if (remaining.length < offlineDrafts.length) loadData();
+  };
+
   // ── Computed summary ──
   const openMRs      = mrs.filter(m => m.status === "DRAFT" || m.status === "SUBMITTED").length;
   const partialDels  = deliveries.filter(d => d.delivery_status === "PARTIALLY_RECEIVED").length;
@@ -336,16 +387,9 @@ export default function SiteDashboardPage() {
     .filter(s => !lotId || s.lot_id === lotId)
     .sort((a, b) => (a.sequence_order ?? 99) - (b.sequence_order ?? 99));
 
-  // ── Recent activity ──
-  // Legacy computed activity (fallback when API data not yet loaded)
-  type LegacyActivity = { id: string; label: string; sub: string; date: string; kind: "del" | "use" | "alert" };
+  // ── Recent activity (usage + alerts only — deliveries have their own section) ──
+  type LegacyActivity = { id: string; label: string; sub: string; date: string; kind: "use" | "alert" };
   const legacyActivity: LegacyActivity[] = [
-    ...deliveries.slice(0, 8).map(d => ({
-      id: d.id, kind: "del" as const,
-      label: `Delivery ${d.delivery_number || d.id.slice(0, 8)}`,
-      sub: d.delivery_status.replace(/_/g, " "),
-      date: d.delivery_date,
-    })),
     ...ledger.filter(e => e.movement_type === "USAGE").slice(0, 8).map(e => ({
       id: e.id, kind: "use" as const,
       label: "Usage recorded",
@@ -374,8 +418,15 @@ export default function SiteDashboardPage() {
       {/* Header */}
       <header className="sticky top-0 z-30 bg-card/90 backdrop-blur border-b border-border px-4 py-3
                           flex items-center justify-between gap-2">
-        <div className="flex items-center min-w-0">
+        <div className="flex items-center gap-2 min-w-0">
           <HMHLogo size="sm" />
+          {isViewOnly && (
+            <span className="flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-md
+                             bg-amber-100 text-amber-800 border border-amber-200 shrink-0">
+              <ShieldOff className="w-2.5 h-2.5" />
+              View Only
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-1 shrink-0">
           <button
@@ -447,23 +498,54 @@ export default function SiteDashboardPage() {
 
         {/* ── Offline draft queue banner ── */}
         {offlineDrafts.length > 0 && (
-          <div className="flex items-center gap-3 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2.5">
-            <Upload className="w-4 h-4 text-amber-600 shrink-0" />
-            <div className="flex-1 min-w-0">
-              <p className="text-xs font-semibold text-amber-800">
-                {offlineDrafts.length} offline draft{offlineDrafts.length > 1 ? "s" : ""} pending
-              </p>
-              <p className="text-xs text-amber-700">Saved while offline — tap Sync to submit.</p>
+          <div className="bg-amber-50 border border-amber-200 rounded-xl px-3 py-2.5 space-y-2">
+            <div className="flex items-center gap-3">
+              <Upload className="w-4 h-4 text-amber-600 shrink-0" />
+              <div className="flex-1 min-w-0">
+                <p className="text-xs font-semibold text-amber-800">
+                  {offlineDrafts.length} offline draft{offlineDrafts.length > 1 ? "s" : ""} pending
+                </p>
+                <p className="text-xs text-amber-700">Saved while offline — sync or discard.</p>
+              </div>
             </div>
-            <button
-              onClick={() => {
-                offlineDrafts.forEach(d => removeDraft(d.id));
-                setOfflineDrafts([]);
-              }}
-              className="text-xs font-medium text-amber-800 underline shrink-0"
-            >
-              Dismiss
-            </button>
+            {discardConfirm ? (
+              <div className="flex items-center gap-2">
+                <p className="text-xs text-amber-800 flex-1">Discard all drafts? This cannot be undone.</p>
+                <button
+                  onClick={() => {
+                    offlineDrafts.forEach(d => removeDraft(d.id));
+                    setOfflineDrafts([]);
+                    setDiscardConfirm(false);
+                  }}
+                  className="text-xs font-semibold text-red-700 px-2 py-1 bg-red-50 border border-red-200 rounded-md"
+                >
+                  Yes, discard
+                </button>
+                <button
+                  onClick={() => setDiscardConfirm(false)}
+                  className="text-xs font-medium text-amber-800 px-2 py-1 bg-white border border-amber-200 rounded-md"
+                >
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <div className="flex gap-2">
+                <button
+                  onClick={syncDrafts}
+                  disabled={syncingDrafts}
+                  className="flex items-center gap-1.5 text-xs font-semibold text-white bg-amber-600 hover:bg-amber-700 disabled:opacity-60 px-3 py-1.5 rounded-lg transition-colors"
+                >
+                  <RotateCcw className={cn("w-3.5 h-3.5", syncingDrafts && "animate-spin")} />
+                  {syncingDrafts ? "Syncing…" : "Sync Now"}
+                </button>
+                <button
+                  onClick={() => setDiscardConfirm(true)}
+                  className="text-xs font-medium text-amber-800 px-3 py-1.5 bg-white border border-amber-200 rounded-lg"
+                >
+                  Discard
+                </button>
+              </div>
+            )}
           </div>
         )}
 
@@ -513,6 +595,7 @@ export default function SiteDashboardPage() {
                 {!isViewOnly && <ActionBtn icon={Truck}       label="Receive Delivery"   onClick={() => setModal("delivery")} />}
                 {!isViewOnly && <ActionBtn icon={Minus}       label="Record Usage"       onClick={() => setModal("usage")} />}
                 {!isViewOnly && <ActionBtn icon={ListChecks}  label="Update Milestone"   onClick={() => setModal("stage")} />}
+                {!isViewOnly && siteId && <ActionBtn icon={Briefcase} label="Log Job Card" onClick={() => setModal("jobcard")} />}
                 <ActionBtn
                   icon={Flag}
                   label="View Milestones"
@@ -640,9 +723,8 @@ export default function SiteDashboardPage() {
                     }))
                   : legacyActivity.map(a => ({
                       key:   a.id,
-                      icon:  a.kind === "del"   ? <Truck className="w-4 h-4 text-blue-500 shrink-0" />
-                           : a.kind === "use"   ? <Box   className="w-4 h-4 text-purple-500 shrink-0" />
-                           :                      <Bell  className="w-4 h-4 text-amber-500 shrink-0" />,
+                      icon:  a.kind === "use" ? <Box  className="w-4 h-4 text-purple-500 shrink-0" />
+                                              : <Bell className="w-4 h-4 text-amber-500 shrink-0" />,
                       label: a.label,
                       sub:   a.sub,
                       date:  a.date,
@@ -714,29 +796,20 @@ export default function SiteDashboardPage() {
             )}
 
             {/* ── Photo / Evidence Gallery ── */}
-            {(() => {
-              const photos = stages
-                .flatMap(s => (s.notes ?? "").split("|").map(n => n.trim()))
-                .filter(n => n.startsWith("evidence:"))
-                .map(n => n.slice("evidence:".length).trim())
-                .filter(Boolean)
-                .slice(0, 12);
-              if (photos.length === 0) return null;
-              return (
-                <Section title="Evidence Photos">
-                  <div className="grid grid-cols-3 gap-2">
-                    {photos.map((url, i) => (
-                      <a key={i} href={url} target="_blank" rel="noopener noreferrer"
-                         className="aspect-square rounded-lg overflow-hidden bg-muted border border-border block">
-                        <img src={url} alt={`Evidence ${i + 1}`}
-                             className="w-full h-full object-cover"
-                             onError={e => { (e.target as HTMLImageElement).style.display = "none"; }} />
-                      </a>
-                    ))}
-                  </div>
-                </Section>
-              );
-            })()}
+            {stagePhotos.length > 0 && (
+              <Section title="Evidence Photos">
+                <div className="grid grid-cols-3 gap-2">
+                  {stagePhotos.slice(0, 12).map(p => (
+                    <a key={p.id} href={p.url} target="_blank" rel="noopener noreferrer"
+                       className="aspect-square rounded-lg overflow-hidden bg-muted border border-border block">
+                      <img src={p.url} alt={p.file_name}
+                           className="w-full h-full object-cover"
+                           onError={e => { (e.target as HTMLImageElement).style.display = "none"; }} />
+                    </a>
+                  ))}
+                </div>
+              </Section>
+            )}
 
           </>
         )}
@@ -768,6 +841,12 @@ export default function SiteDashboardPage() {
         <UpdateStageModal
           projectId={projectId} siteId={siteId} lotId={lotId}
           stageMasters={stageMasters} stages={stages}
+          onClose={() => setModal(null)} onDone={() => { setModal(null); loadData(); }}
+        />
+      )}
+      {modal === "jobcard" && (
+        <CreateJobCardModal
+          projectId={projectId} siteId={siteId} lotId={lotId}
           onClose={() => setModal(null)} onDone={() => { setModal(null); loadData(); }}
         />
       )}
@@ -2534,6 +2613,140 @@ function SignDeliveryModal({ deliveries, onClose, onDone }: {
         {loading ? "Verifying…" : "Mark as Verified"}
       </Button>
       <Button variant="outline" className="w-full mt-2" onClick={onClose}>Cancel</Button>
+    </ModalShell>
+  );
+}
+
+// ── Create Job Card ───────────────────────────────────────────────────────────
+const WORK_TYPES = [
+  { value: "DAILY_LABOUR",  label: "Daily Labour" },
+  { value: "CONTRACT",      label: "Contract" },
+  { value: "SUBCONTRACTOR", label: "Subcontractor" },
+  { value: "OVERTIME",      label: "Overtime" },
+] as const;
+
+function CreateJobCardModal({ projectId, siteId, lotId, onClose, onDone }: {
+  projectId: string; siteId: string; lotId: string;
+  onClose: () => void; onDone: () => void;
+}) {
+  const [description, setDescription] = useState("");
+  const [workType,    setWorkType]    = useState<string>("DAILY_LABOUR");
+  const [workerName,  setWorkerName]  = useState("");
+  const [teamName,    setTeamName]    = useState("");
+  const [quantity,    setQuantity]    = useState("1");
+  const [unit,        setUnit]        = useState("");
+  const [rate,        setRate]        = useState("");
+  const [workDate,    setWorkDate]    = useState(todayStr());
+  const [notes,       setNotes]       = useState("");
+  const [loading,     setLoading]     = useState(false);
+  const [error,       setError]       = useState("");
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!description.trim()) { setError("Work description is required."); return; }
+    if (!rate || parseFloat(rate) <= 0) { setError("Rate must be greater than 0."); return; }
+    if (!siteId) { setError("A site must be selected."); return; }
+    setLoading(true); setError("");
+    try {
+      const jc = await jobCardsApi.create(projectId, {
+        site_id:          siteId,
+        lot_id:           lotId || undefined,
+        work_description: description.trim(),
+        work_type:        workType as "DAILY_LABOUR" | "CONTRACT" | "SUBCONTRACTOR" | "OVERTIME",
+        worker_name:      workerName.trim() || undefined,
+        team_name:        teamName.trim()   || undefined,
+        quantity:         parseFloat(quantity) || 1,
+        unit:             unit.trim()          || undefined,
+        rate:             parseFloat(rate),
+        work_date:        workDate || undefined,
+        notes:            notes.trim()         || undefined,
+      });
+      await jobCardsApi.submit(jc.id);
+      onDone();
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      setError(detail ?? "Failed to create job card. Try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <ModalShell title="Log Job Card" onClose={onClose}>
+      <form onSubmit={submit} className="space-y-3">
+        <div className="space-y-1">
+          <Label htmlFor="jc-desc">Work description *</Label>
+          <textarea
+            id="jc-desc" rows={2} required
+            value={description} onChange={e => setDescription(e.target.value)}
+            placeholder="e.g. Foundation excavation for Block A"
+            className="w-full px-3 py-2 text-sm rounded-md border border-border bg-background resize-none
+                       focus:outline-none focus:ring-1 focus:ring-primary"
+          />
+        </div>
+
+        <div className="grid grid-cols-2 gap-2">
+          <div className="space-y-1">
+            <Label htmlFor="jc-type">Work type</Label>
+            <select id="jc-type" value={workType} onChange={e => setWorkType(e.target.value)}
+                    className="w-full h-10 px-3 text-sm rounded-md border border-border bg-background">
+              {WORK_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+            </select>
+          </div>
+          <div className="space-y-1">
+            <Label htmlFor="jc-date">Work date</Label>
+            <Input id="jc-date" type="date" value={workDate} onChange={e => setWorkDate(e.target.value)} />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-2">
+          <div className="space-y-1">
+            <Label htmlFor="jc-worker">Worker name</Label>
+            <Input id="jc-worker" value={workerName} onChange={e => setWorkerName(e.target.value)} placeholder="John Dlamini" />
+          </div>
+          <div className="space-y-1">
+            <Label htmlFor="jc-team">Team</Label>
+            <Input id="jc-team" value={teamName} onChange={e => setTeamName(e.target.value)} placeholder="Foundation crew" />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-3 gap-2">
+          <div className="space-y-1">
+            <Label htmlFor="jc-qty">Quantity</Label>
+            <Input id="jc-qty" type="number" min="0.01" step="any" value={quantity} onChange={e => setQuantity(e.target.value)} />
+          </div>
+          <div className="space-y-1">
+            <Label htmlFor="jc-unit">Unit</Label>
+            <Input id="jc-unit" value={unit} onChange={e => setUnit(e.target.value)} placeholder="m², days…" />
+          </div>
+          <div className="space-y-1">
+            <Label htmlFor="jc-rate">Rate (R) *</Label>
+            <Input id="jc-rate" type="number" min="0.01" step="any" required value={rate} onChange={e => setRate(e.target.value)} placeholder="0.00" />
+          </div>
+        </div>
+
+        {quantity && rate && parseFloat(quantity) > 0 && parseFloat(rate) > 0 && (
+          <p className="text-xs text-muted-foreground bg-muted/40 rounded px-2 py-1">
+            Total: <strong>R {(parseFloat(quantity) * parseFloat(rate)).toFixed(2)}</strong>
+          </p>
+        )}
+
+        <div className="space-y-1">
+          <Label htmlFor="jc-notes">Notes (optional)</Label>
+          <textarea
+            id="jc-notes" rows={2}
+            value={notes} onChange={e => setNotes(e.target.value)}
+            placeholder="Any additional details…"
+            className="w-full px-3 py-2 text-sm rounded-md border border-border bg-background resize-none
+                       focus:outline-none focus:ring-1 focus:ring-primary"
+          />
+        </div>
+
+        {error && <p className="text-xs text-destructive">{error}</p>}
+        <Button type="submit" className="w-full" disabled={loading}>
+          {loading ? "Submitting…" : "Submit Job Card"}
+        </Button>
+      </form>
     </ModalShell>
   );
 }
