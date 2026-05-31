@@ -156,14 +156,18 @@ function RecordDeliveryModal({
             </select>
           </div>
           <div>
-            <label className="text-xs text-muted-foreground block mb-1">Site *</label>
+            <label className="text-xs text-muted-foreground block mb-1">Delivery Location *</label>
             <select
               value={siteId}
               onChange={(e) => setSiteId(e.target.value)}
               className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm"
             >
-              <option value="">— Select site —</option>
-              {sites.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+              <option value="">— Select location —</option>
+              {sites.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.site_type === "warehouse" ? `🏭 ${s.name}` : s.name}
+                </option>
+              ))}
             </select>
           </div>
           <div>

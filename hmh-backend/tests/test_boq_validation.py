@@ -269,3 +269,106 @@ def test_boq_search_empty_query_returns_all_materials(client, db):
     assert any("Cement Bag" in d for d in descriptions)
     assert any("Sand m3" in d for d in descriptions)
     assert not any("Labour" in d for d in descriptions)
+
+
+# ── 20-lot aggregation: pilot scenario ───────────────────────────────────────
+
+def test_twenty_lot_boq_aggregation(client, db):
+    """
+    Pilot scenario: 20 lots each allocating 1 External Door → total BOQ = 20.
+    This mirrors the real HMH use case: 20 houses, each needing 1 door.
+    """
+    owner = make_user(db, role="OWNER")
+    proj = make_project(db, owner["id"])
+    site = make_site(db, proj["id"])
+    door_item = make_item(db, name="External Solid Timber Door", unit="each", item_type="MATERIAL")
+
+    # Create 20 lots, each with 1 door
+    for n in range(1, 21):
+        lot = make_lot(db, proj["id"], site["id"], lot_number=str(n))
+        _make_boq(db, proj["id"], lot["id"], item_id=door_item["id"],
+                  description="External Solid Timber Door", unit="each", qty=1.0)
+
+    token = login(client, owner["email"], owner["password"])
+    r = client.get(f"/api/v1/projects/{proj['id']}/warehouse/boq-summary", headers=auth(token))
+    assert r.status_code == 200, r.text
+    data = r.json()["data"]
+
+    door_rows = [d for d in data if "External Solid Timber Door" in d.get("description", "")]
+    assert len(door_rows) > 0, f"Door must appear in summary. Got: {[d['description'] for d in data]}"
+
+    total_qty = sum(d["total_boq_qty"] for d in door_rows)
+    lots_count = sum(d["lots_count"] for d in door_rows)
+
+    assert total_qty == pytest.approx(20.0, rel=0.01), \
+        f"20 lots × 1 door = 20. Got: {total_qty}"
+    assert lots_count == 20, \
+        f"Should reference 20 lots. Got: {lots_count}"
+
+    # shortfall = 20 (nothing in warehouse yet)
+    shortfall = sum(d["shortfall_qty"] for d in door_rows)
+    assert shortfall == pytest.approx(20.0, rel=0.01), \
+        f"Shortfall should be 20 (nothing received yet). Got: {shortfall}"
+
+
+def test_twenty_lot_search_returns_aggregated(client, db):
+    """
+    BOQ search for 'door' when 20 lots each have 1 door should return 1 deduplicated entry.
+    """
+    owner = make_user(db, role="OWNER")
+    proj = make_project(db, owner["id"])
+    site = make_site(db, proj["id"])
+
+    for n in range(1, 21):
+        lot = make_lot(db, proj["id"], site["id"], lot_number=str(n))
+        _make_boq(db, proj["id"], lot["id"],
+                  description="Internal Door", unit="each", qty=1.0)
+
+    token = login(client, owner["email"], owner["password"])
+    r = client.get(
+        f"/api/v1/projects/{proj['id']}/boq/items/search?q=door",
+        headers=auth(token),
+    )
+    assert r.status_code == 200, r.text
+    data = r.json()["data"]
+
+    # Deduplication: 20 identical description+unit → exactly 1 result
+    door_entries = [d for d in data if "Internal Door" in d["description"]]
+    assert len(door_entries) == 1, \
+        f"20 identical items should deduplicate to 1 search result. Got {len(door_entries)}"
+
+
+# ── MR creation with warehouse site ──────────────────────────────────────────
+
+def test_mr_can_target_warehouse_site(client, db):
+    """MR can be created with a warehouse-type site as the target location."""
+    from app.models.site import Site as SiteModel
+    owner = make_user(db, role="OWNER")
+    proj = make_project(db, owner["id"])
+
+    # Create a warehouse-type site (auto-created by project, but also manual for tests)
+    wh_site = SiteModel(
+        project_id=uuid.UUID(proj["id"]),
+        name="Project Warehouse",
+        site_type="warehouse",
+        is_active=True,
+        created_at=_now(),
+        updated_at=_now(),
+    )
+    db.add(wh_site)
+    db.flush()
+
+    token = login(client, owner["email"], owner["password"])
+    r = client.post(
+        f"/api/v1/projects/{proj['id']}/material-requests/",
+        headers=auth(token),
+        json={
+            "site_id": str(wh_site.id),
+            "delivery_destination": "SITE_STORE",
+            "items": [{"description": "Test Material", "requested_quantity": 5, "unit": "each"}],
+        },
+    )
+    assert r.status_code == 201, r.text
+    mr = r.json()["data"]
+    assert mr["site_id"] == str(wh_site.id)
+    assert mr["delivery_destination"] == "SITE_STORE"

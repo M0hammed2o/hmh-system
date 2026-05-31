@@ -210,7 +210,14 @@ function CreateMRModal({ projectId, sites, onClose, onCreated }: {
 
   // ── Submit ─────────────────────────────────────────────────────────────────
   const handleSubmit = async () => {
-    if (!preferredSupplierId && (scenario !== "A" || supplierOverridden)) {
+    // For Scenario A (BOQ + supplier), fall back to the BOQ supplier directly so
+    // there is no race condition with the useEffect that sets preferredSupplierId.
+    const effectiveSupplierId =
+      scenario === "A" && !supplierOverridden
+        ? (firstBOQSupplier?.boq_supplier_id ?? preferredSupplierId)
+        : preferredSupplierId;
+
+    if (!effectiveSupplierId && (scenario !== "A" || supplierOverridden)) {
       setError("Please select a supplier."); return;
     }
     setLoading(true); setError("");
@@ -221,7 +228,7 @@ function CreateMRModal({ projectId, sites, onClose, onCreated }: {
         delivery_destination: destination,
         notes: notes || undefined,
         needed_by_date: neededBy || undefined,
-        preferred_supplier_id: preferredSupplierId || undefined,
+        preferred_supplier_id: effectiveSupplierId || undefined,
         items: cart.map((item) => ({
           description: item.description,
           requested_quantity: item.quantity,
