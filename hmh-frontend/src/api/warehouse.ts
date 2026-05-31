@@ -161,6 +161,20 @@ export const warehouseApi = {
     return res.data.data;
   },
 
+  /** Aggregated MATERIAL BOQ vs on-hand stock for the Project Warehouse dashboard. */
+  getProjectWarehouseBOQSummary: async (projectId: string): Promise<Array<{
+    item_id: string | null;
+    description: string;
+    unit: string | null;
+    total_boq_qty: number;
+    on_hand_qty: number;
+    shortfall_qty: number;
+    lots_count: number;
+  }>> => {
+    const res = await client.get(`/projects/${projectId}/warehouse/boq-summary`);
+    return res.data.data ?? [];
+  },
+
   /** Recent movements through the Main Warehouse. */
   getMainHistory: async (projectId: string, limit = 100): Promise<WarehouseMovement[]> => {
     const res = await client.get<{ data: WarehouseMovement[] }>(

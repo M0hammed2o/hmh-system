@@ -322,6 +322,82 @@ def get_main_warehouse_stock(project_id: uuid.UUID, db: DbSession, current_user:
     return ApiSuccess(data=result, message=f"{len(result)} item(s) in main warehouse.")
 
 
+@project_warehouse_router.get("/boq-summary", response_model=ApiSuccess[list[dict]], dependencies=[ALL_ROLES])
+def get_warehouse_boq_summary(project_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
+    """
+    Aggregate MATERIAL BOQ items across all lots in the project.
+    Compares planned qty vs on-hand stock in the Project Warehouse.
+    Used by the Project Warehouse dashboard Outstanding Materials panel.
+    """
+    from app.models.project import Project as _Proj
+    from app.models.boq import BOQItem
+    from app.models.enums import ItemType
+    from collections import defaultdict
+
+    project = db.get(_Proj, project_id)
+    if not project:
+        raise HTTPException(404, "Project not found.")
+    check_project_access(db, current_user, project_id)
+
+    # All MATERIAL BOQ items attached to a specific lot in this project
+    boq_rows = (
+        db.query(BOQItem)
+        .filter(
+            BOQItem.project_id == project_id,
+            BOQItem.is_active  == True,
+            BOQItem.item_type  == ItemType.MATERIAL,
+            BOQItem.lot_id.isnot(None),
+        )
+        .all()
+    )
+
+    # Aggregate by item_id (when linked) or normalised description+unit
+    groups: dict = defaultdict(lambda: {
+        "total_planned": 0.0, "lots": set(),
+        "description": "", "unit": None, "item_id": None,
+    })
+    for bi in boq_rows:
+        if bi.item_id:
+            key = str(bi.item_id)
+            groups[key]["item_id"] = str(bi.item_id)
+        else:
+            key = f"_:{(bi.raw_description or '').lower().strip()}:{bi.unit or ''}"
+
+        groups[key]["total_planned"] += float(bi.planned_quantity or 0)
+        groups[key]["description"]    = bi.raw_description or groups[key]["description"]
+        groups[key]["unit"]           = bi.unit
+        if bi.lot_id:
+            groups[key]["lots"].add(str(bi.lot_id))
+
+    # On-hand stock in the Project Warehouse (site_id IS NULL, lot_id IS NULL)
+    stock_rows = db.execute(text("""
+        SELECT sl.item_id,
+               SUM(sl.quantity_in) - SUM(sl.quantity_out) AS on_hand
+        FROM stock_ledger sl
+        WHERE sl.project_id = :pid
+          AND sl.site_id IS NULL
+          AND sl.lot_id  IS NULL
+        GROUP BY sl.item_id
+    """), {"pid": str(project_id)}).mappings().all()
+    on_hand_by_item: dict = {str(r["item_id"]): float(r["on_hand"] or 0) for r in stock_rows}
+
+    result = []
+    for g in sorted(groups.values(), key=lambda x: (x["description"] or "").lower()):
+        on_hand = on_hand_by_item.get(g["item_id"] or "", 0.0) if g["item_id"] else 0.0
+        total   = g["total_planned"]
+        result.append({
+            "item_id":       g["item_id"],
+            "description":   g["description"],
+            "unit":          g["unit"],
+            "total_boq_qty": round(total, 3),
+            "on_hand_qty":   round(on_hand, 3),
+            "shortfall_qty": round(max(0.0, total - on_hand), 3),
+            "lots_count":    len(g["lots"]),
+        })
+
+    return ApiSuccess(data=result)
+
+
 class TransferToSiteRequest(BaseModel):
     item_id:  uuid.UUID
     site_id:  uuid.UUID

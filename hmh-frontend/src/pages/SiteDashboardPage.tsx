@@ -25,6 +25,7 @@ import { stagesApi, type ProjectStageStatus, type StageMaster, type MilestonePho
 import { alertsApi, type Alert } from "@/api/alerts";
 import { stockApi, type StockBalance, type StockLedgerEntry } from "@/api/stock";
 import { suppliersApi, type Supplier } from "@/api/suppliers";
+import { warehouseApi } from "@/api/warehouse";
 import { jobCardsApi, type JobCard } from "@/api/jobCards";
 import { getDrafts, removeDraft, type OfflineDraft } from "@/utils/offlineDrafts";
 import { cn } from "@/lib/utils";
@@ -186,8 +187,9 @@ type ModalType = "request" | "delivery" | "usage" | "stage" | "jobcard" | null;
 export default function SiteDashboardPage() {
 
   // ── Role check ──
-  const userRole  = localStorage.getItem(ROLE_KEY) ?? "";
+  const userRole   = localStorage.getItem(ROLE_KEY) ?? "";
   const isViewOnly = userRole === "SITE_MANAGER_VIEW";
+  const isSiteUser = userRole === "SITE_STAFF" || userRole === "SITE_MANAGER" || userRole === "SITE_MANAGER_VIEW";
 
   // ── Selection (persisted) ──
   const [projectId, setProjectId] = useState(localStorage.getItem(SK_PROJECT) || "");
@@ -212,8 +214,12 @@ export default function SiteDashboardPage() {
   const [materialSummary, setMaterialSummary] = useState<MaterialSummaryItem[]>([]);
   const [activity,        setActivity]        = useState<ActivityItem[]>([]);
 
-  const [jobCards,      setJobCards]      = useState<JobCard[]>([]);
-  const [stagePhotos,   setStagePhotos]   = useState<MilestonePhoto[]>([]);
+  const [jobCards,       setJobCards]       = useState<JobCard[]>([]);
+  const [stagePhotos,    setStagePhotos]    = useState<MilestonePhoto[]>([]);
+  const [pwBOQSummary,   setPwBOQSummary]   = useState<Array<{
+    item_id: string | null; description: string; unit: string | null;
+    total_boq_qty: number; on_hand_qty: number; shortfall_qty: number; lots_count: number;
+  }>>([]);
   const [offlineDrafts, setOfflineDrafts] = useState<OfflineDraft[]>(getDrafts);
   const [discardConfirm, setDiscardConfirm] = useState(false);
   const [syncingDrafts, setSyncingDrafts] = useState(false);
@@ -240,10 +246,17 @@ export default function SiteDashboardPage() {
 
   // ── Load reference data once ──
   useEffect(() => {
-    projectsApi.list(1, 100, "ACTIVE").then(r => setProjects(r.items)).catch(() => {});
+    projectsApi.list(1, 100, "ACTIVE").then(r => {
+      setProjects(r.items);
+      // For site users, auto-select the only available project
+      if (isSiteUser && r.items.length === 1 && !projectId) {
+        setProjectId(r.items[0].id);
+        localStorage.setItem(SK_PROJECT, r.items[0].id);
+      }
+    }).catch(() => {});
     stagesApi.listMasters().then(setStageMasters).catch(() => {});
     suppliersApi.list().then(setSuppliers).catch(() => {});
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Load sites + lots when project changes ──
   useEffect(() => {
@@ -258,6 +271,9 @@ export default function SiteDashboardPage() {
     }).catch(() => {});
     lotsApi.list(projectId).then(setLots).catch(() => {});
   }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Derived: is the selected site the Project Warehouse? ──
+  const isWarehouse = !!siteId && !!sites.find(s => s.id === siteId && s.site_type === "warehouse");
 
   // ── Load live data ──
   const loadData = useCallback(() => {
@@ -319,7 +335,16 @@ export default function SiteDashboardPage() {
       jobCardsApi.list(projectId)
         .then(jcs => setJobCards(jcs.slice(0, 20))).catch(() => setJobCards([]));
     }
-  }, [projectId, siteId, lotId]);
+
+    // Project Warehouse BOQ summary (only when a warehouse site is selected)
+    const _isWarehouse = !!siteId && !!sites.find(s => s.id === siteId && s.site_type === "warehouse");
+    if (_isWarehouse) {
+      warehouseApi.getProjectWarehouseBOQSummary(projectId)
+        .then(setPwBOQSummary).catch(() => setPwBOQSummary([]));
+    } else {
+      setPwBOQSummary([]);
+    }
+  }, [projectId, siteId, lotId, sites]);
 
   useEffect(() => { loadData(); }, [loadData]);
 
@@ -451,26 +476,37 @@ export default function SiteDashboardPage() {
 
         {/* ── Selectors ── */}
         <div className="space-y-2">
-          <Select value={projectId} onChange={selectProject}>
-            <option value="">— Select project —</option>
-            {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-          </Select>
-
-          {/* Only show site selector when there is more than one site */}
-          {projectId && sites.length > 1 && (
-            <Select value={siteId} onChange={selectSite} disabled={!projectId}>
-              <option value="">— Select site / block —</option>
-              {sites.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+          {/* Project: locked for site users with only 1 project */}
+          {isSiteUser && projects.length <= 1 && projectId ? (
+            <div className="w-full h-10 px-3 flex items-center text-sm rounded-lg border border-border bg-muted/40 text-foreground font-medium">
+              {projects.find(p => p.id === projectId)?.name ?? "Project"}
+            </div>
+          ) : (
+            <Select value={projectId} onChange={selectProject}>
+              <option value="">— Select project —</option>
+              {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
             </Select>
           )}
 
-          {siteId && (
+          {/* Location: sites including Project Warehouse */}
+          {projectId && sites.length > 0 && (
+            <Select value={siteId} onChange={selectSite} disabled={!projectId}>
+              <option value="">— Select location —</option>
+              {sites.map(s => (
+                <option key={s.id} value={s.id}>
+                  {s.site_type === "warehouse" ? `🏭 ${s.name}` : s.name}
+                </option>
+              ))}
+            </Select>
+          )}
+
+          {/* Lot: hidden when Project Warehouse is selected */}
+          {siteId && !isWarehouse && (
             <Select value={lotId} onChange={selectLot}>
               <option value="">— All units —</option>
               {lots
                 .filter(l => !l.site_id || l.site_id === siteId)
                 .sort((a, b) => {
-                  // Natural sort: "12A" before "B-17" — numeric first, then alpha
                   const na = parseInt(a.lot_number), nb = parseInt(b.lot_number);
                   if (!isNaN(na) && !isNaN(nb)) return na - nb;
                   return a.lot_number.localeCompare(b.lot_number, undefined, { numeric: true, sensitivity: "base" });
@@ -591,18 +627,20 @@ export default function SiteDashboardPage() {
             {/* ── Quick actions ── */}
             <Section title="Quick Actions">
               <div className="grid grid-cols-3 gap-2">
-                {!isViewOnly && <ActionBtn icon={PackagePlus} label="Request Materials"  onClick={() => setModal("request")} />}
-                {!isViewOnly && <ActionBtn icon={Truck}       label="Receive Delivery"   onClick={() => setModal("delivery")} />}
-                {!isViewOnly && <ActionBtn icon={Minus}       label="Record Usage"       onClick={() => setModal("usage")} />}
-                {!isViewOnly && <ActionBtn icon={ListChecks}  label="Update Milestone"   onClick={() => setModal("stage")} />}
-                {!isViewOnly && siteId && <ActionBtn icon={Briefcase} label="Log Job Card" onClick={() => setModal("jobcard")} />}
-                <ActionBtn
-                  icon={Flag}
-                  label="View Milestones"
-                  onClick={() => {
-                    document.getElementById("milestones-section")?.scrollIntoView({ behavior: "smooth" });
-                  }}
-                />
+                {!isViewOnly && <ActionBtn icon={PackagePlus} label="Request Materials" onClick={() => setModal("request")} />}
+                {!isViewOnly && <ActionBtn icon={Truck}       label="Receive Delivery"  onClick={() => setModal("delivery")} />}
+                {!isViewOnly && !isWarehouse && <ActionBtn icon={Minus}      label="Record Usage"     onClick={() => setModal("usage")} />}
+                {!isViewOnly && !isWarehouse && <ActionBtn icon={ListChecks} label="Update Milestone" onClick={() => setModal("stage")} />}
+                {!isViewOnly && siteId && !isWarehouse && <ActionBtn icon={Briefcase} label="Log Job Card" onClick={() => setModal("jobcard")} />}
+                {!isWarehouse && (
+                  <ActionBtn
+                    icon={Flag}
+                    label="View Milestones"
+                    onClick={() => {
+                      document.getElementById("milestones-section")?.scrollIntoView({ behavior: "smooth" });
+                    }}
+                  />
+                )}
               </div>
               {isViewOnly && (
                 <p className="text-xs text-muted-foreground mt-2 text-center">
@@ -611,8 +649,47 @@ export default function SiteDashboardPage() {
               )}
             </Section>
 
-            {/* ── BOQ Allocation / Usage / Remaining ── */}
-            {siteId && lotId && (
+            {/* ── Project Warehouse: Stock On Hand + Transfer ── */}
+            {isWarehouse && siteId && projectId && (
+              <ProjectWarehouse projectId={projectId} siteId={siteId} />
+            )}
+
+            {/* ── Project Warehouse: Outstanding BOQ Materials ── */}
+            {isWarehouse && pwBOQSummary.length > 0 && (
+              <Section title="Outstanding BOQ Materials">
+                <div className="divide-y divide-border border border-border rounded-xl overflow-hidden">
+                  <div className="grid grid-cols-4 gap-2 px-3 py-2 bg-muted/50 text-xs font-medium text-muted-foreground">
+                    <span className="col-span-2">Material</span>
+                    <span className="text-right">BOQ Total</span>
+                    <span className="text-right">On Hand</span>
+                  </div>
+                  {pwBOQSummary.map((row, i) => (
+                    <div key={row.item_id ?? i} className="grid grid-cols-4 gap-2 px-3 py-2.5 bg-card items-center">
+                      <div className="col-span-2 min-w-0">
+                        <p className="text-sm font-medium truncate">{row.description}</p>
+                        <p className="text-xs text-muted-foreground">{row.lots_count} lot{row.lots_count !== 1 ? "s" : ""} · {row.unit ?? "—"}</p>
+                      </div>
+                      <p className="text-sm text-right font-mono">{row.total_boq_qty}</p>
+                      <div className="text-right">
+                        <p className={cn("text-sm font-mono font-semibold",
+                          row.on_hand_qty >= row.total_boq_qty ? "text-green-600"
+                          : row.on_hand_qty > 0 ? "text-amber-600"
+                          : "text-red-600"
+                        )}>
+                          {row.on_hand_qty}
+                        </p>
+                        {row.shortfall_qty > 0 && (
+                          <p className="text-xs text-red-500">-{row.shortfall_qty} short</p>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </Section>
+            )}
+
+            {/* ── BOQ Allocation / Usage / Remaining (site lots only) ── */}
+            {!isWarehouse && siteId && lotId && (
               <BOQAllocationTable
                 items={materialSummary}
                 loading={loading}
@@ -622,8 +699,8 @@ export default function SiteDashboardPage() {
               />
             )}
 
-            {/* ── Site Stock (fallback when no lot selected) ── */}
-            {siteId && !lotId && matRows.length > 0 && (
+            {/* ── Site Stock (fallback when no lot selected, non-warehouse) ── */}
+            {!isWarehouse && siteId && !lotId && matRows.length > 0 && (
               <Section title="Site Stock">
                 <div className="space-y-2">
                   {matRows.map(b => {
@@ -657,13 +734,8 @@ export default function SiteDashboardPage() {
               <SiteRequestHistory requests={siteRequests} />
             )}
 
-            {/* ── Project Warehouse — stock on hand, transfer to unit ── */}
-            {siteId && projectId && (
-              <ProjectWarehouse projectId={projectId} siteId={siteId} />
-            )}
-
-            {/* ── Milestones / Stage timeline ── */}
-            {siteId && stageMasters.length > 0 && (
+            {/* ── Milestones / Stage timeline (site lots only) ── */}
+            {!isWarehouse && siteId && stageMasters.length > 0 && (
               <section id="milestones-section">
               <Section title="Milestones">
                 <div className="space-y-2">
@@ -786,8 +858,8 @@ export default function SiteDashboardPage() {
               </Section>
             )}
 
-            {/* ── Job Cards ── */}
-            {jobCards.length > 0 && (
+            {/* ── Job Cards (site lots only) ── */}
+            {!isWarehouse && jobCards.length > 0 && (
               <Section title="Job Cards">
                 <div className="divide-y divide-border border border-border rounded-xl overflow-hidden">
                   {jobCards.slice(0, 10).map(jc => (
@@ -808,8 +880,8 @@ export default function SiteDashboardPage() {
               </Section>
             )}
 
-            {/* ── Photo / Evidence Gallery ── */}
-            {stagePhotos.length > 0 && (
+            {/* ── Photo / Evidence Gallery (site lots only) ── */}
+            {!isWarehouse && stagePhotos.length > 0 && (
               <Section title="Evidence Photos">
                 <div className="grid grid-cols-3 gap-2">
                   {stagePhotos.slice(0, 12).map(p => (

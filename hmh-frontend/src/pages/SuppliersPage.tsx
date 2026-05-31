@@ -45,6 +45,7 @@ function SupplierModal({
   const handleSubmit = async () => {
     if (!name.trim()) return;
     if (!email.trim()) { alert("Email is required for suppliers."); return; }
+    if (!phone.trim()) { alert("Phone number is required for suppliers."); return; }
     setSaving(true);
     try {
       const payload = {
@@ -109,12 +110,14 @@ function SupplierModal({
             />
           </div>
           <div>
-            <label className="text-xs text-muted-foreground block mb-1">Phone</label>
+            <label className="text-xs text-muted-foreground block mb-1">Phone *</label>
             <input
-              type="text"
+              type="tel"
               value={phone}
               onChange={(e) => setPhone(e.target.value)}
               className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm"
+              placeholder="+27 XX XXX XXXX"
+              required
             />
           </div>
           <div className="col-span-2">
@@ -148,7 +151,7 @@ function SupplierModal({
         </div>
         <div className="flex justify-end gap-2 pt-1">
           <Button variant="outline" size="sm" onClick={onClose}>Cancel</Button>
-          <Button size="sm" onClick={handleSubmit} disabled={saving || !name.trim() || !email.trim()}>
+          <Button size="sm" onClick={handleSubmit} disabled={saving || !name.trim() || !email.trim() || !phone.trim()}>
             {saving ? "Saving…" : existing ? "Save Changes" : "Create Supplier"}
           </Button>
         </div>
