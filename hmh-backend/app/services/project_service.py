@@ -8,11 +8,14 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import ConflictError, NotFoundError
-from app.models.enums import ProjectStatus
+from app.models.enums import ProjectStatus, UserRole
 from app.models.project import Project
 from app.schemas.project import ProjectCreate, ProjectUpdate
 
 _MAX_PAGE_SIZE = 100
+
+# Roles that see ALL projects (no access-table filter needed)
+_UNRESTRICTED_ROLES = {UserRole.OWNER, UserRole.OFFICE_ADMIN}
 
 
 def _get_or_404(db: Session, project_id: uuid.UUID) -> Project:
@@ -37,6 +40,8 @@ def list_projects(
     page: int,
     limit: int,
     status: Optional[ProjectStatus] = None,
+    user_id: Optional[uuid.UUID] = None,
+    user_role: Optional[UserRole] = None,
 ) -> tuple[list[Project], int]:
     limit = min(limit, _MAX_PAGE_SIZE)
     offset = (page - 1) * limit
@@ -44,6 +49,15 @@ def list_projects(
     q = db.query(Project)
     if status is not None:
         q = q.filter(Project.status == status)
+
+    # Restrict non-admin roles to their explicitly assigned projects
+    if user_id and user_role and user_role not in _UNRESTRICTED_ROLES:
+        from app.models.access import UserProjectAccess
+        q = q.join(
+            UserProjectAccess,
+            (UserProjectAccess.project_id == Project.id) &
+            (UserProjectAccess.user_id == user_id),
+        )
 
     total = q.count()
     projects = q.order_by(Project.created_at.desc()).offset(offset).limit(limit).all()
@@ -76,6 +90,21 @@ def create_project(
     db.add(project)
     db.commit()
     db.refresh(project)
+
+    # Auto-create Project Warehouse site so it's always available for stock
+    try:
+        from app.models.site import Site
+        warehouse = Site(
+            project_id=project.id,
+            name="Project Warehouse",
+            code="PW",
+            site_type="warehouse",
+        )
+        db.add(warehouse)
+        db.commit()
+    except Exception:
+        pass  # never crash project creation
+
     return project
 
 

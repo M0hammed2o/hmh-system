@@ -346,19 +346,37 @@ def send_po_email(
 
 
 def _create_po_email_failure_alert(db: Session, po: PurchaseOrder, error: str) -> None:
-    """Create a SystemAlert so the PO email failure appears in WhatsApp alerts."""
+    """Create a SystemAlert so the PO email failure appears in WhatsApp alerts (deduplicated)."""
     try:
         from app.models.alert import SystemAlert
         from app.models.enums import AlertType, AlertSeverity, AlertStatus
         from datetime import datetime, timezone
         now = datetime.now(timezone.utc)
+
+        # Deduplicate: skip if an OPEN alert for the same PO already exists
+        existing = db.query(SystemAlert).filter(
+            SystemAlert.project_id == po.project_id,
+            SystemAlert.alert_type == AlertType.DELIVERY_WITHOUT_PO,
+            SystemAlert.status     == AlertStatus.OPEN,
+            SystemAlert.title.like(f"%{po.po_number}%"),
+        ).first()
+        if existing:
+            return
+
+        # Resolve supplier name for clearer alert message
+        supplier_name = ""
+        if po.supplier_id:
+            from app.models.supplier import Supplier
+            sup = db.get(Supplier, po.supplier_id)
+            supplier_name = f" ({sup.name})" if sup else ""
+
         db.add(SystemAlert(
-            alert_type=AlertType.DELIVERY_WITHOUT_PO,   # closest available type for email failures
+            alert_type=AlertType.DELIVERY_WITHOUT_PO,
             severity=AlertSeverity.HIGH,
             title=f"PO email failed — {po.po_number}",
             message=(
-                f"Failed to send purchase order {po.po_number} to supplier by email. "
-                f"Error: {error[:200]}"
+                f"Failed to email purchase order {po.po_number}{supplier_name} to supplier. "
+                f"Error: {error[:200]}. Please resend manually."
             ),
             status=AlertStatus.OPEN,
             project_id=po.project_id,
@@ -601,18 +619,37 @@ def send_mr_approval_email(
 
 
 def _create_mr_email_failure_alert(db: Session, mr, error: str) -> None:
-    """Create a SystemAlert when an MR approval email fails."""
+    """Create a SystemAlert when an MR approval email fails (deduplicated)."""
     try:
         from app.models.alert import SystemAlert
         from app.models.enums import AlertType, AlertSeverity, AlertStatus
         from datetime import datetime, timezone
         now = datetime.now(timezone.utc)
+
+        # Deduplicate: skip if an OPEN alert for the same MR already exists
+        existing = db.query(SystemAlert).filter(
+            SystemAlert.project_id == mr.project_id,
+            SystemAlert.alert_type == AlertType.REQUEST_PENDING_TOO_LONG,
+            SystemAlert.status     == AlertStatus.OPEN,
+            SystemAlert.title.like(f"%{mr.request_number}%"),
+        ).first()
+        if existing:
+            return
+
+        # Resolve supplier name for clearer alert message
+        supplier_name = ""
+        if mr.preferred_supplier_id:
+            from app.models.supplier import Supplier
+            sup = db.get(Supplier, mr.preferred_supplier_id)
+            supplier_name = f" (supplier: {sup.name})" if sup else ""
+
         db.add(SystemAlert(
             alert_type=AlertType.REQUEST_PENDING_TOO_LONG,
             severity=AlertSeverity.HIGH,
             title=f"MR email failed — {mr.request_number}",
             message=(
-                f"Failed to email supplier for approved material request {mr.request_number}. "
+                f"Failed to email supplier for approved material request "
+                f"{mr.request_number}{supplier_name}. "
                 f"Error: {error[:200]}. Please resend manually."
             ),
             status=AlertStatus.OPEN,

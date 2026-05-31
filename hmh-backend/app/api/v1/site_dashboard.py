@@ -17,7 +17,7 @@ from app.dependencies import ALL_ROLES, CurrentUser, OFFICE_AND_ABOVE, DbSession
 
 _log = get_logger(__name__)
 from app.models.boq import BOQItem
-from app.models.enums import MovementType
+from app.models.enums import ItemType, MovementType
 from app.models.stock import StockLedger
 from app.schemas.common import ApiSuccess
 
@@ -50,10 +50,14 @@ def lot_material_summary(site_id: uuid.UUID, lot_id: uuid.UUID, db: DbSession, c
     if _site:
         check_project_access(db, current_user, _site.project_id)
 
-    # ── 1. Fetch BOQ items ────────────────────────────────────────────────────
+    # ── 1. Fetch BOQ items (MATERIAL type only — Labour/Plant never in warehouse) ─
     boq_items = (
         db.query(BOQItem)
-        .filter(BOQItem.lot_id == lot_id, BOQItem.is_active == True)
+        .filter(
+            BOQItem.lot_id    == lot_id,
+            BOQItem.is_active == True,
+            BOQItem.item_type == ItemType.MATERIAL,
+        )
         .all()
     )
 
@@ -68,6 +72,7 @@ def lot_material_summary(site_id: uuid.UUID, lot_id: uuid.UUID, db: DbSession, c
                     BOQItem.site_id   == lot.site_id,
                     BOQItem.lot_id.is_(None),
                     BOQItem.is_active == True,
+                    BOQItem.item_type == ItemType.MATERIAL,
                 )
                 .all()
             )
@@ -473,10 +478,14 @@ def project_lot_material_summary(project_id: uuid.UUID, lot_id: uuid.UUID, db: D
         from fastapi import HTTPException
         raise HTTPException(404, "Lot not found in this project.")
 
-    # ── 1. Fetch BOQ items for this lot ──────────────────────────────────────
+    # ── 1. Fetch BOQ items for this lot (MATERIAL only) ──────────────────────
     boq_items = (
         db.query(BOQItem)
-        .filter(BOQItem.lot_id == lot_id, BOQItem.is_active == True)
+        .filter(
+            BOQItem.lot_id    == lot_id,
+            BOQItem.is_active == True,
+            BOQItem.item_type == ItemType.MATERIAL,
+        )
         .all()
     )
 
@@ -493,6 +502,7 @@ def project_lot_material_summary(project_id: uuid.UUID, lot_id: uuid.UUID, db: D
                     BOQItem.site_id    == lot.site_id,
                     BOQItem.lot_id.is_(None),
                     BOQItem.is_active  == True,
+                    BOQItem.item_type  == ItemType.MATERIAL,
                 )
                 .all()
             )
@@ -505,6 +515,7 @@ def project_lot_material_summary(project_id: uuid.UUID, lot_id: uuid.UUID, db: D
                     BOQItem.site_id.is_(None),
                     BOQItem.lot_id.is_(None),
                     BOQItem.is_active   == True,
+                    BOQItem.item_type   == ItemType.MATERIAL,
                 )
                 .all()
             )

@@ -18,7 +18,7 @@ export interface Supplier {
 export interface SupplierCreate {
   name: string;
   code?: string | null;
-  email?: string | null;
+  email: string;
   phone?: string | null;
   address?: string | null;
   contact_person?: string | null;

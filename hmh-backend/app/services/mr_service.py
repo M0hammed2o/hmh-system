@@ -383,6 +383,48 @@ def reject_request(
     return mr
 
 
+def cancel_request(
+    db: Session,
+    mr_id: uuid.UUID,
+    actor_id: uuid.UUID,
+    reason: str,
+    force: bool = False,
+) -> MaterialRequest:
+    """
+    Cancel a material request.
+    - Before ORDERED: any WRITE_ROLES member may cancel directly.
+    - ORDERED or beyond: requires force=True (only OFFICE_AND_ABOVE callers pass this).
+    """
+    mr = get_request(db, mr_id)
+
+    # Already terminal
+    if mr.status in (RecordStatus.CANCELLED, RecordStatus.CLOSED, RecordStatus.RECEIVED):
+        raise ValidationError(f"Cannot cancel a request with status {mr.status.value}.")
+
+    # After ORDERED a supervisor must explicitly authorise
+    ordered_or_beyond = {
+        RecordStatus.ORDERED, RecordStatus.CONVERTED_TO_PO,
+        RecordStatus.PARTIALLY_RECEIVED, RecordStatus.INVOICED,
+        RecordStatus.PARTIALLY_PAID, RecordStatus.PAID,
+    }
+    if mr.status in ordered_or_beyond and not force:
+        raise ValidationError(
+            "Request is ORDERED or beyond — office approval is required to cancel."
+        )
+
+    now = datetime.now(timezone.utc)
+    mr.status = RecordStatus.CANCELLED
+    mr.rejection_reason = reason
+
+    audit_service.write_event(
+        db, AuditAction.UPDATE, "material_request", actor_id, mr_id,
+        after_value={"status": RecordStatus.CANCELLED.value, "cancel_reason": reason},
+    )
+    db.commit()
+    db.refresh(mr)
+    return mr
+
+
 def convert_to_po(
     db: Session,
     mr_id: uuid.UUID,

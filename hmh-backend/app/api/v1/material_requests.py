@@ -253,6 +253,25 @@ def reject_request(mr_id: uuid.UUID, body: RejectBody, db: DbSession, current_us
     return ApiSuccess(data=MaterialRequestRead.model_validate(mr), message="Request rejected.")
 
 
+class CancelBody(BaseModel):
+    reason: str
+
+
+@mr_router.post("/{mr_id}/cancel", response_model=ApiSuccess[MaterialRequestRead], dependencies=[WRITE_ROLES])
+def cancel_material_request(mr_id: uuid.UUID, body: CancelBody, db: DbSession, current_user: CurrentUser):
+    """
+    Cancel a material request.
+    Before ORDERED: any write-role user may cancel directly.
+    ORDERED or beyond: requires OFFICE_AND_ABOVE role (office approval).
+    """
+    from app.models.enums import UserRole as _Role
+    mr_obj = get_and_check_project_resource(db, current_user, MaterialRequest, mr_id, "Material request not found.")
+    office_roles = {_Role.OWNER, _Role.OFFICE_ADMIN, _Role.OFFICE_USER}
+    force = current_user.role in office_roles
+    mr = mr_service.cancel_request(db, mr_id, current_user.id, body.reason, force=force)
+    return ApiSuccess(data=MaterialRequestRead.model_validate(mr), message="Request cancelled.")
+
+
 class ConvertToPOBody(BaseModel):
     supplier_id: uuid.UUID
     expected_delivery_date: Optional[str] = None

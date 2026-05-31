@@ -27,7 +27,7 @@ class SupplierRead(BaseModel):
 class SupplierCreate(BaseModel):
     name: str
     code: Optional[str] = None
-    email: Optional[str] = None
+    email: str
     phone: Optional[str] = None
     address: Optional[str] = None
     contact_person: Optional[str] = None
@@ -40,6 +40,16 @@ class SupplierCreate(BaseModel):
         if not v.strip():
             raise ValueError("name cannot be blank")
         return v.strip()
+
+    @field_validator("email")
+    @classmethod
+    def email_valid(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("email is required")
+        if "@" not in v or "." not in v.split("@")[-1]:
+            raise ValueError("email must be a valid email address")
+        return v.lower()
 
 
 class SupplierUpdate(BaseModel):

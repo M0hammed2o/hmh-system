@@ -28,12 +28,17 @@ router = APIRouter(prefix="/projects", tags=["projects"])
 )
 def list_projects(
     db: DbSession,
+    current_user: CurrentUser,
     page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=100),
     status: Optional[ProjectStatus] = Query(None, description="Filter by project status"),
 ):
-    """List all projects. Optionally filter by status."""
-    projects, total = project_service.list_projects(db, page, limit, status)
+    """List projects. Non-admin roles see only their assigned projects."""
+    projects, total = project_service.list_projects(
+        db, page, limit, status,
+        user_id=current_user.id,
+        user_role=current_user.role,
+    )
     return ApiSuccess(
         data=PaginatedResult(
             items=[ProjectRead.model_validate(p) for p in projects],
