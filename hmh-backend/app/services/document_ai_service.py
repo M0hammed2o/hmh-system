@@ -223,7 +223,7 @@ _EMAIL_RE = re.compile(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+")
 # Patterns: "From:", "Supplier:", "Sold By:", "Vendor:", "Billed From:", "Company Name:"
 _SUPPLIER_LABEL_RE = re.compile(
     r"(?:^|\n)[ \t]*(?:from|supplier|sold\s+by|vendor|billed\s+from|company\s+name)"
-    r"[ \t]*[:\-]?[ \t]*([A-Z][A-Za-z0-9&.,\t ]{2,60})",
+    r"[ \t]*[:\-]?[ \t]*([A-Z][A-Za-z0-9&.,\t ()/]{2,60})",
     re.IGNORECASE | re.MULTILINE,
 )
 # Also match standalone header-style company names: two or more title-case words at line start
@@ -249,7 +249,8 @@ _DUE_DATE_RE = re.compile(
 
 _DATE_RE  = re.compile(
     r"\b(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}|\d{4}[\/\-]\d{1,2}[\/\-]\d{1,2}"
-    r"|\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{4})\b",
+    r"|\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{4}"
+    r"|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{1,2},?\s+\d{4})\b",
     re.IGNORECASE,
 )
 # Invoice total patterns in strict priority order.
@@ -267,10 +268,15 @@ _TOTAL_PATTERNS: list[tuple[re.Pattern, str]] = [
     (re.compile(r"subtotal\s*[:\s]\s*R?\s*([\d,]+\.?\d*)",         re.IGNORECASE), "Subtotal"),
 ]
 
-# Line-item pattern: handles comma-formatted numbers like 2,500.00
+# Line-item pattern: handles comma-formatted numbers like 2,500.00 and R-prefixed amounts like R1,536.00
 # Cols: description | qty | unit | unit_price | line_total
 _LINE_RE = re.compile(
-    r"^(.{3,60}?)\s+(\d[\d,]*(?:\.\d+)?)\s+([a-zA-Z]{1,10})\s+(\d[\d,]*(?:\.\d+)?)\s+(\d[\d,]*(?:\.\d+)?)\s*$",
+    r"^(.{3,60}?)\s+(\d[\d,]*(?:\.\d+)?)\s+([a-zA-Z]{1,10})\s+R?\s*(\d[\d,]*(?:\.\d+)?)\s+R?\s*(\d[\d,]*(?:\.\d+)?)\s*$",
+    re.MULTILINE,
+)
+# Simplified line-item fallback: description | qty | unit_price | line_total (no unit col, R-prefix ok)
+_LINE_RE_SIMPLE = re.compile(
+    r"^(.{3,70}?)\s+(\d[\d,]*(?:\.\d+)?)\s+R?\s*(\d[\d,]*(?:\.\d+)?)\s+R?\s*(\d[\d,]*(?:\.\d+)?)\s*$",
     re.MULTILINE,
 )
 
@@ -566,9 +572,13 @@ def _extract_total(text: str) -> Optional[float]:
 def _parse_line_items(text: str) -> list[dict]:
     """
     Parse table rows into line items.
-    Handles comma-formatted numbers (e.g. 2,500.00) in all numeric columns.
+    Tries the 5-column pattern (desc|qty|unit|price|total) first, then a
+    4-column fallback (desc|qty|price|total) for invoices without a unit column.
+    Handles comma-formatted and R-prefixed numbers (e.g. R1,536.00).
     """
     items = []
+
+    # Primary: 5-column pattern includes a unit abbreviation column
     for m in _LINE_RE.finditer(text):
         desc, qty_s, unit, price_s, total_s = m.groups()
         qty   = _parse_amount(qty_s)
@@ -584,6 +594,27 @@ def _parse_line_items(text: str) -> list[dict]:
             "line_total":  total if total is not None else round(qty * price, 2),
             "confidence":  0.6,
         })
+
+    if items:
+        return items
+
+    # Fallback: 4-column pattern (no unit column) — common in SA invoices
+    for m in _LINE_RE_SIMPLE.finditer(text):
+        desc, qty_s, price_s, total_s = m.groups()
+        qty   = _parse_amount(qty_s)
+        price = _parse_amount(price_s)
+        total = _parse_amount(total_s)
+        if qty is None or price is None:
+            continue
+        items.append({
+            "description": desc.strip(),
+            "unit":        None,
+            "quantity":    qty,
+            "unit_price":  price,
+            "line_total":  total if total is not None else round(qty * price, 2),
+            "confidence":  0.5,
+        })
+
     return items
 
 
