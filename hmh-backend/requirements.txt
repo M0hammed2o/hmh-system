@@ -33,3 +33,4 @@ email-validator==2.2.0
 
 # OCR / Document AI
 google-cloud-vision>=3.4.0   # Google Vision OCR (OCR_PROVIDER=google_vision)
+pypdf>=4.0.0                  # Pure-Python PDF text extraction (no binary deps — works on Render)

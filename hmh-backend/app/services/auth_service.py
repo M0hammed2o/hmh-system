@@ -22,11 +22,14 @@ _LOCKOUT_MINUTES = 30
 
 def login(db: Session, email: str, password: str) -> tuple[User, str, str]:
     # Accept phone number OR email as the login identifier
+    found_by_phone = False
     user = db.query(User).filter(User.email == email).first()
     if not user:
         user = db.query(User).filter(User.phone == email).first()
+        if user:
+            found_by_phone = True
     if not user:
-        raise AuthenticationError("Invalid email or password.")
+        raise AuthenticationError("Invalid credentials.")
 
     if not user.is_active:
         raise AuthenticationError("Account is disabled.")
@@ -37,12 +40,20 @@ def login(db: Session, email: str, password: str) -> tuple[User, str, str]:
             f"Account is locked until {user.locked_until.strftime('%Y-%m-%d %H:%M UTC')}."
         )
 
-    if not verify_password(password, user.password_hash):
+    # Phone login: try pin_hash first (if set), then fall back to password_hash.
+    # Email login: always use password_hash.
+    verified = False
+    if found_by_phone and user.pin_hash:
+        verified = verify_password(password, user.pin_hash)
+    if not verified:
+        verified = verify_password(password, user.password_hash)
+
+    if not verified:
         user.failed_login_attempts += 1
         if user.failed_login_attempts >= _MAX_FAILED_ATTEMPTS:
             user.locked_until = now + timedelta(minutes=_LOCKOUT_MINUTES)
         db.commit()
-        raise AuthenticationError("Invalid email or password.")
+        raise AuthenticationError("Invalid credentials.")
 
     user.failed_login_attempts = 0
     user.locked_until = None
