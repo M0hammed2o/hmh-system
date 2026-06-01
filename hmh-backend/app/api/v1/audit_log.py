@@ -5,9 +5,11 @@ from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Query
+from sqlalchemy import outerjoin
 
 from app.dependencies import CurrentUser, DbSession, OWNER_ONLY
 from app.models.audit import AuditEvent
+from app.models.user import User
 from app.schemas.common import ApiSuccess
 
 router = APIRouter(prefix="/audit", tags=["audit"])
@@ -27,9 +29,14 @@ def list_audit_events(
 ):
     """
     Return audit events in descending chronological order.
-    Supports filtering by actor, entity type, action, and date range.
+    Each event includes actor_name (joined from users) so the frontend
+    never has to do a separate user lookup or guess at deleted users.
     """
-    q = db.query(AuditEvent).order_by(AuditEvent.created_at.desc())
+    q = (
+        db.query(AuditEvent, User.full_name.label("actor_name"), User.email.label("actor_email"))
+        .outerjoin(User, AuditEvent.actor_id == User.id)
+        .order_by(AuditEvent.created_at.desc())
+    )
 
     if actor_id:
         q = q.filter(AuditEvent.actor_id == actor_id)
@@ -43,16 +50,18 @@ def list_audit_events(
         q = q.filter(AuditEvent.created_at <= to_date)
 
     total = q.count()
-    events = q.offset(offset).limit(limit).all()
+    rows = q.offset(offset).limit(limit).all()
 
     return ApiSuccess(data=[{
-        "id":          str(e.id),
-        "actor_id":    str(e.actor_id) if e.actor_id else None,
-        "action":      e.action,
-        "entity_type": e.entity_type,
-        "entity_id":   str(e.entity_id) if e.entity_id else None,
+        "id":           str(e.id),
+        "actor_id":     str(e.actor_id) if e.actor_id else None,
+        "actor_name":   actor_name or ("System" if not e.actor_id else "Deleted User"),
+        "actor_email":  actor_email,
+        "action":       e.action,
+        "entity_type":  e.entity_type,
+        "entity_id":    str(e.entity_id) if e.entity_id else None,
         "before_value": e.before_value,
         "after_value":  e.after_value,
         "notes":        e.notes,
         "created_at":   e.created_at.isoformat(),
-    } for e in events], message=f"{total} total events.")
+    } for e, actor_name, actor_email in rows], message=f"{total} total events.")

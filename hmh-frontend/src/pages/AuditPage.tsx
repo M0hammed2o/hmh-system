@@ -16,6 +16,8 @@ import { usersApi, type User } from "@/api/users";
 interface AuditEvent {
   id: string;
   actor_id:     string | null;
+  actor_name:   string;
+  actor_email:  string | null;
   action:       string;
   entity_type:  string;
   entity_id:    string | null;
@@ -195,9 +197,7 @@ function fmtDateShort(iso: string) {
 
 // ── Single event card ─────────────────────────────────────────────────────────
 
-function EventCard({
-  ev, userName,
-}: { ev: AuditEvent; userName: (id: string | null) => string }) {
+function EventCard({ ev }: { ev: AuditEvent }) {
   const [showRaw, setShowRaw] = useState(false);
   const description = summarize(ev);
   const color = ACTION_COLOR[ev.action] ?? "bg-muted text-muted-foreground";
@@ -215,7 +215,7 @@ function EventCard({
       <div className="flex-1 min-w-0 pb-3 border-b border-border/50 last:border-0">
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0">
-            <span className="text-sm font-medium">{userName(ev.actor_id)}</span>
+            <span className="text-sm font-medium">{ev.actor_name}</span>
             <span className="text-sm text-muted-foreground"> {fmtAction(ev.action).toLowerCase()} </span>
             <span className="text-sm font-medium">{fmtModule(ev.entity_type)}</span>
           </div>
@@ -287,24 +287,18 @@ export default function AuditPage() {
 
   useEffect(() => { load(); }, [load]);
 
-  const userName = (id: string | null) => {
-    if (!id) return "System";
-    const u = users.find(u => u.id === id);
-    return u ? u.full_name : "System / Deleted User";
-  };
-
   // Client-side search over visible fields
   const filtered = useMemo(() => {
     if (!search.trim()) return events;
     const q = search.toLowerCase();
     return events.filter(ev => {
       const desc = summarize(ev).toLowerCase();
-      const user = userName(ev.actor_id).toLowerCase();
+      const user = ev.actor_name.toLowerCase();
       const mod  = fmtModule(ev.entity_type).toLowerCase();
       const raw  = JSON.stringify(ev.after_value ?? "").toLowerCase();
       return desc.includes(q) || user.includes(q) || mod.includes(q) || raw.includes(q);
     });
-  }, [events, search, users]);
+  }, [events, search]);
 
   // Group by date
   const groups = useMemo(() => {
@@ -410,7 +404,7 @@ export default function AuditPage() {
                         {fmtDateShort(ev.created_at)} {fmtTime(ev.created_at)}
                       </p>
                     )}
-                    <EventCard ev={ev} userName={userName} />
+                    <EventCard ev={ev} />
                   </div>
                 ))}
               </div>
