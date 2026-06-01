@@ -9,6 +9,8 @@ The access token is NEVER logged or printed anywhere in this module.
 """
 
 import logging
+import re as _re
+from datetime import datetime, timezone as _tz
 from typing import Optional
 
 import httpx
@@ -17,6 +19,9 @@ from app.core.config import settings
 from app.core.logging_config import get_logger
 
 logger = get_logger(__name__)
+
+# Process-level cache: template_name → {components, language, status, fetched_at}
+_template_cache: dict = {}
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
@@ -28,6 +33,94 @@ def _messages_url() -> str:
         f"/{settings.WHATSAPP_PHONE_NUMBER_ID}"
         f"/messages"
     )
+
+
+def _templates_url() -> str:
+    return (
+        f"https://graph.facebook.com"
+        f"/{settings.WHATSAPP_API_VERSION}"
+        f"/{settings.WHATSAPP_BUSINESS_ACCOUNT_ID}"
+        f"/message_templates"
+    )
+
+
+# ── Template introspection ────────────────────────────────────────────────────
+
+def fetch_template_info(template_name: str) -> Optional[dict]:
+    """
+    Query Meta Graph API for the template definition (cached 1 h per process).
+    Returns the first matching template dict or None on any failure.
+    Includes: name, language, status, components (with body text + example).
+    """
+    cached = _template_cache.get(template_name)
+    if cached:
+        age = (datetime.now(_tz.utc) - cached["fetched_at"]).total_seconds()
+        if age < 3600:
+            return cached
+
+    if not settings.WHATSAPP_BUSINESS_ACCOUNT_ID or not settings.WHATSAPP_ACCESS_TOKEN:
+        logger.debug("Cannot fetch template info: BUSINESS_ACCOUNT_ID or ACCESS_TOKEN missing")
+        return None
+
+    try:
+        resp = httpx.get(
+            _templates_url(),
+            params={"name": template_name, "fields": "name,language,status,components"},
+            headers=_auth_headers(),
+            timeout=10,
+        )
+        data = resp.json()
+        templates = data.get("data", [])
+        if not templates:
+            logger.warning("WA-TEMPLATE-NOT-FOUND name=%s (check Meta Business Manager)", template_name)
+            return None
+        result = dict(templates[0])
+        result["fetched_at"] = datetime.now(_tz.utc)
+        _template_cache[template_name] = result
+        logger.info(
+            "WA-TEMPLATE-INFO name=%s language=%s status=%s",
+            result.get("name"), result.get("language"), result.get("status"),
+        )
+        return result
+    except Exception as exc:
+        logger.warning("WA-TEMPLATE-FETCH-FAILED name=%s error=%s", template_name, exc)
+        return None
+
+
+def count_body_vars(template_info: dict) -> int:
+    """Count {{N}} variables in the BODY component of a fetched template."""
+    for comp in template_info.get("components", []):
+        if comp.get("type", "").upper() == "BODY":
+            text = comp.get("text", "")
+            return len(_re.findall(r'\{\{\d+\}\}', text))
+    return 0
+
+
+def resolve_template_params(template_name: str) -> tuple[int, str]:
+    """
+    Return (body_var_count, language_code) for the named template.
+    Fetches live from Meta API; falls back to configured env vars on failure.
+    This is the single source of truth used by both the test endpoint and
+    the live notification queue sender.
+    """
+    info = fetch_template_info(template_name)
+    if info:
+        var_count = count_body_vars(info)
+        lang = info.get("language") or settings.WHATSAPP_ALERT_TEMPLATE_LANGUAGE or "en_US"
+        logger.info(
+            "WA-TEMPLATE-RESOLVED name=%s var_count=%d lang=%s (source=meta_api)",
+            template_name, var_count, lang,
+        )
+        return var_count, lang
+
+    # Fallback to manually configured values
+    var_count = max(0, int(getattr(settings, "WHATSAPP_ALERT_TEMPLATE_BODY_VAR_COUNT", 2)))
+    lang = settings.WHATSAPP_ALERT_TEMPLATE_LANGUAGE or "en_US"
+    logger.info(
+        "WA-TEMPLATE-RESOLVED name=%s var_count=%d lang=%s (source=config_fallback)",
+        template_name, var_count, lang,
+    )
+    return var_count, lang
 
 
 def _auth_headers() -> dict:

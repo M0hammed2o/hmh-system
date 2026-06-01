@@ -425,20 +425,16 @@ def send_test_message(recipient_id: uuid.UUID, db: DbSession):
     if not template_name:
         return ApiSuccess(
             data={"status": "NOT_CONFIGURED", "provider_message_id": None, "method": None,
-                  "error": "WhatsApp template not configured. Automatic alerts require an approved WhatsApp template. Set WHATSAPP_ALERT_TEMPLATE_NAME."},
+                  "error": "WhatsApp template not configured. Set WHATSAPP_ALERT_TEMPLATE_NAME."},
             message="Template not configured.",
         )
 
-    lang = settings.WHATSAPP_ALERT_TEMPLATE_LANGUAGE or "en_US"
-
-    # Build body components so the param count matches the approved Meta template.
-    # The number of variables is controlled by WHATSAPP_ALERT_TEMPLATE_BODY_VAR_COUNT.
-    # Most templates use {{1}}=title, {{2}}=body — adjust the env var if yours differs.
-    var_count = max(0, int(getattr(settings, "WHATSAPP_ALERT_TEMPLATE_BODY_VAR_COUNT", 2)))
+    # Auto-resolve var_count and language from Meta API (cached).
+    var_count, lang = whatsapp_service.resolve_template_params(template_name)
     test_params = [
         "Test Alert",
         "This is a test notification from HMH System. No action required.",
-        "HMH Group",    # fallback third var if template has 3
+        "HMH Group",
     ]
     components: list | None = None
     if var_count > 0:
@@ -489,11 +485,65 @@ def send_test_message(recipient_id: uuid.UUID, db: DbSession):
             "provider_message_id": msg_id,
             "method": "template",
             "template_used": template_name,
+            "language_used": lang,
             "body_vars_sent": var_count,
             "queue_entry_id": str(_entry.id),
         },
         message=f"Test queued to WhatsApp API: {status}",
     )
+
+
+@router.get("/whatsapp/template-info", response_model=ApiSuccess[dict], dependencies=[OFFICE_AND_ABOVE])
+def get_whatsapp_template_info():
+    """
+    Fetch live template definition from Meta Graph API.
+    Shows template name, language, status, body text, and exact variable count.
+    Use this to verify WHATSAPP_ALERT_TEMPLATE_BODY_VAR_COUNT and language are correct.
+    """
+    from app.services import whatsapp_service
+    template_name = settings.WHATSAPP_ALERT_TEMPLATE_NAME
+    if not template_name:
+        return ApiSuccess(data={
+            "configured": False,
+            "error": "WHATSAPP_ALERT_TEMPLATE_NAME not set",
+        })
+
+    info = whatsapp_service.fetch_template_info(template_name)
+    if not info:
+        return ApiSuccess(data={
+            "configured": True,
+            "template_name": template_name,
+            "meta_api_reachable": False,
+            "error": (
+                "Could not fetch template from Meta API. "
+                "Check WHATSAPP_BUSINESS_ACCOUNT_ID and WHATSAPP_ACCESS_TOKEN."
+            ),
+            "config_var_count": getattr(settings, "WHATSAPP_ALERT_TEMPLATE_BODY_VAR_COUNT", 2),
+            "config_language": settings.WHATSAPP_ALERT_TEMPLATE_LANGUAGE or "en_US",
+        })
+
+    var_count = whatsapp_service.count_body_vars(info)
+    body_text = next(
+        (c.get("text", "") for c in info.get("components", [])
+         if c.get("type", "").upper() == "BODY"),
+        None,
+    )
+    cfg_var_count = getattr(settings, "WHATSAPP_ALERT_TEMPLATE_BODY_VAR_COUNT", 2)
+    cfg_language  = settings.WHATSAPP_ALERT_TEMPLATE_LANGUAGE or "en_US"
+    return ApiSuccess(data={
+        "configured": True,
+        "meta_api_reachable": True,
+        "template_name": info.get("name"),
+        "language": info.get("language"),
+        "status": info.get("status"),
+        "body_text": body_text,
+        "body_var_count": var_count,
+        "components": info.get("components", []),
+        "config_var_count": cfg_var_count,
+        "config_language": cfg_language,
+        "mismatch_var_count": var_count != cfg_var_count,
+        "mismatch_language": (info.get("language") or "") != cfg_language,
+    })
 
 
 # ── Notification Queue ────────────────────────────────────────────────────────

@@ -343,17 +343,17 @@ def _send_for_queue_entry(entry: NotificationQueue, db: Session) -> tuple[str, O
 
     # ── Tier 1: approved template ─────────────────────────────────────────────
     if template_name:
-        lang = settings.WHATSAPP_ALERT_TEMPLATE_LANGUAGE or "en_US"
+        # Auto-resolve var_count + language by querying Meta API (cached per process).
+        # Falls back to WHATSAPP_ALERT_TEMPLATE_BODY_VAR_COUNT / WHATSAPP_ALERT_TEMPLATE_LANGUAGE.
+        var_count, lang = whatsapp_service.resolve_template_params(template_name)
 
-        # Build body components from queue entry so param count matches the template.
-        var_count = max(0, int(getattr(settings, "WHATSAPP_ALERT_TEMPLATE_BODY_VAR_COUNT", 2)))
+        # Build body components matching the exact parameter count from the template.
+        msg_lines   = (entry.message_body or "").split("\n")
+        title_line  = msg_lines[0][:100] if msg_lines else "Alert"
+        body_line   = msg_lines[1][:200] if len(msg_lines) > 1 else title_line
+        live_params = [title_line, body_line, "HMH Group"]
         components: list | None = None
         if var_count > 0:
-            # Derive title and first sentence of body from the queued message
-            msg_lines = (entry.message_body or "").split("\n")
-            title_line = msg_lines[0][:100] if msg_lines else "Alert"
-            body_line  = msg_lines[1][:200] if len(msg_lines) > 1 else title_line
-            live_params = [title_line, body_line, "HMH Group"]
             parameters = [
                 {"type": "text", "text": live_params[i] if i < len(live_params) else f"param{i+1}"}
                 for i in range(var_count)
@@ -371,12 +371,7 @@ def _send_for_queue_entry(entry: NotificationQueue, db: Session) -> tuple[str, O
         )
         if status == "FAILED":
             logger.error(
-                "WA-TEMPLATE-FAILED template='%s' lang=%s var_count=%d phone=%s error=%s\n"
-                "  → #132000 = parameter count mismatch: set WHATSAPP_ALERT_TEMPLATE_BODY_VAR_COUNT "
-                "to match the number of {{N}} variables in your Meta template body "
-                "(0 = no variables, 1 = one variable, etc.).\n"
-                "  → Wrong lang code: template language must exactly match Meta registration "
-                "(e.g. 'en_US' not 'en').",
+                "WA-TEMPLATE-FAILED template='%s' lang=%s var_count=%d phone=%s error=%s",
                 template_name, lang, var_count, entry.phone_number, msg_id,
             )
         else:

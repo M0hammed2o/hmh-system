@@ -180,3 +180,27 @@ async def vision_extract(
             "Data is NOT automatically saved to any business record."
         ),
     })
+
+
+@router.get("/health", dependencies=[ALL_ROLES])
+def ocr_health():
+    """
+    OCR provider health check.
+    Returns provider name, credential status, and whether the Vision client can be imported.
+    Use this to diagnose 'OCR NOT AVAILABLE' errors on Render.
+
+    Setup on Render:
+      OCR_PROVIDER=google_vision
+      GOOGLE_CREDENTIALS_JSON=<paste full service-account JSON here>
+    """
+    from app.services.document_ai_service import validate_ocr_setup
+    status = validate_ocr_setup()
+    # Try to detect credential source for extra context
+    cred_source = None
+    if settings.GOOGLE_CREDENTIALS_JSON:
+        cred_source = "GOOGLE_CREDENTIALS_JSON"
+    elif settings.GOOGLE_APPLICATION_CREDENTIALS:
+        cred_source = "GOOGLE_APPLICATION_CREDENTIALS"
+    status["credential_source"] = cred_source
+    status["ocr_provider_env"] = settings.OCR_PROVIDER
+    return ApiSuccess(data=status)
