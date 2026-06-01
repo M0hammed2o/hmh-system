@@ -413,24 +413,31 @@ def refetch_attachment_from_imap(db, att_id: uuid.UUID) -> dict:
         imap.login(settings.IMAP_USERNAME, settings.IMAP_PASSWORD)
         imap.select("INBOX")
 
-        # Search by Message-ID header — works for read AND unread messages
+        # Search by Message-ID header — works for read AND unread messages.
+        # Try INBOX first, then common Gmail All-Mail folder names as fallback.
         mid = parent.message_id.strip()
         _, data = imap.search(None, f'HEADER "Message-ID" "{mid}"')
         msg_ids = data[0].split() if data[0] else []
 
         if not msg_ids:
-            # Some Gmail servers require searching All Mail
-            try:
-                imap.select('"[Gmail]/All Mail"')
-                _, data = imap.search(None, f'HEADER "Message-ID" "{mid}"')
-                msg_ids = data[0].split() if data[0] else []
-            except Exception:
-                logger.debug("IMAP '[Gmail]/All Mail' folder search failed (may not exist)")
+            for folder in ('"[Gmail]/All Mail"', '"[Google Mail]/All Mail"', "All Mail"):
+                try:
+                    rv, _ = imap.select(folder)
+                    if rv != "OK":
+                        continue
+                    _, data = imap.search(None, f'HEADER "Message-ID" "{mid}"')
+                    msg_ids = data[0].split() if data[0] else []
+                    if msg_ids:
+                        logger.debug("gmail_refetch found msg in folder=%s", folder)
+                        break
+                except Exception as fe:
+                    logger.debug("IMAP folder=%s search failed: %s", folder, fe)
 
         if not msg_ids:
             raise ValueError(
-                f"Email with Message-ID={mid!r} not found in Gmail. "
-                "It may have been deleted or moved out of the mailbox."
+                f"Email with Message-ID={mid!r} not found in Gmail INBOX or All Mail. "
+                "The email may have been permanently deleted or archived in an unlisted folder. "
+                "Re-fetch emails via the Gmail sync button to re-import it."
             )
 
         _, raw = imap.fetch(msg_ids[0], "(RFC822)")

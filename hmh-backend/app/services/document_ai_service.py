@@ -56,17 +56,17 @@ _cred_temp_path: Optional[str] = None
 
 def _prepare_credentials() -> None:
     """
-    Resolve GOOGLE_APPLICATION_CREDENTIALS from settings and set it as an
-    absolute path env var so the Vision client can find it.
-    Handles:
-      - File path (relative or absolute)
-      - Inline JSON string → written to a temp file once per process
-    Called inside extract_text_via_google_vision before creating the client.
+    Resolve Google Vision credentials and set GOOGLE_APPLICATION_CREDENTIALS env var.
+    Priority:
+      1. GOOGLE_CREDENTIALS_JSON  — full service-account JSON (recommended for Render)
+      2. GOOGLE_APPLICATION_CREDENTIALS — file path (relative or absolute) or inline JSON
+    Inline JSON is written to a temp file once per process and cached.
     """
     global _cred_temp_path
     from app.core.config import settings
 
-    raw = settings.GOOGLE_APPLICATION_CREDENTIALS
+    # Priority 1: GOOGLE_CREDENTIALS_JSON (explicit JSON string for cloud deployments)
+    raw = settings.GOOGLE_CREDENTIALS_JSON or settings.GOOGLE_APPLICATION_CREDENTIALS
     if not raw:
         return
 
@@ -77,19 +77,23 @@ def _prepare_credentials() -> None:
             try:
                 json.loads(raw)  # validate JSON before writing
             except json.JSONDecodeError as exc:
-                logger.warning("GOOGLE_APPLICATION_CREDENTIALS inline JSON is invalid: %s", exc)
+                logger.warning("Google credentials inline JSON is invalid: %s", exc)
                 return
             with tempfile.NamedTemporaryFile(
                 mode="w", suffix=".json", delete=False, prefix="hmh_gcp_creds_"
             ) as f:
                 f.write(raw)
                 _cred_temp_path = f.name
-            logger.debug("vision credentials written to temp file %s", _cred_temp_path)
+            logger.info("vision credentials written to temp file %s", _cred_temp_path)
         os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = _cred_temp_path
     else:
         abs_path = _resolve_credentials_path(raw)
         if not os.path.exists(abs_path):
-            logger.warning("GOOGLE_APPLICATION_CREDENTIALS file not found: %s", abs_path)
+            logger.warning(
+                "GOOGLE_APPLICATION_CREDENTIALS file not found: %s — "
+                "on Render, set GOOGLE_CREDENTIALS_JSON to the full JSON content instead.",
+                abs_path,
+            )
             return
         os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = abs_path
 
@@ -142,17 +146,22 @@ def validate_ocr_setup() -> dict:
 
     if provider == "google_vision":
         from app.core.config import settings
-        cred = settings.GOOGLE_APPLICATION_CREDENTIALS
+        cred = settings.GOOGLE_CREDENTIALS_JSON or settings.GOOGLE_APPLICATION_CREDENTIALS
         if not cred:
             return {
                 "provider": "google_vision", "ready": False,
-                "message": "GOOGLE_APPLICATION_CREDENTIALS not set",
+                "message": (
+                    "No credentials set. On Render: set GOOGLE_CREDENTIALS_JSON to the full "
+                    "service-account JSON. Locally: set GOOGLE_APPLICATION_CREDENTIALS to the "
+                    "file path or inline JSON."
+                ),
             }
         if cred.strip().startswith("{"):
             try:
                 import json
                 json.loads(cred)
-                label = "inline JSON credentials"
+                src = "GOOGLE_CREDENTIALS_JSON" if settings.GOOGLE_CREDENTIALS_JSON else "GOOGLE_APPLICATION_CREDENTIALS"
+                label = f"inline JSON ({src})"
             except Exception:
                 return {"provider": "google_vision", "ready": False, "message": "inline JSON is invalid"}
         else:
@@ -160,7 +169,10 @@ def validate_ocr_setup() -> dict:
             if not os.path.exists(abs_path):
                 return {
                     "provider": "google_vision", "ready": False,
-                    "message": f"credentials file not found: {abs_path}",
+                    "message": (
+                        f"credentials file not found: {abs_path}. "
+                        "On Render, use GOOGLE_CREDENTIALS_JSON with the full JSON content."
+                    ),
                 }
             label = os.path.basename(abs_path)
         try:

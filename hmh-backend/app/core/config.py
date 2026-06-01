@@ -57,7 +57,11 @@ class Settings(BaseSettings):
 
     # OCR provider: "local" (pytesseract), "google_vision", or "disabled"
     OCR_PROVIDER: str = "local"
-    # Google Cloud Vision credentials (JSON key file path or inline JSON)
+    # Google Cloud Vision credentials.
+    # Option A (recommended for Render/cloud): paste the full service-account JSON here.
+    # Option B: path to credentials JSON file (relative to hmh-backend/ or absolute).
+    # GOOGLE_CREDENTIALS_JSON takes precedence over GOOGLE_APPLICATION_CREDENTIALS.
+    GOOGLE_CREDENTIALS_JSON: str = ""
     GOOGLE_APPLICATION_CREDENTIALS: str = ""
 
     # Alert thresholds — read by alert_scan and reactive alert logic

@@ -5,7 +5,7 @@ import {
   ListChecks, Upload, PenLine, AlertTriangle, CheckCircle2,
   Clock, Circle, ChevronRight, Box, Bell, Camera, Image, X,
   Plus, Trash2, ClipboardList, Flag, Ban, Lock, CalendarClock,
-  ShieldOff, Briefcase, RotateCcw,
+  ShieldOff, Briefcase, RotateCcw, Search,
 } from "lucide-react";
 import { siteCaptureApi, type ExtractedItem } from "@/api/siteCapture";
 import { siteDashboardApi, type MaterialSummaryItem, type ActivityItem } from "@/api/siteDashboard";
@@ -28,6 +28,7 @@ import { suppliersApi, type Supplier } from "@/api/suppliers";
 import { warehouseApi } from "@/api/warehouse";
 import { jobCardsApi, type JobCard } from "@/api/jobCards";
 import { getDrafts, removeDraft, type OfflineDraft } from "@/utils/offlineDrafts";
+import { procurementApi, type BOQSearchResult } from "@/api/procurement";
 import { cn } from "@/lib/utils";
 
 // ── Error boundary — prevents any modal crash from blanking the whole page ────
@@ -941,46 +942,100 @@ export default function SiteDashboardPage() {
   );
 }
 
-// ── Request Material (multi-item) ─────────────────────────────────────────────
-interface ItemRow { desc: string; qty: string; unit: string; }
-const BLANK_ITEM: ItemRow = { desc: "", qty: "", unit: "" };
+// ── Request Material (BOQ-driven) ─────────────────────────────────────────────
+interface CartItem {
+  key:            string;
+  mode:           "boq" | "custom";
+  boq_item_id:    string | null;
+  description:    string;
+  qty:            string;
+  unit:           string;
+  supplier_id?:   string;
+  supplier_name?: string;
+  planned_qty?:   number;
+}
 
 function RequestMaterialModal({ projectId, siteId, lotId, onClose, onDone }: {
   projectId: string; siteId: string; lotId: string;
   onClose: () => void; onDone: () => void;
 }) {
-  const [items,    setItems]    = useState<ItemRow[]>([{ ...BLANK_ITEM }]);
-  const [neededBy, setNeededBy] = useState("");
-  const [notes,    setNotes]    = useState("");
-  const [loading,  setLoading]  = useState(false);
-  const [error,    setError]    = useState("");
+  const [cart,         setCart]         = useState<CartItem[]>([]);
+  const [search,       setSearch]       = useState("");
+  const [results,      setResults]      = useState<BOQSearchResult[]>([]);
+  const [searching,    setSearching]    = useState(false);
+  const [neededBy,     setNeededBy]     = useState("");
+  const [notes,        setNotes]        = useState("");
+  const [loading,      setLoading]      = useState(false);
+  const [error,        setError]        = useState("");
   const [savedOffline, setSavedOffline] = useState(false);
+  const searchTimer = useRef<ReturnType<typeof setTimeout>>();
 
-  const updateItem = (i: number, field: keyof ItemRow, val: string) =>
-    setItems(prev => prev.map((row, idx) => idx === i ? { ...row, [field]: val } : row));
+  // Debounced BOQ search
+  useEffect(() => {
+    clearTimeout(searchTimer.current);
+    const q = search.trim();
+    if (!q) { setResults([]); return; }
+    searchTimer.current = setTimeout(async () => {
+      setSearching(true);
+      try {
+        const res = await procurementApi.searchBOQItems(projectId, q);
+        setResults(res.filter(r => !cart.some(c => c.boq_item_id === r.id)));
+      } catch { setResults([]); }
+      finally { setSearching(false); }
+    }, 300);
+    return () => clearTimeout(searchTimer.current);
+  }, [search, projectId, cart]);
 
-  const addItem    = () => setItems(prev => [...prev, { ...BLANK_ITEM }]);
-  const removeItem = (i: number) => setItems(prev => prev.filter((_, idx) => idx !== i));
+  const addBOQItem = (item: BOQSearchResult) => {
+    setCart(prev => [...prev, {
+      key:           item.id,
+      mode:          "boq",
+      boq_item_id:   item.id,
+      description:   item.description,
+      qty:           "",
+      unit:          item.unit ?? "",
+      supplier_id:   item.preferred_supplier_id ?? undefined,
+      supplier_name: item.supplier_name ?? undefined,
+      planned_qty:   item.planned_quantity ?? undefined,
+    }]);
+    setSearch("");
+    setResults([]);
+  };
+
+  const addCustom = () => setCart(prev => [...prev, {
+    key: `custom-${Date.now()}`,
+    mode: "custom", boq_item_id: null,
+    description: "", qty: "", unit: "",
+  }]);
+
+  const updateCart = (i: number, field: keyof CartItem, val: string) =>
+    setCart(prev => prev.map((row, idx) => idx === i ? { ...row, [field]: val } : row));
+
+  const removeCart = (i: number) => setCart(prev => prev.filter((_, idx) => idx !== i));
+
+  const validItems = cart.filter(c => c.description.trim() && parseFloat(c.qty) > 0);
 
   const submit = async () => {
-    const valid = items.filter(r => r.desc.trim() && parseFloat(r.qty) > 0);
-    if (valid.length === 0) { setError("Add at least one item with a name and quantity."); return; }
-    if (!projectId)          { setError("No project selected."); return; }
+    if (validItems.length === 0) { setError("Add at least one item with a name and quantity."); return; }
+    if (!projectId) { setError("No project selected."); return; }
     setLoading(true); setError("");
     try {
+      const supplierFromBOQ = cart.find(c => c.mode === "boq" && c.supplier_id)?.supplier_id;
       const mr = await materialRequestsApi.create(projectId, {
-        site_id:              siteId  || null,
-        lot_id:               lotId   || null,
-        delivery_destination: "SITE_STORE",
-        needed_by_date:       neededBy || null,
-        notes:                notes    || null,
-        items: valid.map(r => ({
-          description:        r.desc.trim(),
-          requested_quantity: parseFloat(r.qty),
-          unit:               r.unit.trim() || null,
+        site_id:               siteId  || null,
+        lot_id:                lotId   || null,
+        delivery_destination:  "SITE_STORE",
+        needed_by_date:        neededBy || null,
+        notes:                 notes    || null,
+        preferred_supplier_id: supplierFromBOQ ?? null,
+        items: validItems.map(c => ({
+          description:        c.description.trim(),
+          quantity_requested: parseFloat(c.qty),
+          unit:               c.unit.trim() || null,
+          boq_item_id:        c.boq_item_id,
+          notes:              c.mode === "custom" ? "Outside BOQ — one-time purchase" : null,
         })),
       });
-      // Auto-submit so office sees it immediately
       await materialRequestsApi.submit(mr.id);
       onDone();
     } catch (err: unknown) {
@@ -989,7 +1044,10 @@ function RequestMaterialModal({ projectId, siteId, lotId, onClose, onDone }: {
         const { saveDraft } = await import("@/utils/offlineDrafts");
         saveDraft({
           type: "material_request", projectId, siteId, lotId,
-          payload: { items: valid, neededBy, notes },
+          payload: {
+            items: validItems.map(c => ({ desc: c.description, qty: c.qty, unit: c.unit })),
+            neededBy, notes,
+          },
         });
         setSavedOffline(true);
       } else {
@@ -1014,86 +1072,167 @@ function RequestMaterialModal({ projectId, siteId, lotId, onClose, onDone }: {
           <Button className="w-full" onClick={onClose}>Close</Button>
         </div>
       ) : (
-      <div className="space-y-3">
+        <div className="space-y-3">
 
-        {/* Item list */}
-        <div className="space-y-2">
-          <Label className="text-xs text-muted-foreground">Items requested</Label>
-          {items.map((row, i) => (
-            <div key={i} className="flex gap-2 items-start">
-              <div className="flex-1 space-y-1.5">
-                <Input
-                  placeholder="Material description (e.g. Cement 50 kg)"
-                  value={row.desc}
-                  onChange={e => updateItem(i, "desc", e.target.value)}
-                  autoFocus={i === 0}
-                />
-                <div className="grid grid-cols-2 gap-2">
-                  <Input
-                    type="number" min="0.001" step="any"
-                    placeholder="Qty"
-                    value={row.qty}
-                    onChange={e => updateItem(i, "qty", e.target.value)}
-                  />
-                  <Input
-                    placeholder="Unit (bags, m³…)"
-                    value={row.unit}
-                    onChange={e => updateItem(i, "unit", e.target.value)}
-                  />
-                </div>
-              </div>
-              {items.length > 1 && (
-                <button
-                  type="button"
-                  onClick={() => removeItem(i)}
-                  className="mt-1 p-1.5 text-muted-foreground hover:text-destructive rounded-md hover:bg-muted transition-colors"
-                >
-                  <Trash2 className="w-4 h-4" />
-                </button>
-              )}
+          {/* ── BOQ Search ─────────────────────────────────────────── */}
+          <div className="space-y-1">
+            <Label className="text-xs font-medium">Search BOQ Materials</Label>
+            <div className="relative">
+              <Search className="absolute left-2.5 top-2.5 w-4 h-4 text-muted-foreground pointer-events-none" />
+              <Input
+                placeholder="Type material name (e.g. Cement, Door…)"
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                className="pl-8"
+                autoFocus
+              />
             </div>
-          ))}
 
+            {results.length > 0 && (
+              <div className="border border-border rounded-lg divide-y bg-background shadow-sm max-h-40 overflow-y-auto">
+                {results.map(r => (
+                  <button
+                    type="button" key={r.id}
+                    onClick={() => addBOQItem(r)}
+                    className="w-full text-left px-3 py-2 text-sm hover:bg-muted flex items-center justify-between"
+                  >
+                    <div className="min-w-0">
+                      <span className="font-medium">{r.description}</span>
+                      {r.supplier_name && (
+                        <span className="text-xs text-muted-foreground ml-2">· {r.supplier_name}</span>
+                      )}
+                    </div>
+                    <span className="text-xs text-muted-foreground ml-2 shrink-0">
+                      {r.planned_quantity != null ? `${r.planned_quantity} ` : ""}{r.unit ?? ""}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {search.trim() && !searching && results.length === 0 && (
+              <p className="text-xs text-muted-foreground px-1">
+                No BOQ items match — use "Add one-time purchase" below.
+              </p>
+            )}
+          </div>
+
+          {/* ── Cart ───────────────────────────────────────────────── */}
+          {cart.length > 0 && (
+            <div className="space-y-1.5">
+              <Label className="text-xs text-muted-foreground">
+                Items to request ({cart.length})
+              </Label>
+              {cart.map((item, i) => (
+                <div key={item.key}
+                  className="flex gap-2 items-start bg-muted/30 rounded-lg px-2.5 py-2">
+                  <div className="flex-1 min-w-0 space-y-1">
+                    {item.mode === "custom" ? (
+                      <Input
+                        placeholder="Item description"
+                        value={item.description}
+                        onChange={e => updateCart(i, "description", e.target.value)}
+                        className="h-7 text-xs"
+                        autoFocus={item.description === ""}
+                      />
+                    ) : (
+                      <p className="text-xs font-medium truncate">{item.description}</p>
+                    )}
+                    <div className="flex flex-wrap gap-1.5 items-center">
+                      <Input
+                        type="number" min="0.001" step="any"
+                        placeholder="Qty"
+                        value={item.qty}
+                        onChange={e => updateCart(i, "qty", e.target.value)}
+                        className="h-7 text-xs w-20"
+                      />
+                      {item.mode === "custom" ? (
+                        <Input
+                          placeholder="unit"
+                          value={item.unit}
+                          onChange={e => updateCart(i, "unit", e.target.value)}
+                          className="h-7 text-xs w-16"
+                        />
+                      ) : (
+                        <span className="text-xs text-muted-foreground">{item.unit}</span>
+                      )}
+                      {item.mode === "boq" && item.planned_qty != null && (
+                        <span className="text-[10px] text-green-700 bg-green-50 border border-green-200 rounded px-1.5 py-0.5">
+                          BOQ: {item.planned_qty}
+                        </span>
+                      )}
+                      {item.mode === "boq" && item.supplier_name && (
+                        <span className="text-[10px] text-blue-700 bg-blue-50 border border-blue-200 rounded px-1.5 py-0.5 truncate max-w-[100px]">
+                          {item.supplier_name}
+                        </span>
+                      )}
+                      {item.mode === "custom" && (
+                        <span className="text-[10px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5">
+                          One-time
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => removeCart(i)}
+                    className="mt-0.5 p-1 text-muted-foreground hover:text-destructive rounded transition-colors"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* ── Add custom item ─────────────────────────────────────── */}
           <button
             type="button"
-            onClick={addItem}
-            className="flex items-center gap-1.5 text-xs text-primary hover:text-primary/80 font-medium
-                       px-2 py-1.5 rounded-md hover:bg-primary/5 transition-colors"
+            onClick={addCustom}
+            className="flex items-center gap-1.5 text-xs text-amber-600 hover:text-amber-700 font-medium
+                       px-2 py-1.5 rounded-md hover:bg-amber-50 transition-colors"
           >
             <Plus className="w-3.5 h-3.5" />
-            Add another item
+            Add one-time purchase (not in BOQ)
           </button>
+
+          <div className="h-px bg-border" />
+
+          {/* ── Date + notes ────────────────────────────────────────── */}
+          <div className="space-y-1">
+            <Label htmlFor="rm-date" className="text-xs">Needed by (optional)</Label>
+            <Input id="rm-date" type="date" min={todayStr()}
+                   value={neededBy} onChange={e => setNeededBy(e.target.value)} />
+          </div>
+          <div className="space-y-1">
+            <Label htmlFor="rm-notes" className="text-xs">Notes (optional)</Label>
+            <textarea
+              id="rm-notes" rows={2}
+              value={notes} onChange={e => setNotes(e.target.value)}
+              placeholder="Any extra details for the office…"
+              className="w-full px-3 py-2 text-sm rounded-md border border-border bg-background resize-none
+                         focus:outline-none focus:ring-1 focus:ring-primary"
+            />
+          </div>
+
+          <div className="text-xs text-muted-foreground bg-muted/40 rounded-lg px-3 py-2">
+            Destination: <strong>Project Warehouse</strong> — office will arrange delivery or transfer.
+          </div>
+
+          {error && <p className="text-xs text-destructive">{error}</p>}
+
+          <Button
+            onClick={submit}
+            disabled={loading || validItems.length === 0}
+            className="w-full"
+          >
+            {loading
+              ? "Submitting…"
+              : validItems.length === 0
+                ? "Search and add items above"
+                : `Submit Request (${validItems.length} item${validItems.length !== 1 ? "s" : ""})`}
+          </Button>
         </div>
-
-        <div className="h-px bg-border" />
-
-        {/* Date + notes */}
-        <div className="space-y-1">
-          <Label htmlFor="rm-date" className="text-xs">Needed by (optional)</Label>
-          <Input id="rm-date" type="date" min={todayStr()}
-                 value={neededBy} onChange={e => setNeededBy(e.target.value)} />
-        </div>
-        <div className="space-y-1">
-          <Label htmlFor="rm-notes" className="text-xs">Notes (optional)</Label>
-          <textarea
-            id="rm-notes" rows={2}
-            value={notes} onChange={e => setNotes(e.target.value)}
-            placeholder="Any extra details for the office…"
-            className="w-full px-3 py-2 text-sm rounded-md border border-border bg-background resize-none
-                       focus:outline-none focus:ring-1 focus:ring-primary"
-          />
-        </div>
-
-        <div className="text-xs text-muted-foreground bg-muted/40 rounded-lg px-3 py-2">
-          Destination: <strong>Project Warehouse</strong> — office will arrange delivery or transfer.
-        </div>
-
-        {error && <p className="text-xs text-destructive">{error}</p>}
-
-        <Button onClick={submit} disabled={loading} className="w-full">
-          {loading ? "Submitting…" : `Submit Request (${items.filter(r => r.desc.trim() && parseFloat(r.qty) > 0).length || 0} item${items.filter(r => r.desc.trim() && parseFloat(r.qty) > 0).length !== 1 ? "s" : ""})`}
-        </Button>
-      </div>
       )}
     </ModalShell>
   );

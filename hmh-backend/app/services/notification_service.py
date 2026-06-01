@@ -360,15 +360,24 @@ def _send_for_queue_entry(entry: NotificationQueue, db: Session) -> tuple[str, O
             ]
             components = [{"type": "body", "parameters": parameters}]
 
-        logger.info("WA-SEND template='%s' lang=%s phone=%s", template_name, lang, entry.phone_number)
+        import json as _json
+        logger.info(
+            "WA-TEMPLATE-SEND template='%s' lang=%s var_count=%d phone=%s components=%s",
+            template_name, lang, var_count, entry.phone_number,
+            _json.dumps(components, ensure_ascii=False)[:500] if components else "none",
+        )
         status, msg_id = whatsapp_service.send_template_message(
             entry.phone_number, template_name, lang, components=components
         )
         if status == "FAILED":
             logger.error(
-                "WA-TEMPLATE-FAILED template='%s' phone=%s error=%s — "
-                "verify template name in Meta Business Manager",
-                template_name, entry.phone_number, msg_id,
+                "WA-TEMPLATE-FAILED template='%s' lang=%s var_count=%d phone=%s error=%s\n"
+                "  → #132000 = parameter count mismatch: set WHATSAPP_ALERT_TEMPLATE_BODY_VAR_COUNT "
+                "to match the number of {{N}} variables in your Meta template body "
+                "(0 = no variables, 1 = one variable, etc.).\n"
+                "  → Wrong lang code: template language must exactly match Meta registration "
+                "(e.g. 'en_US' not 'en').",
+                template_name, lang, var_count, entry.phone_number, msg_id,
             )
         else:
             logger.info("WA-SEND result status=%s msg_id=%s phone=%s", status, msg_id, entry.phone_number)
