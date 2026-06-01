@@ -56,12 +56,26 @@ _ALLOWED_MIMES = frozenset({
     "image/jpg",
     "image/png",
 })
+# Accept by extension when the mail client sends a generic MIME type (e.g. application/octet-stream)
+_ALLOWED_EXTENSIONS = frozenset({".pdf", ".jpg", ".jpeg", ".png"})
 _MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024  # 10 MB
 
 
-def _is_allowed_attachment(content_type: str, size_bytes: int) -> bool:
-    """Return True when the attachment MIME type and size are within safe limits."""
-    return content_type.lower() in _ALLOWED_MIMES and size_bytes <= _MAX_ATTACHMENT_BYTES
+def _is_allowed_attachment(content_type: str, size_bytes: int, filename: str = "") -> bool:
+    """Return True when the attachment is safe to save.
+
+    Accepts by MIME type first; falls back to file extension because many mail
+    clients (including Gmail forwarding) send PDFs as application/octet-stream.
+    """
+    if size_bytes > _MAX_ATTACHMENT_BYTES:
+        return False
+    ct = content_type.lower().split(";")[0].strip()
+    if ct in _ALLOWED_MIMES:
+        return True
+    if filename:
+        ext = os.path.splitext(filename.lower())[1]
+        return ext in _ALLOWED_EXTENSIONS
+    return False
 
 
 def classify_document(filename: str, subject: str = "") -> str:
@@ -267,7 +281,7 @@ def _fetch_via_imap(db: Session, limit: int) -> dict:
 
                     # MIME allowlist + size cap
                     content_type = part.get_content_type().lower()
-                    if not _is_allowed_attachment(content_type, len(payload_bytes)):
+                    if not _is_allowed_attachment(content_type, len(payload_bytes), filename):
                         logger.info(
                             "gmail_att_skip filename=%s content_type=%s size=%d reason=blocked",
                             filename, content_type, len(payload_bytes),
@@ -323,45 +337,87 @@ def _fetch_via_imap(db: Session, limit: int) -> dict:
 def _refetch_missing_attachments(db, incoming_email, msg) -> None:
     """
     Called when an email already exists in DB (skip duplicate path).
-    For every IncomingEmailAttachment whose file is missing on disk,
-    re-download the bytes from the already-fetched IMAP message and re-save.
+
+    Two actions:
+    1. For existing IncomingEmailAttachment records with missing files, re-download them.
+    2. For attachment parts that were never imported (e.g. skipped due to old MIME filter),
+       save them now so they are available for OCR.
+
     Never raises — skipping an existing email must not fail.
     """
     from app.models.incoming_email import IncomingEmailAttachment
     try:
-        for att in (
+        existing_atts = (
             db.query(IncomingEmailAttachment)
             .filter(IncomingEmailAttachment.incoming_email_id == incoming_email.id)
             .all()
-        ):
-            resolved, _ = _resolve_path(att.file_path)
-            if resolved:
-                continue  # file is present — nothing to do
+        )
+        existing_filenames = {a.filename for a in existing_atts}
+        now = datetime.now(timezone.utc)
 
-            # File missing — scan message parts for this filename
-            for part in msg.walk():
-                if part.get_content_maintype() == "multipart":
-                    continue
-                if part.get("Content-Disposition") is None:
-                    continue
-                raw_fname = part.get_filename()
-                if not raw_fname:
-                    continue
-                original_fname = _decode_header_value(raw_fname)
-                if original_fname != att.filename:
-                    continue
+        for part in msg.walk():
+            if part.get_content_maintype() == "multipart":
+                continue
+            if part.get("Content-Disposition") is None:
+                continue
+            raw_fname = part.get_filename()
+            if not raw_fname:
+                continue
+            filename = _decode_header_value(raw_fname)
 
-                payload_bytes = part.get_payload(decode=True)
-                if not payload_bytes:
-                    continue
+            payload_bytes = part.get_payload(decode=True)
+            if not payload_bytes:
+                continue
 
-                doc_type = att.detected_type or classify_document(att.filename, "")
-                new_path = _save_attachment(payload_bytes, att.filename, doc_type)
-                att.file_path = new_path
-                db.commit()
-                logger.info("gmail_refetch_attachment att_id=%s path=%s exists=%s size=%d",
-                            att.id, new_path, os.path.isfile(new_path), len(payload_bytes))
-                break
+            content_type = part.get_content_type().lower()
+
+            if filename in existing_filenames:
+                # Already has a DB record — check if file is missing on disk
+                att = next((a for a in existing_atts if a.filename == filename), None)
+                if att:
+                    resolved, _ = _resolve_path(att.file_path)
+                    if not resolved:
+                        doc_type = att.detected_type or classify_document(filename, "")
+                        new_path = _save_attachment(payload_bytes, filename, doc_type)
+                        att.file_path = new_path
+                        db.commit()
+                        logger.info("gmail_refetch_att att_id=%s path=%s size=%d",
+                                    att.id, new_path, len(payload_bytes))
+            else:
+                # New attachment — was never imported (e.g. old MIME filter blocked it)
+                if not _is_allowed_attachment(content_type, len(payload_bytes), filename):
+                    continue
+                doc_type = classify_document(filename, incoming_email.subject or "")
+                try:
+                    file_path = _save_attachment(payload_bytes, filename, doc_type)
+                    att = IncomingEmailAttachment(
+                        id=uuid.uuid4(),
+                        incoming_email_id=incoming_email.id,
+                        filename=filename,
+                        file_path=file_path,
+                        content_type=content_type,
+                        detected_type=doc_type,
+                        created_at=now,
+                    )
+                    db.add(att)
+                    db.flush()
+                    _trigger_extraction(db, file_path, doc_type, str(att.id), now)
+                    existing_filenames.add(filename)
+                    logger.info("gmail_new_att_imported filename=%s email_id=%s",
+                                filename, incoming_email.id)
+                except Exception:
+                    logger.exception("_refetch_missing_attachments new-att failed filename=%s", filename)
+
+        # Update has_attachments flag
+        updated_count = (
+            db.query(IncomingEmailAttachment)
+            .filter(IncomingEmailAttachment.incoming_email_id == incoming_email.id)
+            .count()
+        )
+        if updated_count > 0 and not incoming_email.has_attachments:
+            incoming_email.has_attachments = True
+            db.commit()
+
     except Exception:
         logger.exception("_refetch_missing_attachments failed for email %s", incoming_email.id)
 
@@ -382,6 +438,172 @@ def _resolve_path(stored: str) -> tuple:
         if c and os.path.isfile(c):
             return c, candidates
     return None, candidates
+
+
+def reimport_email_attachments(db: Session, email_id: uuid.UUID) -> dict:
+    """
+    Connect to IMAP, locate the email by Message-ID (works on already-SEEN messages),
+    and import any attachments that were never saved (e.g. silently skipped by old MIME filter).
+
+    Returns {"imported": N, "already_present": N, "skipped": N, "errors": list}.
+    Raises ValueError with a human-readable message on fatal errors.
+    """
+    from app.models.incoming_email import IncomingEmail, IncomingEmailAttachment
+
+    incoming = db.get(IncomingEmail, email_id)
+    if not incoming:
+        raise ValueError(f"Email {email_id} not found.")
+    if not incoming.message_id:
+        raise ValueError("Email has no Message-ID — cannot locate in IMAP.")
+    if not settings.IMAP_ENABLED:
+        raise ValueError("IMAP is disabled. Set IMAP_ENABLED=true to reimport attachments.")
+    if not settings.IMAP_USERNAME or not settings.IMAP_PASSWORD:
+        raise ValueError("IMAP credentials missing. Set IMAP_USERNAME and IMAP_PASSWORD.")
+
+    existing_atts = (
+        db.query(IncomingEmailAttachment)
+        .filter(IncomingEmailAttachment.incoming_email_id == email_id)
+        .all()
+    )
+    existing_filenames = {a.filename for a in existing_atts}
+
+    try:
+        imap = imaplib.IMAP4_SSL(settings.IMAP_HOST, settings.IMAP_PORT)
+        imap.login(settings.IMAP_USERNAME, settings.IMAP_PASSWORD)
+        imap.select("INBOX")
+
+        mid = incoming.message_id.strip()
+        _, data = imap.search(None, f'HEADER "Message-ID" "{mid}"')
+        msg_ids = data[0].split() if data[0] else []
+
+        if not msg_ids:
+            for folder in ('"[Gmail]/All Mail"', '"[Google Mail]/All Mail"', "All Mail"):
+                try:
+                    rv, _ = imap.select(folder)
+                    if rv != "OK":
+                        continue
+                    _, data = imap.search(None, f'HEADER "Message-ID" "{mid}"')
+                    msg_ids = data[0].split() if data[0] else []
+                    if msg_ids:
+                        logger.debug("gmail_reimport found msg in folder=%s", folder)
+                        break
+                except Exception as fe:
+                    logger.debug("IMAP folder=%s search failed: %s", folder, fe)
+
+        if not msg_ids:
+            raise ValueError(
+                f"Email Message-ID={mid!r} not found in Gmail INBOX or All Mail. "
+                "It may have been deleted or moved to an unlisted folder."
+            )
+
+        _, raw = imap.fetch(msg_ids[0], "(RFC822)")
+        raw_bytes = raw[0][1] if raw and raw[0] else b""
+        msg = email.message_from_bytes(raw_bytes)
+        imap.logout()
+
+    except (imaplib.IMAP4.error, OSError) as exc:
+        raise ValueError(f"IMAP error: {exc}") from exc
+
+    imported = 0
+    already_present = 0
+    skipped = 0
+    errors: list = []
+    now = datetime.now(timezone.utc)
+
+    for part in msg.walk():
+        if part.get_content_maintype() == "multipart":
+            continue
+        if part.get("Content-Disposition") is None:
+            continue
+        raw_fname = part.get_filename()
+        if not raw_fname:
+            continue
+        filename = _decode_header_value(raw_fname)
+
+        payload_bytes = part.get_payload(decode=True)
+        if not payload_bytes:
+            continue
+
+        content_type = part.get_content_type().lower()
+
+        if filename in existing_filenames:
+            already_present += 1
+            continue
+
+        if not _is_allowed_attachment(content_type, len(payload_bytes), filename):
+            logger.info("gmail_reimport_skip filename=%s content_type=%s", filename, content_type)
+            skipped += 1
+            continue
+
+        doc_type = classify_document(filename, incoming.subject or "")
+        try:
+            file_path = _save_attachment(payload_bytes, filename, doc_type)
+            att = IncomingEmailAttachment(
+                id=uuid.uuid4(),
+                incoming_email_id=incoming.id,
+                filename=filename,
+                file_path=file_path,
+                content_type=content_type,
+                detected_type=doc_type,
+                created_at=now,
+            )
+            db.add(att)
+            db.flush()
+            _trigger_extraction(db, file_path, doc_type, str(att.id), now)
+            existing_filenames.add(filename)
+            imported += 1
+            logger.info("gmail_reimport_imported filename=%s email_id=%s", filename, email_id)
+        except Exception as exc:
+            errors.append(f"{filename}: {exc}")
+            logger.exception("reimport_email_attachments failed filename=%s", filename)
+
+    if imported > 0 and not incoming.has_attachments:
+        incoming.has_attachments = True
+    db.commit()
+
+    return {
+        "email_id":       str(email_id),
+        "imported":       imported,
+        "already_present": already_present,
+        "skipped":        skipped,
+        "errors":         errors,
+    }
+
+
+def reimport_all_unprocessed(db: Session) -> dict:
+    """
+    For every email in the DB with has_attachments=False or processed_status=UNPROCESSED,
+    reconnect to IMAP and import any missed attachments.
+
+    Returns summary {"processed": N, "total_imported": N, "errors": list}.
+    """
+    from app.models.incoming_email import IncomingEmail
+
+    emails = (
+        db.query(IncomingEmail)
+        .filter(
+            (IncomingEmail.has_attachments == False) |  # noqa: E712
+            (IncomingEmail.processed_status == "UNPROCESSED")
+        )
+        .all()
+    )
+
+    total_imported = 0
+    processed = 0
+    errors: list = []
+
+    for e in emails:
+        if not e.message_id:
+            continue
+        try:
+            result = reimport_email_attachments(db, e.id)
+            total_imported += result["imported"]
+            processed += 1
+        except Exception as exc:
+            errors.append(f"email_id={e.id}: {exc}")
+            logger.warning("reimport_all_unprocessed failed email_id=%s: %s", e.id, exc)
+
+    return {"processed": processed, "total_imported": total_imported, "errors": errors}
 
 
 def refetch_attachment_from_imap(db, att_id: uuid.UUID) -> dict:

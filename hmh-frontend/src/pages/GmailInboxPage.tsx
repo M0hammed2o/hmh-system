@@ -315,18 +315,20 @@ function FieldRow({ label, value, bold = false }: { label: string; value: string
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function GmailInboxPage() {
-  const [emails,     setEmails]     = useState<IncomingEmail[]>([]);
-  const [total,      setTotal]      = useState(0);
-  const [loading,    setLoading]    = useState(false);
-  const [fetching,   setFetching]   = useState(false);
-  const [processing, setProcessing] = useState(false);
-  const [error,      setError]      = useState("");
-  const [notice,     setNotice]     = useState("");
-  const [selected,   setSelected]   = useState<IncomingEmail | null>(null);
-  const [filter,     setFilter]     = useState<string>("");
-  const [extraction, setExtraction] = useState<ProcessedAttachment[] | null>(null);
-  const [composeOpen, setComposeOpen] = useState(false);
-  const [smtpEnabled, setSmtpEnabled] = useState<boolean | null>(null);
+  const [emails,       setEmails]       = useState<IncomingEmail[]>([]);
+  const [total,        setTotal]        = useState(0);
+  const [loading,      setLoading]      = useState(false);
+  const [fetching,     setFetching]     = useState(false);
+  const [processing,   setProcessing]   = useState(false);
+  const [reimporting,  setReimporting]  = useState(false);
+  const [reimportingAll, setReimportingAll] = useState(false);
+  const [error,        setError]        = useState("");
+  const [notice,       setNotice]       = useState("");
+  const [selected,     setSelected]     = useState<IncomingEmail | null>(null);
+  const [filter,       setFilter]       = useState<string>("");
+  const [extraction,   setExtraction]   = useState<ProcessedAttachment[] | null>(null);
+  const [composeOpen,  setComposeOpen]  = useState(false);
+  const [smtpEnabled,  setSmtpEnabled]  = useState<boolean | null>(null);
   const autoRefreshTimer = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const load = useCallback(async () => {
@@ -453,6 +455,41 @@ export default function GmailInboxPage() {
     }
   };
 
+  /** Import attachments that were previously skipped for the selected email (MIME type fix). */
+  const handleReimportAttachments = async () => {
+    if (!selected) return;
+    setReimporting(true); setError(""); setNotice("");
+    try {
+      const res = await gmailApi.reimportAttachments(selected.id);
+      setNotice(res.imported > 0
+        ? `Imported ${res.imported} attachment(s). You can now run OCR Suggestions.`
+        : "No new attachments found. The email may only contain text with no PDF/image files.");
+      // Reload selected email so attachment list updates
+      const updated = await gmailApi.getIncoming(selected.id);
+      setSelected(updated);
+      setEmails(prev => prev.map(e => e.id === updated.id ? { ...e, has_attachments: updated.has_attachments } : e));
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      setError(detail || "Re-import failed. Check that IMAP is enabled.");
+    } finally {
+      setReimporting(false);
+    }
+  };
+
+  /** Backfill missed attachments for all emails that have has_attachments=false. */
+  const handleReimportAll = async () => {
+    setReimportingAll(true); setError(""); setNotice("");
+    try {
+      const res = await gmailApi.reimportAllAttachments();
+      setNotice(`Backfill complete: checked ${res.processed} email(s), imported ${res.total_imported} attachment(s).`);
+      await load();
+    } catch {
+      setError("Bulk re-import failed. Check backend logs.");
+    } finally {
+      setReimportingAll(false);
+    }
+  };
+
   const handleProcess = async () => {
     if (!selected) return;
     setProcessing(true); setError(""); setExtraction(null);
@@ -522,6 +559,11 @@ export default function GmailInboxPage() {
           <Button size="sm" onClick={handleFetch} disabled={fetching}>
             <Download className={cn("w-4 h-4 mr-1.5", fetching && "animate-spin")} />
             {fetching ? "Fetching…" : "Fetch New Emails"}
+          </Button>
+          <Button size="sm" variant="outline" onClick={handleReimportAll} disabled={reimportingAll}
+            title="Re-import attachments for all emails where they were previously skipped (PDF sent as application/octet-stream)">
+            <RotateCcw className={cn("w-4 h-4 mr-1.5", reimportingAll && "animate-spin")} />
+            {reimportingAll ? "Re-importing…" : "Fix Missing Attachments"}
           </Button>
           <Button size="sm" variant="outline" onClick={() => setComposeOpen(true)}>
             <PenSquare className="w-4 h-4 mr-1.5" />Compose
@@ -722,7 +764,20 @@ export default function GmailInboxPage() {
             ) : selected.has_attachments ? (
               <p className="text-xs text-muted-foreground">Has attachments (load detail to view)</p>
             ) : (
-              <p className="text-xs text-muted-foreground">No attachments</p>
+              <div className="space-y-2">
+                <p className="text-xs text-muted-foreground">No attachments found for this email.</p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="w-full text-xs"
+                  onClick={handleReimportAttachments}
+                  disabled={reimporting}
+                  title="Some email clients send PDFs as application/octet-stream. This re-checks the original email for any missed attachments."
+                >
+                  <RotateCcw className={cn("w-3.5 h-3.5 mr-1.5", reimporting && "animate-spin")} />
+                  {reimporting ? "Re-importing…" : "Re-import Attachments from Gmail"}
+                </Button>
+              </div>
             )}
 
             {/* ── Extraction results ── */}

@@ -209,6 +209,28 @@ export const gmailApi = {
     return r.data.data;
   },
 
+  /** Import any previously-skipped attachments for one email (safe to call multiple times). */
+  reimportAttachments: async (emailId: string): Promise<{
+    email_id: string;
+    imported: number;
+    already_present: number;
+    skipped: number;
+    errors: string[];
+  }> => {
+    const r = await client.post(`/gmail/incoming/${emailId}/reimport-attachments`);
+    return r.data.data;
+  },
+
+  /** Backfill missed attachments for all emails that have has_attachments=false. */
+  reimportAllAttachments: async (): Promise<{
+    processed: number;
+    total_imported: number;
+    errors: string[];
+  }> => {
+    const r = await client.post("/gmail/reimport-all-attachments");
+    return r.data.data;
+  },
+
   /** Returns whether SMTP and IMAP are configured on the server. */
   getEmailConfig: async (): Promise<{ smtp_enabled: boolean; imap_enabled: boolean }> => {
     const r = await client.get<{ data: { smtp_enabled: boolean; imap_enabled: boolean } }>("/gmail/email-config");

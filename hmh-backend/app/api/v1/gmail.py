@@ -347,6 +347,41 @@ def _gmail_alert(db, email, title: str, message: str, severity: str, now) -> Non
         logger.exception("_gmail_alert failed — alert not created for: %s", title)
 
 
+@gmail_router.post("/incoming/{email_id}/reimport-attachments", dependencies=[OFFICE_AND_ABOVE])
+def reimport_email_attachments(email_id: uuid.UUID, db: DbSession):
+    """
+    Connect to IMAP and import any attachments for this email that were previously
+    skipped (e.g. because they had a generic MIME type like application/octet-stream).
+
+    Safe to call multiple times — already-imported attachments are not duplicated.
+    Returns {"imported": N, "already_present": N, "skipped": N}.
+    """
+    from app.services.gmail_reader_service import reimport_email_attachments as _reimport
+    try:
+        result = _reimport(db, email_id)
+        msg = f"Imported {result['imported']} new attachment(s)."
+        return ApiSuccess(data=result, message=msg)
+    except ValueError as exc:
+        logger.warning("reimport_email_attachments failed email_id=%s: %s", email_id, exc)
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@gmail_router.post("/reimport-all-attachments", dependencies=[OFFICE_AND_ABOVE])
+def reimport_all_attachments(db: DbSession):
+    """
+    For every email with has_attachments=False or status=UNPROCESSED,
+    reconnect to IMAP and import any missed attachments.
+
+    Use this after enabling OCR to backfill attachments that were silently
+    skipped during an earlier IMAP fetch (generic MIME type on the PDF).
+    Returns {"processed": N, "total_imported": N}.
+    """
+    from app.services.gmail_reader_service import reimport_all_unprocessed
+    result = reimport_all_unprocessed(db)
+    msg = f"Processed {result['processed']} email(s), imported {result['total_imported']} attachment(s)."
+    return ApiSuccess(data=result, message=msg)
+
+
 @gmail_router.post("/attachments/{att_id}/refetch", dependencies=[OFFICE_AND_ABOVE])
 def refetch_attachment(att_id: uuid.UUID, db: DbSession):
     """
