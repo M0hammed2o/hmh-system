@@ -110,8 +110,8 @@ type MRModalStage = "location" | "items" | "supplier";
 
 const OFFICE_ROLES = ["OWNER", "OFFICE_ADMIN", "OFFICE_USER"];
 
-function CreateMRModal({ projectId, sites, onClose, onCreated }: {
-  projectId: string; sites: Site[]; onClose: () => void; onCreated: () => void;
+function CreateMRModal({ projectId: defaultProjectId, sites, isMainWarehouse = false, projects = [], onClose, onCreated }: {
+  projectId: string; sites: Site[]; isMainWarehouse?: boolean; projects?: Project[]; onClose: () => void; onCreated: () => void;
 }) {
   const { role } = useAuthContext();
   const isOfficeRole = OFFICE_ROLES.includes(role ?? "");
@@ -119,9 +119,14 @@ function CreateMRModal({ projectId, sites, onClose, onCreated }: {
   const [stage, setStage] = useState<MRModalStage>("location");
 
   // Stage 1: location + meta
+  // In main warehouse mode, user picks which project to charge/search BOQ from
+  const [mrProjectId, setMrProjectId] = useState(isMainWarehouse ? (projects[0]?.id ?? "") : defaultProjectId);
+  const projectId = mrProjectId || defaultProjectId;
   const [siteId, setSiteId] = useState(sites[0]?.id || "");
   const [priority, setPriority] = useState<MRPriority>("NORMAL");
-  const [destination, setDestination] = useState<DeliveryDestination>("SITE_STORE");
+  // Destination is always SITE_STORE (Project Warehouse) for project MRs;
+  // MAIN_WAREHOUSE for main warehouse MRs.
+  const destination: DeliveryDestination = isMainWarehouse ? "MAIN_WAREHOUSE" : "SITE_STORE";
   const [neededBy, setNeededBy] = useState("");
   const [notes, setNotes] = useState("");
 
@@ -217,6 +222,9 @@ function CreateMRModal({ projectId, sites, onClose, onCreated }: {
         ? (firstBOQSupplier?.boq_supplier_id ?? preferredSupplierId)
         : preferredSupplierId;
 
+    if (isMainWarehouse && !mrProjectId) {
+      setError("Please select a project for billing before creating the request."); return;
+    }
     if (!effectiveSupplierId && (scenario !== "A" || supplierOverridden)) {
       setError("Please select a supplier."); return;
     }
@@ -279,13 +287,31 @@ function CreateMRModal({ projectId, sites, onClose, onCreated }: {
           {/* ── Stage 1: Location & Meta ── */}
           {stage === "location" && (
             <div className="space-y-4">
+              {/* Location row */}
               <div className="space-y-1.5">
-                <Label>Location *</Label>
-                <select value={siteId} onChange={(e) => setSiteId(e.target.value)} className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm">
-                  {sites.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-                </select>
-                <p className="text-[10px] text-muted-foreground">Select Project Warehouse for procurement that delivers to the warehouse first.</p>
+                <Label>Delivery Location</Label>
+                <div className="h-9 w-full rounded-md border border-input bg-muted/30 px-3 text-sm flex items-center gap-2">
+                  <Warehouse className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                  <span className="text-sm font-medium">
+                    {isMainWarehouse ? "Main Warehouse" : "Project Warehouse"}
+                  </span>
+                </div>
+                {!isMainWarehouse && sites.length > 1 && (
+                  <select value={siteId} onChange={(e) => setSiteId(e.target.value)} className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm mt-1">
+                    {sites.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                  </select>
+                )}
               </div>
+              {/* Main Warehouse: choose which project's BOQ to reference */}
+              {isMainWarehouse && projects.length > 0 && (
+                <div className="space-y-1.5">
+                  <Label>Project (for BOQ &amp; billing)</Label>
+                  <select value={mrProjectId} onChange={(e) => setMrProjectId(e.target.value)} className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm">
+                    <option value="">— Select project —</option>
+                    {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  </select>
+                </div>
+              )}
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1.5">
                   <Label>Priority</Label>
@@ -294,12 +320,10 @@ function CreateMRModal({ projectId, sites, onClose, onCreated }: {
                   </select>
                 </div>
                 <div className="space-y-1.5">
-                  <Label>Delivery Destination</Label>
-                  <select value={destination} onChange={(e) => setDestination(e.target.value as DeliveryDestination)} className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm">
-                    <option value="SITE_STORE">Project Warehouse</option>
-                    <option value="MAIN_WAREHOUSE">Main Warehouse</option>
-                    <option value="LOT">Direct to Lot</option>
-                  </select>
+                  <Label>Destination</Label>
+                  <div className="h-9 w-full rounded-md border border-input bg-muted/30 px-3 text-sm flex items-center text-muted-foreground">
+                    {isMainWarehouse ? "Main Warehouse (bulk)" : "Project Warehouse"}
+                  </div>
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-3">
@@ -496,7 +520,7 @@ function CreateMRModal({ projectId, sites, onClose, onCreated }: {
             <>
               <Button
                 className="flex-1"
-                disabled={!siteId}
+                disabled={(!isMainWarehouse && !siteId) || (isMainWarehouse && !mrProjectId)}
                 onClick={() => setStage("items")}
               >
                 Next: Add Materials
@@ -1559,8 +1583,10 @@ export default function ProcurementPage() {
     }).catch(() => {}).finally(() => setLoading(false));
   }, []);
 
+  const isMainWarehouse = projectId === "__main__";
+
   const loadData = useCallback(async () => {
-    if (!projectId) return;
+    if (!projectId || isMainWarehouse) return;
     const [mrData, poData] = await Promise.allSettled([
       procurementApi.listMRs(projectId),
       procurementApi.listPOs(projectId),
@@ -1575,7 +1601,7 @@ export default function ProcurementPage() {
       setSites(sitesRes.data.data || []);
       setSuppliers(suppliersRes.data.data || []);
     } catch { /* ignore */ }
-  }, [projectId]);
+  }, [projectId, isMainWarehouse]);
 
   useEffect(() => { loadData(); }, [loadData]);
 
@@ -1607,25 +1633,44 @@ export default function ProcurementPage() {
           </p>
         </div>
         <div className="flex gap-2">
-          <select value={projectId} onChange={(e) => setProjectId(e.target.value)} className="h-9 rounded-md border border-input bg-background px-3 text-sm max-w-[180px]">
+          <select value={projectId} onChange={(e) => setProjectId(e.target.value)} className="h-9 rounded-md border border-input bg-background px-3 text-sm max-w-[200px]">
+            <option value="__main__">🏭 Main Warehouse</option>
             {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
           </select>
-          {tab === "mr" && <Button size="sm" onClick={() => setShowCreate(true)}><Plus className="w-4 h-4" />New MR</Button>}
-          {tab === "po" && <Button size="sm" variant="outline" onClick={() => setShowCaptureExternal(true)}><FileText className="w-4 h-4" />Capture External PO</Button>}
+          {!isMainWarehouse && tab === "mr" && <Button size="sm" onClick={() => setShowCreate(true)}><Plus className="w-4 h-4" />New MR</Button>}
+          {!isMainWarehouse && tab === "po" && <Button size="sm" variant="outline" onClick={() => setShowCaptureExternal(true)}><FileText className="w-4 h-4" />Capture External PO</Button>}
+          {isMainWarehouse && <Button size="sm" onClick={() => setShowCreate(true)}><Plus className="w-4 h-4" />New MR</Button>}
         </div>
       </div>
 
-      {/* Tabs */}
-      <div className="flex gap-1">
+      {/* Main Warehouse panel — shown instead of MR/PO tabs */}
+      {isMainWarehouse && (
+        <div className="bg-card border border-border rounded-xl p-6 space-y-3">
+          <div className="flex items-center gap-2">
+            <Warehouse className="w-5 h-5 text-primary" />
+            <h2 className="font-semibold">Main Warehouse</h2>
+          </div>
+          <p className="text-sm text-muted-foreground">
+            Create a material request for the main warehouse — bulk purchasing not tied to a specific project.
+          </p>
+          <div className="bg-muted/40 rounded-lg p-4 text-sm text-muted-foreground">
+            Use "New MR" above to create a purchase request for the main warehouse.
+            Select materials and a supplier — the delivery will go directly to the main warehouse.
+          </div>
+        </div>
+      )}
+
+      {/* Tabs — hidden when Main Warehouse is selected */}
+      {!isMainWarehouse && <div className="flex gap-1">
         {(["mr", "po"] as const).map((t) => (
           <button key={t} onClick={() => setTab(t)} className={cn("px-4 py-2 rounded-lg text-sm font-medium transition-colors", tab === t ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted")}>
             {t === "mr" ? `Material Requests (${mrs.length})` : `Purchase Orders (${pos.length})`}
           </button>
         ))}
-      </div>
+      </div>}
 
       {/* MR tab */}
-      {tab === "mr" && (
+      {!isMainWarehouse && tab === "mr" && (
         <div className="space-y-3">
           <div className="flex overflow-x-auto gap-1 pb-1">
             {["ALL", "DRAFT", "SUBMITTED", "PENDING_APPROVAL", "APPROVED", "REJECTED", "CONVERTED_TO_PO"].map((s) => (
@@ -1661,7 +1706,7 @@ export default function ProcurementPage() {
       )}
 
       {/* PO tab */}
-      {tab === "po" && (
+      {!isMainWarehouse && tab === "po" && (
         <div className="space-y-2">
           {pos.length === 0 ? (
             <div className="bg-card border border-border rounded-xl p-10 text-center">
@@ -1686,7 +1731,7 @@ export default function ProcurementPage() {
         </div>
       )}
 
-      {showCreate && <CreateMRModal projectId={projectId} sites={sites} onClose={() => setShowCreate(false)} onCreated={() => { setShowCreate(false); loadData(); }} />}
+      {showCreate && <CreateMRModal projectId={isMainWarehouse ? "" : projectId} sites={sites} isMainWarehouse={isMainWarehouse} projects={projects} onClose={() => setShowCreate(false)} onCreated={() => { setShowCreate(false); if (!isMainWarehouse) loadData(); }} />}
       {showCaptureExternal && (
         <CaptureExternalPOModal
           projectId={projectId}

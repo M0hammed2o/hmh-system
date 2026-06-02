@@ -925,6 +925,8 @@ export default function ProjectDetailPage() {
   const [showAddLot, setShowAddLot] = useState(false);
   const [showGenerateLots, setShowGenerateLots] = useState(false);
   const [showApplyBOQ, setShowApplyBOQ] = useState(false);
+  const [lotSiteFilter, setLotSiteFilter] = useState<string>("");
+  const [lotStatusFilter, setLotStatusFilter] = useState<string>("");
 
   // Lot Types state — Phase 3D.2
   const [lotTypes, setLotTypes] = useState<LotType[]>([]);
@@ -1304,9 +1306,13 @@ export default function ProjectDetailPage() {
                   {sites.map((site) => (
                     <tr
                       key={site.id}
-                      className="border-b border-border last:border-0 hover:bg-muted/30 transition-colors"
+                      onClick={() => { setTab("lots"); setLotSiteFilter(site.id); setLotStatusFilter(""); }}
+                      className="border-b border-border last:border-0 hover:bg-muted/30 transition-colors cursor-pointer group"
                     >
-                      <td className="px-4 py-3 font-medium">{site.name}</td>
+                      <td className="px-4 py-3 font-medium flex items-center gap-1.5">
+                        {site.name}
+                        <ChevronRight className="w-3.5 h-3.5 text-muted-foreground opacity-0 group-hover:opacity-100" />
+                      </td>
                       <td className="px-4 py-3 font-mono text-xs text-muted-foreground">
                         {site.code ?? <span className="italic text-muted-foreground/60">—</span>}
                       </td>
@@ -1322,7 +1328,7 @@ export default function ProjectDetailPage() {
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-1">
                           <button
-                            onClick={() => setEditingSite(site)}
+                            onClick={(e) => { e.stopPropagation(); setEditingSite(site); }}
                             className="p-1.5 rounded-md hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
                             title="Edit site"
                           >
@@ -1330,7 +1336,8 @@ export default function ProjectDetailPage() {
                           </button>
                           {site.is_active && (
                             <button
-                              onClick={async () => {
+                              onClick={async (e) => {
+                                e.stopPropagation();
                                 if (!window.confirm(
                                   `Deactivate site "${site.name}"?\n\n` +
                                   `The site will be hidden from all lists. All historical data ` +
@@ -1364,12 +1371,35 @@ export default function ProjectDetailPage() {
       )}
 
       {/* ── LOTS (real data) ──────────────────────────────────────────────── */}
-      {tab === "lots" && (
+      {tab === "lots" && (() => {
+        const naturalSortedLots = [...lots].sort((a, b) =>
+          a.lot_number.localeCompare(b.lot_number, undefined, { numeric: true, sensitivity: "base" })
+        );
+        const displayLots = naturalSortedLots.filter(l => {
+          if (lotSiteFilter && l.site_id !== lotSiteFilter) return false;
+          if (lotStatusFilter === "__incomplete__" && l.status === "COMPLETED") return false;
+          if (lotStatusFilter && lotStatusFilter !== "__incomplete__" && l.status !== lotStatusFilter) return false;
+          return true;
+        });
+        const activeSiteName = lotSiteFilter ? sites.find(s => s.id === lotSiteFilter)?.name : null;
+        return (
         <div className="space-y-4">
           <div className="flex items-center justify-between">
-            <p className="text-sm text-muted-foreground">
-              {lots.length} lot{lots.length !== 1 ? "s" : ""} in this project
-            </p>
+            <div className="flex items-center gap-2 flex-wrap">
+              <p className="text-sm text-muted-foreground">
+                {displayLots.length} of {lots.length} lot{lots.length !== 1 ? "s" : ""}
+                {activeSiteName ? <> in <span className="font-medium text-foreground">{activeSiteName}</span></> : ""}
+              </p>
+              {/* Filter chips */}
+              {(lotSiteFilter || lotStatusFilter) && (
+                <button
+                  onClick={() => { setLotSiteFilter(""); setLotStatusFilter(""); }}
+                  className="text-[10px] px-2 py-0.5 rounded-full bg-primary/10 text-primary hover:bg-primary/20 flex items-center gap-1"
+                >
+                  Clear filters ×
+                </button>
+              )}
+            </div>
             <div className="flex flex-wrap gap-2">
               <Button size="sm" variant="outline" onClick={() => setShowApplyBOQ(true)}>
                 <FileSpreadsheet className="w-4 h-4" />
@@ -1384,6 +1414,34 @@ export default function ProjectDetailPage() {
                 Add Lot
               </Button>
             </div>
+          </div>
+
+          {/* Filter bar */}
+          <div className="flex gap-2 flex-wrap">
+            {sites.length > 1 && (
+              <select
+                value={lotSiteFilter}
+                onChange={e => setLotSiteFilter(e.target.value)}
+                className="h-8 rounded-md border border-input bg-background px-2 text-xs"
+              >
+                <option value="">All sites</option>
+                {[...sites].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" })).map(s => (
+                  <option key={s.id} value={s.id}>{s.name}</option>
+                ))}
+              </select>
+            )}
+            <select
+              value={lotStatusFilter}
+              onChange={e => setLotStatusFilter(e.target.value)}
+              className="h-8 rounded-md border border-input bg-background px-2 text-xs"
+            >
+              <option value="">All statuses</option>
+              <option value="__incomplete__">Incomplete only</option>
+              <option value="AVAILABLE">Available</option>
+              <option value="IN_PROGRESS">In Progress</option>
+              <option value="ON_HOLD">On Hold</option>
+              <option value="COMPLETED">Completed</option>
+            </select>
           </div>
 
           {/* Unassigned lots admin banner — only when project HAS sites but some lots are unassigned.
@@ -1444,16 +1502,20 @@ export default function ProjectDetailPage() {
               <div className="p-4 space-y-3">
                 {[1, 2, 3].map((i) => <Skeleton key={i} className="h-12 rounded-lg" />)}
               </div>
-            ) : lots.length === 0 ? (
+            ) : displayLots.length === 0 ? (
               <div className="p-12 text-center">
-                <p className="text-sm font-medium mb-1">No lots yet</p>
+                <p className="text-sm font-medium mb-1">{lots.length === 0 ? "No lots yet" : "No lots match the current filters"}</p>
                 <p className="text-xs text-muted-foreground mb-4">
-                  Add the first lot for this project.
+                  {lots.length === 0
+                    ? "Add the first lot for this project."
+                    : "Try changing the site or status filter above."}
                 </p>
-                <Button size="sm" variant="outline" onClick={() => setShowAddLot(true)}>
-                  <Plus className="w-4 h-4" />
-                  Add Lot
-                </Button>
+                {lots.length === 0 && (
+                  <Button size="sm" variant="outline" onClick={() => setShowAddLot(true)}>
+                    <Plus className="w-4 h-4" />
+                    Add Lot
+                  </Button>
+                )}
               </div>
             ) : (
               <table className="w-full text-sm">
@@ -1468,7 +1530,7 @@ export default function ProjectDetailPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {lots.map((lot) => (
+                  {displayLots.map((lot) => (
                     <tr
                       key={lot.id}
                       onClick={() => navigate(`/lots/${lot.id}`)}
@@ -1537,7 +1599,8 @@ export default function ProjectDetailPage() {
             )}
           </div>
         </div>
-      )}
+        );
+      })()}
 
       {/* ── LOT TYPES (Phase 3D.2) ───────────────────────────────────────── */}
       {tab === "lot-types" && (

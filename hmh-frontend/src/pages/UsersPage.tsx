@@ -18,7 +18,7 @@ const roleLabel: Record<UserRole, string> = {
   OFFICE_USER:       "Office User",
   SITE_MANAGER:      "Site Manager",
   SITE_MANAGER_VIEW: "Site Manager View Only",
-  SITE_STAFF:        "Site Staff",
+  SITE_STAFF:        "Site Clerk",
   READ_ONLY:         "Owner View Only",
 };
 
