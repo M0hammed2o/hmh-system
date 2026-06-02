@@ -20,16 +20,16 @@ class MaterialRequest(TimestampMixin, Base):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     request_number: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
-    project_id: Mapped[uuid.UUID] = mapped_column(
+    project_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("projects.id", ondelete="CASCADE"),
-        nullable=False,
+        nullable=True,
         index=True,
     )
-    site_id: Mapped[uuid.UUID] = mapped_column(
+    site_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("sites.id", ondelete="CASCADE"),
-        nullable=False,
+        ForeignKey("sites.id", ondelete="SET NULL"),
+        nullable=True,
         index=True,
     )
     lot_id: Mapped[Optional[uuid.UUID]] = mapped_column(

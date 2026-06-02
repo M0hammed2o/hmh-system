@@ -52,6 +52,16 @@ def create_material_request(project_id: uuid.UUID, body: MaterialRequestCreate, 
         raise
 
 
+@mr_router.post("/", response_model=ApiSuccess[MaterialRequestRead], status_code=201, dependencies=[WRITE_ROLES])
+def create_warehouse_mr(body: MaterialRequestCreate, db: DbSession, current_user: CurrentUser):
+    """Create a main warehouse MR — not bound to any project or site."""
+    from app.models.enums import DeliveryDestination
+    if body.delivery_destination != DeliveryDestination.MAIN_WAREHOUSE:
+        raise HTTPException(status_code=400, detail="This endpoint only accepts MAIN_WAREHOUSE delivery destination.")
+    mr = mr_service.create_request(db, None, body, current_user.id)
+    return ApiSuccess(data=MaterialRequestRead.model_validate(mr), message="Material request created.")
+
+
 @mr_router.get("/{mr_id}", response_model=ApiSuccess[MaterialRequestRead], dependencies=[ALL_ROLES])
 def get_material_request(mr_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
     mr = secure_project_lookup(mr_service.get_request(db, mr_id), db, current_user)

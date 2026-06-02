@@ -28,11 +28,14 @@ from app.schemas.material_request import (
 from app.services import allocation_service, audit_service
 
 
-def _generate_request_number(db: Session, project_id: uuid.UUID) -> str:
-    count = db.query(MaterialRequest).filter(
-        MaterialRequest.project_id == project_id
-    ).count()
-    return f"MR-{str(project_id)[:8].upper()}-{count + 1:04d}"
+def _generate_request_number(db: Session, project_id: Optional[uuid.UUID]) -> str:
+    if project_id:
+        count = db.query(MaterialRequest).filter(
+            MaterialRequest.project_id == project_id
+        ).count()
+        return f"MR-{str(project_id)[:8].upper()}-{count + 1:04d}"
+    count = db.query(MaterialRequest).filter(MaterialRequest.project_id.is_(None)).count()
+    return f"MR-WH-{count + 1:04d}"
 
 
 def _generate_po_number(db: Session, project_id: uuid.UUID) -> str:
@@ -91,17 +94,18 @@ def _attach_email_log(db: Session, mr: MaterialRequest) -> None:
 
 def create_request(
     db: Session,
-    project_id: uuid.UUID,
+    project_id: Optional[uuid.UUID],
     data: MaterialRequestCreate,
     requested_by_id: uuid.UUID,
 ) -> MaterialRequest:
-    project = db.get(Project, project_id)
-    if not project:
-        raise NotFoundError(f"Project {project_id} not found.")
-
-    site = db.get(Site, data.site_id)
-    if not site or site.project_id != project_id:
-        raise NotFoundError(f"Site {data.site_id} not found in this project.")
+    if project_id is not None:
+        project = db.get(Project, project_id)
+        if not project:
+            raise NotFoundError(f"Project {project_id} not found.")
+        if data.site_id:
+            site = db.get(Site, data.site_id)
+            if not site or site.project_id != project_id:
+                raise NotFoundError(f"Site {data.site_id} not found in this project.")
 
     now = datetime.now(timezone.utc)
     mr = MaterialRequest(
@@ -146,7 +150,7 @@ def create_request(
         db.add(mr_item)
 
     mr.over_boq = over_boq
-    if over_boq:
+    if over_boq and project_id is not None:
         from app.models.alert import SystemAlert
         alert = SystemAlert(
             project_id=project_id,

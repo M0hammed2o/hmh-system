@@ -55,8 +55,8 @@ class MaterialRequestRead(BaseModel):
 
     id: uuid.UUID
     request_number: str
-    project_id: uuid.UUID
-    site_id: uuid.UUID
+    project_id: Optional[uuid.UUID] = None
+    site_id: Optional[uuid.UUID] = None
     lot_id: Optional[uuid.UUID] = None
     stage_id: Optional[uuid.UUID] = None
     requested_by: uuid.UUID
@@ -82,7 +82,7 @@ class MaterialRequestRead(BaseModel):
 
 
 class MaterialRequestCreate(BaseModel):
-    site_id: uuid.UUID
+    site_id: Optional[uuid.UUID] = None
     lot_id: Optional[uuid.UUID] = None
     stage_id: Optional[uuid.UUID] = None
     preferred_supplier_id: Optional[uuid.UUID] = None

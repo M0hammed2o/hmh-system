@@ -155,6 +155,11 @@ export const procurementApi = {
     return res.data.data;
   },
 
+  createWarehouseMR: async (body: MRCreate): Promise<MaterialRequest> => {
+    const res = await client.post<{ data: MaterialRequest }>(`/material-requests/`, body);
+    return res.data.data;
+  },
+
   submitMR: async (mrId: string): Promise<MaterialRequest> => {
     const res = await client.post<{ data: MaterialRequest }>(`/material-requests/${mrId}/submit`);
     return res.data.data;

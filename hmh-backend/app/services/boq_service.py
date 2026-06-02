@@ -984,7 +984,11 @@ def get_project_master_summary(db: Session, project_id: uuid.UUID) -> dict:
     _project_or_404(db, project_id)
     all_sites = (
         db.query(Site)
-        .filter(Site.project_id == project_id, Site.is_active == True)
+        .filter(
+            Site.project_id == project_id,
+            Site.is_active == True,
+            Site.site_type != "warehouse",
+        )
         .all()
     )
 

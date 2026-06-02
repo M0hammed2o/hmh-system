@@ -63,7 +63,7 @@ const PRIORITY_COLOR: Record<MRPriority, string> = {
   LOW: "text-muted-foreground bg-muted",
 };
 
-interface Site { id: string; name: string; }
+interface Site { id: string; name: string; site_type?: string; }
 interface Supplier { id: string; name: string; email: string | null; }
 
 // ── Shared: Procurement Activity Row ────────────────────────────────────────
@@ -110,8 +110,8 @@ type MRModalStage = "location" | "items" | "supplier";
 
 const OFFICE_ROLES = ["OWNER", "OFFICE_ADMIN", "OFFICE_USER"];
 
-function CreateMRModal({ projectId: defaultProjectId, sites, isMainWarehouse = false, projects = [], onClose, onCreated }: {
-  projectId: string; sites: Site[]; isMainWarehouse?: boolean; projects?: Project[]; onClose: () => void; onCreated: () => void;
+function CreateMRModal({ projectId: defaultProjectId, sites, isMainWarehouse = false, onClose, onCreated }: {
+  projectId: string; sites: Site[]; isMainWarehouse?: boolean; onClose: () => void; onCreated: () => void;
 }) {
   const { role } = useAuthContext();
   const isOfficeRole = OFFICE_ROLES.includes(role ?? "");
@@ -119,10 +119,10 @@ function CreateMRModal({ projectId: defaultProjectId, sites, isMainWarehouse = f
   const [stage, setStage] = useState<MRModalStage>("location");
 
   // Stage 1: location + meta
-  // In main warehouse mode, user picks which project to charge/search BOQ from
-  const [mrProjectId, setMrProjectId] = useState(isMainWarehouse ? (projects[0]?.id ?? "") : defaultProjectId);
-  const projectId = mrProjectId || defaultProjectId;
-  const [siteId, setSiteId] = useState(sites[0]?.id || "");
+  const projectId = defaultProjectId;
+  // Auto-select the Project Warehouse site (site_type === "warehouse"), fall back to first site
+  const warehouseSite = sites.find(s => s.site_type === "warehouse");
+  const [siteId] = useState(warehouseSite?.id || sites[0]?.id || "");
   const [priority, setPriority] = useState<MRPriority>("NORMAL");
   // Destination is always SITE_STORE (Project Warehouse) for project MRs;
   // MAIN_WAREHOUSE for main warehouse MRs.
@@ -169,7 +169,7 @@ function CreateMRModal({ projectId: defaultProjectId, sites, isMainWarehouse = f
   const triggerSearch = (q: string) => {
     setSearchQ(q);
     if (searchTimer.current) clearTimeout(searchTimer.current);
-    if (!q.trim()) { setSearchResults([]); return; }
+    if (!q.trim() || isMainWarehouse || !projectId) { setSearchResults([]); return; }
     searchTimer.current = setTimeout(async () => {
       setSearchLoading(true);
       try {
@@ -222,30 +222,39 @@ function CreateMRModal({ projectId: defaultProjectId, sites, isMainWarehouse = f
         ? (firstBOQSupplier?.boq_supplier_id ?? preferredSupplierId)
         : preferredSupplierId;
 
-    if (isMainWarehouse && !mrProjectId) {
-      setError("Please select a project for billing before creating the request."); return;
-    }
     if (!effectiveSupplierId && (scenario !== "A" || supplierOverridden)) {
       setError("Please select a supplier."); return;
     }
     setLoading(true); setError("");
+    const mrItems = cart.map((item) => ({
+      description: item.description,
+      requested_quantity: item.quantity,
+      unit: item.unit || undefined,
+      boq_item_id: item.boq_item_id,
+      item_id: item.item_id,
+      remarks: !item.is_boq ? "Outside BOQ — one-time purchase" : undefined,
+    }));
     try {
-      await procurementApi.createMR(projectId, {
-        site_id: siteId || undefined,
-        priority,
-        delivery_destination: destination,
-        notes: notes || undefined,
-        needed_by_date: neededBy || undefined,
-        preferred_supplier_id: effectiveSupplierId || undefined,
-        items: cart.map((item) => ({
-          description: item.description,
-          requested_quantity: item.quantity,
-          unit: item.unit || undefined,
-          boq_item_id: item.boq_item_id,
-          item_id: item.item_id,
-          remarks: !item.is_boq ? "Outside BOQ — one-time purchase" : undefined,
-        })),
-      } as MRCreate);
+      if (isMainWarehouse) {
+        await procurementApi.createWarehouseMR({
+          delivery_destination: "MAIN_WAREHOUSE",
+          priority,
+          notes: notes || undefined,
+          needed_by_date: neededBy || undefined,
+          preferred_supplier_id: effectiveSupplierId || undefined,
+          items: mrItems,
+        } as MRCreate);
+      } else {
+        await procurementApi.createMR(projectId, {
+          site_id: siteId || undefined,
+          priority,
+          delivery_destination: destination,
+          notes: notes || undefined,
+          needed_by_date: neededBy || undefined,
+          preferred_supplier_id: effectiveSupplierId || undefined,
+          items: mrItems,
+        } as MRCreate);
+      }
       onCreated(); onClose();
     } catch (err: unknown) {
       const msg = (err as { response?: { data?: { message?: string; detail?: string } } })?.response?.data;
@@ -296,22 +305,7 @@ function CreateMRModal({ projectId: defaultProjectId, sites, isMainWarehouse = f
                     {isMainWarehouse ? "Main Warehouse" : "Project Warehouse"}
                   </span>
                 </div>
-                {!isMainWarehouse && sites.length > 1 && (
-                  <select value={siteId} onChange={(e) => setSiteId(e.target.value)} className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm mt-1">
-                    {sites.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-                  </select>
-                )}
               </div>
-              {/* Main Warehouse: choose which project's BOQ to reference */}
-              {isMainWarehouse && projects.length > 0 && (
-                <div className="space-y-1.5">
-                  <Label>Project (for BOQ &amp; billing)</Label>
-                  <select value={mrProjectId} onChange={(e) => setMrProjectId(e.target.value)} className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm">
-                    <option value="">— Select project —</option>
-                    {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                  </select>
-                </div>
-              )}
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1.5">
                   <Label>Priority</Label>
@@ -501,7 +495,7 @@ function CreateMRModal({ projectId: defaultProjectId, sites, isMainWarehouse = f
               <div className="bg-muted/30 rounded-lg p-3 space-y-1.5">
                 <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Summary</p>
                 <div className="text-xs space-y-1">
-                  <div className="flex justify-between"><span className="text-muted-foreground">Location</span><span>{sites.find((s) => s.id === siteId)?.name ?? siteId}</span></div>
+                  <div className="flex justify-between"><span className="text-muted-foreground">Location</span><span>{isMainWarehouse ? "Main Warehouse" : (sites.find((s) => s.id === siteId)?.name ?? "Project Warehouse")}</span></div>
                   <div className="flex justify-between"><span className="text-muted-foreground">Destination</span><span>{DEST_LABEL[destination]}</span></div>
                   <div className="flex justify-between"><span className="text-muted-foreground">Priority</span><span>{priority}</span></div>
                   <div className="flex justify-between"><span className="text-muted-foreground">Items</span><span>{cart.length}</span></div>
@@ -520,7 +514,7 @@ function CreateMRModal({ projectId: defaultProjectId, sites, isMainWarehouse = f
             <>
               <Button
                 className="flex-1"
-                disabled={(!isMainWarehouse && !siteId) || (isMainWarehouse && !mrProjectId)}
+                disabled={false}
                 onClick={() => setStage("items")}
               >
                 Next: Add Materials
@@ -1731,7 +1725,7 @@ export default function ProcurementPage() {
         </div>
       )}
 
-      {showCreate && <CreateMRModal projectId={isMainWarehouse ? "" : projectId} sites={sites} isMainWarehouse={isMainWarehouse} projects={projects} onClose={() => setShowCreate(false)} onCreated={() => { setShowCreate(false); if (!isMainWarehouse) loadData(); }} />}
+      {showCreate && <CreateMRModal projectId={isMainWarehouse ? "" : projectId} sites={sites} isMainWarehouse={isMainWarehouse} onClose={() => setShowCreate(false)} onCreated={() => { setShowCreate(false); if (!isMainWarehouse) loadData(); }} />}
       {showCaptureExternal && (
         <CaptureExternalPOModal
           projectId={projectId}
