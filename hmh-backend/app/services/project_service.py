@@ -14,8 +14,15 @@ from app.schemas.project import ProjectCreate, ProjectUpdate
 
 _MAX_PAGE_SIZE = 100
 
-# Roles that see ALL projects (no access-table filter needed)
-_UNRESTRICTED_ROLES = {UserRole.OWNER, UserRole.OFFICE_ADMIN}
+# Roles that see ALL projects (no access-table filter needed).
+# Site-type roles (SITE_MANAGER, SITE_STAFF, SITE_MANAGER_VIEW) are excluded —
+# they must be explicitly assigned to a project.
+_UNRESTRICTED_ROLES = {
+    UserRole.OWNER,
+    UserRole.OFFICE_ADMIN,
+    UserRole.OFFICE_USER,
+    UserRole.READ_ONLY,
+}
 
 
 def _get_or_404(db: Session, project_id: uuid.UUID) -> Project:

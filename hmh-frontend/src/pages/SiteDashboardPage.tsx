@@ -247,7 +247,7 @@ export default function SiteDashboardPage() {
 
   // ── Load reference data once ──
   useEffect(() => {
-    projectsApi.list(1, 100, "ACTIVE").then(r => {
+    projectsApi.list(1, 100).then(r => {
       setProjects(r.items);
       // For site users, auto-select the only available project
       if (isSiteUser && r.items.length === 1 && !projectId) {
