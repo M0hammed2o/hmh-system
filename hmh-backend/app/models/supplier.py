@@ -3,12 +3,13 @@
 import uuid
 from typing import Optional
 
-from sqlalchemy import Boolean, String, Text
+from sqlalchemy import Boolean, Enum, Numeric, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
 from app.models.base import TimestampMixin
+from app.models.enums import PricingMethod
 
 
 class Supplier(TimestampMixin, Base):
@@ -28,6 +29,18 @@ class Supplier(TimestampMixin, Base):
     payment_terms: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+    # VAT configuration (Phase 1)
+    vat_registered: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
+    pricing_method: Mapped[PricingMethod] = mapped_column(
+        Enum(PricingMethod, name="pricingmethod", create_type=False),
+        nullable=False,
+        default=PricingMethod.EX_VAT,
+        server_default="EX_VAT",
+    )
+    default_vat_rate: Mapped[float] = mapped_column(
+        Numeric(5, 2), nullable=False, default=15.0, server_default="15.00"
+    )
 
     # Relationships
     purchase_orders: Mapped[list["PurchaseOrder"]] = relationship(  # type: ignore[name-defined]

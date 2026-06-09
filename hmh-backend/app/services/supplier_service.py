@@ -6,6 +6,7 @@ from typing import Optional
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import ConflictError, NotFoundError
+from app.models.enums import PricingMethod
 from app.models.supplier import Supplier
 from app.schemas.supplier import SupplierCreate, SupplierUpdate
 
@@ -40,8 +41,13 @@ def create_supplier(db: Session, data: SupplierCreate) -> Supplier:
         phone=data.phone,
         address=data.address,
         contact_person=data.contact_person,
+        whatsapp_number=data.whatsapp_number,
+        vat_number=data.vat_number,
         payment_terms=data.payment_terms,
         notes=data.notes,
+        vat_registered=data.vat_registered,
+        pricing_method=PricingMethod(data.pricing_method),
+        default_vat_rate=data.default_vat_rate,
     )
     db.add(supplier)
     db.commit()
@@ -73,12 +79,22 @@ def update_supplier(db: Session, supplier_id: uuid.UUID, data: SupplierUpdate) -
         supplier.address = data.address
     if "contact_person" in fields:
         supplier.contact_person = data.contact_person
+    if "whatsapp_number" in fields:
+        supplier.whatsapp_number = data.whatsapp_number
+    if "vat_number" in fields:
+        supplier.vat_number = data.vat_number
     if "payment_terms" in fields:
         supplier.payment_terms = data.payment_terms
     if "notes" in fields:
         supplier.notes = data.notes
     if "is_active" in fields and data.is_active is not None:
         supplier.is_active = data.is_active
+    if "vat_registered" in fields and data.vat_registered is not None:
+        supplier.vat_registered = data.vat_registered
+    if "pricing_method" in fields and data.pricing_method is not None:
+        supplier.pricing_method = PricingMethod(data.pricing_method)
+    if "default_vat_rate" in fields and data.default_vat_rate is not None:
+        supplier.default_vat_rate = data.default_vat_rate
 
     db.commit()
     db.refresh(supplier)

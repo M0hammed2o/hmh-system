@@ -32,6 +32,7 @@ const WhatsAppQueuePage       = lazy(() => import("@/pages/WhatsAppQueuePage"));
 const GmailInboxPage          = lazy(() => import("@/pages/GmailInboxPage"));
 const FuelPage                = lazy(() => import("@/pages/FuelPage"));
 const SuppliersPage           = lazy(() => import("@/pages/SuppliersPage"));
+const SupplierProfilePage     = lazy(() => import("@/pages/SupplierProfilePage"));
 const VehiclesPage            = lazy(() => import("@/pages/VehiclesPage"));
 const LotDetailPage           = lazy(() => import("@/pages/LotDetailPage"));
 const MilestonesPage          = lazy(() => import("@/pages/MilestonesPage"));
@@ -100,6 +101,7 @@ export function AppRouter() {
             <Route path="gmail-inbox" element={<GmailInboxPage />} />
             <Route path="fuel" element={<FuelPage />} />
             <Route path="suppliers" element={<SuppliersPage />} />
+            <Route path="suppliers/:supplierId" element={<SupplierProfilePage />} />
             <Route path="vehicles" element={<VehiclesPage />} />
             <Route path="milestones" element={<MilestonesPage />} />
             <Route path="timeline" element={<TimelinePage />} />

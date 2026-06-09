@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, EmailStr, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator
 
 
 class SupplierRead(BaseModel):
@@ -17,9 +17,14 @@ class SupplierRead(BaseModel):
     phone: Optional[str] = None
     address: Optional[str] = None
     contact_person: Optional[str] = None
+    whatsapp_number: Optional[str] = None
+    vat_number: Optional[str] = None
     payment_terms: Optional[str] = None
     notes: Optional[str] = None
     is_active: bool
+    vat_registered: bool = True
+    pricing_method: str = "EX_VAT"
+    default_vat_rate: float = 15.0
     created_at: datetime
     updated_at: datetime
 
@@ -31,8 +36,13 @@ class SupplierCreate(BaseModel):
     phone: Optional[str] = None
     address: Optional[str] = None
     contact_person: Optional[str] = None
+    whatsapp_number: Optional[str] = None
+    vat_number: Optional[str] = None
     payment_terms: Optional[str] = None
     notes: Optional[str] = None
+    vat_registered: bool = True
+    pricing_method: str = "EX_VAT"
+    default_vat_rate: float = 15.0
 
     @field_validator("name")
     @classmethod
@@ -59,6 +69,11 @@ class SupplierUpdate(BaseModel):
     phone: Optional[str] = None
     address: Optional[str] = None
     contact_person: Optional[str] = None
+    whatsapp_number: Optional[str] = None
+    vat_number: Optional[str] = None
     payment_terms: Optional[str] = None
     notes: Optional[str] = None
     is_active: Optional[bool] = None
+    vat_registered: Optional[bool] = None
+    pricing_method: Optional[str] = None
+    default_vat_rate: Optional[float] = None

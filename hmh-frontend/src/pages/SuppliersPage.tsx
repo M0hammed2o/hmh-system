@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { Plus, Building2, CheckCircle2, XCircle, Trash2, ChevronDown, ChevronUp, Paperclip } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -25,6 +26,7 @@ function SupplierModal({
   const [code, setCode] = useState(existing?.code ?? "");
   const [email, setEmail] = useState(existing?.email ?? "");
   const [phone, setPhone] = useState(existing?.phone ?? "");
+  const [whatsapp, setWhatsapp] = useState(existing?.whatsapp_number ?? "");
   const [address, setAddress] = useState(existing?.address ?? "");
   const [contactPerson, setContactPerson] = useState(existing?.contact_person ?? "");
   const [paymentTerms, setPaymentTerms] = useState(existing?.payment_terms ?? "");
@@ -36,6 +38,7 @@ function SupplierModal({
     setCode(existing?.code ?? "");
     setEmail(existing?.email ?? "");
     setPhone(existing?.phone ?? "");
+    setWhatsapp(existing?.whatsapp_number ?? "");
     setAddress(existing?.address ?? "");
     setContactPerson(existing?.contact_person ?? "");
     setPaymentTerms(existing?.payment_terms ?? "");
@@ -53,6 +56,7 @@ function SupplierModal({
         code: code.trim() || null,
         email: email.trim(),
         phone: phone.trim() || null,
+        whatsapp_number: whatsapp.trim() || null,
         address: address.trim() || null,
         contact_person: contactPerson.trim() || null,
         payment_terms: paymentTerms.trim() || null,
@@ -120,6 +124,16 @@ function SupplierModal({
               required
             />
           </div>
+          <div>
+            <label className="text-xs text-muted-foreground block mb-1">WhatsApp Number</label>
+            <input
+              type="tel"
+              value={whatsapp}
+              onChange={(e) => setWhatsapp(e.target.value)}
+              className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm"
+              placeholder="+27 XX XXX XXXX"
+            />
+          </div>
           <div className="col-span-2">
             <label className="text-xs text-muted-foreground block mb-1">Address</label>
             <input
@@ -162,6 +176,7 @@ function SupplierModal({
 
 // ─── Main Component ─────────────────────────────────────────────────────────────
 export default function SuppliersPage() {
+  const navigate = useNavigate();
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
@@ -262,7 +277,14 @@ export default function SuppliersPage() {
                   <React.Fragment key={s.id}>
                     <tr className="border-b border-border last:border-0 hover:bg-muted/30 transition-colors">
                       <td className="px-4 py-3 font-mono text-xs">{s.code ?? "—"}</td>
-                      <td className="px-4 py-3 font-medium">{s.name}</td>
+                      <td className="px-4 py-3 font-medium">
+                        <button
+                          onClick={() => navigate(`/suppliers/${s.id}`)}
+                          className="text-primary hover:underline text-left"
+                        >
+                          {s.name}
+                        </button>
+                      </td>
                       <td className="px-4 py-3 text-xs text-muted-foreground">{s.contact_person ?? "—"}</td>
                       <td className="px-4 py-3 text-xs text-muted-foreground">{s.email ?? "—"}</td>
                       <td className="px-4 py-3 text-xs text-muted-foreground">{s.phone ?? "—"}</td>

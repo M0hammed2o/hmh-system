@@ -252,6 +252,11 @@ class VatMode(str, enum.Enum):
     EXCLUSIVE = "EXCLUSIVE"   # entered price is before VAT
 
 
+class PricingMethod(str, enum.Enum):
+    EX_VAT   = "EX_VAT"    # supplier quotes prices before VAT
+    INCL_VAT = "INCL_VAT"  # supplier quotes prices that already include VAT
+
+
 class FuelType(str, enum.Enum):
     DIESEL = "DIESEL"
     PETROL = "PETROL"

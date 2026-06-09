@@ -1,5 +1,7 @@
 import client from "./client";
 
+export type PricingMethod = "EX_VAT" | "INCL_VAT";
+
 export interface Supplier {
   id: string;
   name: string;
@@ -8,11 +10,26 @@ export interface Supplier {
   phone: string | null;
   address: string | null;
   contact_person: string | null;
+  whatsapp_number: string | null;
+  vat_number: string | null;
   payment_terms: string | null;
   notes: string | null;
   is_active: boolean;
+  vat_registered: boolean;
+  pricing_method: PricingMethod;
+  default_vat_rate: number;
   created_at: string;
   updated_at: string;
+}
+
+export interface SupplierOutstanding {
+  supplier_id: string;
+  supplier_name: string;
+  po_total: number;
+  invoice_total: number;
+  paid_total: number;
+  outstanding: number;
+  overdue_amount: number;
 }
 
 export interface SupplierCreate {
@@ -22,8 +39,13 @@ export interface SupplierCreate {
   phone?: string | null;
   address?: string | null;
   contact_person?: string | null;
+  whatsapp_number?: string | null;
+  vat_number?: string | null;
   payment_terms?: string | null;
   notes?: string | null;
+  vat_registered?: boolean;
+  pricing_method?: PricingMethod;
+  default_vat_rate?: number;
 }
 
 export interface SupplierUpdate {
@@ -33,9 +55,14 @@ export interface SupplierUpdate {
   phone?: string | null;
   address?: string | null;
   contact_person?: string | null;
+  whatsapp_number?: string | null;
+  vat_number?: string | null;
   payment_terms?: string | null;
   notes?: string | null;
   is_active?: boolean;
+  vat_registered?: boolean;
+  pricing_method?: PricingMethod;
+  default_vat_rate?: number;
 }
 
 export const suppliersApi = {
@@ -58,6 +85,11 @@ export const suppliersApi = {
 
   update: async (id: string, body: SupplierUpdate): Promise<Supplier> => {
     const res = await client.patch<{ data: Supplier }>(`/suppliers/${id}`, body);
+    return res.data.data;
+  },
+
+  outstanding: async (id: string): Promise<SupplierOutstanding> => {
+    const res = await client.get<{ data: SupplierOutstanding }>(`/suppliers/${id}/outstanding`);
     return res.data.data;
   },
 
