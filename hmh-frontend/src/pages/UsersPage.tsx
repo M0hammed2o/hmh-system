@@ -561,6 +561,7 @@ export default function UsersPage() {
   }, []);
 
   useEffect(() => {
+    if (authLoading) return; // Auth hasn't resolved yet — keep skeleton, avoid empty-state flash
     if (!canAccess) {
       setLoading(false);
       return;

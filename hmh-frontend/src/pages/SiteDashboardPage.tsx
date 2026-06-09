@@ -249,7 +249,22 @@ export default function SiteDashboardPage() {
   useEffect(() => {
     projectsApi.list(1, 100).then(r => {
       setProjects(r.items);
-      // For site users, auto-select the only available project
+      const validIds = new Set(r.items.map((p: Project) => p.id));
+
+      // Wipe stale localStorage selection if the stored project is no longer accessible
+      if (projectId && !validIds.has(projectId)) {
+        setProjectId(""); setSiteId(""); setLotId("");
+        localStorage.removeItem(SK_PROJECT);
+        localStorage.removeItem(SK_SITE);
+        localStorage.removeItem(SK_LOT);
+        if (isSiteUser && r.items.length === 1) {
+          setProjectId(r.items[0].id);
+          localStorage.setItem(SK_PROJECT, r.items[0].id);
+        }
+        return;
+      }
+
+      // Auto-select the only accessible project on first visit
       if (isSiteUser && r.items.length === 1 && !projectId) {
         setProjectId(r.items[0].id);
         localStorage.setItem(SK_PROJECT, r.items[0].id);
