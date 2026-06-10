@@ -260,6 +260,15 @@ class PricingMethod(str, enum.Enum):
     INCL_VAT = "INCL_VAT"  # supplier quotes prices that already include VAT
 
 
+class QuotationStatus(str, enum.Enum):
+    DRAFT    = "DRAFT"
+    SENT     = "SENT"
+    RECEIVED = "RECEIVED"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+    EXPIRED  = "EXPIRED"
+
+
 class FuelType(str, enum.Enum):
     DIESEL = "DIESEL"
     PETROL = "PETROL"

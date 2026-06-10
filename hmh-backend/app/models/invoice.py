@@ -53,6 +53,9 @@ class Invoice(TimestampMixin, Base):
         default=RecordStatus.DRAFT,
         index=True,
     )
+    vat_rate_used: Mapped[Optional[float]] = mapped_column(
+        Numeric(5, 2), nullable=True, server_default="15.00"
+    )
     captured_by: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="SET NULL"),

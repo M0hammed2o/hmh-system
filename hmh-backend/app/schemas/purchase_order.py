@@ -115,6 +115,7 @@ class PurchaseOrderRead(BaseModel):
     site_id: Optional[uuid.UUID] = None
     supplier_id: uuid.UUID
     material_request_id: Optional[uuid.UUID] = None
+    quotation_id: Optional[uuid.UUID] = None
     status: RecordStatus
     po_date: datetime
     expected_delivery_date: Optional[date] = None
@@ -134,6 +135,7 @@ class PurchaseOrderCreate(BaseModel):
     supplier_id: uuid.UUID
     site_id: Optional[uuid.UUID] = None
     material_request_id: Optional[uuid.UUID] = None
+    quotation_id: Optional[uuid.UUID] = None
     expected_delivery_date: Optional[date] = None
     notes: Optional[str] = None
     items: list[POItemCreate] = []
@@ -144,3 +146,4 @@ class PurchaseOrderUpdate(BaseModel):
     expected_delivery_date: Optional[date] = None
     notes: Optional[str] = None
     site_id: Optional[uuid.UUID] = None
+    quotation_id: Optional[uuid.UUID] = None

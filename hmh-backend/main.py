@@ -336,6 +336,9 @@ app.include_router(admin_router, prefix="/api/v1")
 from app.api.v1.reconciliation import router as reconciliation_router
 app.include_router(reconciliation_router, prefix="/api/v1")
 
+from app.api.v1.quotations import router as quotations_router
+app.include_router(quotations_router, prefix="/api/v1")
+
 from app.api.v1.ops import router as ops_router
 app.include_router(ops_router, prefix="/api/v1")
 

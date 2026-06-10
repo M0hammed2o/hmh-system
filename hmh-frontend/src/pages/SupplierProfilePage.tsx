@@ -2,7 +2,8 @@ import React, { useEffect, useRef, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import {
   ArrowLeft, Building2, Edit2, CheckCircle2, XCircle,
-  FileText, Download, Trash2, Upload,
+  FileText, Download, Trash2, Upload, ChevronDown, ChevronRight,
+  Plus, ClipboardList, Package, Truck, Receipt, CreditCard,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -14,6 +15,9 @@ import {
   type SupplierOutstanding,
   type SupplierUpdate,
   type PricingMethod,
+  type POChain,
+  type SupplierProcurementHistory,
+  type StandaloneQuotation,
 } from "@/api/suppliers";
 import {
   attachmentsApi,
@@ -21,6 +25,13 @@ import {
   type AttachmentType,
   ATTACHMENT_TYPE_LABELS,
 } from "@/api/attachments";
+import {
+  quotationsApi,
+  type QuotationCreate,
+  type QuotationUpdate,
+  type QuotationStatus,
+  QUOTATION_STATUS_LABELS,
+} from "@/api/quotations";
 
 // ─── Document Centre ──────────────────────────────────────────────────────────
 
@@ -283,6 +294,638 @@ function SupplierDocCentre({ supplierId }: { supplierId: string }) {
           </div>
         </Modal>
       )}
+    </div>
+  );
+}
+
+// ─── Procurement History ──────────────────────────────────────────────────────
+
+const fmt = (n: number) =>
+  `R ${n.toLocaleString("en-ZA", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+const fmtDate = (iso: string | null) =>
+  iso
+    ? new Date(iso).toLocaleDateString("en-ZA", { day: "numeric", month: "short", year: "numeric" })
+    : "—";
+
+function QuotationStatusBadge({ status }: { status: string }) {
+  const variants: Record<string, string> = {
+    DRAFT:    "bg-muted text-muted-foreground",
+    SENT:     "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400",
+    RECEIVED: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400",
+    APPROVED: "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400",
+    REJECTED: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400",
+    EXPIRED:  "bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400",
+  };
+  const label = QUOTATION_STATUS_LABELS[status as QuotationStatus] ?? status;
+  return (
+    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${variants[status] ?? "bg-muted text-muted-foreground"}`}>
+      {label}
+    </span>
+  );
+}
+
+function PoStatusBadge({ status }: { status: string }) {
+  const labelMap: Record<string, string> = {
+    DRAFT: "Draft", SUBMITTED: "Submitted", PENDING_APPROVAL: "Pending Approval",
+    APPROVED: "Approved", REJECTED: "Rejected", SENT: "Sent",
+    SUPPLIER_CONFIRMED: "Confirmed", ORDERED: "Ordered",
+    PARTIALLY_RECEIVED: "Partially Delivered", RECEIVED: "Delivered",
+    INVOICED: "Invoiced", PARTIALLY_PAID: "Partially Paid",
+    PAID: "Paid", CANCELLED: "Cancelled", CLOSED: "Closed",
+  };
+  const colorMap: Record<string, string> = {
+    DRAFT: "secondary", SUBMITTED: "outline", APPROVED: "outline",
+    SENT: "outline", SUPPLIER_CONFIRMED: "outline", ORDERED: "outline",
+    PARTIALLY_RECEIVED: "warning", RECEIVED: "success",
+    INVOICED: "outline", PAID: "success", CANCELLED: "destructive",
+  };
+  return (
+    <Badge variant={(colorMap[status] as any) ?? "secondary"} className="text-xs">
+      {labelMap[status] ?? status}
+    </Badge>
+  );
+}
+
+function ChainStep({
+  icon: Icon,
+  label,
+  present,
+  status,
+  detail,
+}: {
+  icon: React.ElementType;
+  label: string;
+  present: boolean;
+  status?: string | null;
+  detail?: string | null;
+}) {
+  const doneStatuses = new Set(["APPROVED", "RECEIVED", "PAID", "SUPPLIER_CONFIRMED", "MATCHED", "CLOSED"]);
+  const activeStatuses = new Set(["SENT", "PARTIALLY_RECEIVED", "INVOICED", "PARTIALLY_PAID", "ORDERED"]);
+  const badStatuses = new Set(["CANCELLED", "REJECTED", "EXPIRED"]);
+
+  let dotColor = "bg-muted text-muted-foreground";
+  let textColor = "text-muted-foreground";
+  if (!present) {
+    dotColor = "bg-muted/50 text-muted-foreground/50";
+    textColor = "text-muted-foreground/50";
+  } else if (status && badStatuses.has(status)) {
+    dotColor = "bg-destructive/20 text-destructive";
+    textColor = "text-destructive";
+  } else if (status && doneStatuses.has(status)) {
+    dotColor = "bg-success/20 text-success";
+    textColor = "text-foreground";
+  } else if (status && activeStatuses.has(status)) {
+    dotColor = "bg-amber-100 text-amber-600 dark:bg-amber-900/30 dark:text-amber-400";
+    textColor = "text-foreground";
+  } else if (present) {
+    dotColor = "bg-primary/10 text-primary";
+    textColor = "text-foreground";
+  }
+
+  return (
+    <div className="flex items-start gap-2 min-w-0">
+      <div className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 mt-0.5 ${dotColor}`}>
+        <Icon className="w-3.5 h-3.5" />
+      </div>
+      <div className="min-w-0">
+        <p className={`text-xs font-medium ${textColor}`}>{label}</p>
+        {detail && present && (
+          <p className="text-xs text-muted-foreground truncate max-w-[120px]">{detail}</p>
+        )}
+        {!present && (
+          <p className="text-xs text-muted-foreground/50">Not recorded</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function POChainCard({
+  po,
+  supplierId,
+  onRefresh,
+}: {
+  po: POChain;
+  supplierId: string;
+  onRefresh: () => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const cs = po.chain_status;
+
+  return (
+    <div className="border border-border rounded-xl overflow-hidden">
+      {/* Summary row */}
+      <button
+        onClick={() => setExpanded((p) => !p)}
+        className="w-full flex items-center gap-3 px-4 py-3 hover:bg-muted/30 transition-colors text-left"
+      >
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-sm font-semibold font-mono">{po.po_number}</span>
+            <PoStatusBadge status={po.status} />
+            {po.quotation && (
+              <span className="text-xs text-muted-foreground">· Q: {po.quotation.quote_number}</span>
+            )}
+          </div>
+          <div className="flex items-center gap-3 mt-1 flex-wrap">
+            <span className="text-xs text-muted-foreground">{fmtDate(po.po_date)}</span>
+            <span className="text-xs font-medium">{fmt(po.total_amount)}</span>
+            {po.invoices.length > 0 && (
+              <span className="text-xs text-muted-foreground">
+                · Paid: {fmt(cs.total_paid)} / {fmt(cs.total_invoiced)}
+              </span>
+            )}
+          </div>
+        </div>
+
+        {/* Mini chain indicators */}
+        <div className="hidden sm:flex items-center gap-1 shrink-0">
+          {[
+            { ok: cs.has_mr, label: "MR" },
+            { ok: cs.has_quotation, label: "Q" },
+            { ok: true, label: "PO" },
+            { ok: cs.has_delivery, label: "Del" },
+            { ok: cs.has_invoice, label: "Inv" },
+            { ok: cs.is_fully_paid, label: "Paid" },
+          ].map((step) => (
+            <span
+              key={step.label}
+              className={`text-xs px-1.5 py-0.5 rounded font-mono ${
+                step.ok
+                  ? "bg-success/15 text-success"
+                  : "bg-muted text-muted-foreground/50"
+              }`}
+            >
+              {step.label}
+            </span>
+          ))}
+        </div>
+
+        {expanded ? (
+          <ChevronDown className="w-4 h-4 text-muted-foreground shrink-0" />
+        ) : (
+          <ChevronRight className="w-4 h-4 text-muted-foreground shrink-0" />
+        )}
+      </button>
+
+      {/* Expanded chain */}
+      {expanded && (
+        <div className="border-t border-border bg-muted/20 px-4 py-4 space-y-4">
+          {/* Chain steps */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3">
+            <ChainStep
+              icon={ClipboardList}
+              label="Order Note / MR"
+              present={cs.has_mr}
+              detail={cs.has_mr ? "Linked" : undefined}
+            />
+            <ChainStep
+              icon={FileText}
+              label="Quotation"
+              present={cs.has_quotation}
+              status={cs.quotation_status}
+              detail={po.quotation?.quote_number}
+            />
+            <ChainStep
+              icon={Package}
+              label="Purchase Order"
+              present={true}
+              status={cs.po_status}
+              detail={po.po_number}
+            />
+            <ChainStep
+              icon={Truck}
+              label="Delivery"
+              present={cs.has_delivery}
+              status={cs.delivery_status}
+              detail={cs.has_delivery ? `${po.deliveries.length} delivery${po.deliveries.length !== 1 ? "ies" : ""}` : undefined}
+            />
+            <ChainStep
+              icon={Receipt}
+              label="Invoice"
+              present={cs.has_invoice}
+              status={cs.invoice_status}
+              detail={cs.has_invoice ? po.invoices[0].invoice_number : undefined}
+            />
+            <ChainStep
+              icon={CreditCard}
+              label="Payment"
+              present={cs.is_fully_paid}
+              status={cs.is_fully_paid ? "PAID" : cs.has_invoice && cs.total_paid > 0 ? "PARTIALLY_PAID" : undefined}
+              detail={cs.total_paid > 0 ? fmt(cs.total_paid) : undefined}
+            />
+          </div>
+
+          {/* Deliveries detail */}
+          {po.deliveries.length > 0 && (
+            <div>
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">
+                Deliveries
+              </p>
+              <div className="space-y-1">
+                {po.deliveries.map((d) => (
+                  <div key={d.delivery_id} className="flex items-center gap-3 text-xs">
+                    <span className="font-mono text-muted-foreground">{d.delivery_number}</span>
+                    <span className="text-muted-foreground">{fmtDate(d.delivery_date)}</span>
+                    {d.status && <Badge variant="outline" className="text-xs py-0 h-4">{d.status}</Badge>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Invoices detail */}
+          {po.invoices.length > 0 && (
+            <div>
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">
+                Invoices
+              </p>
+              <div className="space-y-1">
+                {po.invoices.map((inv) => (
+                  <div key={inv.invoice_id} className="flex items-center gap-3 text-xs flex-wrap">
+                    <span className="font-mono font-medium">{inv.invoice_number}</span>
+                    <span className="text-muted-foreground">{fmt(inv.total_amount)}</span>
+                    <span className={inv.balance_due > 0 ? "text-amber-600" : "text-success"}>
+                      {inv.balance_due > 0 ? `Owing: ${fmt(inv.balance_due)}` : "Paid"}
+                    </span>
+                    {inv.due_date && (
+                      <span className="text-muted-foreground">Due: {fmtDate(inv.due_date)}</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* PO amounts */}
+          <div className="flex items-center gap-4 pt-1 border-t border-border/50 text-xs text-muted-foreground flex-wrap">
+            <span>Net: {fmt(po.subtotal_amount)}</span>
+            <span>VAT: {fmt(po.vat_amount)}</span>
+            <span className="font-medium text-foreground">Total: {fmt(po.total_amount)}</span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function QuotationModal({
+  open,
+  onClose,
+  supplierId,
+  existing,
+  onSave,
+}: {
+  open: boolean;
+  onClose: () => void;
+  supplierId: string;
+  existing: StandaloneQuotation | null;
+  onSave: () => void;
+}) {
+  const [quoteNumber, setQuoteNumber] = useState(existing?.quote_number ?? "");
+  const [status, setStatus] = useState<QuotationStatus>((existing?.status as QuotationStatus) ?? "DRAFT");
+  const [quoteDate, setQuoteDate] = useState(existing?.quote_date ?? "");
+  const [expiryDate, setExpiryDate] = useState(existing?.expiry_date ?? "");
+  const [vatRate, setVatRate] = useState(String(existing?.vat_rate_used ?? 15));
+  const [netAmount, setNetAmount] = useState(String(existing?.net_amount ?? 0));
+  const [vatAmount, setVatAmount] = useState(String(existing?.vat_amount ?? 0));
+  const [grossAmount, setGrossAmount] = useState(String(existing?.gross_amount ?? 0));
+  const [notes, setNotes] = useState(existing?.notes ?? "");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (!open) return;
+    setQuoteNumber(existing?.quote_number ?? "");
+    setStatus((existing?.status as QuotationStatus) ?? "DRAFT");
+    setQuoteDate(existing?.quote_date ?? "");
+    setExpiryDate(existing?.expiry_date ?? "");
+    setVatRate(String(existing?.vat_rate_used ?? 15));
+    setNetAmount(String(existing?.net_amount ?? 0));
+    setVatAmount(String(existing?.vat_amount ?? 0));
+    setGrossAmount(String(existing?.gross_amount ?? 0));
+    setNotes(existing?.notes ?? "");
+    setError("");
+  }, [open, existing]);
+
+  const handleNetChange = (val: string) => {
+    setNetAmount(val);
+    const net = parseFloat(val) || 0;
+    const rate = parseFloat(vatRate) || 0;
+    const vat = parseFloat((net * rate / 100).toFixed(2));
+    setVatAmount(String(vat));
+    setGrossAmount(String(parseFloat((net + vat).toFixed(2))));
+  };
+
+  const handleSubmit = async () => {
+    if (!quoteNumber.trim()) { setError("Quote number is required."); return; }
+    setSaving(true);
+    setError("");
+    try {
+      const payload = {
+        quote_number: quoteNumber.trim(),
+        supplier_id: supplierId,
+        status,
+        quote_date: quoteDate || null,
+        expiry_date: expiryDate || null,
+        net_amount: parseFloat(netAmount) || 0,
+        vat_amount: parseFloat(vatAmount) || 0,
+        gross_amount: parseFloat(grossAmount) || 0,
+        vat_rate_used: parseFloat(vatRate) || 15,
+        notes: notes.trim() || null,
+      };
+      if (existing) {
+        await quotationsApi.update(existing.quotation_id, payload as QuotationUpdate);
+      } else {
+        await quotationsApi.create(payload as QuotationCreate);
+      }
+      onSave();
+      onClose();
+    } catch (err: unknown) {
+      setError(
+        (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ??
+          "Failed to save quotation."
+      );
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title={existing ? "Edit Quotation" : "New Quotation"}
+      size="md"
+    >
+      <div className="p-6 space-y-4">
+        <div className="grid grid-cols-2 gap-4">
+          <div className="col-span-2">
+            <label className="text-xs text-muted-foreground block mb-1">Quote Number *</label>
+            <input
+              type="text"
+              value={quoteNumber}
+              onChange={(e) => setQuoteNumber(e.target.value)}
+              className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm font-mono"
+              placeholder="e.g. Q-2026-001"
+              disabled={!!existing}
+            />
+          </div>
+          <div>
+            <label className="text-xs text-muted-foreground block mb-1">Status</label>
+            <select
+              value={status}
+              onChange={(e) => setStatus(e.target.value as QuotationStatus)}
+              className="w-full h-9 rounded-md border border-input bg-background px-2 text-sm"
+            >
+              {(["DRAFT", "SENT", "RECEIVED", "APPROVED", "REJECTED", "EXPIRED"] as QuotationStatus[]).map((s) => (
+                <option key={s} value={s}>{QUOTATION_STATUS_LABELS[s]}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="text-xs text-muted-foreground block mb-1">VAT Rate (%)</label>
+            <input
+              type="number"
+              value={vatRate}
+              onChange={(e) => setVatRate(e.target.value)}
+              className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm"
+              placeholder="15"
+              min="0"
+              max="100"
+              step="0.01"
+            />
+          </div>
+          <div>
+            <label className="text-xs text-muted-foreground block mb-1">Quote Date</label>
+            <input
+              type="date"
+              value={quoteDate}
+              onChange={(e) => setQuoteDate(e.target.value)}
+              className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm"
+            />
+          </div>
+          <div>
+            <label className="text-xs text-muted-foreground block mb-1">Expiry Date</label>
+            <input
+              type="date"
+              value={expiryDate}
+              onChange={(e) => setExpiryDate(e.target.value)}
+              className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm"
+            />
+          </div>
+          <div>
+            <label className="text-xs text-muted-foreground block mb-1">Net Amount (excl. VAT)</label>
+            <input
+              type="number"
+              value={netAmount}
+              onChange={(e) => handleNetChange(e.target.value)}
+              className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm"
+              placeholder="0.00"
+              min="0"
+              step="0.01"
+            />
+          </div>
+          <div>
+            <label className="text-xs text-muted-foreground block mb-1">VAT Amount</label>
+            <input
+              type="number"
+              value={vatAmount}
+              onChange={(e) => setVatAmount(e.target.value)}
+              className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm"
+              placeholder="0.00"
+              min="0"
+              step="0.01"
+            />
+          </div>
+          <div className="col-span-2">
+            <label className="text-xs text-muted-foreground block mb-1">Gross Amount (incl. VAT)</label>
+            <input
+              type="number"
+              value={grossAmount}
+              onChange={(e) => setGrossAmount(e.target.value)}
+              className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm font-semibold"
+              placeholder="0.00"
+              min="0"
+              step="0.01"
+            />
+          </div>
+          <div className="col-span-2">
+            <label className="text-xs text-muted-foreground block mb-1">Notes</label>
+            <textarea
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              rows={2}
+              className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm resize-none"
+            />
+          </div>
+        </div>
+        {error && <p className="text-xs text-destructive">{error}</p>}
+        <div className="flex justify-end gap-2">
+          <Button variant="outline" size="sm" onClick={onClose}>Cancel</Button>
+          <Button size="sm" onClick={handleSubmit} disabled={saving || !quoteNumber.trim()}>
+            {saving ? "Saving…" : existing ? "Save Changes" : "Create Quotation"}
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function ProcurementHistoryTab({ supplierId }: { supplierId: string }) {
+  const [history, setHistory] = useState<SupplierProcurementHistory | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [showQuotationModal, setShowQuotationModal] = useState(false);
+  const [editQuotation, setEditQuotation] = useState<StandaloneQuotation | null>(null);
+  const [poFilter, setPoFilter] = useState("");
+
+  const load = () => {
+    setLoading(true);
+    suppliersApi
+      .procurementHistory(supplierId)
+      .then(setHistory)
+      .catch(() => setHistory(null))
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(() => { load(); }, [supplierId]);
+
+  const filteredPos = (history?.purchase_orders ?? []).filter(
+    (po) =>
+      !poFilter ||
+      po.po_number.toLowerCase().includes(poFilter.toLowerCase()) ||
+      (po.quotation?.quote_number ?? "").toLowerCase().includes(poFilter.toLowerCase())
+  );
+
+  const handleDeleteQuotation = async (id: string) => {
+    if (!window.confirm("Delete this quotation?")) return;
+    try {
+      await quotationsApi.delete(id);
+      load();
+    } catch {
+      /* silent */
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="space-y-3">
+        {[1, 2, 3].map((i) => <Skeleton key={i} className="h-14 rounded-xl" />)}
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* Purchase Orders */}
+      <div>
+        <div className="flex items-center justify-between gap-3 mb-3">
+          <div>
+            <h3 className="text-sm font-semibold">Purchase Orders</h3>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              {history?.po_count ?? 0} total — click a row to expand the full procurement chain.
+            </p>
+          </div>
+          <input
+            type="text"
+            value={poFilter}
+            onChange={(e) => setPoFilter(e.target.value)}
+            placeholder="Filter by PO or quote number…"
+            className="h-8 rounded-md border border-input bg-background px-3 text-xs w-48"
+          />
+        </div>
+
+        {filteredPos.length === 0 ? (
+          <div className="py-10 text-center text-sm text-muted-foreground border border-dashed border-border rounded-xl">
+            {poFilter ? "No purchase orders match your filter." : "No purchase orders for this supplier yet."}
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {filteredPos.map((po) => (
+              <POChainCard key={po.po_id} po={po} supplierId={supplierId} onRefresh={load} />
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Standalone Quotations */}
+      <div>
+        <div className="flex items-center justify-between gap-3 mb-3">
+          <div>
+            <h3 className="text-sm font-semibold">Quotations</h3>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              Standalone supplier quotations not yet converted to a Purchase Order.
+            </p>
+          </div>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => { setEditQuotation(null); setShowQuotationModal(true); }}
+          >
+            <Plus className="w-3.5 h-3.5 mr-1.5" />
+            New Quotation
+          </Button>
+        </div>
+
+        {(history?.standalone_quotations ?? []).length === 0 ? (
+          <div className="py-8 text-center text-sm text-muted-foreground border border-dashed border-border rounded-xl">
+            No standalone quotations. Use the button above to record a supplier quotation.
+          </div>
+        ) : (
+          <div className="divide-y divide-border border border-border rounded-xl overflow-hidden">
+            {(history?.standalone_quotations ?? []).map((q) => (
+              <div key={q.quotation_id} className="flex items-center gap-3 px-4 py-3 hover:bg-muted/30 transition-colors">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-sm font-mono font-semibold">{q.quote_number}</span>
+                    <QuotationStatusBadge status={q.status} />
+                    {q.expiry_date && new Date(q.expiry_date) < new Date() && q.status !== "EXPIRED" && (
+                      <span className="text-xs text-amber-600">⚠ Expired</span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-3 mt-1 flex-wrap">
+                    {q.quote_date && (
+                      <span className="text-xs text-muted-foreground">Date: {fmtDate(q.quote_date)}</span>
+                    )}
+                    {q.expiry_date && (
+                      <span className="text-xs text-muted-foreground">Expires: {fmtDate(q.expiry_date)}</span>
+                    )}
+                    <span className="text-xs font-medium">{fmt(q.gross_amount)}</span>
+                    <span className="text-xs text-muted-foreground">VAT @ {q.vat_rate_used}%</span>
+                  </div>
+                  {q.notes && (
+                    <p className="text-xs text-muted-foreground mt-0.5 truncate">{q.notes}</p>
+                  )}
+                </div>
+                <div className="flex items-center gap-1 shrink-0">
+                  <button
+                    onClick={() => { setEditQuotation(q); setShowQuotationModal(true); }}
+                    className="text-xs text-primary hover:underline px-1.5 py-1"
+                  >
+                    Edit
+                  </button>
+                  <button
+                    onClick={() => handleDeleteQuotation(q.quotation_id)}
+                    className="p-1.5 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
+                    title="Delete"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <QuotationModal
+        open={showQuotationModal}
+        onClose={() => setShowQuotationModal(false)}
+        supplierId={supplierId}
+        existing={editQuotation}
+        onSave={load}
+      />
     </div>
   );
 }
@@ -616,6 +1259,7 @@ export default function SupplierProfilePage() {
   const [outstanding, setOutstanding] = useState<SupplierOutstanding | null>(null);
   const [loading, setLoading] = useState(true);
   const [editOpen, setEditOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState<"documents" | "history">("documents");
 
   useEffect(() => {
     if (!supplierId) return;
@@ -804,10 +1448,37 @@ export default function SupplierProfilePage() {
         </div>
       )}
 
-      {/* Documents */}
-      <div className="bg-card border border-border rounded-xl p-5">
-        <h2 className="text-sm font-semibold mb-4">Document Centre</h2>
-        <SupplierDocCentre supplierId={supplier.id} />
+      {/* Tabs: Documents | Procurement History */}
+      <div className="bg-card border border-border rounded-xl overflow-hidden">
+        <div className="flex border-b border-border">
+          <button
+            onClick={() => setActiveTab("documents")}
+            className={`px-5 py-3 text-sm font-medium transition-colors border-b-2 -mb-px ${
+              activeTab === "documents"
+                ? "border-primary text-foreground"
+                : "border-transparent text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            Document Centre
+          </button>
+          <button
+            onClick={() => setActiveTab("history")}
+            className={`px-5 py-3 text-sm font-medium transition-colors border-b-2 -mb-px ${
+              activeTab === "history"
+                ? "border-primary text-foreground"
+                : "border-transparent text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            Procurement History
+          </button>
+        </div>
+        <div className="p-5">
+          {activeTab === "documents" ? (
+            <SupplierDocCentre supplierId={supplier.id} />
+          ) : (
+            <ProcurementHistoryTab supplierId={supplier.id} />
+          )}
+        </div>
       </div>
 
       {/* Edit Modal */}

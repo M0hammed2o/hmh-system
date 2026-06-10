@@ -23,6 +23,7 @@ class InvoiceRead(BaseModel):
     subtotal_amount: Optional[float] = None
     vat_amount: Optional[float] = None
     total_amount: float
+    vat_rate_used: Optional[float] = None
     status: RecordStatus
     captured_by: Optional[uuid.UUID] = None
     captured_at: datetime
@@ -41,6 +42,7 @@ class InvoiceCreate(BaseModel):
     subtotal_amount: Optional[float] = None
     vat_amount: Optional[float] = None
     total_amount: float
+    vat_rate_used: Optional[float] = None
     notes: Optional[str] = None
 
     @field_validator("invoice_number")
@@ -58,3 +60,4 @@ class InvoiceUpdate(BaseModel):
     total_amount: Optional[float] = None
     subtotal_amount: Optional[float] = None
     vat_amount: Optional[float] = None
+    vat_rate_used: Optional[float] = None

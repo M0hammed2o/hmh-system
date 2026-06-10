@@ -167,6 +167,198 @@ def supplier_outstanding(supplier_id: uuid.UUID, db: DbSession):
     })
 
 
+@router.get(
+    "/{supplier_id}/procurement-history",
+    response_model=ApiSuccess[dict],
+    dependencies=[ALL_ROLES],
+)
+def supplier_procurement_history(supplier_id: uuid.UUID, db: DbSession):
+    """
+    Return a full procurement chain for this supplier:
+    all POs (with linked quotation, MR, deliveries, invoices, payments)
+    plus standalone quotations not yet linked to a PO.
+    """
+    from datetime import date as _date
+    from sqlalchemy import func
+    from app.models.supplier import Supplier
+    from app.models.purchase_order import PurchaseOrder
+    from app.models.delivery import Delivery
+    from app.models.invoice import Invoice
+    from app.models.material_request import MaterialRequest
+    from app.models.payment import Payment
+    from app.models.quotation import Quotation
+    from app.models.enums import PaymentStatus, RecordStatus
+
+    s = db.get(Supplier, supplier_id)
+    if not s:
+        raise HTTPException(404, "Supplier not found.")
+
+    # ── All POs for this supplier ──────────────────────────────────────────────
+    pos = (
+        db.query(PurchaseOrder)
+        .filter(PurchaseOrder.supplier_id == supplier_id)
+        .order_by(PurchaseOrder.po_date.desc())
+        .all()
+    )
+
+    po_ids = [po.id for po in pos]
+    linked_quotation_ids: set = set()
+
+    # Bulk-fetch deliveries for all POs
+    all_deliveries = (
+        db.query(Delivery)
+        .filter(Delivery.purchase_order_id.in_(po_ids))
+        .all()
+    ) if po_ids else []
+    deliveries_by_po: dict = {}
+    for d in all_deliveries:
+        deliveries_by_po.setdefault(str(d.purchase_order_id), []).append(d)
+
+    # Bulk-fetch invoices for all POs
+    all_invoices = (
+        db.query(Invoice)
+        .filter(Invoice.purchase_order_id.in_(po_ids))
+        .order_by(Invoice.created_at)
+        .all()
+    ) if po_ids else []
+    invoices_by_po: dict = {}
+    invoice_ids = []
+    for i in all_invoices:
+        invoices_by_po.setdefault(str(i.purchase_order_id), []).append(i)
+        invoice_ids.append(i.id)
+
+    # Bulk-fetch payment totals per invoice
+    paid_by_invoice: dict = {}
+    if invoice_ids:
+        rows = (
+            db.query(Payment.invoice_id, func.coalesce(func.sum(Payment.amount_paid), 0).label("total"))
+            .filter(Payment.invoice_id.in_(invoice_ids), Payment.status == PaymentStatus.PAID)
+            .group_by(Payment.invoice_id)
+            .all()
+        )
+        paid_by_invoice = {str(r.invoice_id): float(r.total) for r in rows}
+
+    # Bulk-fetch quotations linked to these POs
+    quotation_ids_from_po = [po.quotation_id for po in pos if po.quotation_id]
+    quotations_by_id: dict = {}
+    if quotation_ids_from_po:
+        qs = db.query(Quotation).filter(Quotation.id.in_(quotation_ids_from_po)).all()
+        for q in qs:
+            quotations_by_id[str(q.id)] = q
+            linked_quotation_ids.add(str(q.id))
+
+    # Build PO chain data
+    po_chains = []
+    for po in pos:
+        po_deliveries = deliveries_by_po.get(str(po.id), [])
+        po_invoices = invoices_by_po.get(str(po.id), [])
+
+        q_summary = None
+        if po.quotation_id:
+            q = quotations_by_id.get(str(po.quotation_id))
+            if q:
+                q_summary = {
+                    "quotation_id": str(q.id),
+                    "quote_number": q.quote_number,
+                    "status": q.status.value,
+                    "gross_amount": float(q.gross_amount or 0),
+                    "vat_rate_used": float(q.vat_rate_used or 15.0),
+                    "expiry_date": q.expiry_date.isoformat() if q.expiry_date else None,
+                }
+
+        invoice_list = [
+            {
+                "invoice_id": str(i.id),
+                "invoice_number": i.invoice_number,
+                "total_amount": float(i.total_amount or 0),
+                "total_paid": paid_by_invoice.get(str(i.id), 0.0),
+                "balance_due": round(float(i.total_amount or 0) - paid_by_invoice.get(str(i.id), 0.0), 2),
+                "status": i.status.value,
+                "due_date": i.due_date.isoformat() if i.due_date else None,
+                "invoice_date": i.invoice_date.isoformat() if i.invoice_date else None,
+            }
+            for i in po_invoices
+        ]
+
+        delivery_list = [
+            {
+                "delivery_id": str(d.id),
+                "delivery_number": d.delivery_number or str(d.id)[:8],
+                "delivery_date": d.delivery_date.date().isoformat() if d.delivery_date else None,
+                "status": d.delivery_status.value if d.delivery_status else None,
+            }
+            for d in po_deliveries
+        ]
+
+        total_invoiced = sum(i["total_amount"] for i in invoice_list)
+        total_paid = sum(i["total_paid"] for i in invoice_list)
+
+        # Chain status summary for indicators
+        chain_status = {
+            "has_mr": po.material_request_id is not None,
+            "has_quotation": q_summary is not None,
+            "quotation_status": q_summary["status"] if q_summary else None,
+            "po_status": po.status.value,
+            "has_delivery": len(delivery_list) > 0,
+            "delivery_status": delivery_list[0]["status"] if delivery_list else None,
+            "has_invoice": len(invoice_list) > 0,
+            "invoice_status": invoice_list[0]["status"] if invoice_list else None,
+            "total_invoiced": round(total_invoiced, 2),
+            "total_paid": round(total_paid, 2),
+            "is_fully_paid": total_invoiced > 0 and round(total_invoiced - total_paid, 2) <= 0,
+        }
+
+        po_chains.append({
+            "po_id": str(po.id),
+            "po_number": po.po_number,
+            "po_date": po.po_date.date().isoformat() if po.po_date else None,
+            "status": po.status.value,
+            "total_amount": float(po.total_amount or 0),
+            "subtotal_amount": float(po.subtotal_amount or 0),
+            "vat_amount": float(po.vat_amount or 0),
+            "project_id": str(po.project_id),
+            "quotation": q_summary,
+            "source_mr": {"mr_id": str(po.material_request_id)} if po.material_request_id else None,
+            "deliveries": delivery_list,
+            "invoices": invoice_list,
+            "chain_status": chain_status,
+        })
+
+    # ── Standalone quotations (not linked to any PO for this supplier) ─────────
+    all_supplier_quotations = (
+        db.query(Quotation)
+        .filter(Quotation.supplier_id == supplier_id)
+        .order_by(Quotation.created_at.desc())
+        .all()
+    )
+    standalone_quotations = [
+        {
+            "quotation_id": str(q.id),
+            "quote_number": q.quote_number,
+            "status": q.status.value,
+            "quote_date": q.quote_date.isoformat() if q.quote_date else None,
+            "expiry_date": q.expiry_date.isoformat() if q.expiry_date else None,
+            "net_amount": float(q.net_amount or 0),
+            "vat_amount": float(q.vat_amount or 0),
+            "gross_amount": float(q.gross_amount or 0),
+            "vat_rate_used": float(q.vat_rate_used or 15.0),
+            "notes": q.notes,
+            "created_at": q.created_at.isoformat(),
+        }
+        for q in all_supplier_quotations
+        if str(q.id) not in linked_quotation_ids
+    ]
+
+    return ApiSuccess(data={
+        "supplier_id": str(supplier_id),
+        "supplier_name": s.name,
+        "purchase_orders": po_chains,
+        "standalone_quotations": standalone_quotations,
+        "po_count": len(po_chains),
+        "quotation_count": len(all_supplier_quotations),
+    })
+
+
 @router.delete(
     "/{supplier_id}",
     response_model=ApiSuccess[dict],

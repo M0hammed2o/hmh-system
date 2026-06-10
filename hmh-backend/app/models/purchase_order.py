@@ -76,8 +76,15 @@ class PurchaseOrder(TimestampMixin, Base):
         Enum(DeliveryDestination, name="delivery_destination_enum", create_type=False),
         nullable=True,
     )
+    quotation_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("quotations.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
 
     supplier: Mapped["Supplier"] = relationship("Supplier", back_populates="purchase_orders")  # type: ignore[name-defined]
+    quotation: Mapped[Optional["Quotation"]] = relationship("Quotation", back_populates="purchase_orders", foreign_keys=[quotation_id])  # type: ignore[name-defined]
     order_items: Mapped[list["PurchaseOrderItem"]] = relationship(
         "PurchaseOrderItem", back_populates="purchase_order", cascade="all, delete-orphan"
     )

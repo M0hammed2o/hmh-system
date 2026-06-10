@@ -233,17 +233,32 @@ def confirm_supplier(db: Session, po_id: uuid.UUID, confirmed_by_id: uuid.UUID) 
 
 
 def get_po_linked_docs(db: Session, po_id: uuid.UUID) -> dict:
-    """Return all linked documents for a PO: source MR, deliveries, invoices + payment totals."""
+    """Return all linked documents for a PO: quotation, source MR, deliveries, invoices + payment totals."""
     from app.models.delivery import Delivery
     from app.models.invoice import Invoice
     from app.models.material_request import MaterialRequest
     from app.models.payment import Payment
+    from app.models.quotation import Quotation
     from app.models.enums import PaymentStatus
     from sqlalchemy import func
 
     po = db.get(PurchaseOrder, po_id)
     if not po:
         raise NotFoundError(f"Purchase order {po_id} not found.")
+
+    # Linked quotation
+    quotation_summary = None
+    if po.quotation_id:
+        q = db.get(Quotation, po.quotation_id)
+        if q:
+            quotation_summary = {
+                "quotation_id": str(q.id),
+                "quote_number": q.quote_number,
+                "status": q.status.value,
+                "gross_amount": float(q.gross_amount or 0),
+                "vat_rate_used": float(q.vat_rate_used or 15.0),
+                "expiry_date": q.expiry_date.isoformat() if q.expiry_date else None,
+            }
 
     # Source MR
     mr_summary = None
@@ -310,6 +325,7 @@ def get_po_linked_docs(db: Session, po_id: uuid.UUID) -> dict:
         "po_id": str(po_id),
         "po_number": po.po_number,
         "status": po.status.value,
+        "quotation": quotation_summary,
         "source_mr": mr_summary,
         "deliveries": delivery_list,
         "invoices": invoice_list,
