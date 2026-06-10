@@ -39,7 +39,8 @@ const LotDetailPage           = lazy(() => import("@/pages/LotDetailPage"));
 const MilestonesPage          = lazy(() => import("@/pages/MilestonesPage"));
 const TimelinePage            = lazy(() => import("@/pages/TimelinePage"));
 const AuditPage               = lazy(() => import("@/pages/AuditPage"));
-const NotificationSettingsPage = lazy(() => import("@/pages/NotificationSettingsPage"));
+const NotificationSettingsPage    = lazy(() => import("@/pages/NotificationSettingsPage"));
+const ProcurementAnalyticsPage    = lazy(() => import("@/pages/ProcurementAnalyticsPage"));
 const SettingsPage            = lazy(() => import("@/pages/SettingsPage"));
 
 function PageLoader() {
@@ -109,6 +110,7 @@ export function AppRouter() {
             <Route path="timeline" element={<TimelinePage />} />
             <Route path="audit" element={<AuditPage />} />
             <Route path="notification-settings" element={<NotificationSettingsPage />} />
+            <Route path="procurement-analytics" element={<ProcurementAnalyticsPage />} />
             <Route path="settings" element={<SettingsPage />} />
           </Route>
 
