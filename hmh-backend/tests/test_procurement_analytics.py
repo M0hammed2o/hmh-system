@@ -13,7 +13,7 @@ def admin(db):
 
 @pytest.fixture
 def auth(client: TestClient, admin):
-    resp = client.post("/api/v1/auth/login", data={"username": admin["email"], "password": admin["password"]})
+    resp = client.post("/api/v1/auth/login", json={"email": admin["email"], "password": admin["password"]})
     assert resp.status_code == 200
     token = resp.json()["access_token"]
     return {"Authorization": f"Bearer {token}"}
