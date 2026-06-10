@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 
 class SupplierRead(BaseModel):
@@ -22,7 +22,7 @@ class SupplierRead(BaseModel):
     payment_terms: Optional[str] = None
     notes: Optional[str] = None
     is_active: bool
-    vat_registered: bool = True
+    vat_registered: bool = False
     pricing_method: str = "EX_VAT"
     default_vat_rate: float = 15.0
     created_at: datetime
@@ -40,7 +40,9 @@ class SupplierCreate(BaseModel):
     vat_number: Optional[str] = None
     payment_terms: Optional[str] = None
     notes: Optional[str] = None
-    vat_registered: bool = True
+    # Defaults to False so quick-create forms don't require a VAT number.
+    # VAT configuration is done via the supplier profile page.
+    vat_registered: bool = False
     pricing_method: str = "EX_VAT"
     default_vat_rate: float = 15.0
 
@@ -61,6 +63,14 @@ class SupplierCreate(BaseModel):
             raise ValueError("email must be a valid email address")
         return v.lower()
 
+    @model_validator(mode="after")
+    def vat_number_required_when_registered(self) -> "SupplierCreate":
+        if self.vat_registered and not (self.vat_number or "").strip():
+            raise ValueError(
+                "vat_number is required when vat_registered is true"
+            )
+        return self
+
 
 class SupplierUpdate(BaseModel):
     name: Optional[str] = None
@@ -77,3 +87,14 @@ class SupplierUpdate(BaseModel):
     vat_registered: Optional[bool] = None
     pricing_method: Optional[str] = None
     default_vat_rate: Optional[float] = None
+
+    @model_validator(mode="after")
+    def vat_number_required_when_registered(self) -> "SupplierUpdate":
+        fields = self.model_fields_set
+        # Only fire when both fields are being set in the same request
+        if "vat_registered" in fields and "vat_number" in fields:
+            if self.vat_registered and not (self.vat_number or "").strip():
+                raise ValueError(
+                    "vat_number is required when vat_registered is true"
+                )
+        return self

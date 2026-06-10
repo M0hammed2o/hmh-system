@@ -62,8 +62,12 @@ function EditSupplierModal({
     setError("");
   }, [open, supplier]);
 
+  // Derived: VAT number is required when registered
+  const vatNumberMissing = vatRegistered && !vatNumber.trim();
+
   const handleSubmit = async () => {
     if (!name.trim() || !email.trim()) return;
+    if (vatNumberMissing) return;
     setSaving(true);
     setError("");
     try {
@@ -190,16 +194,59 @@ function EditSupplierModal({
             VAT Configuration
           </p>
           <div className="grid grid-cols-2 gap-4">
+            {/* Toggle first — user decides registration status before entering number */}
+            <div className="flex items-center gap-3 pt-1">
+              <label className="relative inline-flex items-center cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={vatRegistered}
+                  onChange={(e) => setVatRegistered(e.target.checked)}
+                  className="sr-only peer"
+                />
+                <div className="w-9 h-5 bg-muted peer-checked:bg-primary rounded-full transition-colors" />
+                <div className="absolute left-0.5 top-0.5 w-4 h-4 bg-white rounded-full transition-transform peer-checked:translate-x-4 shadow" />
+              </label>
+              <span className="text-sm font-medium">
+                {vatRegistered ? "VAT Registered" : "Not VAT Registered"}
+              </span>
+            </div>
+
+            {/* VAT Number — required when registered */}
             <div>
-              <label className="text-xs text-muted-foreground block mb-1">VAT Number</label>
+              <label className="text-xs text-muted-foreground block mb-1">
+                VAT Number
+                {vatRegistered && <span className="text-destructive ml-0.5">*</span>}
+              </label>
               <input
                 type="text"
                 value={vatNumber}
                 onChange={(e) => setVatNumber(e.target.value)}
-                className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm"
-                placeholder="e.g. 4123456789"
+                className={`w-full h-9 rounded-md border bg-background px-3 text-sm transition-colors ${
+                  vatNumberMissing
+                    ? "border-destructive ring-1 ring-destructive/30 focus:outline-none"
+                    : "border-input"
+                }`}
+                placeholder={vatRegistered ? "Required — e.g. 4123456789" : "e.g. 4123456789"}
               />
+              {vatNumberMissing && (
+                <p className="text-xs text-destructive mt-1">
+                  VAT number is required when the supplier is VAT registered.
+                </p>
+              )}
             </div>
+
+            <div>
+              <label className="text-xs text-muted-foreground block mb-1">Pricing Method</label>
+              <select
+                value={pricingMethod}
+                onChange={(e) => setPricingMethod(e.target.value as PricingMethod)}
+                className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm"
+              >
+                <option value="EX_VAT">Ex-VAT (prices exclude VAT)</option>
+                <option value="INCL_VAT">Incl. VAT (prices include VAT)</option>
+              </select>
+            </div>
+
             <div>
               <label className="text-xs text-muted-foreground block mb-1">Default VAT Rate (%)</label>
               <input
@@ -212,32 +259,6 @@ function EditSupplierModal({
                 className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm"
                 placeholder="15.00"
               />
-            </div>
-            <div>
-              <label className="text-xs text-muted-foreground block mb-1">Pricing Method</label>
-              <select
-                value={pricingMethod}
-                onChange={(e) => setPricingMethod(e.target.value as PricingMethod)}
-                className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm"
-              >
-                <option value="EX_VAT">Ex-VAT (prices exclude VAT)</option>
-                <option value="INCL_VAT">Incl. VAT (prices include VAT)</option>
-              </select>
-            </div>
-            <div className="flex items-center gap-3 pt-5">
-              <label className="relative inline-flex items-center cursor-pointer select-none">
-                <input
-                  type="checkbox"
-                  checked={vatRegistered}
-                  onChange={(e) => setVatRegistered(e.target.checked)}
-                  className="sr-only peer"
-                />
-                <div className="w-9 h-5 bg-muted peer-checked:bg-primary rounded-full transition-colors" />
-                <div className="absolute left-0.5 top-0.5 w-4 h-4 bg-white rounded-full transition-transform peer-checked:translate-x-4 shadow" />
-              </label>
-              <span className="text-sm">
-                {vatRegistered ? "VAT Registered" : "Not VAT Registered"}
-              </span>
             </div>
           </div>
         </div>
@@ -262,7 +283,7 @@ function EditSupplierModal({
           <Button
             size="sm"
             onClick={handleSubmit}
-            disabled={saving || !name.trim() || !email.trim()}
+            disabled={saving || !name.trim() || !email.trim() || vatNumberMissing}
           >
             {saving ? "Saving…" : "Save Changes"}
           </Button>

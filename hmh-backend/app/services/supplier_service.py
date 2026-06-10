@@ -5,7 +5,7 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
-from app.core.exceptions import ConflictError, NotFoundError
+from app.core.exceptions import ConflictError, NotFoundError, ValidationError
 from app.models.enums import PricingMethod
 from app.models.supplier import Supplier
 from app.schemas.supplier import SupplierCreate, SupplierUpdate
@@ -95,6 +95,15 @@ def update_supplier(db: Session, supplier_id: uuid.UUID, data: SupplierUpdate) -
         supplier.pricing_method = PricingMethod(data.pricing_method)
     if "default_vat_rate" in fields and data.default_vat_rate is not None:
         supplier.default_vat_rate = data.default_vat_rate
+
+    # Cross-field guard: only fires when at least one VAT field is being changed.
+    # Skipped for unrelated edits (name, phone, etc.) so existing rows with
+    # vat_registered=True but no vat_number aren't suddenly rejected.
+    if "vat_registered" in fields or "vat_number" in fields:
+        if supplier.vat_registered and not (supplier.vat_number or "").strip():
+            raise ValidationError(
+                "VAT number is required when the supplier is VAT registered."
+            )
 
     db.commit()
     db.refresh(supplier)
