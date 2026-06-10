@@ -26,6 +26,7 @@ const ProjectWarehousePage    = lazy(() => import("@/pages/ProjectWarehousePage"
 const PaymentsPage            = lazy(() => import("@/pages/PaymentsPage"));
 const PaymentReportsPage      = lazy(() => import("@/pages/PaymentReportsPage"));
 const InvoiceReconciliationPage = lazy(() => import("@/pages/InvoiceReconciliationPage"));
+const ReconciliationPage        = lazy(() => import("@/pages/ReconciliationPage"));
 const AlertsPage              = lazy(() => import("@/pages/AlertsPage"));
 const LabourPage              = lazy(() => import("@/pages/LabourPage"));
 const WhatsAppQueuePage       = lazy(() => import("@/pages/WhatsAppQueuePage"));
@@ -94,7 +95,8 @@ export function AppRouter() {
             <Route path="project-warehouse" element={<ProjectWarehousePage />} />
             <Route path="payments" element={<PaymentsPage />} />
             <Route path="payment-reports" element={<PaymentReportsPage />} />
-            <Route path="reconciliation" element={<InvoiceReconciliationPage />} />
+            <Route path="reconciliation" element={<ReconciliationPage />} />
+            <Route path="reconciliation/proof-packs" element={<InvoiceReconciliationPage />} />
             <Route path="alerts" element={<AlertsPage />} />
             <Route path="labour" element={<LabourPage />} />
             <Route path="whatsapp-queue" element={<WhatsAppQueuePage />} />

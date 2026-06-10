@@ -36,6 +36,8 @@ from app.models.document_extraction import (
 )
 from app.models.boq_adjustment import BOQAdjustment
 from app.models.mr_email_log import MREmailLog
+from app.models.quotation import Quotation
+from app.models.procurement_reconciliation import ProcurementReconciliation
 
 __all__ = [
     "User",
@@ -85,4 +87,6 @@ __all__ = [
     "ExpenseRecord",
     "BOQAdjustment",
     "MREmailLog",
+    "Quotation",
+    "ProcurementReconciliation",
 ]
