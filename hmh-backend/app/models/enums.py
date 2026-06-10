@@ -238,6 +238,9 @@ class AttachmentType(str, enum.Enum):
     COMPLETION_PHOTO  = "COMPLETION_PHOTO"  # completion evidence
     ISSUE_PHOTO       = "ISSUE_PHOTO"       # defect/issue photo
     DELIVERY_EVIDENCE = "DELIVERY_EVIDENCE" # delivery verification photo
+    # Phase 3M: supplier document centre
+    ORDER_NOTE        = "ORDER_NOTE"        # order note / instruction
+    CREDIT_NOTE       = "CREDIT_NOTE"       # supplier credit note
 
 
 class EmailStatus(str, enum.Enum):

@@ -1,13 +1,13 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import {
   ArrowLeft, Building2, Edit2, CheckCircle2, XCircle,
+  FileText, Download, Trash2, Upload,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Modal } from "@/components/shared/Modal";
-import { AttachmentStrip } from "@/components/shared/AttachmentStrip";
 import {
   suppliersApi,
   type Supplier,
@@ -15,6 +15,277 @@ import {
   type SupplierUpdate,
   type PricingMethod,
 } from "@/api/suppliers";
+import {
+  attachmentsApi,
+  type Attachment,
+  type AttachmentType,
+  ATTACHMENT_TYPE_LABELS,
+} from "@/api/attachments";
+
+// ─── Document Centre ──────────────────────────────────────────────────────────
+
+const SUPPLIER_DOC_TYPES: { value: AttachmentType; label: string }[] = [
+  { value: "ORDER_NOTE",    label: "Order Note" },
+  { value: "QUOTATION",     label: "Quotation" },
+  { value: "PO_DOCUMENT",   label: "Purchase Order" },
+  { value: "DELIVERY_NOTE", label: "Delivery Note" },
+  { value: "INVOICE_COPY",  label: "Invoice" },
+  { value: "CREDIT_NOTE",   label: "Credit Note" },
+];
+
+const DOC_FILTER_CHIPS: { value: AttachmentType | "ALL"; label: string }[] = [
+  { value: "ALL",           label: "All" },
+  { value: "ORDER_NOTE",    label: "Order Notes" },
+  { value: "QUOTATION",     label: "Quotations" },
+  { value: "PO_DOCUMENT",   label: "Purchase Orders" },
+  { value: "DELIVERY_NOTE", label: "Delivery Notes" },
+  { value: "INVOICE_COPY",  label: "Invoices" },
+  { value: "CREDIT_NOTE",   label: "Credit Notes" },
+];
+
+function DocRow({
+  doc,
+  onOpen,
+  onDelete,
+}: {
+  doc: Attachment;
+  onOpen: (d: Attachment) => void;
+  onDelete: (id: string) => void;
+}) {
+  const typeLabel = ATTACHMENT_TYPE_LABELS[doc.attachment_type] ?? doc.attachment_type;
+  const date = new Date(doc.uploaded_at).toLocaleDateString("en-ZA", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
+
+  return (
+    <div className="flex items-center gap-3 px-4 py-3 hover:bg-muted/30 transition-colors group">
+      <div className="shrink-0 w-9 h-9 rounded-lg bg-muted flex items-center justify-center overflow-hidden">
+        {doc.is_image ? (
+          <img src={doc.download_url} alt="" className="w-9 h-9 object-cover" />
+        ) : (
+          <FileText className="w-4 h-4 text-muted-foreground" />
+        )}
+      </div>
+
+      <div className="flex-1 min-w-0">
+        <button
+          onClick={() => onOpen(doc)}
+          className="text-sm font-medium hover:text-primary truncate block w-full text-left leading-tight"
+        >
+          {doc.file_name}
+        </button>
+        {doc.caption && (
+          <p className="text-xs text-muted-foreground truncate mt-0.5">{doc.caption}</p>
+        )}
+        <div className="flex items-center gap-2 mt-1 flex-wrap">
+          <Badge variant="outline" className="text-xs font-normal py-0 px-1.5 h-4">
+            {typeLabel}
+          </Badge>
+          <span className="text-xs text-muted-foreground">{doc.file_size_display}</span>
+          <span className="text-xs text-muted-foreground">{date}</span>
+          {doc.uploaded_by_name && (
+            <span className="text-xs text-muted-foreground">· {doc.uploaded_by_name}</span>
+          )}
+        </div>
+      </div>
+
+      <div className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+        <a
+          href={doc.download_url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+          title="Open / Download"
+        >
+          <Download className="w-3.5 h-3.5" />
+        </a>
+        <button
+          onClick={() => onDelete(doc.id)}
+          className="p-1.5 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
+          title="Delete"
+        >
+          <Trash2 className="w-3.5 h-3.5" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function SupplierDocCentre({ supplierId }: { supplierId: string }) {
+  const [docs, setDocs] = useState<Attachment[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [activeType, setActiveType] = useState<AttachmentType | "ALL">("ALL");
+  const [search, setSearch] = useState("");
+  const [uploadType, setUploadType] = useState<AttachmentType>("QUOTATION");
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState("");
+  const [preview, setPreview] = useState<Attachment | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    attachmentsApi
+      .listByEntity("SUPPLIER", supplierId)
+      .then(setDocs)
+      .catch(() => setDocs([]))
+      .finally(() => setLoading(false));
+  }, [supplierId]);
+
+  const filtered = docs.filter((d) => {
+    const matchesType = activeType === "ALL" || d.attachment_type === activeType;
+    const q = search.toLowerCase();
+    const matchesSearch =
+      !q ||
+      d.file_name.toLowerCase().includes(q) ||
+      (d.caption ?? "").toLowerCase().includes(q);
+    return matchesType && matchesSearch && d.is_active;
+  });
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 5 * 1024 * 1024) {
+      setUploadError("File exceeds 5 MB limit.");
+      e.target.value = "";
+      return;
+    }
+    setUploadError("");
+    setUploading(true);
+    try {
+      const att = await attachmentsApi.upload(file, "SUPPLIER", supplierId, uploadType);
+      setDocs((prev) => [att, ...prev]);
+    } catch {
+      setUploadError("Upload failed. Please try again.");
+    } finally {
+      setUploading(false);
+      e.target.value = "";
+    }
+  };
+
+  const handleDelete = async (id: string) => {
+    if (!window.confirm("Delete this document?")) return;
+    try {
+      await attachmentsApi.delete(id);
+      setDocs((prev) => prev.filter((d) => d.id !== id));
+    } catch {
+      // silent — item may already be gone
+    }
+  };
+
+  const handleOpen = (doc: Attachment) => {
+    if (doc.is_image) {
+      setPreview(doc);
+    } else {
+      window.open(doc.download_url, "_blank", "noopener,noreferrer");
+    }
+  };
+
+  const countFor = (type: AttachmentType) =>
+    docs.filter((d) => d.is_active && d.attachment_type === type).length;
+
+  return (
+    <div className="space-y-4">
+      {/* Category chips */}
+      <div className="flex gap-1.5 flex-wrap">
+        {DOC_FILTER_CHIPS.map((chip) => (
+          <button
+            key={chip.value}
+            onClick={() => setActiveType(chip.value)}
+            className={`px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${
+              activeType === chip.value
+                ? "bg-primary text-primary-foreground"
+                : "bg-muted text-muted-foreground hover:bg-muted/80 hover:text-foreground"
+            }`}
+          >
+            {chip.label}
+            {chip.value !== "ALL" && (
+              <span className="ml-1 opacity-70">({countFor(chip.value as AttachmentType)})</span>
+            )}
+          </button>
+        ))}
+      </div>
+
+      {/* Search + upload row */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <input
+          type="text"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search by filename or caption…"
+          className="h-8 flex-1 min-w-48 rounded-md border border-input bg-background px-3 text-xs"
+        />
+        <select
+          value={uploadType}
+          onChange={(e) => setUploadType(e.target.value as AttachmentType)}
+          className="h-8 rounded-md border border-input bg-background px-2 text-xs"
+        >
+          {SUPPLIER_DOC_TYPES.map((t) => (
+            <option key={t.value} value={t.value}>
+              {t.label}
+            </option>
+          ))}
+        </select>
+        <Button size="sm" onClick={() => fileInputRef.current?.click()} disabled={uploading}>
+          <Upload className="w-3.5 h-3.5 mr-1.5" />
+          {uploading ? "Uploading…" : "Upload"}
+        </Button>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".pdf,.jpg,.jpeg,.png,.gif,.webp,.heic,.doc,.docx,.xls,.xlsx"
+          className="hidden"
+          onChange={handleFileChange}
+        />
+      </div>
+
+      {uploadError && <p className="text-xs text-destructive">{uploadError}</p>}
+
+      {/* Document list */}
+      {loading ? (
+        <div className="space-y-2">
+          {[1, 2, 3].map((i) => (
+            <Skeleton key={i} className="h-14 rounded-lg" />
+          ))}
+        </div>
+      ) : filtered.length === 0 ? (
+        <div className="py-10 text-center text-sm text-muted-foreground border border-dashed border-border rounded-lg">
+          {search || activeType !== "ALL"
+            ? "No documents match your filter."
+            : "No documents uploaded yet. Use the upload button to add documents."}
+        </div>
+      ) : (
+        <div className="divide-y divide-border border border-border rounded-lg overflow-hidden">
+          {filtered.map((doc) => (
+            <DocRow key={doc.id} doc={doc} onOpen={handleOpen} onDelete={handleDelete} />
+          ))}
+        </div>
+      )}
+
+      {/* Image lightbox */}
+      {preview && (
+        <Modal open={!!preview} onClose={() => setPreview(null)} title={preview.file_name} size="lg">
+          <div className="p-4 flex flex-col items-center gap-3">
+            <img
+              src={preview.download_url}
+              alt={preview.file_name}
+              className="max-w-full max-h-[65vh] object-contain rounded"
+            />
+            <a
+              href={preview.download_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-xs text-primary hover:underline flex items-center gap-1"
+            >
+              <Download className="w-3 h-3" />
+              Open full size
+            </a>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
 
 // ─── Edit Modal ───────────────────────────────────────────────────────────────
 function EditSupplierModal({
@@ -535,14 +806,8 @@ export default function SupplierProfilePage() {
 
       {/* Documents */}
       <div className="bg-card border border-border rounded-xl p-5">
-        <h2 className="text-sm font-semibold mb-4">Documents</h2>
-        <AttachmentStrip
-          entityType="SUPPLIER"
-          entityId={supplier.id}
-          attachmentType="QUOTATION"
-          showTypeSelector
-          compact
-        />
+        <h2 className="text-sm font-semibold mb-4">Document Centre</h2>
+        <SupplierDocCentre supplierId={supplier.id} />
       </div>
 
       {/* Edit Modal */}

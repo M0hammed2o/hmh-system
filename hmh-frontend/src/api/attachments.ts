@@ -32,7 +32,10 @@ export type AttachmentType =
   | "BEFORE_PHOTO"
   | "COMPLETION_PHOTO"
   | "ISSUE_PHOTO"
-  | "DELIVERY_EVIDENCE";
+  | "DELIVERY_EVIDENCE"
+  // Phase 3M: supplier document centre
+  | "ORDER_NOTE"
+  | "CREDIT_NOTE";
 
 /** Human-readable labels for attachment type selector. */
 export const ATTACHMENT_TYPE_LABELS: Record<AttachmentType, string> = {
@@ -51,6 +54,8 @@ export const ATTACHMENT_TYPE_LABELS: Record<AttachmentType, string> = {
   COMPLETION_PHOTO:   "Completion Photo",
   ISSUE_PHOTO:        "Issue / Defect Photo",
   DELIVERY_EVIDENCE:  "Delivery Evidence",
+  ORDER_NOTE:         "Order Note",
+  CREDIT_NOTE:        "Credit Note",
 };
 
 export interface Attachment {
