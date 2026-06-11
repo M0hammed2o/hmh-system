@@ -55,6 +55,9 @@ class Settings(BaseSettings):
     SUPABASE_URL:         str = ""   # e.g. https://xyz.supabase.co
     SUPABASE_SERVICE_KEY: str = ""   # service_role key (never ANON key for uploads)
 
+    # AI / LLM
+    ANTHROPIC_API_KEY: str = ""   # Anthropic Claude API key for AI OCR field extraction (Phase 6A)
+
     # OCR provider: "local" (pytesseract), "google_vision", or "disabled"
     OCR_PROVIDER: str = "local"
     # Google Cloud Vision credentials.

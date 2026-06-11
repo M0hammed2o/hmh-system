@@ -7,7 +7,7 @@
  * NEVER auto-submits — user must confirm each field and click Create.
  */
 import { useState, useEffect } from "react";
-import { CheckCircle2, AlertTriangle, Info } from "lucide-react";
+import { CheckCircle2, AlertTriangle, Info, Sparkles } from "lucide-react";
 import { Modal } from "@/components/shared/Modal";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -15,6 +15,12 @@ import {
   gmailApi,
   type ReconciliationSuggestion,
 } from "@/api/gmail";
+import {
+  documentAiApi,
+  type AIExtractionResult,
+  confidenceTier,
+  CONF_BADGE,
+} from "@/api/documentAi";
 import client from "@/api/client";
 
 interface Project {
@@ -37,10 +43,12 @@ interface Props {
 }
 
 export function CreateInvoiceFromSuggestionModal({ open, onClose, suggestion, onCreated }: Props) {
-  const [projects,  setProjects]  = useState<Project[]>([]);
-  const [suppliers, setSuppliers] = useState<Supplier[]>([]);
-  const [saving,    setSaving]    = useState(false);
-  const [error,     setError]     = useState("");
+  const [projects,    setProjects]    = useState<Project[]>([]);
+  const [suppliers,   setSuppliers]   = useState<Supplier[]>([]);
+  const [saving,      setSaving]      = useState(false);
+  const [error,       setError]       = useState("");
+  const [aiResult,    setAIResult]    = useState<AIExtractionResult | null>(null);
+  const [aiLoading,   setAILoading]   = useState(false);
 
   // Editable fields — pre-filled from OCR suggestion
   const [projectId,   setProjectId]   = useState("");
@@ -58,6 +66,7 @@ export function CreateInvoiceFromSuggestionModal({ open, onClose, suggestion, on
   useEffect(() => {
     if (!open) return;
     setError("");
+    setAIResult(null);
     setInvoiceNum(suggestion.invoice_number ?? "");
     setTotalAmount(String(suggestion.total_amount ?? ""));
     setNotes("");
@@ -69,6 +78,13 @@ export function CreateInvoiceFromSuggestionModal({ open, onClose, suggestion, on
     client.get<{ data: Supplier[] }>("/suppliers/", { params: { include_inactive: false } })
       .then(r => setSuppliers(r.data.data ?? []))
       .catch(() => {});
+
+    // Fetch existing AI extraction result if available (non-blocking)
+    if (suggestion.attachment_id) {
+      documentAiApi.getAIExtraction(suggestion.attachment_id)
+        .then(result => setAIResult(result))
+        .catch(() => {}); // 404 is expected when AI hasn't been run yet
+    }
   }, [open, suggestion]);
 
   // Auto-select supplier if OCR matched one by name
@@ -146,6 +162,85 @@ export function CreateInvoiceFromSuggestionModal({ open, onClose, suggestion, on
             )}
           </div>
         </div>
+
+        {/* AI extraction panel */}
+        {aiResult ? (
+          <div className="rounded-lg border border-border overflow-hidden">
+            <div className="flex items-center gap-2 px-3 py-2 bg-muted/40 border-b border-border">
+              <Sparkles className="w-3.5 h-3.5 text-primary shrink-0" />
+              <span className="text-xs font-semibold flex-1">AI Extraction Results</span>
+              <span className={cn(
+                "text-[10px] font-bold px-1.5 py-0.5 rounded border",
+                CONF_BADGE[confidenceTier(aiResult.overall_confidence)]
+              )}>
+                {(aiResult.overall_confidence * 100).toFixed(0)}% overall
+              </span>
+            </div>
+            <div className="divide-y divide-border">
+              {(Object.entries(aiResult.header) as [string, { value: string | number | null; confidence: number }][]).map(([key, field]) => {
+                const tier = confidenceTier(field.confidence);
+                const label = key.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+                return (
+                  <div key={key} className={cn(
+                    "flex items-center justify-between gap-2 px-3 py-1.5 text-xs",
+                    tier === "low" && "bg-red-50/50",
+                  )}>
+                    <span className="text-muted-foreground shrink-0">{label}</span>
+                    <div className="flex items-center gap-2">
+                      <span className={cn("font-semibold", field.value == null && "text-muted-foreground italic")}>
+                        {field.value != null ? String(field.value) : "—"}
+                      </span>
+                      <span className={cn("text-[10px] font-bold px-1.5 py-0.5 rounded border", CONF_BADGE[tier])}>
+                        {(field.confidence * 100).toFixed(0)}%
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            {aiResult.warnings.length > 0 && (
+              <div className="px-3 py-2 bg-amber-50 border-t border-border text-xs text-amber-700 space-y-0.5">
+                {aiResult.warnings.map((w, i) => (
+                  <div key={i} className="flex items-start gap-1.5">
+                    <AlertTriangle className="w-3 h-3 mt-0.5 shrink-0" />{w}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : suggestion.attachment_id ? (
+          <div className="flex items-center gap-2 rounded-lg border border-dashed border-border p-3">
+            <Sparkles className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+            <span className="text-xs text-muted-foreground flex-1">Run AI extraction for per-field confidence scores</span>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 text-xs"
+              disabled={aiLoading}
+              onClick={async () => {
+                setAILoading(true);
+                try {
+                  const r = await documentAiApi.runAIExtraction(suggestion.attachment_id!);
+                  setAIResult(r);
+                  // Pre-fill from high-confidence AI values
+                  if (r.header.invoice_number.confidence >= 0.5 && r.header.invoice_number.value) {
+                    setInvoiceNum(String(r.header.invoice_number.value));
+                  }
+                  if (r.header.gross_amount.confidence >= 0.5 && r.header.gross_amount.value != null) {
+                    setTotalAmount(String(r.header.gross_amount.value));
+                  }
+                } catch {
+                  setError("AI extraction failed. Check that ANTHROPIC_API_KEY is configured.");
+                } finally {
+                  setAILoading(false);
+                }
+              }}
+            >
+              <Sparkles className="w-3 h-3 mr-1" />
+              {aiLoading ? "Analysing…" : "AI Extract"}
+            </Button>
+          </div>
+        ) : null}
 
         {/* Required: Project */}
         <div>

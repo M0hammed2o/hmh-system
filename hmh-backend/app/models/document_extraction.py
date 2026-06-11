@@ -45,8 +45,9 @@ class DocumentExtraction(Base):
     review_status: Mapped[str] = mapped_column(String(50), nullable=False, default="PENDING_REVIEW", index=True)
 
     raw_text:               Mapped[Optional[str]] = mapped_column(Text)
-    extracted_json:         Mapped[Optional[str]] = mapped_column(Text)       # JSON string
+    extracted_json:         Mapped[Optional[str]] = mapped_column(Text)       # JSON string — regex extraction
     manually_corrected_json: Mapped[Optional[str]] = mapped_column(Text)      # JSON string
+    ai_extraction_json:     Mapped[Optional[str]] = mapped_column(Text)       # JSON string — Claude AI extraction (Phase 6A)
 
     confidence_score: Mapped[Optional[float]] = mapped_column(Numeric(5, 2))
 

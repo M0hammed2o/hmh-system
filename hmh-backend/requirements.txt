@@ -35,6 +35,9 @@ email-validator==2.2.0
 google-cloud-vision>=3.4.0   # Google Vision OCR (OCR_PROVIDER=google_vision)
 pypdf>=4.0.0                  # Pure-Python PDF text extraction (no binary deps — works on Render)
 
+# AI / LLM
+anthropic>=0.40.0             # Anthropic Claude API — AI OCR field extraction (Phase 6A)
+
 # Analytics / Export
 openpyxl==3.1.2               # Excel (.xlsx) export for management reports
 reportlab==4.2.5              # PDF generation for management reports

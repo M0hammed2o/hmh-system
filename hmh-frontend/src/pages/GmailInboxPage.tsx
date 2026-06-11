@@ -10,11 +10,13 @@ import {
   type IncomingEmail, type IncomingEmailAttachment, type DetectedType,
   type ProcessedAttachment, type MatchStatus, type ReconciliationSuggestion,
 } from "@/api/gmail";
+import { documentAiApi, type AIExtractionResult } from "@/api/documentAi";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { EmailDraftModal } from "@/components/EmailDraftModal";
 import { CreateInvoiceFromSuggestionModal } from "@/components/gmail/CreateInvoiceFromSuggestionModal";
 import { LinkDeliveryFromSuggestionModal } from "@/components/gmail/LinkDeliveryFromSuggestionModal";
+import { AIExtractionPanel, AIExtractionLoading } from "@/components/ocr/AIExtractionPanel";
 import type { ReviewStatus } from "@/api/gmail";
 
 const AUTO_REFRESH_MS = 3 * 60 * 1000; // 3 minutes
@@ -97,13 +99,19 @@ function SuggestionCard({
   onCreateInvoice,
   onLinkDelivery,
   onDismiss,
+  onAIExtract,
   dismissing,
+  aiExtracting,
+  aiResult,
 }: {
   s: ReconciliationSuggestion;
   onCreateInvoice: () => void;
   onLinkDelivery: () => void;
   onDismiss: () => void;
+  onAIExtract: () => void;
   dismissing: boolean;
+  aiExtracting: boolean;
+  aiResult: AIExtractionResult | null;
 }) {
   const conf = s.match_confidence;
   const ConfIcon = conf >= 0.75 ? CheckCircle2 : AlertTriangle;
@@ -196,6 +204,18 @@ function SuggestionCard({
         <p className="text-[10px] text-muted-foreground flex-1 italic min-w-0">
           requires_review — human approval required
         </p>
+        {s.attachment_id && (
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 text-xs shrink-0"
+            onClick={onAIExtract}
+            disabled={aiExtracting}
+            title="Run Claude AI extraction for per-field confidence scores"
+          >
+            <Sparkles className="w-3.5 h-3.5 mr-1" />{aiExtracting ? "Analysing…" : "AI Extract"}
+          </Button>
+        )}
         {!isActedOn && (
           <Button
             size="sm"
@@ -218,6 +238,14 @@ function SuggestionCard({
           </Button>
         )}
       </div>
+
+      {/* AI extraction result panel */}
+      {aiExtracting && <div className="px-3 pb-3"><AIExtractionLoading /></div>}
+      {aiResult && !aiExtracting && (
+        <div className="px-3 pb-3">
+          <AIExtractionPanel result={aiResult} />
+        </div>
+      )}
     </div>
   );
 }
@@ -396,6 +424,8 @@ export default function GmailInboxPage() {
   const [linkDeliveryModal, setLinkDeliveryModal] = useState<ReconciliationSuggestion | null>(null);
   const [dismissingId,      setDismissingId]      = useState<string | null>(null);
   const [successMsg,        setSuccessMsg]        = useState("");
+  const [aiExtractingId,    setAIExtractingId]    = useState<string | null>(null);
+  const [aiResults,         setAIResults]         = useState<Record<string, AIExtractionResult>>({});
 
   /** Update a single suggestion's review_status in local state. */
   const _patchSuggestionStatus = (attId: string, status: ReviewStatus) => {
@@ -415,6 +445,22 @@ export default function GmailInboxPage() {
       setError("Failed to dismiss suggestion.");
     } finally {
       setDismissingId(null);
+    }
+  };
+
+  /** Run Claude AI extraction for a suggestion's attachment. */
+  const handleAIExtract = async (s: ReconciliationSuggestion) => {
+    if (!s.attachment_id) return;
+    setAIExtractingId(s.attachment_id);
+    setError("");
+    try {
+      const result = await documentAiApi.runAIExtraction(s.attachment_id);
+      setAIResults(prev => ({ ...prev, [s.attachment_id!]: result }));
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      setError(detail ?? "AI extraction failed. Check that ANTHROPIC_API_KEY is set.");
+    } finally {
+      setAIExtractingId(null);
     }
   };
 
@@ -823,7 +869,10 @@ export default function GmailInboxPage() {
                       onCreateInvoice={() => setCreateModal(s)}
                       onLinkDelivery={() => setLinkDeliveryModal(s)}
                       onDismiss={() => handleDismiss(s)}
+                      onAIExtract={() => handleAIExtract(s)}
                       dismissing={dismissingId === s.attachment_id}
+                      aiExtracting={aiExtractingId === s.attachment_id}
+                      aiResult={s.attachment_id ? (aiResults[s.attachment_id] ?? null) : null}
                     />
                   ))
                 )}
