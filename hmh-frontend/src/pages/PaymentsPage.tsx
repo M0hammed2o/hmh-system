@@ -75,7 +75,7 @@ const PAGE_TABS = [
 
 // ── OCR Review Panel ──────────────────────────────────────────────────────────
 
-type OcrStatus = "idle" | "extracting" | "EXTRACTED" | "NEEDS_REVIEW" | "OCR_NOT_AVAILABLE" | "FAILED";
+type OcrStatus = "idle" | "extracting" | "EXTRACTED" | "NEEDS_REVIEW" | "OCR_NOT_AVAILABLE" | "OCR_FAILED" | "FAILED";
 
 interface OcrReview {
   invoice_number: string;
@@ -113,7 +113,7 @@ function OCRReviewPanel({
       const { visionApi } = await import("@/api/vision");
       const result = await visionApi.extract(file, "invoice");
 
-      if (result.status === "OCR_NOT_AVAILABLE" || result.status === "FAILED") {
+      if (result.status === "OCR_NOT_AVAILABLE" || result.status === "OCR_FAILED" || result.status === "FAILED") {
         setStatus(result.status as OcrStatus);
         return;
       }
@@ -190,15 +190,16 @@ function OCRReviewPanel({
         <div className={`px-3 py-1.5 text-[10px] font-medium flex items-center gap-1.5 ${
           status === "EXTRACTED"         ? "bg-green-50 text-green-700 border-b border-green-200" :
           status === "NEEDS_REVIEW"      ? "bg-amber-50 text-amber-700 border-b border-amber-200" :
-          status === "OCR_NOT_AVAILABLE" ? "bg-muted text-muted-foreground border-b border-border" :
+          (status === "OCR_NOT_AVAILABLE" || status === "OCR_FAILED") ? "bg-muted text-muted-foreground border-b border-border" :
           "bg-destructive/10 text-destructive border-b border-destructive/20"
         }`}>
           {status === "EXTRACTED"         && <CheckCircle2 className="w-3 h-3" />}
           {status === "NEEDS_REVIEW"      && <AlertTriangle className="w-3 h-3" />}
-          {status === "OCR_NOT_AVAILABLE" && <FileText className="w-3 h-3" />}
+          {(status === "OCR_NOT_AVAILABLE" || status === "OCR_FAILED") && <FileText className="w-3 h-3" />}
           {status === "EXTRACTED"         && "Fields extracted — review and apply below"}
           {status === "NEEDS_REVIEW"      && "Partial extraction — some fields may be missing. Review carefully."}
           {status === "OCR_NOT_AVAILABLE" && "OCR not configured — enter fields manually"}
+          {status === "OCR_FAILED"        && "Google Vision configured but returned no text — check credentials. Enter fields manually."}
           {status === "FAILED"            && "Could not read file — enter fields manually"}
         </div>
       )}

@@ -1777,8 +1777,10 @@ function UnifiedReceiveModal({ projectId, siteId, lotId, suppliers, materialSumm
                   try {
                     const { visionApi } = await import("@/api/vision");
                     const result = await visionApi.extract(file, "delivery_note");
-                    if (result.status === "OCR_NOT_AVAILABLE") {
-                      setWarning("AI Vision not configured — entering manually.");
+                    if (result.status === "OCR_NOT_AVAILABLE" || result.status === "OCR_FAILED") {
+                      setWarning(result.status === "OCR_FAILED"
+                        ? "Google Vision configured but returned no text — check credentials. Entering manually."
+                        : "AI Vision not configured — entering manually.");
                     } else {
                       const p = result.preview as { delivery_note_number?: string | null; items?: Array<{ description: string | null; quantity: number | null; unit: string | null }> };
                       if (p.delivery_note_number) setDnNum(p.delivery_note_number);
@@ -2697,9 +2699,11 @@ function DeliveryNoteUploadModal({ projectId, siteId, lotId, suppliers, onClose,
       {/* ── Step 2: Correct ── */}
       {step === "correct" && extracted && (
         <div className="space-y-3">
-          {extracted.status === "OCR_NOT_AVAILABLE" && (
+          {(extracted.status === "OCR_NOT_AVAILABLE" || extracted.status === "OCR_FAILED") && (
             <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-700">
-              OCR is not available — enter data manually.
+              {extracted.status === "OCR_FAILED"
+                ? "Google Vision configured but returned no text — verify GOOGLE_CREDENTIALS_JSON on Render. Enter data manually."
+                : "OCR is not available — enter data manually."}
             </div>
           )}
           {extracted.warnings.map((w, i) => (

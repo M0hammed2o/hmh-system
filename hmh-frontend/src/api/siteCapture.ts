@@ -23,7 +23,7 @@ export interface ExtractedItem {
 export interface DeliveryNoteUploadResult {
   id:               string;
   extraction_id:    string;
-  status:           string;   // EXTRACTED | OCR_NOT_AVAILABLE | NEEDS_REVIEW | FAILED
+  status:           string;   // EXTRACTED | OCR_NOT_AVAILABLE | OCR_FAILED | NEEDS_REVIEW | FAILED
   extracted_fields: ExtractionFields;
   items:            ExtractedItem[];
   warnings:         string[];

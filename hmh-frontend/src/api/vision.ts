@@ -48,7 +48,7 @@ export interface VisionPreviewPaymentProof {
 }
 
 export interface VisionResult {
-  status:          string;   // EXTRACTED | NEEDS_REVIEW | OCR_NOT_AVAILABLE | FAILED
+  status:          string;   // EXTRACTED | NEEDS_REVIEW | OCR_NOT_AVAILABLE | OCR_FAILED | FAILED
   document_type:   string;
   file_name:       string | null;
   file_size_bytes: number;
