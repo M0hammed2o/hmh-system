@@ -564,11 +564,15 @@ function MRDetailModal({ mr, suppliers, onClose, onUpdated }: {
   const [showReject, setShowReject] = useState(false);
   const [rejectReason, setRejectReason] = useState("");
   const [showConvert, setShowConvert] = useState(false);
-  const [convertSupplierId, setConvertSupplierId] = useState(suppliers[0]?.id || "");
+  const [convertSupplierId, setConvertSupplierId] = useState(
+    mr.preferred_supplier_id || suppliers[0]?.id || ""
+  );
   const [convertItems, setConvertItems] = useState(
     mr.items.map((i) => ({ description: i.description, quantity: i.requested_quantity, unit: i.unit || "", rate: 0, item_id: i.item_id }))
   );
   const [quotes, setQuotes] = useState<MRQuote[]>([]);
+  const [showAddQuote, setShowAddQuote] = useState(false);
+  const [quoteForm, setQuoteForm] = useState({ supplier_id: mr.preferred_supplier_id || "", description: "", unit_price: "", quoted_quantity: "", unit: "", notes: "" });
   const [showMREmail, setShowMREmail] = useState(false);
 
   // Phase 3I: activity timeline
@@ -737,20 +741,97 @@ function MRDetailModal({ mr, suppliers, onClose, onUpdated }: {
             </div>
           )}
 
-          {quotes.length > 0 && (
-            <div>
-              <p className="text-xs font-medium text-muted-foreground mb-2">Quotes ({quotes.length})</p>
-              <div className="space-y-1.5">
-                {quotes.map((q) => (
-                  <div key={q.id} className={cn("flex items-center justify-between px-3 py-2 rounded-lg border text-sm", q.is_selected ? "border-green-500/40 bg-green-500/5" : "border-border")}>
-                    <span>{q.description}</span>
-                    <div className="flex items-center gap-2">
-                      <span className="font-medium">R{q.unit_price.toFixed(2)}/{q.unit || "unit"}</span>
-                      {q.is_selected && <Check className="w-3.5 h-3.5 text-green-500" />}
+          {/* Quotes section — always shown for APPROVED MRs */}
+          {(["APPROVED", "CONVERTED_TO_PO"].includes(mr.status)) && (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <p className="text-xs font-medium text-muted-foreground">
+                  Supplier Quotes{quotes.length > 0 ? ` (${quotes.length})` : ""}
+                </p>
+                {mr.status === "APPROVED" && (
+                  <Button size="sm" variant="outline" className="h-7 text-xs gap-1"
+                    onClick={() => setShowAddQuote(p => !p)}>
+                    <Plus className="w-3 h-3" />{showAddQuote ? "Cancel" : "Record Quote"}
+                  </Button>
+                )}
+              </div>
+
+              {showAddQuote && (
+                <div className="border border-border rounded-lg p-3 space-y-2 bg-muted/20">
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Supplier *</Label>
+                    <select value={quoteForm.supplier_id} onChange={e => setQuoteForm(f => ({ ...f, supplier_id: e.target.value }))}
+                      className="h-8 w-full rounded-md border border-input bg-background px-2 text-xs">
+                      <option value="">— Select supplier —</option>
+                      {suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                    </select>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="space-y-1">
+                      <Label className="text-xs">Description *</Label>
+                      <Input value={quoteForm.description} onChange={e => setQuoteForm(f => ({ ...f, description: e.target.value }))}
+                        placeholder="Item description" className="h-8 text-xs" />
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs">Unit Price (R) *</Label>
+                      <Input type="number" min="0" step="0.01" value={quoteForm.unit_price}
+                        onChange={e => setQuoteForm(f => ({ ...f, unit_price: e.target.value }))}
+                        placeholder="0.00" className="h-8 text-xs" />
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs">Qty</Label>
+                      <Input type="number" min="0.001" step="any" value={quoteForm.quoted_quantity}
+                        onChange={e => setQuoteForm(f => ({ ...f, quoted_quantity: e.target.value }))}
+                        placeholder="1" className="h-8 text-xs" />
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs">Unit</Label>
+                      <Input value={quoteForm.unit} onChange={e => setQuoteForm(f => ({ ...f, unit: e.target.value }))}
+                        placeholder="e.g. bags" className="h-8 text-xs" />
                     </div>
                   </div>
-                ))}
-              </div>
+                  <Button size="sm" className="w-full h-8 text-xs"
+                    disabled={!quoteForm.supplier_id || !quoteForm.description.trim() || !quoteForm.unit_price || loading === "addquote"}
+                    onClick={async () => {
+                      await act(async () => {
+                        const q = await procurementApi.addQuote(mr.id, {
+                          supplier_id: quoteForm.supplier_id,
+                          description: quoteForm.description.trim(),
+                          unit_price: parseFloat(quoteForm.unit_price),
+                          quoted_quantity: parseFloat(quoteForm.quoted_quantity) || 1,
+                          unit: quoteForm.unit.trim() || undefined,
+                          notes: quoteForm.notes.trim() || undefined,
+                        });
+                        setQuotes(prev => [...prev, q]);
+                        setShowAddQuote(false);
+                        setQuoteForm({ supplier_id: mr.preferred_supplier_id || "", description: "", unit_price: "", quoted_quantity: "", unit: "", notes: "" });
+                      }, "addquote");
+                    }}>
+                    {loading === "addquote" ? "Saving…" : "Save Quote"}
+                  </Button>
+                </div>
+              )}
+
+              {quotes.length > 0 && (
+                <div className="space-y-1.5">
+                  {quotes.map((q) => (
+                    <div key={q.id} className={cn("flex items-center justify-between px-3 py-2 rounded-lg border text-sm", q.is_selected ? "border-green-500/40 bg-green-500/5" : "border-border")}>
+                      <div className="min-w-0">
+                        <span className="font-medium truncate block">{q.description}</span>
+                        <span className="text-xs text-muted-foreground">{suppliers.find(s => s.id === q.supplier_id)?.name || "—"}</span>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <span className="font-medium text-sm">R{q.unit_price.toFixed(2)}/{q.unit || "unit"}</span>
+                        {q.is_selected && <Check className="w-3.5 h-3.5 text-green-500" />}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {quotes.length === 0 && !showAddQuote && (
+                <p className="text-xs text-muted-foreground">No quotes recorded yet. Click "Record Quote" to add one.</p>
+              )}
             </div>
           )}
 

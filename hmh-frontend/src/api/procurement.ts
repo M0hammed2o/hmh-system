@@ -32,6 +32,15 @@ export interface MRItem {
   remarks: string | null;
 }
 
+export interface MREmailLog {
+  id: string;
+  status: string;
+  sent_to_email: string;
+  email_subject: string | null;
+  sent_at: string | null;
+  error_message: string | null;
+}
+
 export interface MaterialRequest {
   id: string;
   request_number: string;
@@ -42,6 +51,7 @@ export interface MaterialRequest {
   priority: MRPriority;
   delivery_destination: DeliveryDestination;
   status: MRStatus;
+  preferred_supplier_id: string | null;
   over_boq: boolean;
   over_boq_reason: string | null;
   approved_by: string | null;
@@ -52,6 +62,7 @@ export interface MaterialRequest {
   created_at: string;
   updated_at: string;
   items: MRItem[];
+  email_log?: MREmailLog | null;
 }
 
 export interface MRItemCreate {
