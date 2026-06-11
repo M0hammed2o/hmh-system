@@ -71,20 +71,20 @@ def _prepare_credentials() -> None:
         return
 
     if raw.strip().startswith("{"):
-        # Inline JSON: write to a temp file once and cache the path.
-        if not (_cred_temp_path and os.path.exists(_cred_temp_path)):
-            import json, tempfile
+        # Inline JSON: write to a fixed path so redeploys overwrite rather than
+        # accumulate orphaned files. Validated on every call but written only once.
+        import json, pathlib
+        if not _cred_temp_path:
             try:
                 json.loads(raw)  # validate JSON before writing
             except json.JSONDecodeError as exc:
                 logger.warning("Google credentials inline JSON is invalid: %s", exc)
                 return
-            with tempfile.NamedTemporaryFile(
-                mode="w", suffix=".json", delete=False, prefix="hmh_gcp_creds_"
-            ) as f:
+            fixed_path = str(pathlib.Path(__file__).resolve().parent.parent.parent / "hmh_gcp_creds.json")
+            with open(fixed_path, "w") as f:
                 f.write(raw)
-                _cred_temp_path = f.name
-            logger.info("vision credentials written to temp file %s", _cred_temp_path)
+            globals()["_cred_temp_path"] = fixed_path
+            logger.info("vision credentials written to %s", fixed_path)
         os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = _cred_temp_path
     else:
         abs_path = _resolve_credentials_path(raw)

@@ -65,10 +65,11 @@ class Settings(BaseSettings):
     GOOGLE_APPLICATION_CREDENTIALS: str = ""
 
     # Alert thresholds — read by alert_scan and reactive alert logic
-    LOW_STOCK_THRESHOLD:     float = 5.0    # items below this trigger LOW_STOCK alert
-    BOQ_VARIANCE_ALERT_PCT:  float = 10.0   # BOQ usage variance % that triggers BOQ_VARIANCE alert
-    PENDING_MR_DAYS:         int   = 5      # MR pending longer than this triggers REQUEST_PENDING_TOO_LONG
-    PAYMENT_DUE_DAYS:        int   = 3      # Phase 3Q.3: days before due date to fire PAYMENT_DUE alert
+    LOW_STOCK_THRESHOLD:              float = 5.0    # items below this trigger LOW_STOCK alert
+    BOQ_VARIANCE_ALERT_PCT:           float = 10.0   # BOQ usage variance % that triggers BOQ_VARIANCE alert
+    PENDING_MR_DAYS:                  int   = 5      # MR pending longer than this triggers REQUEST_PENDING_TOO_LONG
+    PAYMENT_DUE_DAYS:                 int   = 3      # days before due date to fire PAYMENT_DUE alert
+    RECONCILIATION_VARIANCE_THRESHOLD: float = 1.0   # rand amount diff above this flags VARIANCE_DETECTED
 
     # CORS — comma-separated allowed origins
     # Render env var should set the production domain(s)

@@ -174,6 +174,22 @@ def process_email(email_id: uuid.UUID, db: DbSession):
             any_done = True
 
         # ── Alerts ───────────────────────────────────────────────────────────
+        if ext_result["status"] in ("FAILED", "OCR_NOT_AVAILABLE"):
+            _gmail_alert(
+                db, email,
+                f"OCR extraction failed — {att.filename}",
+                f"Document '{att.filename}' could not be extracted (status: {ext_result['status']}). "
+                "Check OCR provider configuration or re-upload the file.",
+                "MEDIUM", now,
+            )
+        elif ext_result["status"] == "NEEDS_REVIEW":
+            _gmail_alert(
+                db, email,
+                f"OCR needs review — {att.filename}",
+                f"Extraction for '{att.filename}' completed with low confidence or missing fields. "
+                "Manual review required before creating an invoice record.",
+                "LOW", now,
+            )
         if mr_match["status"] == "MISMATCH":
             _gmail_alert(
                 db, email,

@@ -15,7 +15,8 @@ from app.schemas.procurement_reconciliation import (
     ProcurementReconciliationUpdate,
 )
 
-_VARIANCE_THRESHOLD = 0.01  # amounts differing by > R 0.01 are flagged
+from app.core.config import settings as _settings
+_VARIANCE_THRESHOLD = _settings.RECONCILIATION_VARIANCE_THRESHOLD  # configurable via RECONCILIATION_VARIANCE_THRESHOLD env var (default R 1.00)
 
 
 # ── Variance computation ──────────────────────────────────────────────────────

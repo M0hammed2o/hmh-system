@@ -169,9 +169,12 @@ def fetch_procurement_emails(db: Session, limit: int = 20) -> dict:
     # Never hit live Gmail in pytest — same guard as email_service SMTP
     import os as _os
     _in_test = bool(_os.getenv("PYTEST_CURRENT_TEST")) or _os.getenv("APP_ENV", "").lower() == "test"
-    if not settings.IMAP_ENABLED or _in_test:
-        logger.info("[MOCK IMAP] IMAP disabled or test env — returning empty result.")
+    if _in_test:
+        logger.info("[MOCK IMAP] Test env — skipping real IMAP fetch.")
         return {"fetched": 0, "saved": 0, "skipped": 0, "mock": True}
+    if not settings.IMAP_ENABLED:
+        logger.info("IMAP disabled (IMAP_ENABLED=false) — no emails fetched.")
+        return {"fetched": 0, "saved": 0, "skipped": 0, "enabled": False, "message": "IMAP is disabled in this environment. Set IMAP_ENABLED=true to activate."}
 
     if not settings.IMAP_USERNAME or not settings.IMAP_PASSWORD:
         logger.warning("IMAP credentials not set. Set IMAP_USERNAME and IMAP_PASSWORD in .env.")

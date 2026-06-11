@@ -573,6 +573,12 @@ def _log_startup_config() -> None:
     else:
         _log.warning("startup supabase=NOT_CONFIGURED photos will be lost on Render restart")
     _log.info("startup smtp_enabled=%s whatsapp_enabled=%s", settings.SMTP_ENABLED, settings.WHATSAPP_ENABLED)
+    if settings.WHATSAPP_ENABLED and not settings.WHATSAPP_ALERT_TEMPLATE_NAME:
+        _log.warning(
+            "startup WHATSAPP_ALERT_TEMPLATE_NAME is not set — "
+            "WhatsApp messages outside the 24-hour window will fail silently. "
+            "Set this in Render env vars to enable template-based sends."
+        )
 
     # OCR / Vision
     from app.services.document_ai_service import validate_ocr_setup
