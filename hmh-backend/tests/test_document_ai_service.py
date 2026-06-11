@@ -320,7 +320,8 @@ class TestGoogleVisionOCR:
         test_file = tmp_path / "invoice.png"
         test_file.write_bytes(b"\x89PNG\r\n\x1a\n")  # minimal PNG header bytes
 
-        monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
+        # Simulate credentials being present (env var set by _prepare_credentials)
+        monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "/fake/creds.json")
         monkeypatch.setattr(
             "app.services.document_ai_service._prepare_credentials", lambda: None
         )
@@ -338,7 +339,7 @@ class TestGoogleVisionOCR:
 
         test_file = tmp_path / "doc.png"
         test_file.write_bytes(b"\x89PNG\r\n\x1a\n")
-        monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
+        monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "/fake/creds.json")
         monkeypatch.setattr(
             "app.services.document_ai_service._prepare_credentials", lambda: None
         )

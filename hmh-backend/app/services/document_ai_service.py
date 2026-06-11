@@ -109,6 +109,15 @@ def extract_text_via_google_vision(file_path: str) -> str:
         from google.cloud import vision  # type: ignore
 
         _prepare_credentials()
+
+        if not os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"):
+            logger.warning(
+                "Google Vision credentials not available for %s — "
+                "set GOOGLE_CREDENTIALS_JSON (Render) or GOOGLE_APPLICATION_CREDENTIALS (local).",
+                os.path.basename(file_path),
+            )
+            return ""
+
         client_v = vision.ImageAnnotatorClient()
 
         with open(file_path, "rb") as f:
@@ -444,7 +453,9 @@ def extract_document_text(file_path: str) -> tuple[str, str]:
         logger.info("pdf ocr_fallback=required file=%s", os.path.basename(file_path))
         if _ocr_provider() == "disabled":
             return ("", "OCR_NOT_AVAILABLE")
+        vision_attempted = False
         if _ocr_provider() == "google_vision":
+            vision_attempted = True
             text = extract_text_via_google_vision(file_path)
             if text.strip():
                 return (text, "OCR_EXTRACTED")
@@ -468,8 +479,8 @@ def extract_document_text(file_path: str) -> tuple[str, str]:
             except ImportError:
                 logger.debug("pdf fitz not available for OCR rendering")
         except ImportError:
-            logger.debug("pdf pytesseract/Pillow not installed — OCR_NOT_AVAILABLE")
-            return ("", "OCR_NOT_AVAILABLE")
+            logger.debug("pdf pytesseract/Pillow not installed — OCR unavailable")
+            return ("", "OCR_FAILED" if vision_attempted else "OCR_NOT_AVAILABLE")
         return ("", "OCR_REQUIRED")
 
     elif ext in {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tiff", ".tif"}:
@@ -478,7 +489,12 @@ def extract_document_text(file_path: str) -> tuple[str, str]:
             text = extract_text_via_google_vision(file_path)
             if text.strip():
                 return (text, "OCR_EXTRACTED")
-            # Vision failed — fall through to local
+            # Vision configured but returned empty — try local tesseract as fallback
+            text = extract_text_from_image(file_path)
+            if text.strip():
+                return (text, "OCR_EXTRACTED")
+            # Both Vision and local OCR returned nothing
+            return ("", "OCR_FAILED")
         elif _ocr_provider() == "disabled":
             return ("", "OCR_NOT_AVAILABLE")
 
@@ -860,6 +876,12 @@ def extract_document_data(file_path: str, document_type: str = "OTHER") -> dict:
                         "Key reference number could not be extracted — manual review required."
                     )
 
+        elif status == "OCR_FAILED":
+            result["warnings"].append(
+                "Google Vision is configured but returned no text. "
+                "Verify GOOGLE_CREDENTIALS_JSON is set correctly on Render, "
+                "or check API quota and service account permissions."
+            )
         elif status in {"OCR_REQUIRED", "OCR_NOT_AVAILABLE"}:
             result["warnings"].append(f"Text extraction not available ({status}) — manual data entry required.")
 

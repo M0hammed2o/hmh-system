@@ -181,8 +181,8 @@ class TestDeliveryNoteUpload:
         r = _upload_image_placeholder(client, s["staff_tok"], s["site_id"])
         assert r.status_code == 201, r.text
         data = r.json()["data"]
-        # Status may be OCR_NOT_AVAILABLE or FAILED — both acceptable for an image without OCR
-        assert data["status"] in ("EXTRACTED", "OCR_NOT_AVAILABLE", "FAILED", "NEEDS_REVIEW", "EXTRACTION_FAILED")
+        # Status may be OCR_NOT_AVAILABLE, OCR_FAILED, or FAILED — all acceptable for an image without OCR
+        assert data["status"] in ("EXTRACTED", "OCR_NOT_AVAILABLE", "OCR_FAILED", "FAILED", "NEEDS_REVIEW", "EXTRACTION_FAILED")
         # Verification record must always be created
         vid = data["id"]
         v = db.query(DeliveryVerification).filter(

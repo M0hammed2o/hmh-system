@@ -524,10 +524,11 @@ function SummaryModal({ result, onClose }: { result: { summary_text: string; que
 
 // ── Tab definition ────────────────────────────────────────────────────────────
 
-type Tab = "all" | "critical" | "materials" | "deliveries" | "invoices" | "vehicles" | "delays" | "queue" | "recipients";
+type Tab = "active" | "history" | "critical" | "materials" | "deliveries" | "invoices" | "vehicles" | "delays" | "queue" | "recipients";
 
 const TABS: { id: Tab; label: string }[] = [
-  { id: "all",        label: "All" },
+  { id: "active",     label: "Active" },
+  { id: "history",    label: "History" },
   { id: "critical",   label: "Critical" },
   { id: "materials",  label: "Materials" },
   { id: "deliveries", label: "Deliveries" },
@@ -550,7 +551,7 @@ const TAB_TYPE_FILTER: Partial<Record<Tab, string[]>> = {
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function AlertsPage() {
-  const [tab, setTab] = useState<Tab>("all");
+  const [tab, setTab] = useState<Tab>("active");
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [stats, setStats] = useState<AlertStats | null>(null);
   const [recipients, setRecipients] = useState<AlertRecipient[]>([]);
@@ -631,7 +632,8 @@ export default function AlertsPage() {
   };
 
   const filteredAlerts = useMemo(() => {
-    if (tab === "all") return alerts;
+    if (tab === "active")  return alerts.filter((a) => a.status === "OPEN");
+    if (tab === "history") return alerts.filter((a) => a.status === "ACKNOWLEDGED" || a.status === "RESOLVED");
     if (tab === "critical") return alerts.filter((a) => a.severity === "CRITICAL" || a.severity === "HIGH");
     const types = TAB_TYPE_FILTER[tab];
     if (types) return alerts.filter((a) => types.includes(a.alert_type));
@@ -695,6 +697,11 @@ export default function AlertsPage() {
             )}
           >
             {t.label}
+            {t.id === "active" && stats && stats.open > 0 && (
+              <span className="ml-1.5 bg-destructive text-destructive-foreground text-[10px] rounded-full px-1.5 py-0.5">
+                {stats.open}
+              </span>
+            )}
             {t.id === "queue" && queueStats && (queueStats.pending + queueStats.failed) > 0 && (
               <span className="ml-1.5 bg-amber-500 text-white text-[10px] rounded-full px-1.5 py-0.5">
                 {queueStats.pending + queueStats.failed}
@@ -738,7 +745,9 @@ export default function AlertsPage() {
           {filteredAlerts.length === 0 ? (
             <div className="bg-card border border-border rounded-xl p-10 text-center">
               <CheckCircle2 className="w-8 h-8 text-green-500 mx-auto mb-2" />
-              <p className="text-sm text-muted-foreground">No alerts in this category.</p>
+              <p className="text-sm text-muted-foreground">
+                {tab === "active" ? "All clear — no open alerts." : tab === "history" ? "No alert history yet." : "No alerts in this category."}
+              </p>
             </div>
           ) : (
             filteredAlerts.map((a) => (
