@@ -74,6 +74,10 @@ def _entity_project_id(db, entity_type: str, entity_id: uuid.UUID):
         from app.models.stock import UsageLog
         obj = db.get(UsageLog, entity_id)
         return obj.project_id if obj else None
+    if t == "WORK_DONE":
+        from app.models.work_done import SubcontractorWorkDone
+        obj = db.get(SubcontractorWorkDone, entity_id)
+        return obj.project_id if obj else None
     # SUPPLIER, CERTIFICATION, BOQ_HEADER — not project-scoped; any authed user may access
     return None
 

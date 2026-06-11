@@ -42,6 +42,8 @@ const AuditPage               = lazy(() => import("@/pages/AuditPage"));
 const NotificationSettingsPage    = lazy(() => import("@/pages/NotificationSettingsPage"));
 const ProcurementAnalyticsPage    = lazy(() => import("@/pages/ProcurementAnalyticsPage"));
 const SettingsPage            = lazy(() => import("@/pages/SettingsPage"));
+const WorkDonePage            = lazy(() => import("@/pages/WorkDonePage"));
+const MonthlySubcontractorSummaryPage = lazy(() => import("@/pages/MonthlySubcontractorSummaryPage"));
 
 function PageLoader() {
   return (
@@ -112,6 +114,8 @@ export function AppRouter() {
             <Route path="notification-settings" element={<NotificationSettingsPage />} />
             <Route path="procurement-analytics" element={<ProcurementAnalyticsPage />} />
             <Route path="settings" element={<SettingsPage />} />
+            <Route path="work-done" element={<WorkDonePage />} />
+            <Route path="work-done/monthly-summary" element={<MonthlySubcontractorSummaryPage />} />
           </Route>
 
           <Route path="*" element={<Navigate to="/" replace />} />

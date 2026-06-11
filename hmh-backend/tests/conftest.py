@@ -499,6 +499,23 @@ def ensure_tables():
             END $$;
         """))
 
+    # migration 0043: work_done_status_enum + WORK_DONE attachment entity
+    with engine.begin() as conn:
+        conn.execute(_t("""
+            DO $$ BEGIN
+                CREATE TYPE work_done_status_enum AS ENUM (
+                    'DRAFT', 'SUBMITTED', 'SITE_APPROVED', 'OFFICE_APPROVED', 'PAID', 'REJECTED'
+                );
+            EXCEPTION WHEN duplicate_object THEN NULL;
+            END $$;
+        """))
+        conn.execute(_t("""
+            DO $$ BEGIN
+                ALTER TYPE attachment_entity_enum ADD VALUE IF NOT EXISTS 'WORK_DONE';
+            EXCEPTION WHEN others THEN NULL;
+            END $$;
+        """))
+
     yield
 
 

@@ -216,6 +216,7 @@ class AttachmentEntity(str, enum.Enum):
     SUPPLIER         = "SUPPLIER"          # Phase 3I: supplier documents
     LOT              = "LOT"               # Phase 3K: lot/unit documents
     PROJECT          = "PROJECT"           # Phase 3K: project-level documents
+    WORK_DONE        = "WORK_DONE"         # Phase 6B: subcontractor work done photos
 
 
 class AttachmentType(str, enum.Enum):
@@ -313,6 +314,15 @@ class JobCardStatus(str, enum.Enum):
     OFFICE_APPROVED = "OFFICE_APPROVED"
     OWNER_APPROVED = "OWNER_APPROVED"
     PAYMENT_APPROVED = "PAYMENT_APPROVED"
+    PAID = "PAID"
+    REJECTED = "REJECTED"
+
+
+class WorkDoneStatus(str, enum.Enum):
+    DRAFT = "DRAFT"
+    SUBMITTED = "SUBMITTED"
+    SITE_APPROVED = "SITE_APPROVED"
+    OFFICE_APPROVED = "OFFICE_APPROVED"
     PAID = "PAID"
     REJECTED = "REJECTED"
 
