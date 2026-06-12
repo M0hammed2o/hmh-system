@@ -24,12 +24,28 @@ depends_on = None
 
 
 def upgrade() -> None:
-    # New enum type for work done status
+    # Create enum only if it does not already exist.
+    # Production may have a partial version of this type from a failed prior attempt.
     op.execute("""
-        CREATE TYPE work_done_status_enum AS ENUM (
-            'DRAFT', 'SUBMITTED', 'SITE_APPROVED', 'OFFICE_APPROVED', 'PAID', 'REJECTED'
-        )
+        DO $$
+        BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'work_done_status_enum') THEN
+                CREATE TYPE work_done_status_enum AS ENUM (
+                    'DRAFT', 'SUBMITTED', 'SITE_APPROVED', 'OFFICE_APPROVED', 'PAID', 'REJECTED'
+                );
+            END IF;
+        END
+        $$
     """)
+
+    # Ensure every required value is present — no-op if value already exists.
+    # This handles the case where the type existed with a different set of values.
+    op.execute("ALTER TYPE work_done_status_enum ADD VALUE IF NOT EXISTS 'DRAFT'")
+    op.execute("ALTER TYPE work_done_status_enum ADD VALUE IF NOT EXISTS 'SUBMITTED'")
+    op.execute("ALTER TYPE work_done_status_enum ADD VALUE IF NOT EXISTS 'SITE_APPROVED'")
+    op.execute("ALTER TYPE work_done_status_enum ADD VALUE IF NOT EXISTS 'OFFICE_APPROVED'")
+    op.execute("ALTER TYPE work_done_status_enum ADD VALUE IF NOT EXISTS 'PAID'")
+    op.execute("ALTER TYPE work_done_status_enum ADD VALUE IF NOT EXISTS 'REJECTED'")
 
     # Extend attachment entity enum
     op.execute("ALTER TYPE attachment_entity_enum ADD VALUE IF NOT EXISTS 'WORK_DONE'")
