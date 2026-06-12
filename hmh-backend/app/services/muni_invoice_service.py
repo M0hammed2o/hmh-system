@@ -234,134 +234,404 @@ def export_excel(db: Session, invoice_id: uuid.UUID) -> bytes:
     """
     try:
         import openpyxl
-        from openpyxl.styles import Font, Alignment
+        from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
+        from openpyxl.utils import get_column_letter
     except ImportError:
         raise ValidationError("openpyxl is required for Excel export. Run: pip install openpyxl")
+
+    def _add_border(ws_inner, row, col, top=None, bottom=None, left=None, right=None):
+        c = ws_inner.cell(row=row, column=col)
+        b = c.border
+        def _s(existing, new):
+            if new:
+                return new
+            if existing and existing.border_style:
+                return existing
+            return Side()
+        c.border = Border(
+            top=_s(b.top if b else None, top),
+            bottom=_s(b.bottom if b else None, bottom),
+            left=_s(b.left if b else None, left),
+            right=_s(b.right if b else None, right),
+        )
 
     inv = _get_or_404(db, invoice_id)
 
     wb = openpyxl.Workbook()
     ws = wb.active
-    ws.title = f"Invoice {inv.invoice_number}"
+    ws.title = f"Cert {inv.cert_number or ''} - inv {inv.invoice_number}"
 
-    def w(row: int, col: int, value, bold: bool = False, align: str = "left") -> None:
-        cell = ws.cell(row=row, column=col, value=value)
-        if bold:
-            cell.font = Font(bold=True)
-        cell.alignment = Alignment(horizontal=align, vertical="center", wrap_text=True)
+    # ── Style constants (matching original cell-by-cell) ──────────────────────
+    MED   = Side(style="medium")
+    DBL   = Side(style="double")
+    MONEY = '"R"\\ #,##0.00;[Red]"R"\\ #,##0.00'
 
-    # ── Column widths (approximate match to template) ─────────────────────────
-    col_widths = {1: 8, 2: 3, 3: 45, 4: 12, 5: 3, 6: 14, 7: 14, 8: 40, 9: 22, 10: 16}
-    for col_idx, width in col_widths.items():
-        ws.column_dimensions[openpyxl.utils.get_column_letter(col_idx)].width = width
+    F_TITLE  = Font(name="Arial",    size=10, bold=True)
+    F_HDR8B  = Font(name="Arial",    size=8,  bold=True)
+    F_HDR8   = Font(name="Arial",    size=8,  bold=False)
+    F_CAL11B = Font(name="Calibri",  size=11, bold=True,  color="FF000000")
+    F_CAL11  = Font(name="Calibri",  size=11, bold=False, color="FF000000")
+    F_CAL9   = Font(name="Calibri",  size=9,  bold=False, color="FF000000")
+    F_CAL12R = Font(name="Calibri",  size=12, bold=False, color="FFFF0000")
+    F_BANK   = Font(name="Copperplate Gothic Bold", size=9)
+    F_TOT    = Font(name="Arial",    size=10, bold=True)
+    F_DUE    = Font(name="Arial",    size=10, bold=True,  color="FFFF0000")
+    F_SIG    = Font(name="Arial",    size=12, bold=False)
 
-    # ── Header (right side) ───────────────────────────────────────────────────
-    w(1, 8, "TAX INVOICE", bold=True)
-    w(2, 8, inv.invoice_date.strftime("%Y-%m-%d") if inv.invoice_date else "")
-    w(3, 8, "Page                                                     1")
-    w(4, 8, f"Document Number                   {inv.invoice_number}")
+    # ── Column widths (exact match to original) ───────────────────────────────
+    for col, width in {
+        1: 6.44, 2: 0.55, 3: 30.22, 4: 7.33, 5: 0.55,
+        6: 6.78, 7: 11.33, 8: 7.66, 9: 12.55, 10: 14.78,
+    }.items():
+        ws.column_dimensions[get_column_letter(col)].width = width
 
-    # ── Supplier email (left side) ────────────────────────────────────────────
-    w(5, 1, "e-mail:")
-    w(5, 4, inv.company_email or "")
+    # ── Row heights for fixed header section ──────────────────────────────────
+    for r, h in {
+        1: 15.0, 2: 17.4, 3: 13.2, 4: 14.4, 7: 14.4,
+        8: 14.4, 9: 14.4, 10: 15.0, 15: 10.8, 16: 13.8,
+        17: 10.8, 18: 22.2, 19: 3.0,
+    }.items():
+        ws.row_dimensions[r].height = h
 
-    w(6, 8, "   Deliver To:")
+    # ── ROW 1: TAX INVOICE ────────────────────────────────────────────────────
+    ws.merge_cells("H1:J1")
+    c = ws["H1"]
+    c.value = "TAX INVOICE"
+    c.font  = F_TITLE
+    c.alignment = Alignment(horizontal="center", vertical="center")
+    c.border = Border(right=MED, top=MED, bottom=MED)
 
-    # ── Client info ───────────────────────────────────────────────────────────
+    # ── ROWS 2–3: Invoice date ────────────────────────────────────────────────
+    ws.merge_cells("H2:J3")
+    ws.merge_cells("A3:G3")
+    c = ws["H2"]
+    c.value  = inv.invoice_date if inv.invoice_date else ""
+    c.font   = F_HDR8B
+    c.alignment = Alignment(horizontal="left", vertical="center")
+    c.number_format = "d-mmm-yy"
+
+    # ── ROW 4: spacer merges ──────────────────────────────────────────────────
+    ws.merge_cells("F4:G4")
+
+    # ── ROWS 5–6: Page number ─────────────────────────────────────────────────
+    ws.merge_cells("F5:G5")
+    ws.merge_cells("F6:G6")
+    ws.merge_cells("H5:J6")
+    c = ws["H5"]
+    c.value = "Page                                                     1"
+    c.font  = F_HDR8B
+    c.alignment = Alignment(horizontal="left", vertical="center")
+
+    # ── ROWS 8–10: Document number ────────────────────────────────────────────
+    ws.merge_cells("H8:J10")
+    c = ws["H8"]
+    c.value = f"Document Number                   {inv.invoice_number}"
+    c.font  = F_HDR8B
+    c.alignment = Alignment(vertical="center")
+
+    # ── ROW 10: e-mail ────────────────────────────────────────────────────────
+    ws.merge_cells("A10:C10")
+    c = ws["A10"]
+    c.value = "e-mail:"
+    c.font  = F_HDR8
+    c.alignment = Alignment(horizontal="right")
+    c = ws["D10"]
+    c.value = inv.company_email or ""
+    c.alignment = Alignment(horizontal="left")
+
+    # ── ROW 12: Deliver To ────────────────────────────────────────────────────
+    c = ws["H12"]
+    c.value = "   Deliver To:"
+    c.font  = F_HDR8B
+    c.alignment = Alignment(horizontal="left")
+
+    # ── ROW 13: Client VAT + name ─────────────────────────────────────────────
+    ws.merge_cells("H13:J13")
     if inv.client_vat_no:
-        w(7, 3, f"Client Vat No {inv.client_vat_no}")
-    w(7, 8, inv.client_name or "")
+        c = ws["C13"]
+        c.value = f"Client Vat No {inv.client_vat_no}"
+        c.font  = F_HDR8
+    c = ws["H13"]
+    c.value = inv.client_name or "Ethekweni Municipality"
+    c.font  = F_HDR8
+    c.alignment = Alignment(horizontal="right")
 
-    address_lines = (inv.client_address or "").split("\n")
-    for i, line in enumerate(address_lines[:3]):
-        w(8 + i, 8, line)
+    # ── ROWS 14–15: Client address ────────────────────────────────────────────
+    ws.merge_cells("H14:J14")
+    ws.merge_cells("H15:J15")
+    addr = inv.client_address or "PO BOX 828,Durban\n4001"
+    addr_lines = addr.split("\n")
+    for i, (row, addr_line) in enumerate(zip([14, 15], addr_lines[:2])):
+        c = ws.cell(row=row, column=8, value=addr_line)
+        c.font  = F_HDR8
+        c.alignment = Alignment(horizontal="right")
 
-    # ── Reference header row ─────────────────────────────────────────────────
-    ref_row = 10
-    w(ref_row, 1, "Account")
-    w(ref_row, 3, "Your Reference")
-    w(ref_row, 6, "Tax Reference")
-    w(ref_row, 8, "Sales Code")
-    w(ref_row + 1, 6, "N/A")
+    # ── ROW 16: Reference column headers ─────────────────────────────────────
+    ws.merge_cells("C16:D16")
+    ws.merge_cells("F16:G16")
+    for col, val, align in [
+        (1, "Account",        None),
+        (3, "Your Reference", "center"),
+        (6, "Tax Reference",  "right"),
+        (8, "Sales Code",     "right"),
+    ]:
+        c = ws.cell(row=16, column=col, value=val)
+        c.font = F_HDR8B
+        if align:
+            c.alignment = Alignment(horizontal=align)
 
-    # ── Column headers ────────────────────────────────────────────────────────
-    hdr = ref_row + 2
-    w(hdr, 1, "Code",       bold=True)
-    w(hdr, 3, "Description", bold=True)
-    w(hdr, 4, "Quantity",   bold=True)
-    w(hdr, 6, "Unit Price", bold=True)
-    w(hdr, 7, "Total",      bold=True)
-    w(hdr, 8, "Disc%",      bold=True)
-    w(hdr, 9, "Tax",        bold=True)
+    # ── ROW 17: Reference values ──────────────────────────────────────────────
+    ws.merge_cells("C17:D17")
+    c = ws["F17"]
+    c.value = "N/A"
+    c.font  = F_HDR8
+    c.alignment = Alignment(horizontal="center")
 
-    # ── Project / certificate block ───────────────────────────────────────────
-    proj_row = hdr + 3
-    if inv.project_description:
-        w(proj_row,     3, inv.project_description, bold=True)
-    if inv.contract_reference:
-        w(proj_row + 1, 3, inv.contract_reference)
+    # ── ROW 18: Column headers with medium top border ─────────────────────────
+    for col, val, align in [
+        (1, "Code",        None),
+        (3, "Description", None),
+        (4, "Quantity",    "center"),
+        (6, "Unit Price",  "left"),
+        (7, "Total",       "right"),
+        (8, "Disc%",       "center"),
+        (9, "Tax",         None),
+    ]:
+        c = ws.cell(row=18, column=col, value=val)
+        c.font = F_HDR8B
+        if align:
+            c.alignment = Alignment(horizontal=align, wrap_text=(col == 6))
+
+    # ── ROW 19: 3pt spacer (already set above) ────────────────────────────────
+
+    # ── ROWS 20–26: Project / cert block ─────────────────────────────────────
+    for r in range(20, 27):
+        ws.row_dimensions[r].height = 12.0
+
+    c = ws["C21"]
+    c.value = inv.project_description or ""
+    c.font  = F_CAL11B
+    c.alignment = Alignment(horizontal="left")
+
+    c = ws["C23"]
+    c.value = inv.contract_reference or ""
+    c.font  = F_CAL11B
+    c.alignment = Alignment(horizontal="left")
+
     cert_label = f"(to pay cert {inv.cert_number})" if inv.cert_number else ""
-    subtotal_val = float(inv.subtotal or 0)
-    w(proj_row + 2, 3, cert_label)
-    w(proj_row + 2, 7, subtotal_val)
-    w(proj_row + 2, 10, subtotal_val)
+    c = ws["C24"]
+    c.value = cert_label
+    c.font  = F_CAL11B
+    c.alignment = Alignment(horizontal="left")
 
-    # ── DESCRIPTION header ────────────────────────────────────────────────────
-    desc_hdr_row = proj_row + 3
-    w(desc_hdr_row, 3, "DESCRIPTION", bold=True)
+    sub_val = float(inv.subtotal or 0)
+    c = ws["G24"]
+    c.value = sub_val
+    c.font  = F_TITLE
+    c.alignment = Alignment(horizontal="right")
+    c.number_format = MONEY
 
-    # ── Line items ────────────────────────────────────────────────────────────
-    item_start = desc_hdr_row + 1
-    for idx, item in enumerate(inv.items):
-        r = item_start + idx
-        w(r, 1, item.line_number or str(idx + 1))
-        w(r, 3, item.description or "")
+    c = ws["J24"]
+    c.value = sub_val
+    c.font  = F_TITLE
+    c.alignment = Alignment(horizontal="right")
+    c.number_format = MONEY
+
+    c = ws["C26"]
+    c.value = "DESCRIPTION "
+    c.font  = F_CAL11B
+    c.alignment = Alignment(horizontal="left")
+
+    # ── ROWS 27+: Line items ─────────────────────────────────────────────────
+    ITEM_START = 27
+    items = sorted(inv.items, key=lambda x: x.sort_order)
+    for idx, item in enumerate(items):
+        r = ITEM_START + idx
+        ws.row_dimensions[r].height = 12.0
+
+        # Col A: line number — Calibri 11, center/center
+        line_num = int(item.line_number) if item.line_number and str(item.line_number).isdigit() else (idx + 1)
+        c = ws.cell(row=r, column=1, value=line_num)
+        c.font = F_CAL11
+        c.alignment = Alignment(horizontal="center", vertical="center")
+        c.border = Border(left=MED)
+
+        # Col C: description — Calibri 9, left/center, wrap
+        c = ws.cell(row=r, column=3, value=item.description or "")
+        c.font = F_CAL9
+        c.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+
+        # Col D: quantity — Calibri 11, center/center
         if item.quantity is not None:
-            w(r, 4, float(item.quantity))
+            c = ws.cell(row=r, column=4, value=float(item.quantity))
+            c.font = F_CAL11
+            c.alignment = Alignment(horizontal="center", vertical="center")
+
+        # Col F: unit price
         if item.unit_price is not None:
-            w(r, 6, float(item.unit_price))
+            ws.cell(row=r, column=6, value=float(item.unit_price))
+
+        # Col G: total
         if item.total is not None:
-            w(r, 7, float(item.total))
+            ws.cell(row=r, column=7, value=float(item.total))
+
+        # Col H: disc%
         if item.disc_pct is not None:
-            w(r, 8, float(item.disc_pct))
+            ws.cell(row=r, column=8, value=float(item.disc_pct))
+
+        # Right border on J (outer box — will also be covered by _apply_all_borders)
+        ws.cell(row=r, column=10).border = Border(right=MED)
+
+    items_end = ITEM_START + len(items) - 1 if items else ITEM_START - 1
 
     # ── Notes ─────────────────────────────────────────────────────────────────
-    notes_row = item_start + len(inv.items) + 1
+    notes_row = items_end + 2
     if inv.notes:
-        w(notes_row, 3, inv.notes)
-        notes_row += 1
+        c = ws.cell(row=notes_row, column=3, value=inv.notes)
+        c.font = F_CAL12R
+        c.alignment = Alignment(horizontal="left")
 
-    # ── Banking details ───────────────────────────────────────────────────────
-    bank_row = notes_row + 1
+    # ── Banking details (Copperplate Gothic Bold 9) ────────────────────────────
+    bank_start = notes_row + 5
     if inv.bank_name:
-        w(bank_row,     3, f"BANKING DETAILS : {inv.bank_name.upper()}")
-        w(bank_row + 1, 3, f"ACCOUNT NUMBER : {inv.account_number or ''}")
-        w(bank_row + 2, 3, f"BRANCH  : {inv.branch_name or ''}")
-        w(bank_row + 3, 3, f"BRANCH CODE: {inv.branch_code or ''}")
-        totals_row = bank_row + 5
+        for i, line in enumerate([
+            f"BANKING DETAILS : {inv.bank_name.upper()}",
+            f"ACCOUNT NUMBER : {inv.account_number or ''}",
+            f"BRANCH  : {inv.branch_name or ''}",
+            f"BRANCH CODE: {inv.branch_code or ''}",
+        ]):
+            c = ws.cell(row=bank_start + i, column=3, value=line)
+            c.font = F_BANK
+        bank_end = bank_start + 3
     else:
-        totals_row = bank_row + 1
+        bank_end = bank_start - 1
 
-    # ── Totals section ────────────────────────────────────────────────────────
-    sub = float(inv.subtotal or 0)
+    # ── Totals section (rows T through T+7) ───────────────────────────────────
+    T = bank_end + 5
+
+    sub  = float(inv.subtotal or 0)
     prev = float(inv.previously_paid or 0)
     net  = max(0.0, sub - prev)
     vat  = float(inv.vat_amount or 0)
     due  = float(inv.total_due or 0)
 
-    w(totals_row,     9, "Sub Total",           bold=True)
-    w(totals_row,     10, sub)
-    w(totals_row + 1, 1, "Signature: ")
-    w(totals_row + 2, 9, "Sub Total",           bold=True)
-    w(totals_row + 2, 10, sub)
-    w(totals_row + 3, 9, "Less Previously paid", bold=True)
-    w(totals_row + 3, 10, prev if prev > 0 else 0)
-    w(totals_row + 4, 9, "Sub Total",           bold=True)
-    w(totals_row + 4, 10, net)
-    w(totals_row + 5, 9, f"Vat @{float(inv.vat_rate or 15):.0f}%", bold=True)
-    w(totals_row + 5, 10, vat)
-    w(totals_row + 6, 9, "Now Due ",             bold=True)
-    w(totals_row + 6, 10, due)
+    ws.row_dimensions[T].height = 14.4
+    c = ws.cell(row=T, column=9, value="Sub Total")
+    c.font = F_TOT; c.alignment = Alignment(vertical="center")
+    c = ws.cell(row=T, column=10, value=sub)
+    c.font = F_TOT; c.alignment = Alignment(vertical="center"); c.number_format = MONEY
+
+    ws.row_dimensions[T + 1].height = 15.6
+    c = ws.cell(row=T + 1, column=1, value="Signature: "); c.font = F_SIG
+    c = ws.cell(row=T + 1, column=10, value=0); c.font = F_TOT; c.number_format = MONEY
+
+    ws.row_dimensions[T + 2].height = 13.2
+    c = ws.cell(row=T + 2, column=9, value="Sub Total"); c.font = F_TOT
+    c = ws.cell(row=T + 2, column=10, value=sub)
+    c.font = F_TOT; c.alignment = Alignment(horizontal="right"); c.number_format = MONEY
+
+    ws.row_dimensions[T + 3].height = 14.4
+
+    ws.row_dimensions[T + 4].height = 13.2
+    c = ws.cell(row=T + 4, column=9, value="Less Previously paid")
+    c.font = F_TOT; c.alignment = Alignment(horizontal="right")
+    c = ws.cell(row=T + 4, column=10, value=prev)
+    c.font = F_TOT; c.alignment = Alignment(vertical="center", wrap_text=True); c.number_format = MONEY
+
+    ws.row_dimensions[T + 5].height = 13.2
+    c = ws.cell(row=T + 5, column=9, value="Sub Total"); c.font = F_TOT
+    c = ws.cell(row=T + 5, column=10, value=net)
+    c.font = F_TOT; c.alignment = Alignment(horizontal="right"); c.number_format = MONEY
+
+    ws.row_dimensions[T + 6].height = 13.2
+    c = ws.cell(row=T + 6, column=9, value=f"Vat @{float(inv.vat_rate or 15):.0f}%")
+    c.font = F_TOT; c.alignment = Alignment(vertical="center")
+    c = ws.cell(row=T + 6, column=10, value=vat)
+    c.font = F_TOT; c.alignment = Alignment(vertical="center"); c.number_format = MONEY
+
+    ws.row_dimensions[T + 7].height = 13.8
+    c = ws.cell(row=T + 7, column=9, value="Now Due "); c.font = F_TOT
+    c = ws.cell(row=T + 7, column=10, value=due); c.font = F_DUE; c.number_format = MONEY
+
+    # ── Apply all outer-box + section borders (must come after all values set) ──
+    BOTTOM_ROW = T + 8
+
+    def _ab(row, col, top=None, bottom=None, left=None, right=None):
+        _add_border(ws, row, col, top=top, bottom=bottom, left=left, right=right)
+
+    # Full outer left/right on every row
+    for r in range(1, BOTTOM_ROW + 1):
+        _ab(r, 1,  left=MED)
+        _ab(r, 10, right=MED)
+
+    # Top outer border row 1
+    for col in range(1, 11):
+        _ab(1, col, top=MED)
+
+    # Bottom outer border BOTTOM_ROW
+    for col in range(1, 11):
+        _ab(BOTTOM_ROW, col, bottom=MED)
+    _ab(BOTTOM_ROW, 8, left=MED)
+
+    # Vertical divider: G right rows 1-10
+    for r in range(1, 11):
+        _ab(r, 7, right=MED)
+
+    # H1:J1 sub-box
+    _ab(1, 8, top=MED, bottom=MED, right=MED)
+    for col in (9, 10):
+        _ab(1, col, top=MED, bottom=MED)
+
+    # H2:J3 date area
+    _ab(2, 8, top=MED, right=MED)
+    _ab(2, 9, top=MED); _ab(2, 10, top=MED)
+
+    # H5 right (page area)
+    _ab(5, 8, right=MED)
+
+    # H8 right (document number)
+    _ab(8, 8, right=MED)
+
+    # Row 10 bottom (close left-header section)
+    for col in range(1, 8):
+        _ab(10, col, bottom=MED)
+
+    # H11:J11 top (start Deliver-To sub-box)
+    for col in range(8, 11):
+        _ab(11, col, top=MED)
+    _ab(11, 8, left=MED)
+
+    # H col left rows 12-15
+    for r in range(12, 16):
+        _ab(r, 8, left=MED)
+
+    # H15:J15 bottom (close client box)
+    for col in range(8, 11):
+        _ab(15, col, bottom=MED)
+    _ab(15, 8, left=MED, right=MED)
+
+    # Row 16 full top+bottom
+    for col in range(1, 11):
+        _ab(16, col, top=MED, bottom=MED)
+
+    # Rows 18-20 top separators
+    for col in range(1, 11):
+        _ab(18, col, top=MED)
+        _ab(19, col, top=MED)
+        _ab(20, col, top=MED)
+
+    # Totals H col left (rows T through T+7)
+    for r in range(T, T + 8):
+        _ab(r, 8, left=MED)
+
+    # Totals top separator row T
+    for col in range(1, 11):
+        _ab(T, col, top=MED)
+
+    # Now Due double-bottom on I and J (must come after outer-box pass)
+    _ab(T + 7, 8, left=MED)
+    _ab(T + 7, 9, bottom=DBL)
+    _ab(T + 7, 10, bottom=DBL)
 
     buf = io.BytesIO()
     wb.save(buf)
