@@ -101,6 +101,7 @@ from app.api.v1.document_ai import router as document_ai_router
 from app.api.v1.vision import router as vision_router
 from app.api.v1.expenses import router as expenses_router
 from app.api.v1.work_done import project_wd_router, wd_router
+from app.api.v1.muni_invoice import project_muni_router, muni_router
 from app.dependencies import OWNER_ONLY
 
 
@@ -329,6 +330,8 @@ app.include_router(vision_router,     prefix="/api/v1")
 app.include_router(expenses_router, prefix="/api/v1")
 app.include_router(project_wd_router, prefix="/api/v1")
 app.include_router(wd_router, prefix="/api/v1")
+app.include_router(project_muni_router, prefix="/api/v1")
+app.include_router(muni_router, prefix="/api/v1")
 
 from app.api.v1.audit_log import router as audit_router
 app.include_router(audit_router, prefix="/api/v1")

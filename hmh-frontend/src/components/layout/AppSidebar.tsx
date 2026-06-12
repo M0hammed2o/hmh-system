@@ -2,7 +2,7 @@ import { NavLink, useLocation } from "react-router-dom";
 import {
   LayoutDashboard, Users, FolderKanban, FileSpreadsheet,
   ShoppingCart, Truck, Package, CreditCard, Bell, Settings, LogOut, HardHat,
-  Droplet, Building2, Car, FileCheck2, Copy, Smartphone, MessageSquare, Mail, Clock, Flag, Warehouse, BarChart2, ClipboardList,
+  Droplet, Building2, Car, FileCheck2, Copy, Smartphone, MessageSquare, Mail, Clock, Flag, Warehouse, BarChart2, ClipboardList, Receipt,
 } from "lucide-react";
 import { HMHLogo } from "@/components/HMHLogo";
 import { TOKEN_KEY, REFRESH_TOKEN_KEY, ROLE_KEY } from "@/lib/constants";
@@ -54,7 +54,8 @@ const navGroups = [
   {
     label: "Finance",
     items: [
-      { title: "Payments",            path: "/payments",                        icon: CreditCard },
+      { title: "Municipality Invoices", path: "/municipality-invoices",          icon: Receipt },
+      { title: "Payments",              path: "/payments",                       icon: CreditCard },
       { title: "Payment Reports",     path: "/payment-reports",                 icon: FileCheck2 },
       { title: "Reconciliation",      path: "/reconciliation",                  icon: FileCheck2 },
       { title: "Invoice Proof Packs",    path: "/reconciliation/proof-packs",    icon: FileCheck2 },

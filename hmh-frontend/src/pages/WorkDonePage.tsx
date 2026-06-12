@@ -14,8 +14,10 @@ import { projectsApi, type Project } from "@/api/projects";
 import { cn } from "@/lib/utils";
 import client from "@/api/client";
 
-interface Site     { id: string; name: string; }
-interface Supplier { id: string; name: string; }
+interface Site      { id: string; name: string; }
+interface Lot       { id: string; lot_number: string; description: string | null; }
+interface Milestone { id: string; stage_name: string; status: string; }
+interface Supplier  { id: string; name: string; }
 
 const fmt = (n: number) =>
   `R${Number(n).toLocaleString("en-ZA", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -59,8 +61,31 @@ function CreateModal({
     rate: 0,
     month: new Date().toISOString().slice(0, 7) + "-01",
   });
+  const [lots,       setLots]       = useState<Lot[]>([]);
+  const [milestones, setMilestones] = useState<Milestone[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+
+  // Load lots when site changes
+  useEffect(() => {
+    if (!form.site_id) { setLots([]); return; }
+    client.get<{ data: { items?: Lot[]; lots?: Lot[] } | Lot[] }>(
+      `/projects/${projectId}/lots/`, { params: { site_id: form.site_id, limit: 200 } }
+    ).then(r => {
+      const raw = r.data.data;
+      const arr: Lot[] = Array.isArray(raw) ? raw : ((raw as { items?: Lot[]; lots?: Lot[] }).items ?? (raw as { lots?: Lot[] }).lots ?? []);
+      setLots(arr);
+    }).catch(() => setLots([]));
+  }, [form.site_id, projectId]);
+
+  // Load milestones when site changes
+  useEffect(() => {
+    if (!form.site_id) { setMilestones([]); return; }
+    client.get<{ data: Milestone[] }>(
+      `/projects/${projectId}/stage-statuses/`, { params: { site_id: form.site_id, limit: 200 } }
+    ).then(r => setMilestones(r.data.data ?? []))
+     .catch(() => setMilestones([]));
+  }, [form.site_id, projectId]);
 
   const total = (form.quantity || 0) * (form.rate || 0);
 
@@ -115,6 +140,34 @@ function CreateModal({
                 className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
               />
             </div>
+            {lots.length > 0 && (
+              <div className="space-y-1">
+                <label className="text-xs font-medium text-muted-foreground">Lot</label>
+                <select value={form.lot_id || ""}
+                  onChange={e => f("lot_id", e.target.value || undefined)}
+                  className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm">
+                  <option value="">— None —</option>
+                  {lots.map(l => (
+                    <option key={l.id} value={l.id}>
+                      {l.lot_number}{l.description ? ` — ${l.description}` : ""}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+            {milestones.length > 0 && (
+              <div className="space-y-1">
+                <label className="text-xs font-medium text-muted-foreground">Milestone</label>
+                <select value={form.stage_status_id || ""}
+                  onChange={e => f("stage_status_id", e.target.value || undefined)}
+                  className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm">
+                  <option value="">— None —</option>
+                  {milestones.map(m => (
+                    <option key={m.id} value={m.id}>{m.stage_name} ({m.status})</option>
+                  ))}
+                </select>
+              </div>
+            )}
           </div>
 
           <div className="space-y-1">
