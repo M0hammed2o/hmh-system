@@ -76,6 +76,10 @@ function VehicleFormFields({
         </div>
       </div>
       <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide pt-1">Identification</p>
+      <div className="space-y-2">
+        <Label>VIN Number</Label>
+        <Input value={form.vin_number ?? ""} onChange={(e) => onChange({ vin_number: e.target.value || undefined })} placeholder="e.g. AHTFZ29G003012345" maxLength={20} />
+      </div>
       <div className="grid grid-cols-3 gap-3">
         <div className="space-y-2">
           <Label>Make</Label>
@@ -169,6 +173,7 @@ function EditVehicleModal({ vehicle, onClose, onSaved }: { vehicle: Vehicle; onC
     name: vehicle.name,
     vehicle_type: vehicle.vehicle_type,
     status: vehicle.status,
+    vin_number: vehicle.vin_number ?? undefined,
     make: vehicle.make ?? undefined,
     model: vehicle.model ?? undefined,
     year: vehicle.year ?? undefined,
@@ -484,6 +489,9 @@ export default function VehiclesPage() {
                             <span className="font-medium">{[v.year, v.make, v.model].filter(Boolean).join(" ")}</span>
                           </div>
                         )}
+                        {v.vin_number && (
+                          <div className="col-span-2"><span className="text-muted-foreground">VIN: </span><span className="font-medium font-mono">{v.vin_number}</span></div>
+                        )}
                         {v.fuel_type && (
                           <div><span className="text-muted-foreground">Fuel type: </span><span className="font-medium">{fuelTypeLabels[v.fuel_type]}</span></div>
                         )}
@@ -511,7 +519,7 @@ export default function VehiclesPage() {
                         {v.next_service_date && (
                           <div><span className="text-muted-foreground">Next service: </span><span className="font-medium">{formatDate(v.next_service_date)}</span></div>
                         )}
-                        {!v.make && !v.model && !v.year && !v.fuel_type && !v.tank_capacity_l && !v.current_odometer_km && (
+                        {!v.vin_number && !v.make && !v.model && !v.year && !v.fuel_type && !v.tank_capacity_l && !v.current_odometer_km && (
                           <p className="col-span-2 text-muted-foreground">No additional details recorded. Click the edit button to add vehicle specs.</p>
                         )}
                       </div>

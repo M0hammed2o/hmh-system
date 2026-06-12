@@ -14,6 +14,7 @@ class VehicleCreate(BaseModel):
     name: str
     vehicle_type: VehicleType = VehicleType.OTHER
     status: VehicleStatus = VehicleStatus.ACTIVE
+    vin_number: Optional[str] = None
     make: Optional[str] = None
     model: Optional[str] = None
     year: Optional[int] = None
@@ -30,9 +31,11 @@ class VehicleCreate(BaseModel):
 
 
 class VehicleUpdate(BaseModel):
+    registration: Optional[str] = None
     name: Optional[str] = None
     vehicle_type: Optional[VehicleType] = None
     status: Optional[VehicleStatus] = None
+    vin_number: Optional[str] = None
     make: Optional[str] = None
     model: Optional[str] = None
     year: Optional[int] = None
@@ -56,6 +59,7 @@ class VehicleRead(BaseModel):
     name: str
     vehicle_type: VehicleType
     status: VehicleStatus
+    vin_number: Optional[str] = None
     make: Optional[str] = None
     model: Optional[str] = None
     year: Optional[int] = None

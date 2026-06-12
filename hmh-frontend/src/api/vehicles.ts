@@ -14,6 +14,7 @@ export interface Vehicle {
   status: VehicleStatus;
   assigned_project_id: string | null;
   assigned_site_id: string | null;
+  vin_number: string | null;
   make: string | null;
   model: string | null;
   year: number | null;
@@ -36,6 +37,7 @@ export interface VehicleCreate {
   status?: VehicleStatus;
   assigned_project_id?: string;
   assigned_site_id?: string;
+  vin_number?: string;
   make?: string;
   model?: string;
   year?: number;

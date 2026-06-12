@@ -43,6 +43,7 @@ class Vehicle(TimestampMixin, Base):
         nullable=True,
     )
     # Identification
+    vin_number: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     make: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     model: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     year: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)

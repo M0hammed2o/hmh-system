@@ -39,6 +39,15 @@ def create_vehicle(db: Session, data: VehicleCreate, actor_id: Optional[uuid.UUI
         name=data.name,
         vehicle_type=data.vehicle_type,
         status=data.status,
+        vin_number=data.vin_number,
+        make=data.make,
+        model=data.model,
+        year=data.year,
+        fuel_type=data.fuel_type,
+        tank_capacity_l=data.tank_capacity_l,
+        fuel_consumption_per_100km=data.fuel_consumption_per_100km,
+        current_odometer_km=data.current_odometer_km,
+        service_interval_km=data.service_interval_km,
         assigned_project_id=data.assigned_project_id,
         assigned_site_id=data.assigned_site_id,
         last_service_date=data.last_service_date,
@@ -70,12 +79,37 @@ def update_vehicle(db: Session, vehicle_id: uuid.UUID, data: VehicleUpdate, acto
 
     before = {"status": vehicle.status.value if vehicle.status else None, "name": vehicle.name}
 
+    if data.registration is not None:
+        new_reg = data.registration.upper()
+        if new_reg != vehicle.registration:
+            conflict = db.query(Vehicle).filter(Vehicle.registration == new_reg).first()
+            if conflict:
+                raise ConflictError(f"Vehicle with registration '{new_reg}' already exists.")
+            vehicle.registration = new_reg
     if data.name is not None:
         vehicle.name = data.name
     if data.vehicle_type is not None:
         vehicle.vehicle_type = data.vehicle_type
     if data.status is not None:
         vehicle.status = data.status
+    if data.vin_number is not None:
+        vehicle.vin_number = data.vin_number
+    if data.make is not None:
+        vehicle.make = data.make
+    if data.model is not None:
+        vehicle.model = data.model
+    if data.year is not None:
+        vehicle.year = data.year
+    if data.fuel_type is not None:
+        vehicle.fuel_type = data.fuel_type
+    if data.tank_capacity_l is not None:
+        vehicle.tank_capacity_l = data.tank_capacity_l
+    if data.fuel_consumption_per_100km is not None:
+        vehicle.fuel_consumption_per_100km = data.fuel_consumption_per_100km
+    if data.current_odometer_km is not None:
+        vehicle.current_odometer_km = data.current_odometer_km
+    if data.service_interval_km is not None:
+        vehicle.service_interval_km = data.service_interval_km
     if data.assigned_project_id is not None:
         vehicle.assigned_project_id = data.assigned_project_id
     if data.assigned_site_id is not None:
