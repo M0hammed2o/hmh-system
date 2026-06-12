@@ -15,7 +15,19 @@ Create Date: 2026-06-11
 """
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.dialects.postgresql import UUID
+
+work_done_status_enum = postgresql.ENUM(
+    "DRAFT",
+    "SUBMITTED",
+    "SITE_APPROVED",
+    "OFFICE_APPROVED",
+    "PAID",
+    "REJECTED",
+    name="work_done_status_enum",
+    create_type=False,
+)
 
 revision = "0043"
 down_revision = "0042"
@@ -71,7 +83,7 @@ def upgrade() -> None:
         sa.Column("month",    sa.Date, nullable=False, index=True),
         sa.Column("comments", sa.Text, nullable=True),
 
-        sa.Column("status", sa.Enum(name="work_done_status_enum", create_type=False), nullable=False, server_default="DRAFT", index=True),
+        sa.Column("status", work_done_status_enum, nullable=False, server_default="DRAFT", index=True),
 
         # Approval chain
         sa.Column("submitted_by",      UUID(as_uuid=True), sa.ForeignKey("users.id", ondelete="SET NULL"), nullable=True),
