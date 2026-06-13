@@ -10,6 +10,11 @@ const client = axios.create({
 client.interceptors.request.use((config) => {
   const token = localStorage.getItem(TOKEN_KEY);
   if (token) config.headers.Authorization = `Bearer ${token}`;
+  // For FormData, delete the default Content-Type so the browser can set
+  // multipart/form-data with the correct boundary automatically.
+  if (config.data instanceof FormData) {
+    delete config.headers["Content-Type"];
+  }
   return config;
 });
 
