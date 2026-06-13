@@ -1455,9 +1455,23 @@ function PipelinePanelModal({ mrId, suppliers, onClose, onUpdated }: {
                                   </div>
                                   <p className="text-[10px] text-muted-foreground mt-0.5">{supplierName}</p>
                                 </div>
-                                <div className="text-right shrink-0">
-                                  <p className="text-sm font-semibold">R{q.unit_price.toFixed(2)}<span className="text-[10px] font-normal text-muted-foreground">/{q.unit || "unit"}</span></p>
-                                  <p className="text-[10px] text-muted-foreground">{q.quoted_quantity} × R{q.unit_price.toFixed(2)} = R{(q.total_price ?? 0).toFixed(2)}</p>
+                                <div className="flex items-start gap-2 shrink-0">
+                                  <div className="text-right">
+                                    <p className="text-sm font-semibold">R{q.unit_price.toFixed(2)}<span className="text-[10px] font-normal text-muted-foreground">/{q.unit || "unit"}</span></p>
+                                    <p className="text-[10px] text-muted-foreground">{q.quoted_quantity} × R{q.unit_price.toFixed(2)} = R{(q.total_price ?? 0).toFixed(2)}</p>
+                                  </div>
+                                  {q.status === "PENDING" && (
+                                    <WriteGuard>
+                                      <button
+                                        title="Remove this quote"
+                                        disabled={!!actionLoading}
+                                        onClick={() => act(() => procurementApi.deleteQuote(mrId, q.id), `delete_${q.id}`)}
+                                        className="text-muted-foreground hover:text-destructive transition-colors mt-0.5"
+                                      >
+                                        <X className="w-3.5 h-3.5" />
+                                      </button>
+                                    </WriteGuard>
+                                  )}
                                 </div>
                               </div>
 

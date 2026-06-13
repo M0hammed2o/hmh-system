@@ -379,4 +379,8 @@ export const procurementApi = {
     );
     return res.data.data;
   },
+
+  deleteQuote: async (mrId: string, quoteId: string): Promise<void> => {
+    await client.delete(`/procurement/mrs/${mrId}/quotes/${quoteId}`);
+  },
 };

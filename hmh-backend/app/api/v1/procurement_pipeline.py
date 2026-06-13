@@ -461,3 +461,37 @@ def reject_quote(
             + (" Switched to new supplier." if switched_supplier else "")
         ),
     )
+
+
+# ── DELETE quote ──────────────────────────────────────────────────────────────
+
+@router.delete(
+    "/mrs/{mr_id}/quotes/{quote_id}",
+    response_model=ApiSuccess[dict],
+    dependencies=[OFFICE_AND_ABOVE],
+)
+def delete_quote(
+    mr_id: uuid.UUID,
+    quote_id: uuid.UUID,
+    db: DbSession,
+    current_user: CurrentUser,
+):
+    """
+    Delete a PENDING quote.
+
+    Only PENDING quotes may be deleted — approved quotes are part of the
+    committed procurement record and cannot be removed.
+    This is primarily used to clear incorrectly auto-extracted email quotes
+    so the email can be re-processed and produce correct records.
+    """
+    from app.models.mr_quote import MRQuote
+
+    quote = db.get(MRQuote, quote_id)
+    if not quote or quote.material_request_id != mr_id:
+        raise HTTPException(404, "Quote not found for this MR.")
+    if quote.status != "PENDING":
+        raise HTTPException(409, f"Only PENDING quotes can be deleted (this quote is {quote.status}).")
+
+    db.delete(quote)
+    db.commit()
+    return ApiSuccess(data={"quote_id": str(quote_id), "deleted": True}, message="Quote deleted.")
