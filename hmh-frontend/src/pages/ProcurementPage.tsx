@@ -1156,6 +1156,9 @@ function PipelinePanelModal({ mrId, suppliers, onClose, onUpdated }: {
   const [rejectReason, setRejectReason] = useState("");
   const [showAddQuote, setShowAddQuote] = useState(false);
   const [quoteForm, setQuoteForm] = useState({ supplier_id: "", description: "", unit_price: "", quoted_quantity: "1", unit: "" });
+  // Step 3 fix-inline state
+  const [addEmailValue, setAddEmailValue] = useState("");
+  const [switchSupplierId, setSwitchSupplierId] = useState("");
 
   const load = useCallback(async () => {
     try { setPipeline(await procurementApi.getPipeline(mrId)); }
@@ -1313,24 +1316,99 @@ function PipelinePanelModal({ mrId, suppliers, onClose, onUpdated }: {
                 {/* Step 3: Email to supplier */}
                 {step.step === 3 && (
                   <div className="space-y-2">
-                    {step.missing_email && (
-                      <div className="flex items-start gap-2 bg-destructive/10 border border-destructive/30 rounded-lg px-3 py-2.5">
-                        <AlertCircle className="w-4 h-4 text-destructive shrink-0 mt-0.5" />
-                        <div>
-                          <p className="text-xs font-semibold text-destructive">No supplier email — cannot send</p>
-                          <p className="text-[10px] text-muted-foreground mt-0.5">
-                            Add an email address for <strong>{pipeline.supplier.name}</strong> in the Suppliers page to unblock this step.
-                          </p>
-                        </div>
-                      </div>
-                    )}
                     {step.email_sent ? (
                       <div className="flex items-center gap-2 text-xs">
                         <MailCheck className="w-3.5 h-3.5 text-green-500" />
                         <span className="text-green-600 font-medium">Sent to {step.sent_to}</span>
                         {step.sent_at && <span className="text-muted-foreground">· {formatDate(step.sent_at)}</span>}
                       </div>
-                    ) : !step.missing_email && step.status !== "WAITING" ? (
+                    ) : step.missing_email ? (
+                      /* ── BLOCKED: fix inline ── */
+                      <div className="space-y-3">
+                        <div className="flex items-start gap-2 bg-destructive/10 border border-destructive/30 rounded-lg px-3 py-2.5">
+                          <AlertCircle className="w-4 h-4 text-destructive shrink-0 mt-0.5" />
+                          <p className="text-xs font-semibold text-destructive">
+                            {pipeline.supplier.id
+                              ? `${pipeline.supplier.name ?? "Supplier"} has no email address`
+                              : "No supplier assigned to this MR"}
+                          </p>
+                        </div>
+
+                        {/* Case A: supplier exists but no email → add email or switch */}
+                        {pipeline.supplier.id && (
+                          <WriteGuard>
+                            <div className="space-y-2">
+                              <p className="text-[11px] text-muted-foreground font-medium">Add email to {pipeline.supplier.name}:</p>
+                              <div className="flex gap-2">
+                                <Input
+                                  type="email"
+                                  value={addEmailValue}
+                                  onChange={e => setAddEmailValue(e.target.value)}
+                                  placeholder="supplier@example.com"
+                                  className="h-8 text-xs flex-1"
+                                />
+                                <Button size="sm" className="h-8 text-xs shrink-0"
+                                  disabled={!addEmailValue.trim() || !!actionLoading}
+                                  onClick={() => act(async () => {
+                                    await client.patch(`/suppliers/${pipeline.supplier.id}`, { email: addEmailValue.trim() });
+                                    setAddEmailValue("");
+                                  }, "add_email")}>
+                                  {actionLoading === "add_email" ? "Saving…" : "Save Email"}
+                                </Button>
+                              </div>
+                              <p className="text-[11px] text-muted-foreground font-medium">Or switch to a different supplier:</p>
+                              <div className="flex gap-2">
+                                <select
+                                  value={switchSupplierId}
+                                  onChange={e => setSwitchSupplierId(e.target.value)}
+                                  className="h-8 flex-1 rounded-md border border-input bg-background px-2 text-xs">
+                                  <option value="">— Select supplier —</option>
+                                  {suppliers.filter(s => s.email).map(s => (
+                                    <option key={s.id} value={s.id}>{s.name} ({s.email})</option>
+                                  ))}
+                                </select>
+                                <Button size="sm" variant="outline" className="h-8 text-xs shrink-0"
+                                  disabled={!switchSupplierId || !!actionLoading}
+                                  onClick={() => act(async () => {
+                                    await client.patch(`/material-requests/${mrId}`, { preferred_supplier_id: switchSupplierId });
+                                    setSwitchSupplierId("");
+                                  }, "switch_supplier")}>
+                                  {actionLoading === "switch_supplier" ? "Switching…" : "Switch"}
+                                </Button>
+                              </div>
+                            </div>
+                          </WriteGuard>
+                        )}
+
+                        {/* Case B: no supplier at all → assign one */}
+                        {!pipeline.supplier.id && (
+                          <WriteGuard>
+                            <div className="space-y-1.5">
+                              <p className="text-[11px] text-muted-foreground font-medium">Assign a supplier with email:</p>
+                              <div className="flex gap-2">
+                                <select
+                                  value={switchSupplierId}
+                                  onChange={e => setSwitchSupplierId(e.target.value)}
+                                  className="h-8 flex-1 rounded-md border border-input bg-background px-2 text-xs">
+                                  <option value="">— Select supplier —</option>
+                                  {suppliers.filter(s => s.email).map(s => (
+                                    <option key={s.id} value={s.id}>{s.name} ({s.email})</option>
+                                  ))}
+                                </select>
+                                <Button size="sm" className="h-8 text-xs shrink-0"
+                                  disabled={!switchSupplierId || !!actionLoading}
+                                  onClick={() => act(async () => {
+                                    await client.patch(`/material-requests/${mrId}`, { preferred_supplier_id: switchSupplierId });
+                                    setSwitchSupplierId("");
+                                  }, "assign_supplier")}>
+                                  {actionLoading === "assign_supplier" ? "Assigning…" : "Assign"}
+                                </Button>
+                              </div>
+                            </div>
+                          </WriteGuard>
+                        )}
+                      </div>
+                    ) : step.status !== "WAITING" ? (
                       <div className="flex items-center gap-2">
                         <p className="text-xs text-muted-foreground flex-1">Email to {pipeline.supplier.email}</p>
                         <WriteGuard>
