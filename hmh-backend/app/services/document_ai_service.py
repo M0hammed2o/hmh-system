@@ -265,27 +265,31 @@ _DATE_RE  = re.compile(
 # Invoice total patterns in strict priority order.
 # (?<!\w) prevents matching "subtotal" when looking for "total".
 # Each tuple: (regex, label)
+# SA-aware amount pattern: matches both "12,200.00" (standard) and "12 200, 00" (SA space-thousands).
+# Space within the number is the thousands separator; comma may be decimal.
+_AMT = r"[\d][\d ,]*(?:[,.]\s*\d{1,2})?"
+
 _TOTAL_PATTERNS: list[tuple[re.Pattern, str]] = [
-    (re.compile(r"total\s+due\s*[:\s]\s*R?\s*([\d,]+\.?\d*)",      re.IGNORECASE), "Total Due"),
-    (re.compile(r"amount\s+due\s*[:\s]\s*R?\s*([\d,]+\.?\d*)",     re.IGNORECASE), "Amount Due"),
-    (re.compile(r"invoice\s+total\s*[:\s]\s*R?\s*([\d,]+\.?\d*)",  re.IGNORECASE), "Invoice Total"),
-    (re.compile(r"grand\s+total\s*[:\s]\s*R?\s*([\d,]+\.?\d*)",    re.IGNORECASE), "Grand Total"),
-    (re.compile(r"net\s+total\s*[:\s]\s*R?\s*([\d,]+\.?\d*)",      re.IGNORECASE), "Net Total"),
+    (re.compile(r"total\s+due\s*[:\s]\s*R?\s*(" + _AMT + r")",      re.IGNORECASE), "Total Due"),
+    (re.compile(r"amount\s+due\s*[:\s]\s*R?\s*(" + _AMT + r")",     re.IGNORECASE), "Amount Due"),
+    (re.compile(r"invoice\s+total\s*[:\s]\s*R?\s*(" + _AMT + r")",  re.IGNORECASE), "Invoice Total"),
+    (re.compile(r"grand\s+total\s*[:\s]\s*R?\s*(" + _AMT + r")",    re.IGNORECASE), "Grand Total"),
+    (re.compile(r"net\s+total\s*[:\s]\s*R?\s*(" + _AMT + r")",      re.IGNORECASE), "Net Total"),
     # Generic "Total:" only when NOT part of "Subtotal" (negative lookbehind)
-    (re.compile(r"(?<!\w)total\s*[:\s]\s*R?\s*([\d,]+\.?\d*)",     re.IGNORECASE | re.MULTILINE), "Total"),
+    (re.compile(r"(?<!\w)total\s*[:\s]\s*R?\s*(" + _AMT + r")",     re.IGNORECASE | re.MULTILINE), "Total"),
     # Subtotal only as a last resort
-    (re.compile(r"subtotal\s*[:\s]\s*R?\s*([\d,]+\.?\d*)",         re.IGNORECASE), "Subtotal"),
+    (re.compile(r"subtotal\s*[:\s]\s*R?\s*(" + _AMT + r")",         re.IGNORECASE), "Subtotal"),
 ]
 
-# Line-item pattern: handles comma-formatted numbers like 2,500.00 and R-prefixed amounts like R1,536.00
+# Line-item pattern: handles comma-formatted numbers like 2,500.00 and SA-format like 12 200, 00
 # Cols: description | qty | unit | unit_price | line_total
 _LINE_RE = re.compile(
-    r"^(.{3,60}?)\s+(\d[\d,]*(?:\.\d+)?)\s+([a-zA-Z]{1,10})\s+R?\s*(\d[\d,]*(?:\.\d+)?)\s+R?\s*(\d[\d,]*(?:\.\d+)?)\s*$",
+    r"^(.{3,60}?)\s+(\d[\d,]*(?:\.\d+)?)\s+([a-zA-Z]{1,10})\s+R?\s*(" + _AMT + r")\s+R?\s*(" + _AMT + r")\s*$",
     re.MULTILINE,
 )
 # Simplified line-item fallback: description | qty | unit_price | line_total (no unit col, R-prefix ok)
 _LINE_RE_SIMPLE = re.compile(
-    r"^(.{3,70}?)\s+(\d[\d,]*(?:\.\d+)?)\s+R?\s*(\d[\d,]*(?:\.\d+)?)\s+R?\s*(\d[\d,]*(?:\.\d+)?)\s*$",
+    r"^(.{3,70}?)\s+(\d[\d,]*(?:\.\d+)?)\s+R?\s*(" + _AMT + r")\s+R?\s*(" + _AMT + r")\s*$",
     re.MULTILINE,
 )
 
@@ -559,12 +563,32 @@ def _first_match(pattern: re.Pattern, text: str) -> Optional[str]:
 
 
 def _parse_amount(raw: Optional[str]) -> Optional[float]:
-    """Parse a string like '8,625.00' or '8 625.00' into a float."""
+    """
+    Parse a monetary string into a float.
+
+    Handles:
+      - Standard format:  "8,625.00" / "8 625.00"  (comma=thousands, dot=decimal)
+      - SA/European:      "12 200,00" / "12 200, 00" (space=thousands, comma=decimal)
+
+    Key insight: after removing spaces, if the string ends with comma+1-2 digits
+    (e.g. "12200,00") the comma IS the decimal separator; otherwise commas are
+    thousands separators and should be stripped.
+    """
     if not raw:
         return None
-    cleaned = raw.replace(" ", "").replace(",", "")
+    s = raw.strip()
+    # Strip spaces first to collapse "12 200, 00" → "12200,00"
+    s_no_space = s.replace(" ", "")
+    # SA/European decimal: "12200,00" matches ^\d+,\d{1,2}$
+    import re as _re
+    if _re.match(r'^\d+,\d{1,2}$', s_no_space):
+        try:
+            return float(s_no_space.replace(",", "."))
+        except ValueError:
+            return None
+    # Standard: remove comma thousands-separators, keep dot decimal
     try:
-        return float(cleaned)
+        return float(s_no_space.replace(",", ""))
     except ValueError:
         return None
 
@@ -735,9 +759,10 @@ def _parse_quote_line_items(text: str) -> list[dict]:
     if items:
         return items
 
-    # Quotation-specific fallback: description   qty   R price (no total column)
+    # Quotation-specific fallback: description   qty   [unit]   R price
+    # Uses SA-aware amount for price: "12 200, 00" → 12200.00
     _QUOTE_LINE = re.compile(
-        r"^(.{3,60}?)\s{2,}(\d+(?:[.,]\d+)?)\s{1,}(?:[a-zA-Z]{1,6}\s{1,})?R?\s*(\d[\d,]*(?:\.\d{1,2})?)",
+        r"^(.{3,60}?)\s{2,}(\d+(?:[.,]\d+)?)\s{1,}(?:[a-zA-Z]{1,6}\s{1,})?R?\s*([\d][\d ,]*(?:[,.]\s*\d{1,2})?)\s*$",
         re.MULTILINE | re.IGNORECASE,
     )
     fallback: list[dict] = []
