@@ -21,6 +21,7 @@ import {
   procurementApi,
   type MaterialRequest, type MRCreate, type MRItemCreate, type BOQSearchResult,
   type MRQuote, type PurchaseOrder, type MRPriority, type DeliveryDestination,
+  type MRPipeline,
 } from "@/api/procurement";
 import { purchaseOrdersApi, type POLinkedDocs } from "@/api/purchaseOrders";
 import { warehouseApi, type WarehouseStockItem } from "@/api/warehouse";
@@ -61,6 +62,14 @@ const PRIORITY_COLOR: Record<MRPriority, string> = {
   HIGH: "text-amber-500 bg-amber-500/10",
   NORMAL: "text-blue-500 bg-blue-500/10",
   LOW: "text-muted-foreground bg-muted",
+};
+
+const MR_STATUS_TO_STEP: Record<string, number> = {
+  DRAFT: 1, SUBMITTED: 2, PENDING_APPROVAL: 2,
+  APPROVED: 3, CONVERTED_TO_PO: 5, ORDERED: 5,
+  PARTIALLY_RECEIVED: 7, RECEIVED: 7, INVOICED: 6,
+  PARTIALLY_PAID: 7, PAID: 7, MATCHED: 7,
+  REJECTED: 2, CANCELLED: 2, CLOSED: 7,
 };
 
 interface Site { id: string; name: string; site_type?: string; }
@@ -1103,6 +1112,441 @@ function POLifecycleTimeline({ status }: { status: string }) {
 }
 
 
+// ── Pipeline Panel Modal (Phase 4A) ───────────────────────────────────────────
+
+const STEP_ICON_MAP: Record<number, React.ReactNode> = {
+  1: <FileText className="w-3.5 h-3.5" />,
+  2: <Check className="w-3.5 h-3.5" />,
+  3: <Mail className="w-3.5 h-3.5" />,
+  4: <Receipt className="w-3.5 h-3.5" />,
+  5: <ShoppingCart className="w-3.5 h-3.5" />,
+  6: <CreditCard className="w-3.5 h-3.5" />,
+  7: <Package className="w-3.5 h-3.5" />,
+};
+
+function StepIndicator({ status }: { status: string }) {
+  if (status === "COMPLETE") return <div className="w-7 h-7 rounded-full bg-green-500/15 border-2 border-green-500 flex items-center justify-center text-green-600 shrink-0"><Check className="w-3.5 h-3.5" /></div>;
+  if (status === "CURRENT")  return <div className="w-7 h-7 rounded-full bg-primary/15 border-2 border-primary flex items-center justify-center text-primary shrink-0 animate-pulse"><Circle className="w-3 h-3 fill-current" /></div>;
+  if (status === "BLOCKED")  return <div className="w-7 h-7 rounded-full bg-destructive/15 border-2 border-destructive flex items-center justify-center text-destructive shrink-0"><Lock className="w-3.5 h-3.5" /></div>;
+  return <div className="w-7 h-7 rounded-full bg-muted border-2 border-border flex items-center justify-center text-muted-foreground shrink-0"><Circle className="w-3 h-3" /></div>;
+}
+
+function BOQVarianceBadge({ pct }: { pct: number | null | undefined }) {
+  if (pct == null) return null;
+  const color = pct > 10 ? "text-destructive bg-destructive/10 border-destructive/20"
+    : pct > 0 ? "text-amber-600 bg-amber-500/10 border-amber-500/20"
+    : "text-green-600 bg-green-500/10 border-green-500/20";
+  return <span className={cn("text-[10px] font-semibold border rounded px-1.5 py-0.5", color)}>{pct > 0 ? "+" : ""}{pct.toFixed(1)}% BOQ</span>;
+}
+
+function PipelinePanelModal({ mrId, suppliers, onClose, onUpdated }: {
+  mrId: string;
+  suppliers: Supplier[];
+  onClose: () => void;
+  onUpdated: () => void;
+}) {
+  const [pipeline, setPipeline] = useState<MRPipeline | null>(null);
+  const [fetching, setFetching] = useState(true);
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [actionError, setActionError] = useState("");
+  const [overBoqReason, setOverBoqReason] = useState("");
+  const [showRejectMR, setShowRejectMR] = useState(false);
+  const [rejectMRReason, setRejectMRReason] = useState("");
+  const [rejectQuoteId, setRejectQuoteId] = useState<string | null>(null);
+  const [rejectReason, setRejectReason] = useState("");
+  const [showAddQuote, setShowAddQuote] = useState(false);
+  const [quoteForm, setQuoteForm] = useState({ supplier_id: "", description: "", unit_price: "", quoted_quantity: "1", unit: "" });
+
+  const load = useCallback(async () => {
+    try { setPipeline(await procurementApi.getPipeline(mrId)); }
+    catch { /* ignore 404 */ }
+    finally { setFetching(false); }
+  }, [mrId]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const act = async (fn: () => Promise<unknown>, key: string) => {
+    setActionLoading(key); setActionError("");
+    try { await fn(); await load(); onUpdated(); }
+    catch (err: unknown) {
+      const d = (err as { response?: { data?: { detail?: string; message?: string } } })?.response?.data;
+      setActionError(d?.detail ?? d?.message ?? "Action failed.");
+    } finally { setActionLoading(null); }
+  };
+
+  if (fetching) return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-foreground/40">
+      <div className="bg-card border border-border rounded-xl w-full max-w-xl p-8 text-center">
+        <RefreshCw className="w-6 h-6 animate-spin text-muted-foreground mx-auto mb-2" />
+        <p className="text-sm text-muted-foreground">Loading pipeline…</p>
+      </div>
+    </div>
+  );
+
+  if (!pipeline) return null;
+
+  const step4 = pipeline.steps.find(s => s.step === 4);
+  const pendingQuotes = (step4?.quotes ?? []).filter(q => q.status === "PENDING");
+  const mrStatus = pipeline.mr_status;
+  const canApproveMR = ["SUBMITTED", "PENDING_APPROVAL"].includes(mrStatus);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-foreground/40">
+      <div className="bg-card border border-border rounded-xl w-full max-w-xl max-h-[90vh] flex flex-col animate-fade-in">
+
+        {/* Header */}
+        <div className="sticky top-0 bg-card border-b border-border px-5 py-4 flex items-center justify-between shrink-0 rounded-t-xl">
+          <div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <h2 className="font-semibold">{pipeline.mr_number}</h2>
+              <Badge variant={STATUS_BADGE[mrStatus] || "outline"} className="text-xs">{mrStatus.replace(/_/g, " ")}</Badge>
+              {pipeline.over_boq && <Badge variant="destructive" className="text-xs"><AlertTriangle className="w-3 h-3 mr-0.5" />Over BOQ</Badge>}
+              <span className={cn("text-[10px] font-medium rounded px-1.5 py-0.5", PRIORITY_COLOR[pipeline.priority])}>{pipeline.priority}</span>
+            </div>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              {pipeline.supplier.name ? `Supplier: ${pipeline.supplier.name}` : "No supplier assigned"} · Step {pipeline.current_step} of 7
+            </p>
+          </div>
+          <button onClick={onClose} className="rounded-lg p-1.5 hover:bg-muted"><X className="w-4 h-4 text-muted-foreground" /></button>
+        </div>
+
+        {/* Timeline */}
+        <div className="overflow-y-auto flex-1 px-5 py-4 space-y-0">
+          {actionError && (
+            <div className="mb-3 bg-destructive/10 border border-destructive/20 rounded-lg px-3 py-2 text-sm text-destructive">{actionError}</div>
+          )}
+
+          {pipeline.steps.map((step, idx) => (
+            <div key={step.step} className="flex gap-3 pb-4">
+              {/* Left: indicator + connector */}
+              <div className="flex flex-col items-center">
+                <StepIndicator status={step.status} />
+                {idx < pipeline.steps.length - 1 && (
+                  <div className={cn("w-0.5 flex-1 mt-1 min-h-[20px]", step.status === "COMPLETE" ? "bg-green-500/40" : "bg-border")} />
+                )}
+              </div>
+
+              {/* Right: content */}
+              <div className="flex-1 min-w-0 pt-0.5">
+                <div className="flex items-center gap-2 mb-1">
+                  <span className={cn("text-sm font-semibold", step.status === "WAITING" ? "text-muted-foreground" : "text-foreground")}>
+                    {step.step}. {step.label}
+                  </span>
+                  {step.status === "BLOCKED" && (
+                    <span className="text-[10px] font-bold text-destructive bg-destructive/10 rounded px-1.5 py-0.5">BLOCKED</span>
+                  )}
+                  {step.status === "COMPLETE" && (
+                    <span className="text-[10px] font-medium text-green-600 bg-green-500/10 rounded px-1.5 py-0.5">Done</span>
+                  )}
+                </div>
+
+                {/* Step 1: MR submitted */}
+                {step.step === 1 && step.status === "COMPLETE" && (
+                  <div className="space-y-1">
+                    <p className="text-xs text-muted-foreground">{pipeline.items.length} item{pipeline.items.length !== 1 ? "s" : ""} requested</p>
+                    <div className="bg-muted/30 rounded-lg divide-y divide-border">
+                      {pipeline.items.map((item) => (
+                        <div key={item.id} className="flex items-center justify-between px-3 py-1.5">
+                          <span className="text-xs">{item.description}</span>
+                          <span className="text-xs font-medium text-muted-foreground">{item.requested_quantity} {item.unit || ""}</span>
+                        </div>
+                      ))}
+                    </div>
+                    {pipeline.notes && <p className="text-xs text-muted-foreground italic">{pipeline.notes}</p>}
+                  </div>
+                )}
+
+                {/* Step 2: Office approval */}
+                {step.step === 2 && (
+                  <div className="space-y-2">
+                    {step.status === "COMPLETE" && (
+                      <p className="text-xs text-green-600">Approved {step.approved_at ? `· ${formatDate(step.approved_at)}` : ""}</p>
+                    )}
+                    {step.status === "CURRENT" && canApproveMR && (
+                      <div className="space-y-2">
+                        {pipeline.over_boq && (
+                          <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-2.5 space-y-2">
+                            <p className="text-xs font-medium text-amber-600">Over BOQ — reason required</p>
+                            <Input value={overBoqReason} onChange={e => setOverBoqReason(e.target.value)}
+                              placeholder="Reason for approving over-BOQ request" className="h-8 text-xs" />
+                          </div>
+                        )}
+                        {showRejectMR ? (
+                          <div className="space-y-2">
+                            <Input value={rejectMRReason} onChange={e => setRejectMRReason(e.target.value)}
+                              placeholder="Rejection reason *" className="h-8 text-xs" autoFocus />
+                            <div className="flex gap-2">
+                              <Button size="sm" variant="destructive" className="h-8 text-xs flex-1"
+                                disabled={!rejectMRReason.trim() || !!actionLoading}
+                                onClick={() => act(async () => {
+                                  await procurementApi.rejectMR(mrId, rejectMRReason.trim());
+                                  setShowRejectMR(false);
+                                }, "reject_mr")}>
+                                {actionLoading === "reject_mr" ? "Rejecting…" : "Confirm Reject"}
+                              </Button>
+                              <Button size="sm" variant="outline" className="h-8 text-xs" onClick={() => setShowRejectMR(false)}>Cancel</Button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="flex gap-2">
+                            <WriteGuard>
+                              <Button size="sm" className="h-8 text-xs flex-1 bg-green-600 hover:bg-green-700"
+                                disabled={!!actionLoading || (pipeline.over_boq && !overBoqReason.trim())}
+                                onClick={() => act(async () => {
+                                  await procurementApi.approveMR(mrId, overBoqReason || undefined);
+                                }, "approve_mr")}>
+                                {actionLoading === "approve_mr" ? "Approving…" : "Approve MR"}
+                              </Button>
+                              <Button size="sm" variant="outline" className="h-8 text-xs border-destructive text-destructive hover:bg-destructive/10"
+                                disabled={!!actionLoading}
+                                onClick={() => setShowRejectMR(true)}>
+                                Reject
+                              </Button>
+                            </WriteGuard>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Step 3: Email to supplier */}
+                {step.step === 3 && (
+                  <div className="space-y-2">
+                    {step.missing_email && (
+                      <div className="flex items-start gap-2 bg-destructive/10 border border-destructive/30 rounded-lg px-3 py-2.5">
+                        <AlertCircle className="w-4 h-4 text-destructive shrink-0 mt-0.5" />
+                        <div>
+                          <p className="text-xs font-semibold text-destructive">No supplier email — cannot send</p>
+                          <p className="text-[10px] text-muted-foreground mt-0.5">
+                            Add an email address for <strong>{pipeline.supplier.name}</strong> in the Suppliers page to unblock this step.
+                          </p>
+                        </div>
+                      </div>
+                    )}
+                    {step.email_sent ? (
+                      <div className="flex items-center gap-2 text-xs">
+                        <MailCheck className="w-3.5 h-3.5 text-green-500" />
+                        <span className="text-green-600 font-medium">Sent to {step.sent_to}</span>
+                        {step.sent_at && <span className="text-muted-foreground">· {formatDate(step.sent_at)}</span>}
+                      </div>
+                    ) : !step.missing_email && step.status !== "WAITING" ? (
+                      <div className="flex items-center gap-2">
+                        <p className="text-xs text-muted-foreground flex-1">Email to {pipeline.supplier.email}</p>
+                        <WriteGuard>
+                          <Button size="sm" variant="outline" className="h-7 text-xs gap-1"
+                            disabled={!!actionLoading}
+                            onClick={() => act(async () => {
+                              const { materialRequestsApi } = await import("@/api/materialRequests");
+                              return materialRequestsApi.sendEmail(mrId);
+                            }, "send_email")}>
+                            <Mail className="w-3 h-3" />
+                            {actionLoading === "send_email" ? "Sending…" : "Send Email"}
+                          </Button>
+                        </WriteGuard>
+                      </div>
+                    ) : null}
+                  </div>
+                )}
+
+                {/* Step 4: Quotations */}
+                {step.step === 4 && (
+                  <div className="space-y-2">
+                    {(step.quotes ?? []).length === 0 ? (
+                      <p className="text-xs text-muted-foreground">Waiting for supplier quotation by email or manual entry.</p>
+                    ) : (
+                      <div className="space-y-2">
+                        {(step.quotes ?? []).map((q) => {
+                          const supplierName = suppliers.find(s => s.id === q.supplier_id)?.name ?? "—";
+                          return (
+                            <div key={q.id} className={cn(
+                              "border rounded-lg p-3 space-y-2",
+                              q.status === "APPROVED" ? "border-green-500/40 bg-green-500/5"
+                                : q.status === "REJECTED" ? "border-border/40 bg-muted/20 opacity-60"
+                                : "border-border bg-card",
+                            )}>
+                              <div className="flex items-start justify-between gap-2">
+                                <div className="min-w-0 flex-1">
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    <span className="text-xs font-semibold">{q.description}</span>
+                                    {q.source === "EMAIL" && (
+                                      <span className="text-[10px] bg-blue-500/15 text-blue-600 border border-blue-500/20 rounded px-1.5 py-0.5 font-medium">Email</span>
+                                    )}
+                                    {q.status === "APPROVED" && <Badge variant="success" className="text-[10px] h-4">Approved</Badge>}
+                                    {q.status === "REJECTED" && <Badge variant="destructive" className="text-[10px] h-4">Rejected</Badge>}
+                                  </div>
+                                  <p className="text-[10px] text-muted-foreground mt-0.5">{supplierName}</p>
+                                </div>
+                                <div className="text-right shrink-0">
+                                  <p className="text-sm font-semibold">R{q.unit_price.toFixed(2)}<span className="text-[10px] font-normal text-muted-foreground">/{q.unit || "unit"}</span></p>
+                                  <p className="text-[10px] text-muted-foreground">{q.quoted_quantity} × R{q.unit_price.toFixed(2)} = R{(q.total_price ?? 0).toFixed(2)}</p>
+                                </div>
+                              </div>
+
+                              {/* BOQ comparison */}
+                              {q.boq_unit_price != null && (
+                                <div className="flex items-center gap-2 text-[10px]">
+                                  <span className="text-muted-foreground">BOQ: R{q.boq_unit_price.toFixed(2)}</span>
+                                  <BOQVarianceBadge pct={q.boq_variance_pct} />
+                                </div>
+                              )}
+
+                              {/* Rejection reason */}
+                              {q.status === "REJECTED" && q.rejection_reason && (
+                                <p className="text-[10px] text-muted-foreground italic">Rejected: {q.rejection_reason}</p>
+                              )}
+
+                              {/* Actions for PENDING quotes */}
+                              {q.status === "PENDING" && (
+                                rejectQuoteId === q.id ? (
+                                  <div className="space-y-2 pt-1">
+                                    <Input value={rejectReason} onChange={e => setRejectReason(e.target.value)}
+                                      placeholder="Reason for rejection *" className="h-7 text-xs" autoFocus />
+                                    <div className="flex gap-2">
+                                      <Button size="sm" variant="destructive" className="h-7 text-xs flex-1"
+                                        disabled={!rejectReason.trim() || !!actionLoading}
+                                        onClick={() => act(async () => {
+                                          await procurementApi.rejectQuote(mrId, q.id, rejectReason.trim());
+                                          setRejectQuoteId(null);
+                                          setRejectReason("");
+                                        }, `reject_${q.id}`)}>
+                                        {actionLoading === `reject_${q.id}` ? "Rejecting…" : "Confirm Reject"}
+                                      </Button>
+                                      <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => { setRejectQuoteId(null); setRejectReason(""); }}>Cancel</Button>
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <WriteGuard>
+                                    <div className="flex gap-2 pt-1">
+                                      <Button size="sm" className="h-7 text-xs flex-1 bg-green-600 hover:bg-green-700"
+                                        disabled={!!actionLoading}
+                                        onClick={() => act(() => procurementApi.approveQuote(mrId, q.id), `approve_${q.id}`)}>
+                                        {actionLoading === `approve_${q.id}` ? "Approving…" : "Approve Quote"}
+                                      </Button>
+                                      <Button size="sm" variant="outline" className="h-7 text-xs border-destructive/40 text-destructive hover:bg-destructive/10"
+                                        disabled={!!actionLoading}
+                                        onClick={() => setRejectQuoteId(q.id)}>
+                                        Reject
+                                      </Button>
+                                    </div>
+                                  </WriteGuard>
+                                )
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    {/* Manual quote entry */}
+                    {step.status !== "WAITING" && (
+                      <div>
+                        {!showAddQuote ? (
+                          <WriteGuard>
+                            <Button size="sm" variant="outline" className="h-7 text-xs gap-1"
+                              onClick={() => setShowAddQuote(true)}>
+                              <Plus className="w-3 h-3" />Record quote manually
+                            </Button>
+                          </WriteGuard>
+                        ) : (
+                          <div className="border border-border rounded-lg p-3 space-y-2 bg-muted/20">
+                            <select value={quoteForm.supplier_id}
+                              onChange={e => setQuoteForm(f => ({ ...f, supplier_id: e.target.value }))}
+                              className="h-7 w-full rounded border border-input bg-background px-2 text-xs">
+                              <option value="">— Supplier —</option>
+                              {suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                            </select>
+                            <div className="grid grid-cols-2 gap-2">
+                              <Input value={quoteForm.description} onChange={e => setQuoteForm(f => ({ ...f, description: e.target.value }))}
+                                placeholder="Description *" className="h-7 text-xs col-span-2" />
+                              <Input type="number" min="0" step="0.01" value={quoteForm.unit_price}
+                                onChange={e => setQuoteForm(f => ({ ...f, unit_price: e.target.value }))}
+                                placeholder="Unit price R *" className="h-7 text-xs" />
+                              <Input type="number" min="0.001" step="any" value={quoteForm.quoted_quantity}
+                                onChange={e => setQuoteForm(f => ({ ...f, quoted_quantity: e.target.value }))}
+                                placeholder="Qty" className="h-7 text-xs" />
+                              <Input value={quoteForm.unit} onChange={e => setQuoteForm(f => ({ ...f, unit: e.target.value }))}
+                                placeholder="Unit (bags, m³…)" className="h-7 text-xs col-span-2" />
+                            </div>
+                            <div className="flex gap-2">
+                              <Button size="sm" className="h-7 text-xs flex-1"
+                                disabled={!quoteForm.supplier_id || !quoteForm.description.trim() || !quoteForm.unit_price || !!actionLoading}
+                                onClick={() => act(async () => {
+                                  await procurementApi.addQuote(mrId, {
+                                    supplier_id: quoteForm.supplier_id,
+                                    description: quoteForm.description.trim(),
+                                    unit_price: parseFloat(quoteForm.unit_price),
+                                    quoted_quantity: parseFloat(quoteForm.quoted_quantity) || 1,
+                                    unit: quoteForm.unit.trim() || undefined,
+                                  });
+                                  setShowAddQuote(false);
+                                  setQuoteForm({ supplier_id: "", description: "", unit_price: "", quoted_quantity: "1", unit: "" });
+                                }, "add_quote")}>
+                                {actionLoading === "add_quote" ? "Saving…" : "Save Quote"}
+                              </Button>
+                              <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setShowAddQuote(false)}>Cancel</Button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Step 5: Purchase Order */}
+                {step.step === 5 && step.po && (
+                  <div className="bg-muted/30 rounded-lg px-3 py-2.5 space-y-1">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-medium">{step.po.po_number}</span>
+                      <Badge variant={STATUS_BADGE[step.po.status] || "outline"} className="text-[10px] h-4">{step.po.status.replace(/_/g, " ")}</Badge>
+                      {step.po.sent && <MailCheck className="w-3.5 h-3.5 text-green-500" />}
+                    </div>
+                    <p className="text-xs text-muted-foreground">Total: R{step.po.total.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
+                  </div>
+                )}
+                {step.step === 5 && !step.po && step.status === "WAITING" && (
+                  <p className="text-xs text-muted-foreground">Will be created automatically when a quote is approved.</p>
+                )}
+
+                {/* Step 6: Invoice */}
+                {step.step === 6 && step.invoice && (
+                  <div className="bg-muted/30 rounded-lg px-3 py-2.5 space-y-1">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-medium">{step.invoice.invoice_number}</span>
+                      <Badge variant={STATUS_BADGE[step.invoice.status] || "outline"} className="text-[10px] h-4">{step.invoice.status.replace(/_/g, " ")}</Badge>
+                      {step.invoice.matches_po && <span className="text-[10px] text-green-600 bg-green-500/10 rounded px-1.5 py-0.5">Matches PO</span>}
+                    </div>
+                    <p className="text-xs text-muted-foreground">Amount: R{step.invoice.total_amount.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
+                  </div>
+                )}
+
+                {/* Step 7: Delivery */}
+                {step.step === 7 && step.delivery && (
+                  <div className="bg-muted/30 rounded-lg px-3 py-2.5 space-y-1">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-medium">{step.delivery.delivery_note_number}</span>
+                      <Badge variant={STATUS_BADGE[step.delivery.status] || "outline"} className="text-[10px] h-4">{step.delivery.status.replace(/_/g, " ")}</Badge>
+                    </div>
+                    {step.delivery.received_at && (
+                      <p className="text-xs text-muted-foreground">Received: {formatDate(step.delivery.received_at)}</p>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Footer */}
+        <div className="px-5 pb-5 pt-3 border-t border-border shrink-0">
+          <Button variant="outline" className="w-full h-9 text-sm" onClick={onClose}>Close</Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
 // ── PO Detail Modal ───────────────────────────────────────────────────────────
 
 function PODetailModal({ po, onClose, onUpdated }: { po: PurchaseOrder; onClose: () => void; onUpdated: () => void; }) {
@@ -1647,7 +2091,7 @@ export default function ProcurementPage() {
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
   const [showCaptureExternal, setShowCaptureExternal] = useState(false);
-  const [selectedMR, setSelectedMR] = useState<MaterialRequest | null>(null);
+  const [selectedPipelineMRId, setSelectedPipelineMRId] = useState<string | null>(null);
   const [selectedPO, setSelectedPO] = useState<PurchaseOrder | null>(null);
   const [mrFilter, setMrFilter] = useState("ALL");
 
@@ -1762,7 +2206,7 @@ export default function ProcurementPage() {
           ) : (
             <div className="space-y-2">
               {filteredMRs.map((mr) => (
-                <button key={mr.id} onClick={() => setSelectedMR(mr)} className="w-full text-left bg-card border border-border rounded-xl px-4 py-3 flex items-center gap-4 hover:bg-muted/30 active:scale-[0.99] transition-all">
+                <button key={mr.id} onClick={() => setSelectedPipelineMRId(mr.id)} className="w-full text-left bg-card border border-border rounded-xl px-4 py-3 flex items-center gap-3 hover:bg-muted/30 active:scale-[0.99] transition-all">
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="font-medium text-sm">{mr.request_number}</span>
@@ -1771,6 +2215,14 @@ export default function ProcurementPage() {
                       <span className={cn("text-[10px] font-medium rounded px-1.5 py-0.5", PRIORITY_COLOR[mr.priority])}>{mr.priority}</span>
                     </div>
                     <p className="text-xs text-muted-foreground mt-0.5">{mr.items.length} item{mr.items.length !== 1 ? "s" : ""} · {DEST_LABEL[mr.delivery_destination] ?? mr.delivery_destination} · {timeAgo(mr.created_at)}</p>
+                  </div>
+                  <div className="flex items-center gap-0.5 shrink-0">
+                    {[1,2,3,4,5,6,7].map(n => {
+                      const step = MR_STATUS_TO_STEP[mr.status] ?? 1;
+                      const done = n < step;
+                      const current = n === step;
+                      return <div key={n} className={cn("w-1.5 h-1.5 rounded-full transition-colors", done ? "bg-green-500" : current ? "bg-primary" : "bg-border")} />;
+                    })}
                   </div>
                   <ChevronRight className="w-4 h-4 text-muted-foreground shrink-0" />
                 </button>
@@ -1816,7 +2268,14 @@ export default function ProcurementPage() {
           onDone={() => { setShowCaptureExternal(false); loadData(); }}
         />
       )}
-      {selectedMR && <MRDetailModal mr={selectedMR} suppliers={suppliers} onClose={() => setSelectedMR(null)} onUpdated={() => { loadData(); setSelectedMR(null); }} />}
+      {selectedPipelineMRId && (
+        <PipelinePanelModal
+          mrId={selectedPipelineMRId}
+          suppliers={suppliers}
+          onClose={() => setSelectedPipelineMRId(null)}
+          onUpdated={() => { loadData(); }}
+        />
+      )}
       {selectedPO && <PODetailModal po={selectedPO} onClose={() => setSelectedPO(null)} onUpdated={() => { loadData(); setSelectedPO(null); }} />}
     </div>
   );

@@ -661,3 +661,103 @@ def _create_mr_email_failure_alert(db: Session, mr, error: str) -> None:
         db.commit()
     except Exception:
         logger.exception("Could not create MR email failure alert for %s", mr.request_number)
+
+
+# ── Quote rejection email ─────────────────────────────────────────────────────
+
+def send_quote_rejection_email(
+    db: Session,
+    mr,
+    quote,
+    reason: str,
+    sent_by_id: Optional[uuid.UUID] = None,
+) -> dict:
+    """
+    Email the supplier that their quotation was rejected, with the reason and
+    an invitation to resubmit.  Always creates an MREmailLog entry.
+    Never raises — failures are logged but do not block the rejection flow.
+
+    Returns {"status": "SENT"|"MOCK_SENT"|"FAILED", "sent_to": email}.
+    """
+    from app.models.supplier import Supplier
+    from app.models.mr_email_log import MREmailLog
+
+    now = datetime.now(timezone.utc)
+
+    supplier = db.get(Supplier, quote.supplier_id) if quote.supplier_id else None
+    to_email = (supplier.email or "") if supplier else ""
+    contact  = (supplier.contact_person or supplier.name) if supplier else "Supplier"
+    mr_number = mr.request_number
+
+    subject = f"Quotation Not Accepted — {mr_number} | HMH Group"
+
+    # Format quoted items for the email body
+    items_html = ""
+    if quote.description:
+        items_html = (
+            f"<tr>"
+            f"<td style='padding:8px 12px;border-bottom:1px solid #eee'>{quote.description}</td>"
+            f"<td style='padding:8px 12px;border-bottom:1px solid #eee;text-align:right'>"
+            f"{quote.quoted_quantity:g} {quote.unit or ''}</td>"
+            f"<td style='padding:8px 12px;border-bottom:1px solid #eee;text-align:right'>"
+            f"R {float(quote.unit_price):,.2f}</td>"
+            f"</tr>"
+        )
+
+    body_html = f"""
+<html><body style="font-family:Arial,sans-serif;color:#1a1a1a;max-width:680px;margin:0 auto;background:#f7f7f7">
+<div style="background:#e85d04;padding:22px 32px">
+  <h2 style="color:white;margin:0;font-size:20px">HMH Group — Quotation Not Accepted</h2>
+  <p style="color:#ffd7b5;margin:4px 0 0;font-size:14px">Material Request: {mr_number}</p>
+</div>
+<div style="background:white;padding:28px 32px">
+  <p>Dear {contact},</p>
+  <p>Thank you for submitting your quotation for material request <strong>{mr_number}</strong>.</p>
+  <p>Unfortunately, we are unable to accept this quotation at this time.</p>
+
+  <div style="background:#fff3f3;border-left:4px solid #e74c3c;padding:16px 20px;margin:20px 0;border-radius:4px">
+    <p style="margin:0 0 6px;font-weight:600;color:#c0392b">Reason for rejection:</p>
+    <p style="margin:0;color:#555">{reason}</p>
+  </div>
+
+  {'<p><strong>Items in your quotation:</strong></p><table style="width:100%;border-collapse:collapse"><thead><tr style="background:#f5f5f5"><th style="padding:8px 12px;text-align:left">Description</th><th style="padding:8px 12px;text-align:right">Qty</th><th style="padding:8px 12px;text-align:right">Unit Price</th></tr></thead><tbody>' + items_html + '</tbody></table>' if items_html else ''}
+
+  <p style="margin-top:24px">We invite you to submit a revised quotation that addresses the above feedback.
+  Please reply to this email with your updated pricing.</p>
+
+  <p>If you have any questions, please do not hesitate to contact us.</p>
+  <p style="color:#888;font-size:13px;margin-top:32px">Kind regards,<br><strong>HMH Procurement Team</strong></p>
+</div>
+</body></html>"""
+
+    error_msg: Optional[str] = None
+    if not to_email:
+        status_str = "FAILED"
+        error_msg  = f"Supplier has no email address — cannot send rejection."
+        logger.warning("quote_rejection_email no email mr=%s supplier=%s", mr_number, quote.supplier_id)
+    elif not _smtp_is_real():
+        status_str = "MOCK_SENT"
+        logger.info("quote_rejection_mock mr=%s to=%s", mr_number, to_email)
+    else:
+        err = _send_smtp(to_email, subject, body_html)
+        status_str = "SENT" if err is None else "FAILED"
+        error_msg  = err
+        if err:
+            logger.error("quote_rejection_email failed mr=%s: %s", mr_number, err)
+
+    log = MREmailLog(
+        material_request_id=mr.id,
+        supplier_id=quote.supplier_id,
+        sent_to_email=to_email or "(no email)",
+        email_subject=subject,
+        email_body=body_html,
+        status=status_str,
+        error_message=error_msg,
+        sent_by=sent_by_id,
+        sent_at=now if status_str in ("SENT", "MOCK_SENT") else None,
+        created_at=now,
+    )
+    db.add(log)
+    db.commit()
+
+    return {"status": status_str, "sent_to": to_email}

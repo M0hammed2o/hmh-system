@@ -109,6 +109,72 @@ export interface MRQuote {
   delivery_date: string | null;
   notes: string | null;
   is_selected: boolean;
+  // Phase 4A pipeline fields
+  source?: "MANUAL" | "EMAIL";
+  status?: "PENDING" | "APPROVED" | "REJECTED";
+  boq_unit_price?: number | null;
+  boq_variance_pct?: number | null;
+  rejection_reason?: string | null;
+  rejected_at?: string | null;
+  approved_at?: string | null;
+  created_at?: string | null;
+}
+
+// ── Pipeline types (Phase 4A) ────────────────────────────────────────────────
+
+export type PipelineStepStatus = "COMPLETE" | "CURRENT" | "WAITING" | "BLOCKED";
+
+export interface PipelineStep {
+  step: number;
+  key: string;
+  label: string;
+  status: PipelineStepStatus;
+  // step 1
+  submitted_at?: string | null;
+  item_count?: number;
+  // step 2
+  approved_at?: string | null;
+  over_boq?: boolean;
+  // step 3
+  email_sent?: boolean;
+  sent_to?: string | null;
+  sent_at?: string | null;
+  email_status?: string | null;
+  supplier_name?: string | null;
+  supplier_email?: string | null;
+  missing_email?: boolean;
+  // step 4
+  quotes?: MRQuote[];
+  pending_count?: number;
+  approved_count?: number;
+  // step 5
+  po?: { id: string; po_number: string; status: string; total: number; sent: boolean } | null;
+  // step 6
+  invoice?: { id: string; invoice_number: string; total_amount: number; status: string; matches_po: boolean } | null;
+  // step 7
+  delivery?: { id: string; delivery_note_number: string; status: string; received_at: string | null } | null;
+}
+
+export interface PipelineSupplier {
+  id: string | null;
+  name: string | null;
+  email: string | null;
+  has_email: boolean;
+}
+
+export interface MRPipeline {
+  mr_id: string;
+  mr_number: string;
+  mr_status: string;
+  priority: MRPriority;
+  project_id: string | null;
+  lot_id: string | null;
+  notes: string | null;
+  over_boq: boolean;
+  items: Array<{ id: string; description: string; requested_quantity: number; unit: string | null; over_boq_quantity: number | null }>;
+  current_step: number;
+  steps: PipelineStep[];
+  supplier: PipelineSupplier;
 }
 
 export interface POItem {
@@ -287,6 +353,29 @@ export const procurementApi = {
   getPOActivity: async (poId: string): Promise<ProcurementActivityEntry[]> => {
     const res = await client.get<{ data: ProcurementActivityEntry[] }>(
       `/purchase-orders/${poId}/activity`
+    );
+    return res.data.data;
+  },
+
+  // ── Pipeline (Phase 4A) ────────────────────────────────────────────────────
+
+  getPipeline: async (mrId: string): Promise<MRPipeline> => {
+    const res = await client.get<{ data: MRPipeline }>(`/procurement/mrs/${mrId}/pipeline`);
+    return res.data.data;
+  },
+
+  approveQuote: async (mrId: string, quoteId: string, notes?: string): Promise<{ po_id: string; po_number: string; email: unknown }> => {
+    const res = await client.post<{ data: { po_id: string; po_number: string; email: unknown } }>(
+      `/procurement/mrs/${mrId}/quotes/${quoteId}/approve`,
+      { notes: notes ?? null },
+    );
+    return res.data.data;
+  },
+
+  rejectQuote: async (mrId: string, quoteId: string, reason: string, tryAnotherSupplierId?: string): Promise<{ quote_id: string; status: string }> => {
+    const res = await client.post<{ data: { quote_id: string; status: string } }>(
+      `/procurement/mrs/${mrId}/quotes/${quoteId}/reject`,
+      { reason, try_another_supplier_id: tryAnotherSupplierId ?? null },
     );
     return res.data.data;
   },

@@ -516,6 +516,24 @@ def ensure_tables():
             END $$;
         """))
 
+    # migration 0046: pipeline fields on mr_quotes
+    with engine.begin() as conn:
+        for _col, _type in [
+            ("source",           "VARCHAR(20) NOT NULL DEFAULT 'MANUAL'"),
+            ("status",           "VARCHAR(20) NOT NULL DEFAULT 'PENDING'"),
+            ("boq_unit_price",   "NUMERIC(14,2)"),
+            ("rejection_reason", "TEXT"),
+            ("rejected_at",      "TIMESTAMPTZ"),
+            ("approved_at",      "TIMESTAMPTZ"),
+        ]:
+            conn.execute(_t(f"""
+                DO $$ BEGIN
+                    IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                        WHERE table_name='mr_quotes' AND column_name='{_col}')
+                    THEN ALTER TABLE mr_quotes ADD COLUMN {_col} {_type}; END IF;
+                END $$;
+            """))
+
     yield
 
 
@@ -692,18 +710,23 @@ def make_boq_item(db: Session, project_id: str, lot_id: str, item_id: str,
     return {"boq_item_id": str(item_id_obj), "header_id": str(h.id), "section_id": str(s.id)}
 
 
-def make_supplier(db: Session, name: str = None) -> dict:
+_SUPPLIER_EMAIL_UNSET = object()  # sentinel: generate random email when not provided
+
+def make_supplier(db: Session, name: str = None, email=_SUPPLIER_EMAIL_UNSET) -> dict:
     from app.models.supplier import Supplier
     name = name or f"Test Supplier {uuid.uuid4().hex[:6]}"
+    if email is _SUPPLIER_EMAIL_UNSET:
+        email = f"supplier_{uuid.uuid4().hex[:6]}@test.com"
+    # email=None means "store no email"
     s = Supplier(
         name=name,
-        email=f"supplier_{uuid.uuid4().hex[:6]}@test.com",
+        email=email,
         is_active=True,
         created_at=_now(), updated_at=_now(),
     )
     db.add(s)
     db.flush()
-    return {"id": str(s.id), "name": name}
+    return {"id": str(s.id), "name": name, "email": email}
 
 
 def make_stock(db: Session, project_id: str, site_id, item_id: str,

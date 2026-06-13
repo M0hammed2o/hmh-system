@@ -350,6 +350,9 @@ app.include_router(proc_reconciliations_router, prefix="/api/v1")
 from app.api.v1.procurement_analytics import router as procurement_analytics_router
 app.include_router(procurement_analytics_router, prefix="/api/v1")
 
+from app.api.v1.procurement_pipeline import router as procurement_pipeline_router
+app.include_router(procurement_pipeline_router, prefix="/api/v1")
+
 from app.api.v1.ops import router as ops_router
 app.include_router(ops_router, prefix="/api/v1")
 

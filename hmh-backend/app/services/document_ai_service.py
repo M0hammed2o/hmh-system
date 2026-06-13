@@ -703,7 +703,8 @@ def parse_delivery_note_text(text: str) -> dict:
 
 
 def parse_quote_text(text: str) -> dict:
-    """Extract structured fields from quote/quotation text."""
+    """Extract structured fields from quote/quotation text, including line items."""
+    line_items = _parse_quote_line_items(text)
     return {
         "po_number":            _first_match(_PO_RE,    text),
         "invoice_number":       None,
@@ -713,7 +714,48 @@ def parse_quote_text(text: str) -> dict:
         "date":                 _first_match(_DATE_RE,  text),
         "total_amount":         _extract_total(text),
         "subtotal":             _extract_subtotal(text),
+        "line_items":           line_items,
     }
+
+
+def _parse_quote_line_items(text: str) -> list[dict]:
+    """
+    Extract individual line items from a quotation document.
+
+    Tries the shared invoice line-item parser first (handles well-formatted
+    tables), then falls back to a quotation-specific single-line pattern that
+    handles common SA supplier formats:
+        "Cement 50kg bags   10   R 120.00"
+    Returns [] when nothing parseable is found — callers must show a fallback.
+    """
+    import re
+
+    # Reuse the invoice parser — it handles 5-col and 4-col table rows
+    items = _parse_line_items(text)
+    if items:
+        return items
+
+    # Quotation-specific fallback: description   qty   R price (no total column)
+    _QUOTE_LINE = re.compile(
+        r"^(.{3,60}?)\s{2,}(\d+(?:[.,]\d+)?)\s{1,}(?:[a-zA-Z]{1,6}\s{1,})?R?\s*(\d[\d,]*(?:\.\d{1,2})?)",
+        re.MULTILINE | re.IGNORECASE,
+    )
+    fallback: list[dict] = []
+    for m in _QUOTE_LINE.finditer(text):
+        desc, qty_s, price_s = m.groups()
+        qty   = _parse_amount(qty_s)
+        price = _parse_amount(price_s)
+        if qty is None or price is None or price < 0.01:
+            continue
+        fallback.append({
+            "description": desc.strip(),
+            "unit":        None,
+            "quantity":    qty,
+            "unit_price":  price,
+            "line_total":  round(qty * price, 2),
+            "confidence":  0.4,
+        })
+    return fallback
 
 
 def parse_purchase_order_text(text: str) -> dict:

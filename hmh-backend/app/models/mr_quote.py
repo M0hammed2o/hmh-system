@@ -49,5 +49,15 @@ class MRQuote(Base):
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
+    # ── Phase 4A: pipeline fields (migration 0046) ────────────────────────────
+    # 'MANUAL' = entered by office staff; 'EMAIL' = auto-detected from Gmail
+    source: Mapped[str] = mapped_column(String(20), nullable=False, default="MANUAL", server_default="MANUAL")
+    # 'PENDING' | 'APPROVED' | 'REJECTED'
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="PENDING", server_default="PENDING", index=True)
+    boq_unit_price: Mapped[Optional[float]] = mapped_column(Numeric(14, 2), nullable=True)
+    rejection_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    rejected_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    approved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
     def __repr__(self) -> str:
-        return f"<MRQuote mr={self.material_request_id} supplier={self.supplier_id}>"
+        return f"<MRQuote mr={self.material_request_id} supplier={self.supplier_id} status={self.status}>"

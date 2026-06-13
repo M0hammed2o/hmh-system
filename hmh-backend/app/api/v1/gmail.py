@@ -173,6 +173,10 @@ def process_email(email_id: uuid.UUID, db: DbSession):
         if ext_result["status"] in ("EXTRACTED", "NEEDS_REVIEW"):
             any_done = True
 
+        # ── Auto-create MRQuote when attachment is a QUOTE matched to an MR ────
+        if att.detected_type == "QUOTE" and mr_match["status"] in ("MATCHED", "MISMATCH"):
+            _auto_create_mr_quotes(db, mr_match["mr_id"], fields, items, email, now)
+
         # ── Alerts ───────────────────────────────────────────────────────────
         if ext_result["status"] in ("FAILED", "OCR_NOT_AVAILABLE"):
             _gmail_alert(
@@ -276,6 +280,139 @@ def suggest_reconciliation(email_id: uuid.UUID, db: DbSession):
 
 
 # ── Processing helpers ────────────────────────────────────────────────────────
+
+def _auto_create_mr_quotes(db, mr_id_str: str, fields: dict, items: list, email, now) -> None:
+    """
+    When a QUOTE email attachment is matched to an MR, automatically create
+    MRQuote records so they surface on the Procurement pipeline page without
+    the office needing to go to Gmail Inbox and manually re-enter numbers.
+
+    - Skips if quotes from this email sender already exist for this MR
+      (idempotent — safe to call on re-process).
+    - Uses the extracted line_items when available; falls back to one summary
+      row using the document total when line items could not be parsed.
+    - Marks quotes with source='EMAIL' and status='PENDING' so the pipeline
+      can distinguish them from manually entered quotes.
+    - Looks up the BOQ unit price for each MR item for comparison display.
+    """
+    try:
+        import uuid as _uuid
+        from datetime import datetime as _dt
+        from app.models.mr_quote import MRQuote
+        from app.models.material_request import MaterialRequest
+        from app.models.supplier import Supplier
+        from app.models.boq import BOQItem
+        from sqlalchemy.orm import joinedload
+
+        mr_id = _uuid.UUID(mr_id_str)
+        mr = (
+            db.query(MaterialRequest)
+            .options(joinedload(MaterialRequest.items))
+            .filter(MaterialRequest.id == mr_id)
+            .first()
+        )
+        if not mr:
+            return
+
+        # Resolve supplier — use preferred supplier from MR or match by email
+        supplier_id = mr.preferred_supplier_id
+        if not supplier_id:
+            s = db.query(Supplier).filter(Supplier.email == email.from_email).first()
+            if s:
+                supplier_id = s.id
+        if not supplier_id:
+            return  # cannot create quote without a supplier
+
+        # Idempotency: skip if we already have EMAIL quotes from this sender for this MR
+        existing_email_supplier = (
+            db.query(MRQuote)
+            .filter(
+                MRQuote.material_request_id == mr_id,
+                MRQuote.supplier_id == supplier_id,
+                MRQuote.source == "EMAIL",
+            )
+            .first()
+        )
+        if existing_email_supplier:
+            logger.info("auto_quote skipped — EMAIL quotes already exist mr=%s supplier=%s", mr_id, supplier_id)
+            return
+
+        # Build a BOQ price lookup: item_id → planned_rate
+        boq_prices: dict = {}
+        if mr.lot_id:
+            rows = (
+                db.query(BOQItem.item_id, BOQItem.planned_rate)
+                .filter(BOQItem.lot_id == mr.lot_id, BOQItem.is_active == True)  # noqa: E712
+                .all()
+            )
+            boq_prices = {str(r.item_id): float(r.planned_rate or 0) for r in rows if r.item_id}
+
+        line_items: list[dict] = fields.get("line_items") or items or []
+
+        created = 0
+        if line_items:
+            for li in line_items:
+                desc       = (li.get("description") or "").strip()
+                qty        = float(li.get("quantity") or li.get("qty") or 1)
+                unit_price = float(li.get("unit_price") or li.get("price") or 0)
+                unit       = li.get("unit") or ""
+                if not desc or unit_price <= 0:
+                    continue
+
+                # Try to find the BOQ price by matching description to MR items
+                boq_price = None
+                for mr_item in (mr.items or []):
+                    if mr_item.item_id and str(mr_item.item_id) in boq_prices:
+                        if (mr_item.description or "").lower() in desc.lower() or desc.lower() in (mr_item.description or "").lower():
+                            boq_price = boq_prices[str(mr_item.item_id)]
+                            break
+
+                db.add(MRQuote(
+                    material_request_id=mr_id,
+                    supplier_id=supplier_id,
+                    description=desc[:500],
+                    quoted_quantity=qty,
+                    unit=unit or None,
+                    unit_price=unit_price,
+                    total_price=round(qty * unit_price, 2),
+                    notes=f"Auto-extracted from email: {email.subject or email.from_email}",
+                    source="EMAIL",
+                    status="PENDING",
+                    boq_unit_price=boq_price,
+                    is_selected=False,
+                    created_at=now,
+                ))
+                created += 1
+        else:
+            # Fallback: single summary row using document total
+            total = fields.get("total_amount")
+            if not total:
+                return
+            mr_desc = "; ".join(
+                i.description or "item" for i in (mr.items or [])[:3]
+            ) or "Quoted materials"
+            db.add(MRQuote(
+                material_request_id=mr_id,
+                supplier_id=supplier_id,
+                description=mr_desc[:500],
+                quoted_quantity=1,
+                unit=None,
+                unit_price=float(total),
+                total_price=float(total),
+                notes=f"Auto-extracted from email (line items not parsed): {email.subject or email.from_email}",
+                source="EMAIL",
+                status="PENDING",
+                boq_unit_price=None,
+                is_selected=False,
+                created_at=now,
+            ))
+            created = 1
+
+        db.flush()
+        logger.info("auto_quote created=%d mr=%s supplier=%s", created, mr_id, supplier_id)
+    except Exception:
+        logger.exception("auto_quote failed for mr_id=%s — quotes not created", mr_id_str)
+
 
 def _match_mr_from_text(db, raw_text: str, fields: dict, items: list) -> dict:
     """
