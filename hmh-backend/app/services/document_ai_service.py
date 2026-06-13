@@ -305,9 +305,12 @@ _RECEIVED_BY_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Delivery note simple items: description  qty  unit (2+ spaces as separator)
+# Delivery note simple items: description  qty  unit
+# Uses \s+ (not \s{2,}) because OCR from table images typically outputs a single
+# tab or space between cells, not multiple spaces.  The non-greedy description
+# match still prevents the separator from being swallowed into the description.
 _DELIVERY_ITEM_RE = re.compile(
-    r"^[ \t]*([A-Za-z][A-Za-z0-9 ,./\-]{2,50}?)\s{2,}(\d[\d,]*(?:\.\d+)?)\s+([A-Za-z]{1,15})\s*$",
+    r"^[ \t]*([A-Za-z][A-Za-z0-9 ,./\-]{2,50}?)\s+(\d[\d,]*(?:\.\d+)?)\s+([A-Za-z]{1,15})\s*$",
     re.MULTILINE,
 )
 

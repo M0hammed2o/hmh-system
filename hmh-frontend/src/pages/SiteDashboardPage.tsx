@@ -1645,6 +1645,22 @@ function UnifiedReceiveModal({ projectId, siteId, lotId, suppliers, materialSumm
         const f = res.extracted_fields;
         if (res.status === "EXTRACTED" || res.status === "NEEDS_REVIEW") {
           if (f.delivery_note_number) setDnNum(f.delivery_note_number);
+          // Auto-select PO from extracted po_number
+          if (f.po_number) {
+            const norm = f.po_number.toLowerCase();
+            const matched = projectPOs.find(p =>
+              p.po_number.toLowerCase().includes(norm) || norm.includes(p.po_number.toLowerCase())
+            );
+            if (matched) setPoId(matched.id);
+          }
+          // Auto-select supplier from extracted supplier_name
+          if (f.supplier_name && !supplierId) {
+            const norm = f.supplier_name.toLowerCase().trim();
+            const matched = suppliers.find(s =>
+              s.name.toLowerCase().trim().includes(norm) || norm.includes(s.name.toLowerCase().trim())
+            );
+            if (matched) setSupplierId(matched.id);
+          }
           if (res.items.length > 0) {
             // OCR-extracted items have no catalog/BOQ link — user must add via
             // "Add BOQ Item" or "Add Non-BOQ Item" for stock to update.
@@ -1782,8 +1798,29 @@ function UnifiedReceiveModal({ projectId, siteId, lotId, suppliers, materialSumm
                         ? "Google Vision configured but returned no text — check credentials. Entering manually."
                         : "AI Vision not configured — entering manually.");
                     } else {
-                      const p = result.preview as { delivery_note_number?: string | null; items?: Array<{ description: string | null; quantity: number | null; unit: string | null }> };
+                      const p = result.preview as {
+                        delivery_note_number?: string | null;
+                        po_number?:            string | null;
+                        supplier_name?:        string | null;
+                        items?: Array<{ description: string | null; quantity: number | null; unit: string | null }>;
+                      };
                       if (p.delivery_note_number) setDnNum(p.delivery_note_number);
+                      // Auto-select matching PO from extracted po_number
+                      if (p.po_number) {
+                        const norm = p.po_number.toLowerCase();
+                        const matched = projectPOs.find(po =>
+                          po.po_number.toLowerCase().includes(norm) || norm.includes(po.po_number.toLowerCase())
+                        );
+                        if (matched) setPoId(matched.id);
+                      }
+                      // Auto-select matching supplier from extracted supplier_name
+                      if (p.supplier_name && !supplierId) {
+                        const norm = p.supplier_name.toLowerCase().trim();
+                        const matched = suppliers.find(s =>
+                          s.name.toLowerCase().trim().includes(norm) || norm.includes(s.name.toLowerCase().trim())
+                        );
+                        if (matched) setSupplierId(matched.id);
+                      }
                       if (p.items && p.items.length > 0) {
                         setItems(p.items.map(i => ({
                           description:       String(i.description ?? ""),
