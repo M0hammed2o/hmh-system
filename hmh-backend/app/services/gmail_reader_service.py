@@ -84,22 +84,30 @@ def classify_document(filename: str, subject: str = "") -> str:
     QUOTE, or OTHER based on filename + subject keywords.
     Pure function — no DB or I/O.
 
-    Priority order: PAYMENT_PROOF > FUEL_SLIP > PURCHASE_ORDER >
-                    INVOICE > DELIVERY_NOTE > QUOTE > OTHER
+    Priority: filename is checked first, then combined filename+subject.
+    Filename-first prevents "Re: Purchase Order PO-XXX" subject lines from
+    overriding an "Invoice.pdf" filename — suppliers reply to PO emails with
+    invoice attachments, so the subject often contains "purchase order".
     """
+    _CHECKS = [
+        (_PAYMENT_KEYWORDS, "PAYMENT_PROOF"),
+        (_FUEL_KEYWORDS,    "FUEL_SLIP"),
+        (_INVOICE_KEYWORDS, "INVOICE"),
+        (_DELIVERY_KEYWORDS,"DELIVERY_NOTE"),
+        (_PO_KEYWORDS,      "PURCHASE_ORDER"),
+        (_QUOTE_KEYWORDS,   "QUOTE"),
+    ]
+    # ── 1. Filename alone (strongest signal) ─────────────────────────────────
+    fname = filename.lower()
+    for keywords, result in _CHECKS:
+        if any(k in fname for k in keywords):
+            return result
+    # ── 2. Combined filename + subject (subject only matters when filename
+    #       gives no signal, e.g. "document.pdf" or "attachment.pdf") ─────────
     text = f"{filename} {subject}".lower()
-    if any(k in text for k in _PAYMENT_KEYWORDS):
-        return "PAYMENT_PROOF"
-    if any(k in text for k in _FUEL_KEYWORDS):
-        return "FUEL_SLIP"
-    if any(k in text for k in _PO_KEYWORDS):
-        return "PURCHASE_ORDER"
-    if any(k in text for k in _INVOICE_KEYWORDS):
-        return "INVOICE"
-    if any(k in text for k in _DELIVERY_KEYWORDS):
-        return "DELIVERY_NOTE"
-    if any(k in text for k in _QUOTE_KEYWORDS):
-        return "QUOTE"
+    for keywords, result in _CHECKS:
+        if any(k in text for k in keywords):
+            return result
     return "OTHER"
 
 

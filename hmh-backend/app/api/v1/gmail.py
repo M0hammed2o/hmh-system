@@ -129,8 +129,21 @@ def process_email(email_id: uuid.UUID, db: DbSession):
     results  = []
     any_done = False
 
+    from app.services.gmail_reader_service import classify_document as _classify_doc
+
     for att in email.attachments:
         logger.debug("gmail_att filename=%s type=%s", att.filename, att.detected_type)
+
+        # ── Re-classify using the filename-first classifier ────────────────────
+        # Corrects misclassifications from initial fetch (e.g. "Invoice.pdf"
+        # classified as PURCHASE_ORDER because subject said "Re: Purchase Order").
+        corrected_type = _classify_doc(att.filename, email.subject or "")
+        if corrected_type != att.detected_type:
+            logger.info(
+                "gmail_reclassify att=%s old=%s new=%s",
+                att.filename, att.detected_type, corrected_type,
+            )
+            att.detected_type = corrected_type
 
         # ── Extract ──────────────────────────────────────────────────────────
         ext_result = extract_document_data(att.file_path, att.detected_type)
@@ -157,6 +170,7 @@ def process_email(email_id: uuid.UUID, db: DbSession):
         if existing:
             existing.status        = ext_result["status"]
             existing.raw_text      = raw_text
+            existing.document_type = att.detected_type
             existing.extracted_json = json.dumps(payload)
         else:
             db.add(DocumentExtraction(
@@ -176,6 +190,10 @@ def process_email(email_id: uuid.UUID, db: DbSession):
         # ── Auto-create MRQuote when attachment is a QUOTE matched to an MR ────
         if att.detected_type == "QUOTE" and mr_match["status"] in ("MATCHED", "MISMATCH"):
             _auto_create_mr_quotes(db, mr_match["mr_id"], fields, items, email, now)
+
+        # ── Auto-create Draft Invoice when attachment is an INVOICE ───────────
+        if att.detected_type == "INVOICE" and ext_result["status"] in ("EXTRACTED", "OCR_EXTRACTED", "NEEDS_REVIEW"):
+            _auto_create_invoice(db, fields, email, now)
 
         # ── Alerts ───────────────────────────────────────────────────────────
         if ext_result["status"] in ("FAILED", "OCR_NOT_AVAILABLE"):
@@ -412,6 +430,67 @@ def _auto_create_mr_quotes(db, mr_id_str: str, fields: dict, items: list, email,
         logger.info("auto_quote created=%d mr=%s supplier=%s", created, mr_id, supplier_id)
     except Exception:
         logger.exception("auto_quote failed for mr_id=%s — quotes not created", mr_id_str)
+
+
+def _auto_create_invoice(db, fields: dict, email, now) -> None:
+    """
+    When an INVOICE attachment contains a PO number that matches a PurchaseOrder,
+    auto-create a Draft Invoice record so Step 6 of the pipeline is populated.
+
+    - Falls back to email.matched_po_number when the document field is empty.
+    - Idempotent: skips if an Invoice already exists for the same PO.
+    - Sets status=DRAFT so a human must review before it is treated as approved.
+    """
+    try:
+        import uuid as _uuid
+        from datetime import date as _date
+        from app.models.invoice import Invoice
+        from app.models.enums import RecordStatus
+        from app.services.procurement_matching_service import _find_po_by_number
+
+        po_number_raw = (
+            (fields.get("po_number") or "").strip()
+            or getattr(email, "matched_po_number", None)
+            or ""
+        )
+        if not po_number_raw:
+            logger.info("auto_invoice skip — no PO reference in fields or email")
+            return
+
+        po = _find_po_by_number(db, po_number_raw)
+        if not po:
+            logger.info("auto_invoice skip — PO not found for '%s'", po_number_raw)
+            return
+
+        existing = db.query(Invoice).filter(Invoice.purchase_order_id == po.id).first()
+        if existing:
+            logger.info("auto_invoice skip — Invoice already exists for PO=%s", po.po_number)
+            return
+
+        invoice_number = (fields.get("invoice_number") or "").strip()
+        if not invoice_number:
+            invoice_number = f"AUTO-{po.po_number}-{_date.today().strftime('%Y%m%d')}"
+
+        total = fields.get("total_amount") or float(po.total_amount or 0)
+
+        db.add(Invoice(
+            id=_uuid.uuid4(),
+            invoice_number=invoice_number[:100],
+            supplier_id=po.supplier_id,
+            project_id=po.project_id,
+            site_id=po.site_id,
+            purchase_order_id=po.id,
+            total_amount=float(total),
+            subtotal_amount=fields.get("subtotal"),
+            vat_amount=fields.get("vat_amount"),
+            status=RecordStatus.DRAFT,
+            notes=f"Auto-created from email: {email.subject or email.from_email}",
+            captured_at=now,
+        ))
+        db.flush()
+        logger.info("auto_invoice created invoice_number=%s po=%s total=%s", invoice_number, po.po_number, total)
+    except Exception:
+        logger.exception("auto_invoice failed — invoice not created")
 
 
 def _match_mr_from_text(db, raw_text: str, fields: dict, items: list) -> dict:
