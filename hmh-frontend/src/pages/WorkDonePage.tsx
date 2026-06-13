@@ -358,7 +358,7 @@ export default function WorkDonePage() {
   const supplierMap = Object.fromEntries(suppliers.map(s => [s.id, s.name]));
 
   useEffect(() => {
-    projectsApi.list().then(setProjects).catch(() => {});
+    projectsApi.list().then(r => setProjects(r.items)).catch(() => {});
     client.get<{ data: Supplier[] }>("/suppliers/", { params: { include_inactive: false } })
       .then(r => setSuppliers(r.data.data ?? []))
       .catch(() => {});

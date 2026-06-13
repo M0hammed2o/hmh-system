@@ -629,7 +629,7 @@ export default function MunicipalityInvoicePage() {
   const [filterStatus, setFilterStatus] = useState("");
 
   useEffect(() => {
-    projectsApi.list().then(setProjects).catch(() => {});
+    projectsApi.list().then(r => setProjects(r.items)).catch(() => {});
   }, []);
 
   const load = useCallback(async () => {

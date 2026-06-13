@@ -32,7 +32,7 @@ export default function MonthlySubcontractorSummaryPage() {
   const [loading,   setLoading]   = useState(false);
 
   useEffect(() => {
-    projectsApi.list().then(setProjects).catch(() => {});
+    projectsApi.list().then(r => setProjects(r.items)).catch(() => {});
   }, []);
 
   const load = async () => {

@@ -2,7 +2,7 @@ import { NavLink, useLocation } from "react-router-dom";
 import {
   LayoutDashboard, Users, FolderKanban, FileSpreadsheet,
   ShoppingCart, Truck, Package, CreditCard, Bell, Settings, LogOut, HardHat,
-  Droplet, Building2, Car, FileCheck2, Copy, Smartphone, MessageSquare, Mail, Clock, Flag, Warehouse, BarChart2, ClipboardList, Receipt,
+  Droplet, Building2, Car, FileCheck2, Smartphone, MessageSquare, Mail, Clock, Flag, Warehouse, BarChart2, ClipboardList, Receipt,
 } from "lucide-react";
 import { HMHLogo } from "@/components/HMHLogo";
 import { TOKEN_KEY, REFRESH_TOKEN_KEY, ROLE_KEY } from "@/lib/constants";
@@ -24,7 +24,6 @@ const navGroups = [
     items: [
       { title: "Projects",        path: "/projects",       icon: FolderKanban },
       { title: "BOQ",             path: "/boq",            icon: FileSpreadsheet },
-      { title: "BOQ Templates",   path: "/boq-templates",  icon: Copy },
     ],
   },
   {

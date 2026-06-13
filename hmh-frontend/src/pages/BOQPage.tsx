@@ -33,6 +33,7 @@ import {
   type LotBOQRow,
 } from "@/api/boq";
 import { formatCurrency } from "@/lib/format";
+import BOQTemplatesInner from "@/pages/BOQTemplatesPage";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -279,7 +280,7 @@ function SiteBOQTable({ summary }: { summary: SiteBOQSummary }) {
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 
-type ViewMode = "master" | "site" | "lot";
+type ViewMode = "master" | "site" | "lot" | "templates";
 
 export default function BOQPage() {
   const navigate = useNavigate();
@@ -430,16 +431,19 @@ export default function BOQPage() {
             {projects.length === 0 ? <option disabled>No projects</option>
               : projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
           </Sel>
-          {selectedProjectId && (
-            <div>
-              <p className="text-xs text-muted-foreground mb-1">View Mode</p>
-              <div className="flex gap-1 bg-muted/50 p-1 rounded-lg">
-                <ViewTab label="Master Summary" active={viewMode === "master"} onClick={() => changeMode("master")} />
-                <ViewTab label="Site BOQ"       active={viewMode === "site"}   onClick={() => changeMode("site")} />
-                <ViewTab label="Lot BOQ"        active={viewMode === "lot"}    onClick={() => changeMode("lot")} />
-              </div>
+          <div>
+            <p className="text-xs text-muted-foreground mb-1">View Mode</p>
+            <div className="flex gap-1 bg-muted/50 p-1 rounded-lg flex-wrap">
+              {selectedProjectId && (
+                <>
+                  <ViewTab label="Master Summary" active={viewMode === "master"} onClick={() => changeMode("master")} />
+                  <ViewTab label="Site BOQ"       active={viewMode === "site"}   onClick={() => changeMode("site")} />
+                  <ViewTab label="Lot BOQ"        active={viewMode === "lot"}    onClick={() => changeMode("lot")} />
+                </>
+              )}
+              <ViewTab label="Templates" active={viewMode === "templates"} onClick={() => changeMode("templates")} />
             </div>
-          )}
+          </div>
           <button onClick={loadData} disabled={loadingMain} className="p-2 rounded-md hover:bg-muted text-muted-foreground disabled:opacity-50 mt-5" title="Refresh">
             <RefreshCw className={`w-4 h-4 ${loadingMain ? "animate-spin" : ""}`} />
           </button>
@@ -721,7 +725,10 @@ export default function BOQPage() {
         </>
       )}
 
-      {!selectedProjectId && !loadingProjects && (
+      {/* ════ TEMPLATES ════ */}
+      {viewMode === "templates" && <BOQTemplatesInner />}
+
+      {!selectedProjectId && !loadingProjects && viewMode !== "templates" && (
         <div className="bg-card border border-border rounded-xl p-12 text-center text-sm text-muted-foreground">Select a project to get started.</div>
       )}
     </div>
