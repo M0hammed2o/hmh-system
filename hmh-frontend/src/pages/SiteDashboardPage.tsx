@@ -1580,12 +1580,13 @@ function UnifiedReceiveModal({ projectId, siteId, lotId, suppliers, materialSumm
   const [poId,         setPoId]         = useState("");
   const [dnNum,        setDnNum]        = useState("");
 
-  // Load POs for the project (APPROVED or SENT) so user can link the delivery
-  const [projectPOs, setProjectPOs] = useState<Array<{ id: string; po_number: string; status: string }>>([]);
+  // Load POs for the project (APPROVED or SENT) so user can link the delivery.
+  // Also carries lot_id so the modal can load BOQ items when no lot is pre-selected.
+  const [projectPOs, setProjectPOs] = useState<Array<{ id: string; po_number: string; status: string; lot_id: string | null }>>([]);
   useEffect(() => {
     if (!projectId) return;
     import("@/api/client").then(m =>
-      m.default.get<{ data: Array<{ id: string; po_number: string; status: string }> }>(
+      m.default.get<{ data: Array<{ id: string; po_number: string; status: string; lot_id: string | null }> }>(
         `/projects/${projectId}/purchase-orders/`
       )
     ).then(r => {
@@ -1593,6 +1594,21 @@ function UnifiedReceiveModal({ projectId, siteId, lotId, suppliers, materialSumm
       setProjectPOs(all.filter(p => ["APPROVED", "SENT", "PARTIALLY_RECEIVED"].includes(p.status)));
     }).catch(() => {});
   }, [projectId]);
+
+  // BOQ summary for the selected PO's lot — populated when no lot is pre-selected
+  // at site level but a PO is chosen that carries a lot_id.
+  const [poBOQSummary, setPoBOQSummary] = useState<MaterialSummaryItem[]>([]);
+  useEffect(() => {
+    if (!poId || materialSummary.length > 0) { setPoBOQSummary([]); return; }
+    const po = projectPOs.find(p => p.id === poId);
+    if (!po?.lot_id) { setPoBOQSummary([]); return; }
+    import("@/api/siteDashboard").then(m =>
+      m.siteDashboardApi.getMaterialSummary(siteId, po.lot_id!)
+    ).then(setPoBOQSummary).catch(() => setPoBOQSummary([]));
+  }, [poId, projectPOs, materialSummary.length, siteId]);
+
+  // Effective BOQ summary: prefer parent-provided, fall back to PO-derived
+  const effectiveMaterialSummary = materialSummary.length > 0 ? materialSummary : poBOQSummary;
 
   // Items always start empty — user adds only what actually arrived.
   const [items, setItems] = useState<DeliveryLineItem[]>([]);
@@ -1878,7 +1894,7 @@ function UnifiedReceiveModal({ projectId, siteId, lotId, suppliers, materialSumm
               {(() => {
                 const boqSuppliers = items
                   .filter(i => i.boq_item_id)
-                  .map(i => materialSummary.find(m => String(m.boq_item_id) === i.boq_item_id)?.supplier_name)
+                  .map(i => effectiveMaterialSummary.find(m => String(m.boq_item_id) === i.boq_item_id)?.supplier_name)
                   .filter((n): n is string => !!n);
                 const uniqueSuppliers = [...new Set(boqSuppliers)];
                 if (uniqueSuppliers.length > 1) {
@@ -2006,7 +2022,7 @@ function UnifiedReceiveModal({ projectId, siteId, lotId, suppliers, materialSumm
             {/* ── Picker buttons ── */}
             {!showBOQPicker && !showNonBOQPicker && (
               <div className="flex gap-2">
-                {materialSummary.length > 0 && (
+                {effectiveMaterialSummary.length > 0 && (
                   <button
                     onClick={() => setShowBOQPicker(true)}
                     className="flex-1 py-2 rounded-lg border border-green-300 bg-green-50 text-xs font-medium text-green-700 hover:bg-green-100 transition-colors"
@@ -2025,7 +2041,7 @@ function UnifiedReceiveModal({ projectId, siteId, lotId, suppliers, materialSumm
 
             {/* ── BOQ picker panel ── */}
             {showBOQPicker && <BOQPickerPanel
-              materialSummary={materialSummary}
+              materialSummary={effectiveMaterialSummary}
               addedBOQIds={addedBOQIds}
               boqSearch={boqSearch}
               setBoqSearch={setBoqSearch}
@@ -2033,7 +2049,7 @@ function UnifiedReceiveModal({ projectId, siteId, lotId, suppliers, materialSumm
                 setItems(p => [...p, newItem]);
                 setBoqSearch("");
                 // Auto-populate supplier from the BOQ item if not yet set
-                const boqEntry = materialSummary.find(m => String(m.boq_item_id) === newItem.boq_item_id);
+                const boqEntry = effectiveMaterialSummary.find(m => String(m.boq_item_id) === newItem.boq_item_id);
                 if (boqEntry?.supplier_id && !supplierId) {
                   setSupplierId(boqEntry.supplier_id);
                 }
