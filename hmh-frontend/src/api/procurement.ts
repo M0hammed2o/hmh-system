@@ -383,4 +383,8 @@ export const procurementApi = {
   deleteQuote: async (mrId: string, quoteId: string): Promise<void> => {
     await client.delete(`/procurement/mrs/${mrId}/quotes/${quoteId}`);
   },
+
+  deleteMR: async (mrId: string): Promise<void> => {
+    await client.delete(`/material-requests/${mrId}`);
+  },
 };

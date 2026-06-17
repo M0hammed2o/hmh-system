@@ -276,8 +276,8 @@ function ProofPackDetail({ proof, onBack, onApproved }: {
         <ProofRow label="VAT Number" value={proof.supplier_vat} />
         <ProofRow label="Invoice Date" value={proof.invoice_date} />
         <ProofRow label="Due Date" value={proof.due_date} />
-        <ProofRow label="Subtotal" value={fmt(proof.subtotal_amount)} />
-        <ProofRow label="VAT" value={fmt(proof.vat_amount)} />
+        <ProofRow label="Subtotal" value={proof.subtotal_amount ? fmt(proof.subtotal_amount) : null} />
+        <ProofRow label="VAT" value={proof.vat_amount ? fmt(proof.vat_amount) : null} />
         <ProofRow label="Total" value={fmt(proof.total_amount)} />
         {proof.invoice_notes && <p className="text-xs text-muted-foreground mt-2 italic">{proof.invoice_notes}</p>}
       </div>
@@ -291,8 +291,8 @@ function ProofPackDetail({ proof, onBack, onApproved }: {
         {proof.po_number ? (
           <>
             <ProofRow label="PO Number" value={proof.po_number} ok={true} />
-            <ProofRow label="PO Date" value={proof.po_date} />
-            <ProofRow label="Expected Delivery" value={proof.po_expected_delivery} />
+            <ProofRow label="PO Date" value={proof.po_date ? new Date(proof.po_date).toLocaleDateString("en-ZA", { day: "numeric", month: "short", year: "numeric" }) : null} />
+            <ProofRow label="Expected Delivery" value={proof.po_expected_delivery ? new Date(proof.po_expected_delivery).toLocaleDateString("en-ZA", { day: "numeric", month: "short", year: "numeric" }) : null} />
             {proof.po_items.length > 0 && (
               <div className="mt-3 overflow-x-auto">
                 <table className="w-full text-xs">

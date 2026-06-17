@@ -75,6 +75,20 @@ def update_material_request(mr_id: uuid.UUID, body: MaterialRequestUpdate, db: D
     return ApiSuccess(data=MaterialRequestRead.model_validate(mr), message="Material request updated.")
 
 
+@mr_router.delete("/{mr_id}", response_model=ApiSuccess[dict], dependencies=[OFFICE_AND_ABOVE])
+def delete_material_request(mr_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
+    """Delete a material request. Only DRAFT or REJECTED requests may be deleted."""
+    mr = get_and_check_project_resource(db, current_user, MaterialRequest, mr_id, "Material request not found.")
+    if mr.status not in (RecordStatus.DRAFT, RecordStatus.REJECTED):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot delete an MR with status '{mr.status.value}'. Only DRAFT or REJECTED MRs can be deleted.",
+        )
+    db.delete(mr)
+    db.commit()
+    return ApiSuccess(data={"deleted": True}, message="Material request deleted.")
+
+
 # ── Workflow actions ──────────────────────────────────────────────────────────
 
 @mr_router.post("/{mr_id}/submit", response_model=ApiSuccess[MaterialRequestRead], dependencies=[WRITE_ROLES])

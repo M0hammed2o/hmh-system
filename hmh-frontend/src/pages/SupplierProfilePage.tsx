@@ -36,7 +36,7 @@ import {
 // ─── Document Centre ──────────────────────────────────────────────────────────
 
 const SUPPLIER_DOC_TYPES: { value: AttachmentType; label: string }[] = [
-  { value: "ORDER_NOTE",    label: "Order Note" },
+  { value: "ORDER_NOTE",    label: "Material Request" },
   { value: "QUOTATION",     label: "Quotation" },
   { value: "PO_DOCUMENT",   label: "Purchase Order" },
   { value: "DELIVERY_NOTE", label: "Delivery Note" },
@@ -46,7 +46,7 @@ const SUPPLIER_DOC_TYPES: { value: AttachmentType; label: string }[] = [
 
 const DOC_FILTER_CHIPS: { value: AttachmentType | "ALL"; label: string }[] = [
   { value: "ALL",           label: "All" },
-  { value: "ORDER_NOTE",    label: "Order Notes" },
+  { value: "ORDER_NOTE",    label: "Material Requests" },
   { value: "QUOTATION",     label: "Quotations" },
   { value: "PO_DOCUMENT",   label: "Purchase Orders" },
   { value: "DELIVERY_NOTE", label: "Delivery Notes" },

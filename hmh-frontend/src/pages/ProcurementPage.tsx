@@ -7,7 +7,7 @@ import {
   Plus, Check, X, ChevronRight, AlertTriangle, Mail,
   MailCheck, RefreshCw, FileText, ShoppingCart, Warehouse, ArrowRight,
   CheckCircle2, Circle, Clock, Package, Receipt, CreditCard,
-  Search, Lock, Unlock, AlertCircle,
+  Search, Lock, Unlock, AlertCircle, Trash2,
 } from "lucide-react";
 import { useAuthContext } from "@/context/AuthContext";
 import { suppliersApi } from "@/api/suppliers";
@@ -2298,26 +2298,47 @@ export default function ProcurementPage() {
           ) : (
             <div className="space-y-2">
               {filteredMRs.map((mr) => (
-                <button key={mr.id} onClick={() => setSelectedPipelineMRId(mr.id)} className="w-full text-left bg-card border border-border rounded-xl px-4 py-3 flex items-center gap-3 hover:bg-muted/30 active:scale-[0.99] transition-all">
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="font-medium text-sm">{mr.request_number}</span>
-                      <Badge variant={STATUS_BADGE[mr.status] || "outline"} className="text-xs">{mr.status.replace(/_/g, " ")}</Badge>
-                      {mr.over_boq && <Badge variant="destructive" className="text-xs">Over BOQ</Badge>}
-                      <span className={cn("text-[10px] font-medium rounded px-1.5 py-0.5", PRIORITY_COLOR[mr.priority])}>{mr.priority}</span>
+                <div key={mr.id} className="relative group bg-card border border-border rounded-xl flex items-stretch hover:bg-muted/30 transition-all">
+                  <button
+                    onClick={() => setSelectedPipelineMRId(mr.id)}
+                    className="flex-1 text-left px-4 py-3 flex items-center gap-3 active:scale-[0.99] transition-all min-w-0"
+                  >
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-medium text-sm">{mr.request_number}</span>
+                        <Badge variant={STATUS_BADGE[mr.status] || "outline"} className="text-xs">{mr.status.replace(/_/g, " ")}</Badge>
+                        {mr.over_boq && <Badge variant="destructive" className="text-xs">Over BOQ</Badge>}
+                        <span className={cn("text-[10px] font-medium rounded px-1.5 py-0.5", PRIORITY_COLOR[mr.priority])}>{mr.priority}</span>
+                      </div>
+                      <p className="text-xs text-muted-foreground mt-0.5">{mr.items.length} item{mr.items.length !== 1 ? "s" : ""} · {DEST_LABEL[mr.delivery_destination] ?? mr.delivery_destination} · {timeAgo(mr.created_at)}</p>
                     </div>
-                    <p className="text-xs text-muted-foreground mt-0.5">{mr.items.length} item{mr.items.length !== 1 ? "s" : ""} · {DEST_LABEL[mr.delivery_destination] ?? mr.delivery_destination} · {timeAgo(mr.created_at)}</p>
-                  </div>
-                  <div className="flex items-center gap-0.5 shrink-0">
-                    {[1,2,3,4,5,6,7].map(n => {
-                      const step = MR_STATUS_TO_STEP[mr.status] ?? 1;
-                      const done = n < step;
-                      const current = n === step;
-                      return <div key={n} className={cn("w-1.5 h-1.5 rounded-full transition-colors", done ? "bg-green-500" : current ? "bg-primary" : "bg-border")} />;
-                    })}
-                  </div>
-                  <ChevronRight className="w-4 h-4 text-muted-foreground shrink-0" />
-                </button>
+                    <div className="flex items-center gap-0.5 shrink-0">
+                      {[1,2,3,4,5,6,7].map(n => {
+                        const step = MR_STATUS_TO_STEP[mr.status] ?? 1;
+                        const done = n < step;
+                        const current = n === step;
+                        return <div key={n} className={cn("w-1.5 h-1.5 rounded-full transition-colors", done ? "bg-green-500" : current ? "bg-primary" : "bg-border")} />;
+                      })}
+                    </div>
+                    <ChevronRight className="w-4 h-4 text-muted-foreground shrink-0" />
+                  </button>
+                  {["DRAFT", "REJECTED"].includes(mr.status) && (
+                    <button
+                      onClick={async (e) => {
+                        e.stopPropagation();
+                        if (!window.confirm(`Delete ${mr.request_number}? This cannot be undone.`)) return;
+                        try {
+                          await procurementApi.deleteMR(mr.id);
+                          loadData();
+                        } catch { /* ignore */ }
+                      }}
+                      className="px-3 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive shrink-0"
+                      title="Delete MR"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
               ))}
             </div>
           )}

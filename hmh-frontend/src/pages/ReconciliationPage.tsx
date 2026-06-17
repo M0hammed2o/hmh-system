@@ -3,13 +3,12 @@
  * Dashboard + procurement chain records with variance checking.
  * Manual Approve / Reject workflows. No AI.
  */
-import React, { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import React, { lazy, Suspense, useEffect, useState } from "react";
+const InvoiceReconciliationPage = lazy(() => import("./InvoiceReconciliationPage"));
 import {
   CheckCircle2, AlertTriangle, Clock, XCircle, FileCheck2,
   ChevronDown, ChevronRight, RefreshCw, Plus, Trash2,
   ClipboardList, FileText, Package, Truck, Receipt,
-  ExternalLink,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -573,7 +572,6 @@ function ReconciliationRow({
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
 export default function ReconciliationPage() {
-  const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<"records" | "proof-packs">("records");
   const [dashboard, setDashboard] = useState<ReconciliationDashboard | null>(null);
   const [records, setRecords] = useState<Reconciliation[]>([]);
@@ -624,24 +622,42 @@ export default function ReconciliationPage() {
 
   return (
     <div className="space-y-5 animate-fade-in">
-      {/* Header */}
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h1 className="text-xl font-bold">Reconciliation</h1>
-          <p className="text-sm text-muted-foreground mt-0.5">
-            Compare procurement documents and manually approve or reject matches.
-          </p>
+      {/* Header + Tabs */}
+      <div>
+        <h1 className="text-xl font-bold">Reconciliation</h1>
+        <div className="flex gap-1 mt-3 border-b border-border">
+          <button
+            onClick={() => setActiveTab("records")}
+            className={`px-4 py-2 text-sm font-medium transition-colors border-b-2 -mb-px ${
+              activeTab === "records"
+                ? "border-primary text-foreground"
+                : "border-transparent text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            Reconciliation Records
+          </button>
+          <button
+            onClick={() => setActiveTab("proof-packs")}
+            className={`px-4 py-2 text-sm font-medium transition-colors border-b-2 -mb-px ${
+              activeTab === "proof-packs"
+                ? "border-primary text-foreground"
+                : "border-transparent text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            Invoice Proof Packs
+          </button>
         </div>
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={() => navigate("/reconciliation/proof-packs")}
-          className="shrink-0"
-        >
-          <ExternalLink className="w-3.5 h-3.5 mr-1.5" />
-          Invoice Proof Packs
-        </Button>
       </div>
+
+      {/* Proof Packs tab */}
+      {activeTab === "proof-packs" && (
+        <Suspense fallback={<div className="flex justify-center py-12"><RefreshCw className="w-5 h-5 animate-spin text-muted-foreground" /></div>}>
+          <InvoiceReconciliationPage />
+        </Suspense>
+      )}
+
+      {/* Records tab content below */}
+      {activeTab === "records" && <>
 
       {/* Dashboard stats */}
       {dashboard && (
@@ -762,6 +778,8 @@ export default function ReconciliationPage() {
           onCreated={load}
         />
       )}
+
+      </>}
     </div>
   );
 }

@@ -554,6 +554,22 @@ async def _start_background_queue_drain() -> None:
     _log.info("startup queue_drain_task=started interval=300s")
 
 
+# ── Auto-apply Alembic migrations on startup ──────────────────────────────────
+@app.on_event("startup")
+def run_db_migrations() -> None:
+    """Run `alembic upgrade head` at startup so pending migrations are applied automatically."""
+    import os as _os
+    try:
+        from alembic.config import Config as _AlembicConfig
+        from alembic import command as _alembic_cmd
+        _ini = _os.path.join(_os.path.dirname(__file__), "alembic.ini")
+        _cfg = _AlembicConfig(_ini)
+        _alembic_cmd.upgrade(_cfg, "head")
+        _log.info("startup db_migrations=applied")
+    except Exception as _exc:
+        _log.error("startup db_migrations=FAILED error=%s", _exc)
+
+
 # ── Startup logging ────────────────────────────────────────────────────────────
 @app.on_event("startup")
 def _log_startup_config() -> None:
