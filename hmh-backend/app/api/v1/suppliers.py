@@ -445,6 +445,38 @@ def supplier_documents(supplier_id: uuid.UUID, db: DbSession):
             "is_attachment": False,
         })
 
+    # ── Gmail email attachments matched to this supplier's POs ────────────────
+    from app.models.incoming_email import IncomingEmail, IncomingEmailAttachment as GmailAttachment
+
+    po_numbers = [po.po_number for po in pos if po.po_number]
+    if po_numbers:
+        gmail_atts = (
+            db.query(GmailAttachment)
+            .join(IncomingEmail, GmailAttachment.incoming_email_id == IncomingEmail.id)
+            .filter(IncomingEmail.matched_po_number.in_(po_numbers))
+            .all()
+        )
+        _gmail_type_map = {
+            "INVOICE": "INVOICE", "DELIVERY_NOTE": "DELIVERY_NOTE",
+            "QUOTE": "QUOTATION", "PURCHASE_ORDER": "PURCHASE_ORDER",
+        }
+        for gatt in gmail_atts:
+            doc_type = _gmail_type_map.get(gatt.detected_type, "ATTACHMENT")
+            docs.append({
+                "doc_id":             str(gatt.id),
+                "doc_type":           doc_type,
+                "ref_number":         gatt.filename,
+                "title":              gatt.filename,
+                "date":               gatt.created_at.date().isoformat() if gatt.created_at else None,
+                "amount":             None,
+                "status":             "Email Attachment",
+                "file_url":           None,
+                "file_name":          gatt.filename,
+                "is_attachment":      True,
+                "attachment_type":    "GMAIL",
+                "gmail_attachment_id": str(gatt.id),
+            })
+
     raw_atts = (
         db.query(Attachment)
         .filter(

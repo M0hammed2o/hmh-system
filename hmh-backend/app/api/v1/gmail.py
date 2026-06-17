@@ -192,8 +192,9 @@ def process_email(email_id: uuid.UUID, db: DbSession):
             _auto_create_mr_quotes(db, mr_match["mr_id"], fields, items, email, now)
 
         # ── Auto-create Draft Invoice when attachment is an INVOICE ───────────
+        auto_invoice_id = None
         if att.detected_type == "INVOICE" and ext_result["status"] in ("EXTRACTED", "OCR_EXTRACTED", "NEEDS_REVIEW"):
-            _auto_create_invoice(db, fields, email, now)
+            auto_invoice_id = _auto_create_invoice(db, fields, email, now)
 
         # ── Alerts ───────────────────────────────────────────────────────────
         if ext_result["status"] in ("FAILED", "OCR_NOT_AVAILABLE"):
@@ -228,14 +229,16 @@ def process_email(email_id: uuid.UUID, db: DbSession):
             )
 
         results.append({
-            "attachment_id":    str(att.id),
-            "filename":         att.filename,
-            "detected_type":    att.detected_type,
-            "extraction_status": ext_result["status"],
-            "fields":           fields,
-            "items":            items,
-            "mr_match":         mr_match,
-            "warnings":         ext_result.get("warnings", []),
+            "attachment_id":      str(att.id),
+            "filename":           att.filename,
+            "detected_type":      att.detected_type,
+            "extraction_status":  ext_result["status"],
+            "fields":             fields,
+            "items":              items,
+            "mr_match":           mr_match,
+            "warnings":           ext_result.get("warnings", []),
+            "auto_invoice_id":    auto_invoice_id,
+            "auto_invoice_created": bool(auto_invoice_id),
         })
 
     # ── Update email status ───────────────────────────────────────────────────
@@ -432,7 +435,7 @@ def _auto_create_mr_quotes(db, mr_id_str: str, fields: dict, items: list, email,
         logger.exception("auto_quote failed for mr_id=%s — quotes not created", mr_id_str)
 
 
-def _auto_create_invoice(db, fields: dict, email, now) -> None:
+def _auto_create_invoice(db, fields: dict, email, now):
     """
     When an INVOICE attachment contains a PO number that matches a PurchaseOrder,
     auto-create a Draft Invoice record so Step 6 of the pipeline is populated.
@@ -440,6 +443,8 @@ def _auto_create_invoice(db, fields: dict, email, now) -> None:
     - Falls back to email.matched_po_number when the document field is empty.
     - Idempotent: skips if an Invoice already exists for the same PO.
     - Sets status=DRAFT so a human must review before it is treated as approved.
+
+    Returns the new invoice_id (str) if created, None otherwise.
     """
     try:
         import uuid as _uuid
@@ -455,17 +460,17 @@ def _auto_create_invoice(db, fields: dict, email, now) -> None:
         )
         if not po_number_raw:
             logger.info("auto_invoice skip — no PO reference in fields or email")
-            return
+            return None
 
         po = _find_po_by_number(db, po_number_raw)
         if not po:
             logger.info("auto_invoice skip — PO not found for '%s'", po_number_raw)
-            return
+            return None
 
         existing = db.query(Invoice).filter(Invoice.purchase_order_id == po.id).first()
         if existing:
             logger.info("auto_invoice skip — Invoice already exists for PO=%s", po.po_number)
-            return
+            return None
 
         invoice_number = (fields.get("invoice_number") or "").strip()
         if not invoice_number:
@@ -518,8 +523,10 @@ def _auto_create_invoice(db, fields: dict, email, now) -> None:
             "auto_invoice created invoice_number=%s po=%s delivery_linked=%s",
             invoice_number, po.po_number, bool(existing_delivery),
         )
+        return str(new_inv_id)
     except Exception:
         logger.exception("auto_invoice failed — invoice not created")
+        return None
 
 
 def _match_mr_from_text(db, raw_text: str, fields: dict, items: list) -> dict:

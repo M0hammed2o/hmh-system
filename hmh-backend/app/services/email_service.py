@@ -272,7 +272,7 @@ def build_po_email_body(po: PurchaseOrder) -> tuple[str, str]:
     Quote reference <strong>{po.po_number}</strong> in the subject line of all correspondence
     so your documents can be automatically matched to this order.
   </p>
-  <p style="color:#888;font-size:12px">HMH Group Procurement</p>
+  <p style="color:#888;font-size:12px">HMH Group Procurement &mdash; NextGen Intelligence</p>
 </div>
 </body></html>
 """
@@ -495,7 +495,7 @@ def build_mr_email_body(db: Session, mr) -> tuple[str, str]:
     </a><br>
     Quote reference <strong>{request_number}</strong> on all correspondence.
   </p>
-  <p style="color:#999;font-size:12px">HMH Group Procurement &mdash; Construction Management System</p>
+  <p style="color:#999;font-size:12px">HMH Group Procurement &mdash; NextGen Intelligence</p>
 </div>
 </body></html>
 """

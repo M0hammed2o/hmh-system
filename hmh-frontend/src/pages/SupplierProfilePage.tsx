@@ -22,6 +22,7 @@ import {
   type SupplierDocType,
 } from "@/api/suppliers";
 import { attachmentsApi } from "@/api/attachments";
+import { gmailApi } from "@/api/gmail";
 import {
   quotationsApi,
   type QuotationCreate,
@@ -64,10 +65,12 @@ function SupplierDocRow({
   doc,
   onDeleteAttachment,
   onPreview,
+  onDownloadGmail,
 }: {
   doc: SupplierDocument;
   onDeleteAttachment: (id: string) => void;
   onPreview: (doc: SupplierDocument) => void;
+  onDownloadGmail?: (attId: string) => void;
 }) {
   const typeLabel = DOC_TYPE_LABELS[doc.doc_type] ?? doc.doc_type;
   const statusColour = doc.status ? (STATUS_COLOURS[doc.status] ?? "text-muted-foreground bg-muted") : "";
@@ -114,7 +117,15 @@ function SupplierDocRow({
       </div>
 
       <div className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
-        {doc.file_url && (
+        {doc.gmail_attachment_id ? (
+          <button
+            onClick={() => onDownloadGmail?.(doc.gmail_attachment_id!)}
+            className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+            title="View / Download from email"
+          >
+            <Download className="w-3.5 h-3.5" />
+          </button>
+        ) : doc.file_url ? (
           <a
             href={doc.file_url}
             target="_blank"
@@ -125,8 +136,8 @@ function SupplierDocRow({
           >
             <Download className="w-3.5 h-3.5" />
           </a>
-        )}
-        {doc.is_attachment && (
+        ) : null}
+        {doc.is_attachment && !doc.gmail_attachment_id && (
           <button
             onClick={() => onDeleteAttachment(doc.doc_id)}
             className="p-1.5 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
@@ -202,6 +213,17 @@ function SupplierDocCentre({ supplierId }: { supplierId: string }) {
     }
   };
 
+  const handleDownloadGmail = async (attId: string) => {
+    try {
+      const { blob, filename } = await gmailApi.getAttachmentBlob(attId, true);
+      const url = URL.createObjectURL(blob);
+      window.open(url, "_blank", "noopener,noreferrer");
+      setTimeout(() => URL.revokeObjectURL(url), 30_000);
+    } catch {
+      // ignore — file may be missing from disk
+    }
+  };
+
   const countFor = (type: SupplierDocType) =>
     docs.filter((d) => d.doc_type === type).length;
 
@@ -272,6 +294,7 @@ function SupplierDocCentre({ supplierId }: { supplierId: string }) {
               doc={doc}
               onDeleteAttachment={handleDeleteAttachment}
               onPreview={setPreview}
+              onDownloadGmail={handleDownloadGmail}
             />
           ))}
         </div>

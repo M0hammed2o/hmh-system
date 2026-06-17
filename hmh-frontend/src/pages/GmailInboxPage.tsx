@@ -312,6 +312,17 @@ function ExtractionResult({ result }: { result: ProcessedAttachment }) {
         </div>
       )}
 
+      {/* Auto-invoice creation result */}
+      {result.auto_invoice_created && (
+        <div className="px-3 py-2.5 border-t border-border flex items-center gap-2 bg-green-50/60 text-green-700 text-xs">
+          <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+          <span className="font-semibold">Invoice auto-created</span>
+          {result.auto_invoice_id && (
+            <span className="ml-auto font-mono text-[10px] opacity-70">{result.auto_invoice_id.slice(0, 8)}…</span>
+          )}
+        </div>
+      )}
+
       {/* MR match */}
       <div className="px-3 py-2.5">
         <p className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wide mb-1.5">MR Match</p>
@@ -729,8 +740,9 @@ export default function GmailInboxPage() {
               </Button>
             )}
 
-            {selected.processed_status !== "UNPROCESSED" && !extraction && (
-              <Button variant="outline" className="w-full" size="sm" onClick={handleProcess} disabled={processing}>
+            {selected.processed_status !== "UNPROCESSED" && (
+              <Button variant="outline" className="w-full" size="sm" onClick={handleProcess} disabled={processing}
+                title="Re-run extraction and auto-invoice creation — safe to use if invoice was missed because PO didn't exist yet">
                 <RefreshCw className={cn("w-3.5 h-3.5 mr-1.5", processing && "animate-spin")} />
                 {processing ? "Re-processing…" : "Re-process"}
               </Button>

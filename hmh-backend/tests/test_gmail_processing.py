@@ -524,3 +524,225 @@ class TestPDFExtraction:
             )
         finally:
             os.unlink(path)
+
+
+# ── Auto-invoice creation tests ───────────────────────────────────────────────
+
+class TestAutoInvoiceCreation:
+    """
+    Tests for Issue 1: auto-creating an invoice when an INVOICE email arrives
+    and a PO number is found.  Also covers the re-process use case (email was
+    processed before the PO existed — clicking Re-process must create the invoice).
+    """
+
+    def _make_po(self, db, project_id: str, supplier_id: str, owner_id: str,
+                 po_number: str = None):
+        """Insert a minimal PurchaseOrder directly via ORM."""
+        from app.models.purchase_order import PurchaseOrder
+        from app.models.enums import RecordStatus
+        from decimal import Decimal
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        po_number = po_number or f"PO-AINV-{uuid.uuid4().hex[:6].upper()}"
+        po = PurchaseOrder(
+            po_number=po_number,
+            project_id=uuid.UUID(project_id),
+            supplier_id=uuid.UUID(supplier_id),
+            status=RecordStatus.APPROVED,
+            po_date=now,
+            total_amount=Decimal("5000.00"),
+            subtotal_amount=Decimal("4347.83"),
+            vat_amount=Decimal("652.17"),
+            created_by=uuid.UUID(owner_id),
+            created_at=now,
+            updated_at=now,
+        )
+        db.add(po)
+        db.flush()
+        return po
+
+    @pytest.fixture
+    def inv_setup(self, db, client):
+        from tests.conftest import make_project, make_site, make_supplier
+        owner    = make_user(db, role="OWNER")
+        project  = make_project(db, owner_id=owner["id"])
+        site     = make_site(db, project_id=project["id"])
+        supplier = make_supplier(db)
+        tok      = login(client, owner["email"], owner["password"])
+        return dict(
+            owner_id=owner["id"], project_id=project["id"],
+            site_id=site["id"], supplier_id=supplier["id"], tok=tok,
+        )
+
+    def test_process_invoice_with_po_creates_invoice(self, client, db, inv_setup):
+        """When an INVOICE email has a matching PO number, auto_invoice_created=True."""
+        from app.models.invoice import Invoice
+
+        s = inv_setup
+        po_number = f"PO-AINV-{uuid.uuid4().hex[:6].upper()}"
+        po = self._make_po(db, s["project_id"], s["supplier_id"], s["owner_id"], po_number)
+        db.commit()
+
+        email = _seed_email(db, subject=f"Invoice for {po_number}", has_attachments=True)
+        content = (
+            f"TAX INVOICE\n"
+            f"Invoice No: INV-TEST-{uuid.uuid4().hex[:6]}\n"
+            f"Purchase Order: {po_number}\n"
+            f"Total: R5000.00\n"
+        ).encode()
+
+        with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as f:
+            f.write(content)
+            path = f.name
+
+        try:
+            _seed_attachment(db, email.id, path, detected_type="INVOICE")
+            db.commit()
+
+            r = client.post(
+                f"/api/v1/gmail/incoming/{email.id}/process",
+                headers=auth(s["tok"])
+            )
+            assert r.status_code == 200, r.text
+
+            result = r.json()["data"]["results"][0]
+            assert result["auto_invoice_created"] is True, (
+                f"Expected auto_invoice_created=True, got {result['auto_invoice_created']}. "
+                f"Fields: {result.get('fields')}"
+            )
+            assert result["auto_invoice_id"] is not None
+
+            # Invoice must exist in DB
+            inv = db.query(Invoice).filter(Invoice.purchase_order_id == po.id).first()
+            assert inv is not None, "Invoice not found in DB after auto-create"
+        finally:
+            os.unlink(path)
+
+    def test_process_invoice_without_po_no_invoice_created(self, client, db, inv_setup):
+        """When no matching PO exists, auto_invoice_created=False."""
+        from app.models.invoice import Invoice
+
+        s = inv_setup
+        email = _seed_email(db, subject="Invoice for PO-DOES-NOT-EXIST", has_attachments=True)
+        content = b"TAX INVOICE\nInvoice No: INV-X01\nPurchase Order: PO-NONEXISTENT-9999\nTotal: R1000.00"
+
+        with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as f:
+            f.write(content)
+            path = f.name
+
+        try:
+            _seed_attachment(db, email.id, path, detected_type="INVOICE")
+            db.commit()
+
+            r = client.post(
+                f"/api/v1/gmail/incoming/{email.id}/process",
+                headers=auth(s["tok"])
+            )
+            assert r.status_code == 200, r.text
+
+            result = r.json()["data"]["results"][0]
+            assert result["auto_invoice_created"] is False
+            assert result["auto_invoice_id"] is None
+        finally:
+            os.unlink(path)
+
+    def test_reprocess_creates_invoice_when_po_added_later(self, client, db, inv_setup):
+        """
+        Covers the missed-invoice scenario:
+        1. Email arrives and is processed (no PO yet) → auto_invoice_created=False
+        2. PO is later created in the system
+        3. User clicks Re-process → auto_invoice_created=True
+        """
+        from app.models.invoice import Invoice
+        from app.models.incoming_email import IncomingEmail
+
+        s = inv_setup
+        po_number = f"PO-RETRY-{uuid.uuid4().hex[:6].upper()}"
+
+        # Step 1: process email BEFORE PO exists
+        email = _seed_email(db, subject=f"Invoice {po_number}", has_attachments=True)
+        content = (
+            f"TAX INVOICE\n"
+            f"Invoice No: INV-RETRY-001\n"
+            f"Purchase Order: {po_number}\n"
+            f"Total: R3000.00\n"
+        ).encode()
+
+        with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as f:
+            f.write(content)
+            path = f.name
+
+        try:
+            _seed_attachment(db, email.id, path, detected_type="INVOICE")
+            db.commit()
+
+            r1 = client.post(
+                f"/api/v1/gmail/incoming/{email.id}/process",
+                headers=auth(s["tok"])
+            )
+            assert r1.status_code == 200
+            assert r1.json()["data"]["results"][0]["auto_invoice_created"] is False
+
+            # Step 2: PO is created later
+            po = self._make_po(db, s["project_id"], s["supplier_id"], s["owner_id"], po_number)
+            db.commit()
+
+            # Step 3: Re-process → invoice should now be created
+            r2 = client.post(
+                f"/api/v1/gmail/incoming/{email.id}/process",
+                headers=auth(s["tok"])
+            )
+            assert r2.status_code == 200
+            result2 = r2.json()["data"]["results"][0]
+            assert result2["auto_invoice_created"] is True, (
+                f"Expected invoice created on re-process. Fields: {result2.get('fields')}"
+            )
+
+            inv = db.query(Invoice).filter(Invoice.purchase_order_id == po.id).first()
+            assert inv is not None, "Invoice still missing after re-process"
+        finally:
+            os.unlink(path)
+
+    def test_reprocess_idempotent_does_not_double_create(self, client, db, inv_setup):
+        """Re-processing an email that already created an invoice does not duplicate it."""
+        from app.models.invoice import Invoice
+
+        s = inv_setup
+        po_number = f"PO-IDEM-{uuid.uuid4().hex[:6].upper()}"
+        self._make_po(db, s["project_id"], s["supplier_id"], s["owner_id"], po_number)
+        db.commit()
+
+        email = _seed_email(db, subject=f"Invoice {po_number}", has_attachments=True)
+        content = (
+            f"TAX INVOICE\n"
+            f"Invoice No: INV-IDEM-001\n"
+            f"Purchase Order: {po_number}\n"
+            f"Total: R2000.00\n"
+        ).encode()
+
+        with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as f:
+            f.write(content)
+            path = f.name
+
+        try:
+            _seed_attachment(db, email.id, path, detected_type="INVOICE")
+            db.commit()
+
+            # First process — creates invoice
+            client.post(f"/api/v1/gmail/incoming/{email.id}/process", headers=auth(s["tok"]))
+
+            from app.models.purchase_order import PurchaseOrder
+            po_obj = db.query(PurchaseOrder).filter(PurchaseOrder.po_number == po_number).first()
+            count_after_first = db.query(Invoice).filter(Invoice.purchase_order_id == po_obj.id).count()
+            assert count_after_first == 1
+
+            # Second process (Re-process) — must NOT create a second invoice
+            r2 = client.post(f"/api/v1/gmail/incoming/{email.id}/process", headers=auth(s["tok"]))
+            assert r2.status_code == 200
+            # auto_invoice_created should be False (already exists)
+            assert r2.json()["data"]["results"][0]["auto_invoice_created"] is False
+
+            count_after_second = db.query(Invoice).filter(Invoice.purchase_order_id == po_obj.id).count()
+            assert count_after_second == 1, "Duplicate invoice created on re-process"
+        finally:
+            os.unlink(path)

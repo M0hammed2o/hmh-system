@@ -79,6 +79,8 @@ export interface ProcessedAttachment {
   }>;
   mr_match: MRMatch;
   warnings: string[];
+  auto_invoice_created: boolean;
+  auto_invoice_id: string | null;
 }
 
 export interface ProcessEmailResult {
