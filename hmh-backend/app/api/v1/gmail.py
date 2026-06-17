@@ -473,8 +473,9 @@ def _auto_create_invoice(db, fields: dict, email, now) -> None:
 
         total = fields.get("total_amount") or float(po.total_amount or 0)
 
+        new_inv_id = _uuid.uuid4()
         db.add(Invoice(
-            id=_uuid.uuid4(),
+            id=new_inv_id,
             invoice_number=invoice_number[:100],
             supplier_id=po.supplier_id,
             project_id=po.project_id,
@@ -488,7 +489,35 @@ def _auto_create_invoice(db, fields: dict, email, now) -> None:
             captured_at=now,
         ))
         db.flush()
-        logger.info("auto_invoice created invoice_number=%s po=%s total=%s", invoice_number, po.po_number, total)
+
+        from app.models.invoice import InvoiceMatchingResult
+        from app.models.delivery import Delivery as _Delivery
+        from app.models.enums import InvoiceMatchStatus
+        existing_delivery = (
+            db.query(_Delivery)
+            .filter(_Delivery.purchase_order_id == po.id)
+            .order_by(_Delivery.created_at.desc())
+            .first()
+        )
+        db.add(InvoiceMatchingResult(
+            id=_uuid.uuid4(),
+            invoice_id=new_inv_id,
+            purchase_order_id=po.id,
+            delivery_id=existing_delivery.id if existing_delivery else None,
+            match_status=(
+                InvoiceMatchStatus.AWAITING_REVIEW if existing_delivery
+                else InvoiceMatchStatus.UNLINKED
+            ),
+            quantity_match=False,
+            amount_match=False,
+            supplier_match=True,
+            created_at=now,
+        ))
+        db.flush()
+        logger.info(
+            "auto_invoice created invoice_number=%s po=%s delivery_linked=%s",
+            invoice_number, po.po_number, bool(existing_delivery),
+        )
     except Exception:
         logger.exception("auto_invoice failed — invoice not created")
 

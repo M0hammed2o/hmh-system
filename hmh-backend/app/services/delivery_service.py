@@ -187,9 +187,21 @@ def create_delivery(
         if item_data.purchase_order_item_id and item_data.purchase_order_item_id in po_items:
             poi = po_items[item_data.purchase_order_item_id]
             poi.quantity_received = float(poi.quantity_received or 0) + received
-        elif po_items and len(po_items) == 1:
-            poi = next(iter(po_items.values()))
-            poi.quantity_received = float(poi.quantity_received or 0) + received
+        elif po_items:
+            # For BOQ-picked items without a purchase_order_item_id, try to match
+            # by description so multi-item POs track received quantities correctly.
+            if len(po_items) == 1:
+                poi = next(iter(po_items.values()))
+                poi.quantity_received = float(poi.quantity_received or 0) + received
+            elif item_data.description:
+                desc_norm = (item_data.description or "").strip().lower()
+                matched = next(
+                    (p for p in po_items.values()
+                     if (p.description or "").strip().lower() == desc_norm),
+                    None,
+                )
+                if matched:
+                    matched.quantity_received = float(matched.quantity_received or 0) + received
 
     delivery.delivery_status = (
         RecordStatus.PARTIALLY_RECEIVED if is_partial else RecordStatus.RECEIVED
@@ -320,23 +332,23 @@ def receive_stock(
         effective_site_id = None  # all warehouse entries are project-scoped
         effective_lot_id  = lot_id if destination == DeliveryDestination.LOT else None
 
-        ledger_entry = StockLedger(
-            project_id=delivery.project_id,
-            site_id=effective_site_id,
-            lot_id=effective_lot_id,
-            item_id=d_item.item_id,
-            boq_item_id=d_item.boq_item_id,
-            movement_type=MovementType.DELIVERY_RECEIVED,
-            reference_type="delivery",
-            reference_id=delivery.id,
-            quantity_in=recv_qty,
-            quantity_out=0,
-            movement_date=now,
-            entered_by=actor_id,
-            notes=f"Received: {delivery.delivery_number or str(delivery.id)[:8]}",
-            created_at=now,
-        )
-        db.add(ledger_entry)
+        if d_item.item_id:
+            db.add(StockLedger(
+                project_id=delivery.project_id,
+                site_id=effective_site_id,
+                lot_id=effective_lot_id,
+                item_id=d_item.item_id,
+                boq_item_id=d_item.boq_item_id,
+                movement_type=MovementType.DELIVERY_RECEIVED,
+                reference_type="delivery",
+                reference_id=delivery.id,
+                quantity_in=recv_qty,
+                quantity_out=0,
+                movement_date=now,
+                entered_by=actor_id,
+                notes=f"Received: {delivery.delivery_number or str(delivery.id)[:8]}",
+                created_at=now,
+            ))
         d_item.quantity_received = recv_qty
 
         # Update PO item quantity_received

@@ -18,13 +18,10 @@ import {
   type POChain,
   type SupplierProcurementHistory,
   type StandaloneQuotation,
+  type SupplierDocument,
+  type SupplierDocType,
 } from "@/api/suppliers";
-import {
-  attachmentsApi,
-  type Attachment,
-  type AttachmentType,
-  ATTACHMENT_TYPE_LABELS,
-} from "@/api/attachments";
+import { attachmentsApi } from "@/api/attachments";
 import {
   quotationsApi,
   type QuotationCreate,
@@ -35,58 +32,62 @@ import {
 
 // ─── Document Centre ──────────────────────────────────────────────────────────
 
-const SUPPLIER_DOC_TYPES: { value: AttachmentType; label: string }[] = [
-  { value: "ORDER_NOTE",    label: "Material Request" },
-  { value: "QUOTATION",     label: "Quotation" },
-  { value: "PO_DOCUMENT",   label: "Purchase Order" },
-  { value: "DELIVERY_NOTE", label: "Delivery Note" },
-  { value: "INVOICE_COPY",  label: "Invoice" },
-  { value: "CREDIT_NOTE",   label: "Credit Note" },
+const DOC_FILTER_CHIPS: { value: SupplierDocType | "ALL"; label: string }[] = [
+  { value: "ALL",            label: "All" },
+  { value: "PURCHASE_ORDER", label: "Purchase Orders" },
+  { value: "INVOICE",        label: "Invoices" },
+  { value: "DELIVERY_NOTE",  label: "Delivery Notes" },
+  { value: "QUOTATION",      label: "Quotations" },
+  { value: "ATTACHMENT",     label: "Other Documents" },
 ];
 
-const DOC_FILTER_CHIPS: { value: AttachmentType | "ALL"; label: string }[] = [
-  { value: "ALL",           label: "All" },
-  { value: "ORDER_NOTE",    label: "Material Requests" },
-  { value: "QUOTATION",     label: "Quotations" },
-  { value: "PO_DOCUMENT",   label: "Purchase Orders" },
-  { value: "DELIVERY_NOTE", label: "Delivery Notes" },
-  { value: "INVOICE_COPY",  label: "Invoices" },
-  { value: "CREDIT_NOTE",   label: "Credit Notes" },
-];
+const DOC_TYPE_LABELS: Record<SupplierDocType, string> = {
+  PURCHASE_ORDER: "Purchase Order",
+  INVOICE:        "Invoice",
+  DELIVERY_NOTE:  "Delivery Note",
+  QUOTATION:      "Quotation",
+  ATTACHMENT:     "Document",
+};
 
-function DocRow({
+const STATUS_COLOURS: Record<string, string> = {
+  DRAFT:              "text-yellow-600 bg-yellow-50",
+  PENDING:            "text-yellow-600 bg-yellow-50",
+  APPROVED:           "text-green-600 bg-green-50",
+  RECEIVED:           "text-green-600 bg-green-50",
+  PARTIALLY_RECEIVED: "text-blue-600 bg-blue-50",
+  REJECTED:           "text-red-600 bg-red-50",
+  CANCELLED:          "text-muted-foreground bg-muted",
+  PAID:               "text-green-700 bg-green-100",
+};
+
+function SupplierDocRow({
   doc,
-  onOpen,
-  onDelete,
+  onDeleteAttachment,
+  onPreview,
 }: {
-  doc: Attachment;
-  onOpen: (d: Attachment) => void;
-  onDelete: (id: string) => void;
+  doc: SupplierDocument;
+  onDeleteAttachment: (id: string) => void;
+  onPreview: (doc: SupplierDocument) => void;
 }) {
-  const typeLabel = ATTACHMENT_TYPE_LABELS[doc.attachment_type] ?? doc.attachment_type;
-  const date = new Date(doc.uploaded_at).toLocaleDateString("en-ZA", {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-  });
+  const typeLabel = DOC_TYPE_LABELS[doc.doc_type] ?? doc.doc_type;
+  const statusColour = doc.status ? (STATUS_COLOURS[doc.status] ?? "text-muted-foreground bg-muted") : "";
+  const dateStr = doc.date
+    ? new Date(doc.date).toLocaleDateString("en-ZA", { day: "numeric", month: "short", year: "numeric" })
+    : "—";
+  const fmt = (n: number) => `R ${n.toLocaleString("en-ZA", { minimumFractionDigits: 2 })}`;
 
   return (
     <div className="flex items-center gap-3 px-4 py-3 hover:bg-muted/30 transition-colors group">
       <div className="shrink-0 w-9 h-9 rounded-lg bg-muted flex items-center justify-center overflow-hidden">
-        {doc.is_image ? (
-          <img src={doc.download_url} alt="" className="w-9 h-9 object-cover" />
+        {doc.is_attachment && doc.is_image && doc.file_url ? (
+          <img src={doc.file_url} alt="" className="w-9 h-9 object-cover" />
         ) : (
           <FileText className="w-4 h-4 text-muted-foreground" />
         )}
       </div>
 
       <div className="flex-1 min-w-0">
-        <button
-          onClick={() => onOpen(doc)}
-          className="text-sm font-medium hover:text-primary truncate block w-full text-left leading-tight"
-        >
-          {doc.file_name}
-        </button>
+        <div className="text-sm font-medium truncate leading-tight">{doc.title}</div>
         {doc.caption && (
           <p className="text-xs text-muted-foreground truncate mt-0.5">{doc.caption}</p>
         )}
@@ -94,8 +95,18 @@ function DocRow({
           <Badge variant="outline" className="text-xs font-normal py-0 px-1.5 h-4">
             {typeLabel}
           </Badge>
-          <span className="text-xs text-muted-foreground">{doc.file_size_display}</span>
-          <span className="text-xs text-muted-foreground">{date}</span>
+          {doc.status && (
+            <span className={`text-xs px-1.5 py-0 rounded font-medium ${statusColour}`}>
+              {doc.status.replace(/_/g, " ")}
+            </span>
+          )}
+          {doc.amount != null && (
+            <span className="text-xs font-medium text-foreground">{fmt(doc.amount)}</span>
+          )}
+          {doc.file_size_display && (
+            <span className="text-xs text-muted-foreground">{doc.file_size_display}</span>
+          )}
+          <span className="text-xs text-muted-foreground">{dateStr}</span>
           {doc.uploaded_by_name && (
             <span className="text-xs text-muted-foreground">· {doc.uploaded_by_name}</span>
           )}
@@ -103,54 +114,61 @@ function DocRow({
       </div>
 
       <div className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
-        <a
-          href={doc.download_url}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
-          title="Open / Download"
-        >
-          <Download className="w-3.5 h-3.5" />
-        </a>
-        <button
-          onClick={() => onDelete(doc.id)}
-          className="p-1.5 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
-          title="Delete"
-        >
-          <Trash2 className="w-3.5 h-3.5" />
-        </button>
+        {doc.file_url && (
+          <a
+            href={doc.file_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={doc.is_image ? (e) => { e.preventDefault(); onPreview(doc); } : undefined}
+            className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+            title="Open / Download"
+          >
+            <Download className="w-3.5 h-3.5" />
+          </a>
+        )}
+        {doc.is_attachment && (
+          <button
+            onClick={() => onDeleteAttachment(doc.doc_id)}
+            className="p-1.5 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
+            title="Delete"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+          </button>
+        )}
       </div>
     </div>
   );
 }
 
 function SupplierDocCentre({ supplierId }: { supplierId: string }) {
-  const [docs, setDocs] = useState<Attachment[]>([]);
+  const [docs, setDocs] = useState<SupplierDocument[]>([]);
   const [loading, setLoading] = useState(true);
-  const [activeType, setActiveType] = useState<AttachmentType | "ALL">("ALL");
+  const [activeType, setActiveType] = useState<SupplierDocType | "ALL">("ALL");
   const [search, setSearch] = useState("");
-  const [uploadType, setUploadType] = useState<AttachmentType>("QUOTATION");
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState("");
-  const [preview, setPreview] = useState<Attachment | null>(null);
+  const [preview, setPreview] = useState<SupplierDocument | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
-    attachmentsApi
-      .listByEntity("SUPPLIER", supplierId)
+  const loadDocs = () => {
+    setLoading(true);
+    suppliersApi.documents(supplierId)
       .then(setDocs)
       .catch(() => setDocs([]))
       .finally(() => setLoading(false));
-  }, [supplierId]);
+  };
+
+  useEffect(() => { loadDocs(); }, [supplierId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const filtered = docs.filter((d) => {
-    const matchesType = activeType === "ALL" || d.attachment_type === activeType;
+    const matchesType = activeType === "ALL" || d.doc_type === activeType;
     const q = search.toLowerCase();
     const matchesSearch =
       !q ||
-      d.file_name.toLowerCase().includes(q) ||
+      (d.title || "").toLowerCase().includes(q) ||
+      (d.ref_number || "").toLowerCase().includes(q) ||
       (d.caption ?? "").toLowerCase().includes(q);
-    return matchesType && matchesSearch && d.is_active;
+    return matchesType && matchesSearch;
   });
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -164,8 +182,8 @@ function SupplierDocCentre({ supplierId }: { supplierId: string }) {
     setUploadError("");
     setUploading(true);
     try {
-      const att = await attachmentsApi.upload(file, "SUPPLIER", supplierId, uploadType);
-      setDocs((prev) => [att, ...prev]);
+      await attachmentsApi.upload(file, "SUPPLIER", supplierId, "INVOICE_COPY");
+      loadDocs();
     } catch {
       setUploadError("Upload failed. Please try again.");
     } finally {
@@ -174,26 +192,18 @@ function SupplierDocCentre({ supplierId }: { supplierId: string }) {
     }
   };
 
-  const handleDelete = async (id: string) => {
+  const handleDeleteAttachment = async (id: string) => {
     if (!window.confirm("Delete this document?")) return;
     try {
       await attachmentsApi.delete(id);
-      setDocs((prev) => prev.filter((d) => d.id !== id));
+      setDocs((prev) => prev.filter((d) => d.doc_id !== id));
     } catch {
-      // silent — item may already be gone
+      // silent
     }
   };
 
-  const handleOpen = (doc: Attachment) => {
-    if (doc.is_image) {
-      setPreview(doc);
-    } else {
-      window.open(doc.download_url, "_blank", "noopener,noreferrer");
-    }
-  };
-
-  const countFor = (type: AttachmentType) =>
-    docs.filter((d) => d.is_active && d.attachment_type === type).length;
+  const countFor = (type: SupplierDocType) =>
+    docs.filter((d) => d.doc_type === type).length;
 
   return (
     <div className="space-y-4">
@@ -211,7 +221,7 @@ function SupplierDocCentre({ supplierId }: { supplierId: string }) {
           >
             {chip.label}
             {chip.value !== "ALL" && (
-              <span className="ml-1 opacity-70">({countFor(chip.value as AttachmentType)})</span>
+              <span className="ml-1 opacity-70">({countFor(chip.value as SupplierDocType)})</span>
             )}
           </button>
         ))}
@@ -223,23 +233,12 @@ function SupplierDocCentre({ supplierId }: { supplierId: string }) {
           type="text"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search by filename or caption…"
+          placeholder="Search by title, reference, or caption…"
           className="h-8 flex-1 min-w-48 rounded-md border border-input bg-background px-3 text-xs"
         />
-        <select
-          value={uploadType}
-          onChange={(e) => setUploadType(e.target.value as AttachmentType)}
-          className="h-8 rounded-md border border-input bg-background px-2 text-xs"
-        >
-          {SUPPLIER_DOC_TYPES.map((t) => (
-            <option key={t.value} value={t.value}>
-              {t.label}
-            </option>
-          ))}
-        </select>
         <Button size="sm" onClick={() => fileInputRef.current?.click()} disabled={uploading}>
           <Upload className="w-3.5 h-3.5 mr-1.5" />
-          {uploading ? "Uploading…" : "Upload"}
+          {uploading ? "Uploading…" : "Upload Document"}
         </Button>
         <input
           ref={fileInputRef}
@@ -263,27 +262,32 @@ function SupplierDocCentre({ supplierId }: { supplierId: string }) {
         <div className="py-10 text-center text-sm text-muted-foreground border border-dashed border-border rounded-lg">
           {search || activeType !== "ALL"
             ? "No documents match your filter."
-            : "No documents uploaded yet. Use the upload button to add documents."}
+            : "No documents yet. Purchase orders, invoices, and deliveries will appear here automatically."}
         </div>
       ) : (
         <div className="divide-y divide-border border border-border rounded-lg overflow-hidden">
           {filtered.map((doc) => (
-            <DocRow key={doc.id} doc={doc} onOpen={handleOpen} onDelete={handleDelete} />
+            <SupplierDocRow
+              key={doc.doc_id}
+              doc={doc}
+              onDeleteAttachment={handleDeleteAttachment}
+              onPreview={setPreview}
+            />
           ))}
         </div>
       )}
 
       {/* Image lightbox */}
-      {preview && (
-        <Modal open={!!preview} onClose={() => setPreview(null)} title={preview.file_name} size="lg">
+      {preview?.file_url && (
+        <Modal open={!!preview} onClose={() => setPreview(null)} title={preview.title} size="lg">
           <div className="p-4 flex flex-col items-center gap-3">
             <img
-              src={preview.download_url}
-              alt={preview.file_name}
+              src={preview.file_url}
+              alt={preview.title}
               className="max-w-full max-h-[65vh] object-contain rounded"
             />
             <a
-              href={preview.download_url}
+              href={preview.file_url}
               target="_blank"
               rel="noopener noreferrer"
               className="text-xs text-primary hover:underline flex items-center gap-1"

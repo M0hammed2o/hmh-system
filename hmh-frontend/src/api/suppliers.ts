@@ -143,6 +143,31 @@ export interface SupplierProcurementHistory {
   quotation_count: number;
 }
 
+export type SupplierDocType =
+  | "PURCHASE_ORDER"
+  | "INVOICE"
+  | "DELIVERY_NOTE"
+  | "QUOTATION"
+  | "ATTACHMENT";
+
+export interface SupplierDocument {
+  doc_id: string;
+  doc_type: SupplierDocType;
+  ref_number: string;
+  title: string;
+  date: string | null;
+  amount: number | null;
+  status: string | null;
+  file_url: string | null;
+  file_name: string | null;
+  is_attachment: boolean;
+  attachment_type?: string;
+  file_size_display?: string;
+  uploaded_by_name?: string | null;
+  is_image?: boolean;
+  caption?: string | null;
+}
+
 export const suppliersApi = {
   list: async (includeInactive = false): Promise<Supplier[]> => {
     const res = await client.get<{ data: Supplier[] }>("/suppliers/", {
@@ -177,6 +202,11 @@ export const suppliersApi = {
 
   procurementHistory: async (id: string): Promise<SupplierProcurementHistory> => {
     const res = await client.get<{ data: SupplierProcurementHistory }>(`/suppliers/${id}/procurement-history`);
+    return res.data.data;
+  },
+
+  documents: async (id: string): Promise<SupplierDocument[]> => {
+    const res = await client.get<{ data: SupplierDocument[] }>(`/suppliers/${id}/documents`);
     return res.data.data;
   },
 };

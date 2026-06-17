@@ -359,6 +359,133 @@ def supplier_procurement_history(supplier_id: uuid.UUID, db: DbSession):
     })
 
 
+@router.get(
+    "/{supplier_id}/documents",
+    response_model=ApiSuccess[list[dict]],
+    dependencies=[ALL_ROLES],
+)
+def supplier_documents(supplier_id: uuid.UUID, db: DbSession):
+    """Unified document list: POs, Invoices, Deliveries, Quotations, and manual Attachments."""
+    from app.models.supplier import Supplier
+    from app.models.purchase_order import PurchaseOrder
+    from app.models.invoice import Invoice
+    from app.models.delivery import Delivery
+    from app.models.quotation import Quotation
+    from app.models.attachment import Attachment
+    from app.models.enums import AttachmentEntity
+    from app.schemas.attachment import AttachmentRead
+    from app.models.user import User
+
+    s = db.get(Supplier, supplier_id)
+    if not s:
+        raise HTTPException(404, "Supplier not found.")
+
+    docs = []
+    pos = (
+        db.query(PurchaseOrder)
+        .filter(PurchaseOrder.supplier_id == supplier_id)
+        .order_by(PurchaseOrder.po_date.desc())
+        .all()
+    )
+    po_ids = [po.id for po in pos]
+
+    for po in pos:
+        docs.append({
+            "doc_id":       str(po.id),
+            "doc_type":     "PURCHASE_ORDER",
+            "ref_number":   po.po_number or str(po.id)[:8],
+            "title":        f"Purchase Order {po.po_number}",
+            "date":         po.po_date.date().isoformat() if po.po_date else None,
+            "amount":       float(po.total_amount or 0),
+            "status":       po.status.value,
+            "file_url":     None,
+            "file_name":    None,
+            "is_attachment": False,
+        })
+
+    if po_ids:
+        for inv in db.query(Invoice).filter(Invoice.purchase_order_id.in_(po_ids)).all():
+            docs.append({
+                "doc_id":       str(inv.id),
+                "doc_type":     "INVOICE",
+                "ref_number":   inv.invoice_number,
+                "title":        f"Invoice {inv.invoice_number}",
+                "date":         inv.invoice_date.isoformat() if inv.invoice_date else None,
+                "amount":       float(inv.total_amount or 0),
+                "status":       inv.status.value,
+                "file_url":     None,
+                "file_name":    None,
+                "is_attachment": False,
+            })
+        for d in db.query(Delivery).filter(Delivery.purchase_order_id.in_(po_ids)).all():
+            docs.append({
+                "doc_id":       str(d.id),
+                "doc_type":     "DELIVERY_NOTE",
+                "ref_number":   d.delivery_number or str(d.id)[:8],
+                "title":        f"Delivery {d.delivery_number or str(d.id)[:8]}",
+                "date":         d.delivery_date.date().isoformat() if d.delivery_date else None,
+                "amount":       None,
+                "status":       d.delivery_status.value if d.delivery_status else None,
+                "file_url":     None,
+                "file_name":    None,
+                "is_attachment": False,
+            })
+
+    for q in db.query(Quotation).filter(Quotation.supplier_id == supplier_id).all():
+        docs.append({
+            "doc_id":       str(q.id),
+            "doc_type":     "QUOTATION",
+            "ref_number":   q.quote_number,
+            "title":        f"Quotation {q.quote_number}",
+            "date":         q.quote_date.isoformat() if q.quote_date else None,
+            "amount":       float(q.gross_amount or 0),
+            "status":       q.status.value,
+            "file_url":     None,
+            "file_name":    None,
+            "is_attachment": False,
+        })
+
+    raw_atts = (
+        db.query(Attachment)
+        .filter(
+            Attachment.entity_type == AttachmentEntity.SUPPLIER,
+            Attachment.entity_id == supplier_id,
+            Attachment.is_active == True,  # noqa: E712
+        )
+        .order_by(Attachment.uploaded_at.desc())
+        .all()
+    )
+    uploader_ids = {a.uploaded_by for a in raw_atts if a.uploaded_by}
+    user_map: dict = {}
+    if uploader_ids:
+        for u in db.query(User).filter(User.id.in_(uploader_ids)).all():
+            user_map[str(u.id)] = u.full_name
+
+    for att in raw_atts:
+        read = AttachmentRead.model_validate(att)
+        read.uploaded_by_name = user_map.get(str(att.uploaded_by)) if att.uploaded_by else None
+        docs.append({
+            "doc_id":           str(att.id),
+            "doc_type":         "ATTACHMENT",
+            "ref_number":       att.file_name,
+            "title":            att.file_name,
+            "date":             att.uploaded_at.date().isoformat() if att.uploaded_at else None,
+            "amount":           None,
+            "status":           None,
+            "file_url":         read.download_url,
+            "file_name":        att.file_name,
+            "is_attachment":    True,
+            "attachment_type":  att.attachment_type.value,
+            "file_size_display": read.file_size_display,
+            "uploaded_by_name": read.uploaded_by_name,
+            "is_image":         read.is_image,
+            "caption":          att.caption,
+        })
+
+    docs.sort(key=lambda d: (d["date"] or "0000-00-00"), reverse=True)
+    return ApiSuccess(data=docs, message=f"{len(docs)} document(s).")
+
+
 @router.delete(
     "/{supplier_id}",
     response_model=ApiSuccess[dict],
