@@ -29,7 +29,6 @@ const InvoiceReconciliationPage = lazy(() => import("@/pages/InvoiceReconciliati
 const ReconciliationPage        = lazy(() => import("@/pages/ReconciliationPage"));
 const AlertsPage              = lazy(() => import("@/pages/AlertsPage"));
 const LabourPage              = lazy(() => import("@/pages/LabourPage"));
-const WhatsAppQueuePage       = lazy(() => import("@/pages/WhatsAppQueuePage"));
 const GmailInboxPage          = lazy(() => import("@/pages/GmailInboxPage"));
 const FuelPage                = lazy(() => import("@/pages/FuelPage"));
 const SuppliersPage           = lazy(() => import("@/pages/SuppliersPage"));
@@ -39,7 +38,6 @@ const LotDetailPage           = lazy(() => import("@/pages/LotDetailPage"));
 const MilestonesPage          = lazy(() => import("@/pages/MilestonesPage"));
 const TimelinePage            = lazy(() => import("@/pages/TimelinePage"));
 const AuditPage               = lazy(() => import("@/pages/AuditPage"));
-const NotificationSettingsPage    = lazy(() => import("@/pages/NotificationSettingsPage"));
 const ProcurementAnalyticsPage    = lazy(() => import("@/pages/ProcurementAnalyticsPage"));
 const SettingsPage            = lazy(() => import("@/pages/SettingsPage"));
 const WorkDonePage            = lazy(() => import("@/pages/WorkDonePage"));
@@ -102,8 +100,8 @@ export function AppRouter() {
             <Route path="reconciliation" element={<ReconciliationPage />} />
             <Route path="reconciliation/proof-packs" element={<InvoiceReconciliationPage />} />
             <Route path="alerts" element={<AlertsPage />} />
+            <Route path="whatsapp-queue" element={<Navigate to="/alerts" replace />} />
             <Route path="labour" element={<LabourPage />} />
-            <Route path="whatsapp-queue" element={<WhatsAppQueuePage />} />
             <Route path="gmail-inbox" element={<GmailInboxPage />} />
             <Route path="fuel" element={<FuelPage />} />
             <Route path="suppliers" element={<SuppliersPage />} />
@@ -112,7 +110,7 @@ export function AppRouter() {
             <Route path="milestones" element={<MilestonesPage />} />
             <Route path="timeline" element={<TimelinePage />} />
             <Route path="audit" element={<AuditPage />} />
-            <Route path="notification-settings" element={<NotificationSettingsPage />} />
+            <Route path="notification-settings" element={<Navigate to="/alerts" replace />} />
             <Route path="procurement-analytics" element={<ProcurementAnalyticsPage />} />
             <Route path="settings" element={<SettingsPage />} />
             <Route path="work-done" element={<WorkDonePage />} />

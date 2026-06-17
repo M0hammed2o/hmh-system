@@ -1,22 +1,19 @@
-import { useEffect, useState, useCallback, useMemo } from "react";
+import { lazy, Suspense, useEffect, useState, useCallback, useMemo } from "react";
 import {
-  Bell, AlertTriangle, AlertCircle, Info, CheckCircle2, Phone,
-  MessageSquare, RefreshCw, Plus, Pencil, UserX, Send, Play,
-  FileText, Clock, X,
+  Bell, AlertTriangle, AlertCircle, CheckCircle2,
+  MessageSquare, RefreshCw, FileText, X,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   alertsApi,
-  type Alert, type AlertSeverity, type AlertStats,
-  type AlertRecipient, type AlertRecipientCreate, type AlertRecipientUpdate,
-  type TestRecipientResult,
-  type NotificationQueueEntry, type QueueStats,
+  type Alert, type AlertSeverity, type AlertStats, type QueueStats,
 } from "@/api/alerts";
 import { cn } from "@/lib/utils";
+
+const WhatsAppQueuePage        = lazy(() => import("./WhatsAppQueuePage"));
+const NotificationSettingsPage = lazy(() => import("./NotificationSettingsPage"));
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -42,15 +39,6 @@ const SEV_BADGE: Record<AlertSeverity, "destructive" | "secondary" | "outline"> 
   HIGH:     "destructive",
   MEDIUM:   "secondary",
   LOW:      "outline",
-};
-
-const NOTIFICATION_STATUS_COLOR: Record<string, string> = {
-  SENT:        "text-green-600 dark:text-green-400",
-  MOCK_SENT:   "text-blue-500",
-  PENDING:     "text-amber-500",
-  FAILED:      "text-destructive",
-  ACKNOWLEDGED:"text-green-600 dark:text-green-400",
-  CANCELLED:   "text-muted-foreground",
 };
 
 // ── Stat card ─────────────────────────────────────────────────────────────────
@@ -126,379 +114,6 @@ function AlertCard({ alert, onAck, onResolve }: { alert: Alert; onAck: (id: stri
   );
 }
 
-// ── Queue entry card ──────────────────────────────────────────────────────────
-
-function QueueCard({ entry }: { entry: NotificationQueueEntry }) {
-  const [expanded, setExpanded] = useState(false);
-  return (
-    <div className="border border-border bg-card rounded-xl p-4 space-y-1.5">
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <MessageSquare className="w-4 h-4 text-muted-foreground shrink-0" />
-          <span className="text-sm font-medium font-mono">{entry.phone_number}</span>
-        </div>
-        <span className={cn("text-xs font-medium", NOTIFICATION_STATUS_COLOR[entry.status])}>
-          {entry.status}
-        </span>
-      </div>
-      <div className="flex items-center gap-3 text-xs text-muted-foreground">
-        <span>Attempt {entry.attempt_count}</span>
-        {entry.last_attempt_at && <span>Last: {timeAgo(entry.last_attempt_at)}</span>}
-        {entry.requires_acknowledgement && (
-          <span className={cn("font-medium", entry.acknowledged_at ? "text-green-600 dark:text-green-400" : "text-amber-500")}>
-            {entry.acknowledged_at ? "ACKed" : "Awaiting ACK"}
-          </span>
-        )}
-      </div>
-      {entry.error_message && (
-        <p className="text-xs text-destructive">{entry.error_message}</p>
-      )}
-      <button onClick={() => setExpanded(!expanded)} className="text-xs text-primary">
-        {expanded ? "Hide message" : "View message"}
-      </button>
-      {expanded && (
-        <pre className="text-xs bg-muted rounded-lg p-3 whitespace-pre-wrap font-mono mt-1">{entry.message_body}</pre>
-      )}
-    </div>
-  );
-}
-
-// ── Add recipient modal ───────────────────────────────────────────────────────
-
-function AddRecipientModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
-  const [form, setForm] = useState<AlertRecipientCreate>({
-    name: "", phone_number: "",
-    receives_critical_alerts: true,
-    receives_daily_summary: true,
-    receives_invoice_alerts: false,
-    receives_delivery_alerts: false,
-    receives_vehicle_alerts: false,
-    receives_material_alerts: false,
-  });
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setLoading(true);
-    setError("");
-    try {
-      await alertsApi.createRecipient(form);
-      onSaved();
-      onClose();
-    } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Failed to add recipient.";
-      setError(msg);
-    } finally { setLoading(false); }
-  };
-
-  const toggle = (field: keyof AlertRecipientCreate) =>
-    setForm((f) => ({ ...f, [field]: !f[field] }));
-
-  const checks: { field: keyof AlertRecipientCreate; label: string }[] = [
-    { field: "receives_critical_alerts", label: "Critical alerts" },
-    { field: "receives_daily_summary",   label: "Daily summary" },
-    { field: "receives_material_alerts", label: "Material overuse" },
-    { field: "receives_delivery_alerts", label: "Delivery issues" },
-    { field: "receives_invoice_alerts",  label: "Invoice alerts" },
-    { field: "receives_vehicle_alerts",  label: "Vehicle/fuel" },
-  ];
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-foreground/40">
-      <div className="bg-card border border-border rounded-xl w-full max-w-md p-6 animate-fade-in">
-        <h2 className="text-base font-semibold mb-5">Add WhatsApp Recipient</h2>
-        <form onSubmit={submit} className="space-y-4">
-          <div className="space-y-2">
-            <Label>Name</Label>
-            <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required placeholder="e.g. Mohammed" />
-          </div>
-          <div className="space-y-2">
-            <Label>Phone (international format)</Label>
-            <Input value={form.phone_number} onChange={(e) => setForm({ ...form, phone_number: e.target.value })} required placeholder="+27831234567" />
-          </div>
-          <div className="space-y-2">
-            <Label>Label / Role</Label>
-            <Input value={form.label || ""} onChange={(e) => setForm({ ...form, label: e.target.value })} placeholder="e.g. Owner, Manager" />
-          </div>
-          <div className="space-y-2">
-            <Label>Receives alerts for</Label>
-            <div className="grid grid-cols-2 gap-2">
-              {checks.map(({ field, label }) => (
-                <label key={field} className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={!!form[field]}
-                    onChange={() => toggle(field)}
-                    className="rounded"
-                  />
-                  <span className="text-sm">{label}</span>
-                </label>
-              ))}
-            </div>
-          </div>
-          {error && <p className="text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-lg px-3 py-2">{error}</p>}
-          <div className="flex gap-2 pt-1">
-            <Button type="submit" disabled={loading} className="flex-1">{loading ? "Adding…" : "Add Recipient"}</Button>
-            <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
-          </div>
-        </form>
-      </div>
-    </div>
-  );
-}
-
-// ── Edit recipient modal ──────────────────────────────────────────────────────
-
-function EditRecipientModal({ recipient, onClose, onSaved }: { recipient: AlertRecipient; onClose: () => void; onSaved: () => void }) {
-  const [form, setForm] = useState<AlertRecipientUpdate>({
-    name: recipient.name,
-    phone_number: recipient.phone_number,
-    label: recipient.label ?? "",
-    receives_critical_alerts: recipient.receives_critical_alerts,
-    receives_daily_summary: recipient.receives_daily_summary,
-    receives_material_alerts: recipient.receives_material_alerts,
-    receives_delivery_alerts: recipient.receives_delivery_alerts,
-    receives_invoice_alerts: recipient.receives_invoice_alerts,
-    receives_vehicle_alerts: recipient.receives_vehicle_alerts,
-  });
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setLoading(true);
-    setError("");
-    try {
-      await alertsApi.updateRecipient(recipient.id, { ...form, label: form.label || undefined });
-      onSaved();
-      onClose();
-    } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Failed to update recipient.";
-      setError(msg);
-    } finally { setLoading(false); }
-  };
-
-  const toggle = (field: keyof AlertRecipientUpdate) =>
-    setForm((f) => ({ ...f, [field]: !f[field] }));
-
-  const checks: { field: keyof AlertRecipientUpdate; label: string }[] = [
-    { field: "receives_critical_alerts", label: "Critical alerts" },
-    { field: "receives_daily_summary",   label: "Daily summary" },
-    { field: "receives_material_alerts", label: "Material overuse" },
-    { field: "receives_delivery_alerts", label: "Delivery issues" },
-    { field: "receives_invoice_alerts",  label: "Invoice alerts" },
-    { field: "receives_vehicle_alerts",  label: "Vehicle/fuel" },
-  ];
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-foreground/40">
-      <div className="bg-card border border-border rounded-xl w-full max-w-md p-6 animate-fade-in">
-        <h2 className="text-base font-semibold mb-5">Edit Recipient</h2>
-        <form onSubmit={submit} className="space-y-4">
-          <div className="space-y-2">
-            <Label>Name</Label>
-            <Input value={form.name ?? ""} onChange={(e) => setForm({ ...form, name: e.target.value })} required />
-          </div>
-          <div className="space-y-2">
-            <Label>Phone (international format)</Label>
-            <Input value={form.phone_number ?? ""} onChange={(e) => setForm({ ...form, phone_number: e.target.value })} required placeholder="+27831234567" />
-          </div>
-          <div className="space-y-2">
-            <Label>Label / Role</Label>
-            <Input value={form.label ?? ""} onChange={(e) => setForm({ ...form, label: e.target.value })} placeholder="e.g. Owner, Manager" />
-          </div>
-          <div className="space-y-2">
-            <Label>Receives alerts for</Label>
-            <div className="grid grid-cols-2 gap-2">
-              {checks.map(({ field, label }) => (
-                <label key={field} className="flex items-center gap-2 cursor-pointer">
-                  <input type="checkbox" checked={!!form[field]} onChange={() => toggle(field)} className="rounded" />
-                  <span className="text-sm">{label}</span>
-                </label>
-              ))}
-            </div>
-          </div>
-          {error && <p className="text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-lg px-3 py-2">{error}</p>}
-          <div className="flex gap-2 pt-1">
-            <Button type="submit" disabled={loading} className="flex-1">{loading ? "Saving…" : "Save Changes"}</Button>
-            <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
-          </div>
-        </form>
-      </div>
-    </div>
-  );
-}
-
-
-// ── Recipients panel ──────────────────────────────────────────────────────────
-
-function RecipientsPanel({ recipients, onRefresh }: { recipients: AlertRecipient[]; onRefresh: () => void }) {
-  const [showAdd, setShowAdd] = useState(false);
-  const [editTarget, setEditTarget] = useState<AlertRecipient | null>(null);
-  const [testingId, setTestingId] = useState<string | null>(null);
-  const [testResult, setTestResult] = useState<Record<string, TestRecipientResult & { label: string }>>({});
-  const [deletingId, setDeletingId] = useState<string | null>(null);
-  const [busyId, setBusyId] = useState<string | null>(null);
-
-  const handleTest = async (r: AlertRecipient) => {
-    if (!r.is_active) {
-      setTestResult((prev) => ({
-        ...prev,
-        [r.id]: { status: "INACTIVE", provider_message_id: null, method: null, label: "Recipient is inactive. Activate before testing." },
-      }));
-      return;
-    }
-    setTestingId(r.id);
-    try {
-      const res = await alertsApi.testRecipient(r.id);
-      const label = res.error
-        ? res.error
-        : res.status === "MOCK_SENT"
-          ? "Queued (mock mode — WHATSAPP_ENABLED=false)"
-          : res.status === "SENT"
-            ? `Queued to WhatsApp API${res.template_used ? ` via template '${res.template_used}'` : ""}`
-            : res.status === "NOT_CONFIGURED"
-              ? res.error ?? "Template not configured"
-              : `Status: ${res.status}`;
-      setTestResult((prev) => ({ ...prev, [r.id]: { ...res, label } }));
-    } catch {
-      setTestResult((prev) => ({ ...prev, [r.id]: { status: "ERROR", provider_message_id: null, method: null, label: "Request failed" } }));
-    } finally { setTestingId(null); }
-  };
-
-  const handleToggleActive = async (r: AlertRecipient) => {
-    setBusyId(r.id);
-    try {
-      if (r.is_active) {
-        await alertsApi.deactivateRecipient(r.id);
-      } else {
-        await alertsApi.activateRecipient(r.id);
-      }
-      onRefresh();
-    } finally { setBusyId(null); }
-  };
-
-  const handleDelete = async (id: string, name: string) => {
-    if (!confirm(`Permanently delete recipient "${name}"?\n\nThis also removes their notification history and cannot be undone.`)) return;
-    setDeletingId(id);
-    try {
-      await alertsApi.deleteRecipient(id);
-      onRefresh();
-    } finally { setDeletingId(null); }
-  };
-
-  const active   = recipients.filter((r) => r.is_active);
-  const inactive = recipients.filter((r) => !r.is_active);
-  const sorted   = [...active, ...inactive];
-
-  return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <p className="text-sm text-muted-foreground">
-          {active.length} active{inactive.length > 0 ? `, ${inactive.length} inactive` : ""}
-        </p>
-        <Button size="sm" onClick={() => setShowAdd(true)}>
-          <Plus className="w-4 h-4 mr-1" />Add Recipient
-        </Button>
-      </div>
-
-      {recipients.length === 0 ? (
-        <div className="bg-card border border-border rounded-xl p-10 text-center">
-          <Phone className="w-8 h-8 text-muted-foreground mx-auto mb-2" />
-          <p className="text-sm text-muted-foreground">No WhatsApp recipients configured.</p>
-          <p className="text-xs text-muted-foreground mt-1">Add a recipient to receive alerts on WhatsApp.</p>
-        </div>
-      ) : (
-        <div className="bg-card border border-border rounded-xl overflow-hidden divide-y divide-border">
-          {sorted.map((r) => {
-            const tr = testResult[r.id];
-            const testOk  = tr && (tr.status === "SENT" || tr.status === "MOCK_SENT");
-            const testBad = tr && !testOk;
-            return (
-              <div key={r.id} className={cn("px-4 py-3 flex items-start gap-4", !r.is_active && "opacity-60")}>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <p className="font-medium text-sm">{r.name}</p>
-                    {r.label && <Badge variant="outline" className="text-xs">{r.label}</Badge>}
-                    {!r.is_active && <Badge variant="secondary" className="text-xs bg-amber-500/10 text-amber-600 border-amber-400/30">Inactive</Badge>}
-                  </div>
-                  <p className="text-xs text-muted-foreground font-mono mt-0.5">{r.phone_number}</p>
-                  <div className="flex flex-wrap gap-1 mt-1.5">
-                    {r.receives_critical_alerts && <span className="text-[10px] bg-destructive/10 text-destructive rounded px-1.5 py-0.5">Critical</span>}
-                    {r.receives_daily_summary    && <span className="text-[10px] bg-primary/10 text-primary rounded px-1.5 py-0.5">Daily Summary</span>}
-                    {r.receives_material_alerts  && <span className="text-[10px] bg-muted text-muted-foreground rounded px-1.5 py-0.5">Materials</span>}
-                    {r.receives_delivery_alerts  && <span className="text-[10px] bg-muted text-muted-foreground rounded px-1.5 py-0.5">Deliveries</span>}
-                    {r.receives_invoice_alerts   && <span className="text-[10px] bg-muted text-muted-foreground rounded px-1.5 py-0.5">Invoices</span>}
-                    {r.receives_vehicle_alerts   && <span className="text-[10px] bg-muted text-muted-foreground rounded px-1.5 py-0.5">Vehicles</span>}
-                  </div>
-                  {tr && (
-                    <p className={cn("text-xs mt-1.5 font-medium", testOk ? "text-green-600 dark:text-green-400" : "text-destructive")}>
-                      {testOk ? "✓" : "✗"} {tr.label}
-                    </p>
-                  )}
-                </div>
-
-                <div className="flex items-center gap-1 shrink-0 flex-wrap justify-end">
-                  {/* Test */}
-                  <Button
-                    size="sm" variant="ghost"
-                    onClick={() => handleTest(r)}
-                    disabled={testingId === r.id}
-                    title="Send test message"
-                    className="h-7 px-2 text-xs"
-                  >
-                    {testingId === r.id ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Send className="w-3 h-3" />}
-                  </Button>
-
-                  {/* Edit */}
-                  <Button
-                    size="sm" variant="ghost"
-                    onClick={() => setEditTarget(r)}
-                    title="Edit recipient"
-                    className="h-7 px-2 text-xs"
-                  >
-                    <Pencil className="w-3 h-3" />
-                  </Button>
-
-                  {/* Activate / Deactivate toggle */}
-                  <Button
-                    size="sm" variant="ghost"
-                    onClick={() => handleToggleActive(r)}
-                    disabled={busyId === r.id}
-                    title={r.is_active ? "Deactivate recipient" : "Activate recipient"}
-                    className={cn("h-7 px-2 text-xs", r.is_active ? "text-muted-foreground hover:text-amber-600" : "text-green-600 hover:text-green-700")}
-                  >
-                    {busyId === r.id
-                      ? <RefreshCw className="w-3 h-3 animate-spin" />
-                      : r.is_active ? <UserX className="w-3 h-3" /> : <CheckCircle2 className="w-3 h-3" />}
-                  </Button>
-
-                  {/* Delete */}
-                  <Button
-                    size="sm" variant="ghost"
-                    onClick={() => handleDelete(r.id, r.name)}
-                    disabled={deletingId === r.id}
-                    title="Delete recipient"
-                    className="h-7 px-2 text-xs text-muted-foreground hover:text-destructive"
-                  >
-                    {deletingId === r.id
-                      ? <RefreshCw className="w-3 h-3 animate-spin" />
-                      : <X className="w-3 h-3" />}
-                  </Button>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {showAdd   && <AddRecipientModal onClose={() => setShowAdd(false)} onSaved={onRefresh} />}
-      {editTarget && <EditRecipientModal recipient={editTarget} onClose={() => setEditTarget(null)} onSaved={onRefresh} />}
-    </div>
-  );
-}
-
 // ── Summary modal ─────────────────────────────────────────────────────────────
 
 function SummaryModal({ result, onClose }: { result: { summary_text: string; queued: number; send_counts: Record<string, number> }; onClose: () => void }) {
@@ -522,9 +137,10 @@ function SummaryModal({ result, onClose }: { result: { summary_text: string; que
   );
 }
 
-// ── Tab definition ────────────────────────────────────────────────────────────
+// ── Tab / Section definitions ─────────────────────────────────────────────────
 
-type Tab = "active" | "history" | "critical" | "materials" | "deliveries" | "invoices" | "vehicles" | "delays" | "queue" | "recipients";
+type Tab     = "active" | "history" | "critical" | "materials" | "deliveries" | "invoices" | "vehicles" | "delays";
+type Section = "alerts" | "whatsapp-queue" | "notification-settings";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "active",     label: "Active" },
@@ -535,12 +151,16 @@ const TABS: { id: Tab; label: string }[] = [
   { id: "invoices",   label: "Invoices" },
   { id: "vehicles",   label: "Vehicles" },
   { id: "delays",     label: "Delays" },
-  { id: "queue",      label: "WhatsApp Queue" },
-  { id: "recipients", label: "Recipients" },
+];
+
+const SECTIONS: { id: Section; label: string }[] = [
+  { id: "alerts",                label: "Alerts" },
+  { id: "whatsapp-queue",        label: "WhatsApp Queue" },
+  { id: "notification-settings", label: "Notification Settings" },
 ];
 
 const TAB_TYPE_FILTER: Partial<Record<Tab, string[]>> = {
-  critical:   ["CRITICAL"],  // severity filter, not type
+  critical:   ["CRITICAL"],
   materials:  ["MATERIAL_OVERUSE","BOQ_VARIANCE_OVERUSE","BOQ_ALLOCATION_EXCEEDED","LOW_STOCK","NEGATIVE_STOCK"],
   deliveries: ["DELIVERY_MISMATCH","DELIVERY_NOTE_MISSING","SIGNATURE_MISSING","DELIVERY_DISCREPANCY","DELIVERY_WITHOUT_PO","DELIVERY_SIGNATURE_MISSING"],
   invoices:   ["INVOICE_MISMATCH","INVOICE_UNMATCHED","INVOICE_MISSING_DELIVERY_NOTE","OVERDUE_PAYMENT"],
@@ -548,39 +168,45 @@ const TAB_TYPE_FILTER: Partial<Record<Tab, string[]>> = {
   delays:     ["LOT_DELAYED","STAGE_DELAYED","SITE_DELAY"],
 };
 
+// ── Skeleton loader ───────────────────────────────────────────────────────────
+
+function SectionSkeleton({ rows = 3 }: { rows?: number }) {
+  return (
+    <div className="space-y-3">
+      {Array.from({ length: rows }).map((_, i) => (
+        <Skeleton key={i} className="h-24 rounded-xl" />
+      ))}
+    </div>
+  );
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function AlertsPage() {
-  const [tab, setTab] = useState<Tab>("active");
-  const [alerts, setAlerts] = useState<Alert[]>([]);
-  const [stats, setStats] = useState<AlertStats | null>(null);
-  const [recipients, setRecipients] = useState<AlertRecipient[]>([]);
-  const [queue, setQueue] = useState<NotificationQueueEntry[]>([]);
-  const [queueStats, setQueueStats] = useState<QueueStats | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [summaryResult, setSummaryResult] = useState<{ summary_text: string; queued: number; send_counts: Record<string, number> } | null>(null);
+  const [section, setSection]               = useState<Section>("alerts");
+  const [tab, setTab]                       = useState<Tab>("active");
+  const [alerts, setAlerts]                 = useState<Alert[]>([]);
+  const [stats, setStats]                   = useState<AlertStats | null>(null);
+  const [queueStats, setQueueStats]         = useState<QueueStats | null>(null);
+  const [loading, setLoading]               = useState(true);
+  const [refreshing, setRefreshing]         = useState(false);
+  const [summaryResult, setSummaryResult]   = useState<{ summary_text: string; queued: number; send_counts: Record<string, number> } | null>(null);
   const [generatingSummary, setGeneratingSummary] = useState(false);
-  const [processingQueue, setProcessingQueue] = useState(false);
-  const [scanning, setScanning] = useState(false);
-  const [scanResult, setScanResult] = useState<{ alerts_created: number } | null>(null);
+  const [scanning, setScanning]             = useState(false);
+  const [scanResult, setScanResult]         = useState<{ alerts_created: number } | null>(null);
 
   const loadAll = useCallback(async (quiet = false) => {
     if (!quiet) setLoading(true);
     else setRefreshing(true);
     try {
-      const [alertData, statsData, recipientData, queueData, qsData] = await Promise.allSettled([
+      const [alertData, statsData, qsData] = await Promise.allSettled([
         alertsApi.list({ limit: 200 }),
         alertsApi.stats(),
-        alertsApi.listRecipients(),
-        alertsApi.getQueue(undefined, 100),
         alertsApi.getQueueStats(),
       ]);
-      if (alertData.status === "fulfilled")     setAlerts(alertData.value);
-      if (statsData.status === "fulfilled")     setStats(statsData.value);
-      if (recipientData.status === "fulfilled") setRecipients(recipientData.value);
-      if (queueData.status === "fulfilled")     setQueue(queueData.value);
-      if (qsData.status === "fulfilled")        setQueueStats(qsData.value);
+      if (alertData.status === "fulfilled") setAlerts(alertData.value);
+      if (statsData.status === "fulfilled") setStats(statsData.value);
+      if (qsData.status === "fulfilled")   setQueueStats(qsData.value);
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -600,17 +226,17 @@ export default function AlertsPage() {
   };
 
   const handleScan = async () => {
-    setScanning(true); setScanResult(null);
+    setScanning(true);
+    setScanResult(null);
     try {
-      const res = await import("@/api/client").then(m =>
+      const res = await import("@/api/client").then((m) =>
         m.default.post<{ data: { alerts_created: number } }>("/alerts/scan")
       );
       setScanResult(res.data.data);
       loadAll(true);
     } catch (err: unknown) {
       const d = (err as { response?: { data?: { message?: string; detail?: string } } })?.response?.data;
-      const msg = d?.message || d?.detail || "Scan failed — check your permissions.";
-      alert(msg);
+      alert(d?.message || d?.detail || "Scan failed — check your permissions.");
     } finally { setScanning(false); }
   };
 
@@ -623,17 +249,9 @@ export default function AlertsPage() {
     } finally { setGeneratingSummary(false); }
   };
 
-  const handleProcessQueue = async () => {
-    setProcessingQueue(true);
-    try {
-      await alertsApi.processQueue();
-      loadAll(true);
-    } finally { setProcessingQueue(false); }
-  };
-
   const filteredAlerts = useMemo(() => {
-    if (tab === "active")  return alerts.filter((a) => a.status === "OPEN");
-    if (tab === "history") return alerts.filter((a) => a.status === "ACKNOWLEDGED" || a.status === "RESOLVED");
+    if (tab === "active")   return alerts.filter((a) => a.status === "OPEN");
+    if (tab === "history")  return alerts.filter((a) => a.status === "ACKNOWLEDGED" || a.status === "RESOLVED");
     if (tab === "critical") return alerts.filter((a) => a.severity === "CRITICAL" || a.severity === "HIGH");
     const types = TAB_TYPE_FILTER[tab];
     if (types) return alerts.filter((a) => types.includes(a.alert_type));
@@ -642,119 +260,145 @@ export default function AlertsPage() {
 
   return (
     <div className="space-y-5 animate-fade-in">
-      {/* Header */}
+
+      {/* ── Page header ── */}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-bold">Alerts</h1>
           <p className="text-sm text-muted-foreground">
-            {stats ? `${stats.open} open · ${stats.critical_open} critical` : "Loading…"}
+            {section === "alerts"
+              ? (stats ? `${stats.open} open · ${stats.critical_open} critical` : "Loading…")
+              : section === "whatsapp-queue"
+                ? "Message queue and delivery status"
+                : "WhatsApp recipients and subscriptions"}
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          <Button size="sm" variant="outline" onClick={() => loadAll(true)} disabled={refreshing}>
-            <RefreshCw className={cn("w-4 h-4", refreshing && "animate-spin")} />
-          </Button>
-          <Button size="sm" variant="outline" onClick={handleScan} disabled={scanning} title="Scan for low stock, overdue invoices, pending MRs">
-            {scanning ? <RefreshCw className="w-4 h-4 animate-spin" /> : "Scan Alerts"}
-          </Button>
-          <Button size="sm" variant="outline" onClick={handleDailySummary} disabled={generatingSummary} className="hidden sm:flex">
-            <FileText className="w-4 h-4 mr-1" />
-            {generatingSummary ? "Generating…" : "Daily Summary"}
-          </Button>
-        </div>
+        {section === "alerts" && (
+          <div className="flex items-center gap-2">
+            <Button size="sm" variant="outline" onClick={() => loadAll(true)} disabled={refreshing}>
+              <RefreshCw className={cn("w-4 h-4", refreshing && "animate-spin")} />
+            </Button>
+            <Button size="sm" variant="outline" onClick={handleScan} disabled={scanning} title="Scan for low stock, overdue invoices, pending MRs">
+              {scanning ? <RefreshCw className="w-4 h-4 animate-spin" /> : "Scan Alerts"}
+            </Button>
+            <Button size="sm" variant="outline" onClick={handleDailySummary} disabled={generatingSummary} className="hidden sm:flex">
+              <FileText className="w-4 h-4 mr-1" />
+              {generatingSummary ? "Generating…" : "Daily Summary"}
+            </Button>
+          </div>
+        )}
       </div>
-      {scanResult && (
-        <div className="bg-green-500/10 border border-green-500/30 rounded-xl px-4 py-3 text-sm text-green-700 dark:text-green-400">
-          Scan complete — {scanResult.alerts_created} new alert{scanResult.alerts_created !== 1 ? "s" : ""} created.
-        </div>
-      )}
 
-      {/* Stats row */}
-      {loading ? (
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          {[1,2,3,4].map((i) => <Skeleton key={i} className="h-20 rounded-xl" />)}
-        </div>
-      ) : stats && (
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          <StatBox label="Open" value={stats.open} icon={Bell} warn={stats.open > 0} />
-          <StatBox label="Critical" value={stats.critical_open} icon={AlertCircle} warn={stats.critical_open > 0} />
-          <StatBox label="Pending ACK" value={stats.pending_whatsapp_ack} icon={MessageSquare} warn={stats.pending_whatsapp_ack > 0} />
-          <StatBox label="Send Failures" value={stats.failed_whatsapp_sends} icon={AlertTriangle} warn={stats.failed_whatsapp_sends > 0} />
-        </div>
-      )}
-
-      {/* Tabs */}
-      <div className="flex overflow-x-auto gap-1 pb-1 -mx-1 px-1">
-        {TABS.map((t) => (
+      {/* ── Section tabs ── */}
+      <div className="flex border-b border-border">
+        {SECTIONS.map((s) => (
           <button
-            key={t.id}
-            onClick={() => setTab(t.id)}
+            key={s.id}
+            onClick={() => setSection(s.id)}
             className={cn(
-              "shrink-0 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors",
-              tab === t.id
-                ? "bg-primary text-primary-foreground"
-                : "text-muted-foreground hover:bg-muted hover:text-foreground"
+              "px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors",
+              section === s.id
+                ? "border-primary text-primary"
+                : "border-transparent text-muted-foreground hover:text-foreground"
             )}
           >
-            {t.label}
-            {t.id === "active" && stats && stats.open > 0 && (
-              <span className="ml-1.5 bg-destructive text-destructive-foreground text-[10px] rounded-full px-1.5 py-0.5">
-                {stats.open}
-              </span>
-            )}
-            {t.id === "queue" && queueStats && (queueStats.pending + queueStats.failed) > 0 && (
+            {s.label}
+            {s.id === "whatsapp-queue" && queueStats && (queueStats.pending + queueStats.failed) > 0 && (
               <span className="ml-1.5 bg-amber-500 text-white text-[10px] rounded-full px-1.5 py-0.5">
                 {queueStats.pending + queueStats.failed}
+              </span>
+            )}
+            {s.id === "alerts" && stats && stats.open > 0 && (
+              <span className="ml-1.5 bg-destructive text-destructive-foreground text-[10px] rounded-full px-1.5 py-0.5">
+                {stats.open}
               </span>
             )}
           </button>
         ))}
       </div>
 
-      {/* Tab content */}
-      {loading ? (
-        <div className="space-y-3">{[1,2,3].map((i) => <Skeleton key={i} className="h-24 rounded-xl" />)}</div>
-      ) : tab === "recipients" ? (
-        <RecipientsPanel recipients={recipients} onRefresh={() => loadAll(true)} />
-      ) : tab === "queue" ? (
-        <div className="space-y-4">
-          <div className="flex items-center justify-between">
-            <div className="flex gap-3 text-xs text-muted-foreground">
-              {queueStats && Object.entries(queueStats).map(([k, v]) => (
-                <span key={k}><span className="font-medium text-foreground">{v}</span> {k}</span>
-              ))}
+      {/* ── Alerts section ── */}
+      {section === "alerts" && (
+        <>
+          {scanResult && (
+            <div className="bg-green-500/10 border border-green-500/30 rounded-xl px-4 py-3 text-sm text-green-700 dark:text-green-400">
+              Scan complete — {scanResult.alerts_created} new alert{scanResult.alerts_created !== 1 ? "s" : ""} created.
             </div>
-            <Button size="sm" variant="outline" onClick={handleProcessQueue} disabled={processingQueue} className="h-7 text-xs">
-              <Play className="w-3 h-3 mr-1" />
-              {processingQueue ? "Processing…" : "Process Queue"}
-            </Button>
+          )}
+
+          {/* Stats row */}
+          {loading ? (
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              {[1,2,3,4].map((i) => <Skeleton key={i} className="h-20 rounded-xl" />)}
+            </div>
+          ) : stats && (
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <StatBox label="Open"          value={stats.open}                    icon={Bell}         warn={stats.open > 0} />
+              <StatBox label="Critical"      value={stats.critical_open}           icon={AlertCircle}  warn={stats.critical_open > 0} />
+              <StatBox label="Pending ACK"   value={stats.pending_whatsapp_ack}    icon={MessageSquare} warn={stats.pending_whatsapp_ack > 0} />
+              <StatBox label="Send Failures" value={stats.failed_whatsapp_sends}   icon={AlertTriangle} warn={stats.failed_whatsapp_sends > 0} />
+            </div>
+          )}
+
+          {/* Alert sub-tabs */}
+          <div className="flex overflow-x-auto gap-1 pb-1 -mx-1 px-1">
+            {TABS.map((t) => (
+              <button
+                key={t.id}
+                onClick={() => setTab(t.id)}
+                className={cn(
+                  "shrink-0 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors",
+                  tab === t.id
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                )}
+              >
+                {t.label}
+                {t.id === "active" && stats && stats.open > 0 && (
+                  <span className="ml-1.5 bg-destructive text-destructive-foreground text-[10px] rounded-full px-1.5 py-0.5">
+                    {stats.open}
+                  </span>
+                )}
+              </button>
+            ))}
           </div>
-          {queue.length === 0 ? (
-            <div className="bg-card border border-border rounded-xl p-10 text-center">
-              <MessageSquare className="w-8 h-8 text-muted-foreground mx-auto mb-2" />
-              <p className="text-sm text-muted-foreground">No messages in queue.</p>
-            </div>
+
+          {/* Alert list */}
+          {loading ? (
+            <div className="space-y-3">{[1,2,3].map((i) => <Skeleton key={i} className="h-24 rounded-xl" />)}</div>
           ) : (
             <div className="space-y-2">
-              {queue.map((e) => <QueueCard key={e.id} entry={e} />)}
+              {filteredAlerts.length === 0 ? (
+                <div className="bg-card border border-border rounded-xl p-10 text-center">
+                  <CheckCircle2 className="w-8 h-8 text-green-500 mx-auto mb-2" />
+                  <p className="text-sm text-muted-foreground">
+                    {tab === "active"  ? "All clear — no open alerts."
+                    : tab === "history" ? "No alert history yet."
+                    : "No alerts in this category."}
+                  </p>
+                </div>
+              ) : (
+                filteredAlerts.map((a) => (
+                  <AlertCard key={a.id} alert={a} onAck={handleAck} onResolve={handleResolve} />
+                ))
+              )}
             </div>
           )}
-        </div>
-      ) : (
-        <div className="space-y-2">
-          {filteredAlerts.length === 0 ? (
-            <div className="bg-card border border-border rounded-xl p-10 text-center">
-              <CheckCircle2 className="w-8 h-8 text-green-500 mx-auto mb-2" />
-              <p className="text-sm text-muted-foreground">
-                {tab === "active" ? "All clear — no open alerts." : tab === "history" ? "No alert history yet." : "No alerts in this category."}
-              </p>
-            </div>
-          ) : (
-            filteredAlerts.map((a) => (
-              <AlertCard key={a.id} alert={a} onAck={handleAck} onResolve={handleResolve} />
-            ))
-          )}
-        </div>
+        </>
+      )}
+
+      {/* ── WhatsApp Queue section ── */}
+      {section === "whatsapp-queue" && (
+        <Suspense fallback={<SectionSkeleton />}>
+          <WhatsAppQueuePage />
+        </Suspense>
+      )}
+
+      {/* ── Notification Settings section ── */}
+      {section === "notification-settings" && (
+        <Suspense fallback={<SectionSkeleton rows={5} />}>
+          <NotificationSettingsPage />
+        </Suspense>
       )}
 
       {summaryResult && (
