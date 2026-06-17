@@ -262,12 +262,19 @@ _DATE_RE  = re.compile(
     r"|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{1,2},?\s+\d{4})\b",
     re.IGNORECASE,
 )
-# Invoice total patterns in strict priority order.
-# (?<!\w) prevents matching "subtotal" when looking for "total".
-# Each tuple: (regex, label)
-# SA-aware amount pattern: matches both "12,200.00" (standard) and "12 200, 00" (SA space-thousands).
-# Space within the number is the thousands separator; comma may be decimal.
+# ── Amount patterns ───────────────────────────────────────────────────────────
+#
+# _AMT_STRICT — used in total/subtotal patterns where the captured text is the
+#   LAST or ONLY number on that section of line (no backtracking concern).
+#   Handles: "12 200" (SA space-thousands), "12,200.00" (standard),
+#            "12 200,50" (SA space+comma-decimal), "12200" (no separator).
 _AMT = r"[\d][\d ,]*(?:[,.]\s*\d{1,2})?"
+
+# _COL_SEP — two-or-more spaces / tab used as the separator BETWEEN table
+#   columns.  A single space inside "12 200" (SA thousands) is NOT a column
+#   separator, so requiring 2+ spaces here prevents the regex engine from
+#   backtracking and splitting "12 200" into price="12" / total="200".
+_COL_SEP = r"(?:[ \t]{2,}|\t)"
 
 _TOTAL_PATTERNS: list[tuple[re.Pattern, str]] = [
     (re.compile(r"total\s+due\s*[:\s]\s*R?\s*(" + _AMT + r")",      re.IGNORECASE), "Total Due"),
@@ -281,15 +288,35 @@ _TOTAL_PATTERNS: list[tuple[re.Pattern, str]] = [
     (re.compile(r"subtotal\s*[:\s]\s*R?\s*(" + _AMT + r")",         re.IGNORECASE), "Subtotal"),
 ]
 
-# Line-item pattern: handles comma-formatted numbers like 2,500.00 and SA-format like 12 200, 00
-# Cols: description | qty | unit | unit_price | line_total
+# ── Line-item patterns ─────────────────────────────────────────────────────────
+#
+# All patterns use _COL_SEP (2+ spaces / tab) between the price and total
+# columns so a single-space SA thousands separator inside "12 200" is never
+# mistaken for a column boundary.
+#
+# Pattern priority in _parse_line_items:
+#   1. _LINE_RE      — 5-col: desc | qty | unit | price | total
+#   2. _LINE_RE_SIMPLE — 4-col: desc | qty | price | total  (no unit column)
+#   3. _LINE_RE_3COL — 3-col: desc | qty | [unit] | price  (no total column)
+#      → The price is the LAST group so _AMT is fully greedy with no backtrack.
+#      → Handles quotations and SA invoices that omit the line-total column.
+
 _LINE_RE = re.compile(
-    r"^(.{3,60}?)\s+(\d[\d,]*(?:\.\d+)?)\s+([a-zA-Z]{1,10})\s+R?\s*(" + _AMT + r")\s+R?\s*(" + _AMT + r")\s*$",
+    r"^(.{3,60}?)\s+(\d[\d,]*(?:\.\d+)?)\s+([a-zA-Z]{1,10})\s+R?\s*(" + _AMT + r")"
+    + _COL_SEP + r"R?\s*(" + _AMT + r")\s*$",
     re.MULTILINE,
 )
-# Simplified line-item fallback: description | qty | unit_price | line_total (no unit col, R-prefix ok)
 _LINE_RE_SIMPLE = re.compile(
-    r"^(.{3,70}?)\s+(\d[\d,]*(?:\.\d+)?)\s+R?\s*(" + _AMT + r")\s+R?\s*(" + _AMT + r")\s*$",
+    r"^(.{3,70}?)\s+(\d[\d,]*(?:\.\d+)?)\s+R?\s*(" + _AMT + r")"
+    + _COL_SEP + r"R?\s*(" + _AMT + r")\s*$",
+    re.MULTILINE,
+)
+# 3-col: no total column — price is last, greedy, no backtracking.
+# Uses _COL_SEP between all columns so metadata / date lines (single-spaced)
+# are not accidentally matched.
+_LINE_RE_3COL = re.compile(
+    r"^(.{3,70}?)" + _COL_SEP + r"(\d[\d,]*(?:\.\d+)?)(?:" + _COL_SEP
+    + r"[a-zA-Z]{1,10})?" + _COL_SEP + r"R?\s*(" + _AMT + r")\s*$",
     re.MULTILINE,
 )
 
@@ -567,32 +594,56 @@ def _first_match(pattern: re.Pattern, text: str) -> Optional[str]:
 
 def _parse_amount(raw: Optional[str]) -> Optional[float]:
     """
-    Parse a monetary string into a float.
+    Parse a monetary string into a float, handling all common formats:
 
-    Handles:
-      - Standard format:  "8,625.00" / "8 625.00"  (comma=thousands, dot=decimal)
-      - SA/European:      "12 200,00" / "12 200, 00" (space=thousands, comma=decimal)
+      Standard    "8,625.00"   "8 625.00"   comma/space=thousands, dot=decimal
+      SA          "12 200,00"  "12 200,50"  space=thousands, comma=decimal
+      European    "12.200,50"              dot=thousands, comma=decimal
+      No-sep      "12200"      "12200.50"   plain digits
 
-    Key insight: after removing spaces, if the string ends with comma+1-2 digits
-    (e.g. "12200,00") the comma IS the decimal separator; otherwise commas are
-    thousands separators and should be stripped.
+    Strategy:
+      1. Strip R/ZAR prefix and leading/trailing whitespace.
+      2. If both ',' and '.' present: whichever appears LAST is the decimal.
+      3. If only ',': decimal if ≤2 digits follow it, thousands otherwise.
+      4. If only '.': standard decimal.
+      5. Remove space (SA/standard thousands separator) then parse.
     """
     if not raw:
         return None
-    s = raw.strip()
-    # Strip spaces first to collapse "12 200, 00" → "12200,00"
-    s_no_space = s.replace(" ", "")
-    # SA/European decimal: "12200,00" matches ^\d+,\d{1,2}$
     import re as _re
-    if _re.match(r'^\d+,\d{1,2}$', s_no_space):
-        try:
-            return float(s_no_space.replace(",", "."))
-        except ValueError:
-            return None
-    # Standard: remove comma thousands-separators, keep dot decimal
+    s = raw.strip()
+    # Strip currency prefix (R, ZAR) — e.g. "R 12 200" → "12 200"
+    s = _re.sub(r'^(?:R|ZAR)\s*', '', s, flags=_re.IGNORECASE).strip()
+    if not s:
+        return None
+
+    has_comma = ',' in s
+    has_dot   = '.' in s
+
     try:
-        return float(s_no_space.replace(",", ""))
-    except ValueError:
+        if has_comma and has_dot:
+            # Both separators present — last one is the decimal point
+            if s.rfind('.') > s.rfind(','):
+                # Standard: 1,234.56 or 1 234.56
+                cleaned = s.replace(' ', '').replace(',', '')
+            else:
+                # European: 1.234,56 or 1 234,56
+                cleaned = s.replace(' ', '').replace('.', '').replace(',', '.')
+        elif has_comma:
+            # Only comma — decimal if ≤2 digits follow last comma, else thousands
+            after_last_comma = s.rsplit(',', 1)[-1].strip()
+            if len(after_last_comma) <= 2:
+                # SA/European decimal: "12 200,50" → 12200.50
+                cleaned = s.replace(' ', '').replace(',', '.')
+            else:
+                # Comma thousands: "12,200" → 12200
+                cleaned = s.replace(' ', '').replace(',', '')
+        else:
+            # Dot decimal or plain digits; remove spaces (SA/standard thousands)
+            cleaned = s.replace(' ', '')
+
+        return float(cleaned)
+    except (ValueError, IndexError):
         return None
 
 
@@ -615,13 +666,20 @@ def _extract_total(text: str) -> Optional[float]:
 def _parse_line_items(text: str) -> list[dict]:
     """
     Parse table rows into line items.
-    Tries the 5-column pattern (desc|qty|unit|price|total) first, then a
-    4-column fallback (desc|qty|price|total) for invoices without a unit column.
-    Handles comma-formatted and R-prefixed numbers (e.g. R1,536.00).
+
+    Tries patterns in priority order:
+      1. 5-col: desc | qty | unit | price | total
+      2. 4-col: desc | qty | price | total  (no unit column)
+      3. 3-col: desc | qty | [unit] | price  (no total column — SA quotations)
+
+    All patterns use _COL_SEP (2+ spaces/tab) between price and total so a
+    single space inside SA numbers like "12 200" is never split by backtracking.
+    Pattern 3 is last-resort: the price group is final on the line, so _AMT
+    is fully greedy and always captures "12 200" = 12 200 correctly.
     """
     items = []
 
-    # Primary: 5-column pattern includes a unit abbreviation column
+    # 1. 5-col (desc | qty | unit | price | total)
     for m in _LINE_RE.finditer(text):
         desc, qty_s, unit, price_s, total_s = m.groups()
         qty   = _parse_amount(qty_s)
@@ -641,7 +699,7 @@ def _parse_line_items(text: str) -> list[dict]:
     if items:
         return items
 
-    # Fallback: 4-column pattern (no unit column) — common in SA invoices
+    # 2. 4-col (desc | qty | price | total — no unit column)
     for m in _LINE_RE_SIMPLE.finditer(text):
         desc, qty_s, price_s, total_s = m.groups()
         qty   = _parse_amount(qty_s)
@@ -656,6 +714,28 @@ def _parse_line_items(text: str) -> list[dict]:
             "unit_price":  price,
             "line_total":  total if total is not None else round(qty * price, 2),
             "confidence":  0.5,
+        })
+
+    if items:
+        return items
+
+    # 3. 3-col (desc | qty | [unit] | price — no total column)
+    # Handles SA quotations and any doc where the total is on a separate summary line.
+    # Because price is the last capture group, _AMT is fully greedy and correctly
+    # matches "12 200" (SA thousands) without being split by regex backtracking.
+    for m in _LINE_RE_3COL.finditer(text):
+        desc, qty_s, price_s = m.groups()
+        qty   = _parse_amount(qty_s)
+        price = _parse_amount(price_s)
+        if qty is None or price is None or price < 0.01:
+            continue
+        items.append({
+            "description": desc.strip(),
+            "unit":        None,
+            "quantity":    qty,
+            "unit_price":  price,
+            "line_total":  round(qty * price, 2),
+            "confidence":  0.45,
         })
 
     return items
@@ -749,33 +829,35 @@ def _parse_quote_line_items(text: str) -> list[dict]:
     """
     Extract individual line items from a quotation document.
 
-    Tries the shared invoice line-item parser first (handles well-formatted
-    tables), then falls back to a quotation-specific single-line pattern that
-    handles common SA supplier formats:
-        "Cement 50kg bags   10   R 120.00"
+    Strategy (in order):
+      1. Shared _parse_line_items (5-col → 4-col → 3-col with _COL_SEP separators).
+      2. Quote-specific wide pattern (2+ space separator between all cols, R optional).
+      3. Quote-specific SA-loose pattern: R is MANDATORY before price, single-space
+         separators allowed.  The mandatory R eliminates false matches on date/metadata
+         lines like "Approved by Admin  17 Jun 2026" where no R prefix is present.
+
     Returns [] when nothing parseable is found — callers must show a fallback.
     """
-    import re
+    import re as _re
 
-    # Reuse the invoice parser — it handles 5-col and 4-col table rows
+    # 1. Shared invoice/delivery parser (includes 3-col SA fallback)
     items = _parse_line_items(text)
     if items:
         return items
 
-    # Quotation-specific fallback: description   qty   [unit]   R price
-    # Uses SA-aware amount for price: "12 200, 00" → 12200.00
-    _QUOTE_LINE = re.compile(
+    # 2. Wide-separator quotation pattern (desc 2+ spaces qty [unit] R price)
+    _QUOTE_WIDE = _re.compile(
         r"^(.{3,60}?)\s{2,}(\d+(?:[.,]\d+)?)\s{1,}(?:[a-zA-Z]{1,6}\s{1,})?R?\s*([\d][\d ,]*(?:[,.]\s*\d{1,2})?)\s*$",
-        re.MULTILINE | re.IGNORECASE,
+        _re.MULTILINE | _re.IGNORECASE,
     )
-    fallback: list[dict] = []
-    for m in _QUOTE_LINE.finditer(text):
+    wide: list[dict] = []
+    for m in _QUOTE_WIDE.finditer(text):
         desc, qty_s, price_s = m.groups()
         qty   = _parse_amount(qty_s)
         price = _parse_amount(price_s)
         if qty is None or price is None or price < 0.01:
             continue
-        fallback.append({
+        wide.append({
             "description": desc.strip(),
             "unit":        None,
             "quantity":    qty,
@@ -783,7 +865,32 @@ def _parse_quote_line_items(text: str) -> list[dict]:
             "line_total":  round(qty * price, 2),
             "confidence":  0.4,
         })
-    return fallback
+    if wide:
+        return wide
+
+    # 3. SA loose pattern: single-space separators, R is MANDATORY before price.
+    # Mandatory R prevents false matches on date lines, signature lines, etc.
+    # The price group is last → _AMT greedily captures "12 200" without split.
+    _QUOTE_SA_LOOSE = _re.compile(
+        r"^([A-Za-z][A-Za-z0-9 ,.\-\/]{2,59}?)\s+(\d+(?:[.,]\d+)?)\s+(?:[a-zA-Z]{1,6}\s+)?R\s*([\d][\d ,]*(?:[,.]\s*\d{1,2})?)\s*$",
+        _re.MULTILINE,
+    )
+    loose: list[dict] = []
+    for m in _QUOTE_SA_LOOSE.finditer(text):
+        desc, qty_s, price_s = m.groups()
+        qty   = _parse_amount(qty_s)
+        price = _parse_amount(price_s)
+        if qty is None or price is None or price < 0.01:
+            continue
+        loose.append({
+            "description": desc.strip(),
+            "unit":        None,
+            "quantity":    qty,
+            "unit_price":  price,
+            "line_total":  round(qty * price, 2),
+            "confidence":  0.35,
+        })
+    return loose
 
 
 def parse_purchase_order_text(text: str) -> dict:
