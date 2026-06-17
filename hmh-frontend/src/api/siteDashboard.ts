@@ -58,6 +58,15 @@ export const siteDashboardApi = {
     return res.data.data;
   },
 
+  getProjectWarehouseMaterialSummary: async (
+    projectId: string,
+  ): Promise<MaterialSummaryItem[]> => {
+    const res = await client.get<{ data: MaterialSummaryItem[] }>(
+      `/projects/${projectId}/warehouse/material-summary`,
+    );
+    return res.data.data;
+  },
+
   getActivity: async (
     siteId: string,
     lotId:  string,

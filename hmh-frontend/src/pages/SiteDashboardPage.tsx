@@ -1595,17 +1595,25 @@ function UnifiedReceiveModal({ projectId, siteId, lotId, suppliers, materialSumm
     }).catch(() => {});
   }, [projectId]);
 
-  // BOQ summary for the selected PO's lot — populated when no lot is pre-selected
-  // at site level but a PO is chosen that carries a lot_id.
+  // BOQ summary fallback: project-warehouse aggregate when no lot context is active.
+  // When a specific lot is pre-selected (materialSummary already loaded), this is a no-op.
   const [poBOQSummary, setPoBOQSummary] = useState<MaterialSummaryItem[]>([]);
   useEffect(() => {
-    if (!poId || materialSummary.length > 0) { setPoBOQSummary([]); return; }
-    const po = projectPOs.find(p => p.id === poId);
-    if (!po?.lot_id) { setPoBOQSummary([]); return; }
-    import("@/api/siteDashboard").then(m =>
-      m.siteDashboardApi.getMaterialSummary(siteId, po.lot_id!)
-    ).then(setPoBOQSummary).catch(() => setPoBOQSummary([]));
-  }, [poId, projectPOs, materialSummary.length, siteId]);
+    if (materialSummary.length > 0) { setPoBOQSummary([]); return; }
+    if (!projectId) { setPoBOQSummary([]); return; }
+    const po = poId ? projectPOs.find(p => p.id === poId) : null;
+    if (po?.lot_id) {
+      // PO is linked to a specific lot — load that lot's BOQ
+      import("@/api/siteDashboard").then(m =>
+        m.siteDashboardApi.getMaterialSummary(siteId, po.lot_id!)
+      ).then(setPoBOQSummary).catch(() => setPoBOQSummary([]));
+    } else {
+      // No lot context — aggregate BOQ from all lots in the project (warehouse level)
+      import("@/api/siteDashboard").then(m =>
+        m.siteDashboardApi.getProjectWarehouseMaterialSummary(projectId)
+      ).then(setPoBOQSummary).catch(() => setPoBOQSummary([]));
+    }
+  }, [poId, projectId, projectPOs, materialSummary.length, siteId]);
 
   // Effective BOQ summary: prefer parent-provided, fall back to PO-derived
   const effectiveMaterialSummary = materialSummary.length > 0 ? materialSummary : poBOQSummary;

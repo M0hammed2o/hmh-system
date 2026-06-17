@@ -398,6 +398,131 @@ def get_warehouse_boq_summary(project_id: uuid.UUID, db: DbSession, current_user
     return ApiSuccess(data=result)
 
 
+@project_warehouse_router.get("/material-summary", response_model=ApiSuccess[list[dict]], dependencies=[ALL_ROLES])
+def get_warehouse_material_summary(project_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
+    """
+    BOQ items aggregated across ALL lots in the project, returned in the same
+    MaterialSummaryItem shape as the lot-level material-summary endpoint.
+
+    Used by the Receive Delivery modal when operating at project warehouse level
+    (no specific lot selected) so the BOQ picker shows every material the project
+    needs, regardless of which lot it came from.
+
+    Aggregation key: item_id (catalog-linked) or description+unit (non-catalog).
+    boq_item_id = the representative BOQ item ID (first created for that key).
+    Stock quantities reflect the project warehouse (site_id IS NULL, lot_id IS NULL).
+    """
+    from collections import defaultdict
+    from app.models.project import Project as _Proj
+    from app.models.boq import BOQItem
+    from app.models.enums import ItemType
+    from app.models.supplier import Supplier as _Sup
+
+    project = db.get(_Proj, project_id)
+    if not project:
+        raise HTTPException(404, "Project not found.")
+    check_project_access(db, current_user, project_id)
+
+    boq_rows = (
+        db.query(BOQItem)
+        .filter(
+            BOQItem.project_id == project_id,
+            BOQItem.is_active  == True,
+            BOQItem.item_type  == ItemType.MATERIAL,
+            BOQItem.lot_id.isnot(None),
+        )
+        .order_by(BOQItem.created_at)
+        .all()
+    )
+
+    groups: dict = defaultdict(lambda: {
+        "boq_item_id":  None,
+        "item_id":      None,
+        "description":  "",
+        "unit":         None,
+        "supplier_id":  None,
+        "total_planned": 0.0,
+    })
+    for bi in boq_rows:
+        key = str(bi.item_id) if bi.item_id else f"_:{(bi.raw_description or '').lower().strip()}:{bi.unit or ''}"
+        g = groups[key]
+        if g["boq_item_id"] is None:
+            g["boq_item_id"] = str(bi.id)
+            g["item_id"]     = str(bi.item_id) if bi.item_id else None
+            g["description"] = bi.raw_description or ""
+            g["unit"]        = bi.unit
+            g["supplier_id"] = str(bi.supplier_id) if bi.supplier_id else None
+        g["total_planned"] += float(bi.planned_quantity or 0)
+
+    if not groups:
+        return ApiSuccess(data=[])
+
+    item_ids = [uuid.UUID(g["item_id"]) for g in groups.values() if g["item_id"]]
+    items_map = {str(i.id): i for i in db.query(Item).filter(Item.id.in_(item_ids)).all()} if item_ids else {}
+    supplier_ids = [uuid.UUID(g["supplier_id"]) for g in groups.values() if g["supplier_id"]]
+    suppliers_map = {str(s.id): s for s in db.query(_Sup).filter(_Sup.id.in_(supplier_ids)).all()} if supplier_ids else {}
+
+    in_rows = db.execute(text("""
+        SELECT item_id, COALESCE(SUM(quantity_in), 0) AS total_in
+        FROM stock_ledger
+        WHERE project_id = :pid AND site_id IS NULL AND lot_id IS NULL
+          AND movement_type = 'DELIVERY_RECEIVED'
+        GROUP BY item_id
+    """), {"pid": str(project_id)}).mappings().all()
+    delivered_by_item = {str(r["item_id"]): float(r["total_in"]) for r in in_rows}
+
+    out_rows = db.execute(text("""
+        SELECT item_id, COALESCE(SUM(quantity_out), 0) AS total_out
+        FROM stock_ledger
+        WHERE project_id = :pid AND site_id IS NULL AND lot_id IS NULL
+        GROUP BY item_id
+    """), {"pid": str(project_id)}).mappings().all()
+    used_by_item = {str(r["item_id"]): float(r["total_out"]) for r in out_rows}
+
+    result = []
+    for g in sorted(groups.values(), key=lambda x: (x["description"] or "").lower()):
+        item_id  = g["item_id"]
+        cat_item = items_map.get(item_id) if item_id else None
+
+        description  = cat_item.name if cat_item else g["description"]
+        unit         = (cat_item.default_unit if cat_item else None) or g["unit"]
+        supplier_id  = g["supplier_id"]
+        supplier_name = suppliers_map[supplier_id].name if supplier_id and supplier_id in suppliers_map else None
+
+        allocated = g["total_planned"]
+        delivered = delivered_by_item.get(item_id, 0.0) if item_id else 0.0
+        used      = used_by_item.get(item_id, 0.0)      if item_id else 0.0
+        remaining = max(0.0, allocated - used)
+        over      = max(0.0, used - allocated)
+
+        if used > allocated > 0:
+            status = "OVER_BOQ"
+        elif allocated > 0 and remaining < allocated * 0.15:
+            status = "LOW"
+        elif used > 0 and delivered > 0 and used > delivered:
+            status = "STOCK_ISSUE"
+        else:
+            status = "OK"
+
+        result.append({
+            "boq_item_id":       g["boq_item_id"],
+            "item_id":           item_id,
+            "description":       description,
+            "unit":              unit,
+            "boq_allocated_qty": round(allocated, 3),
+            "delivered_qty":     round(delivered, 3),
+            "used_qty":          round(used, 3),
+            "remaining_qty":     round(remaining, 3),
+            "over_qty":          round(over, 3),
+            "status":            status,
+            "from_site_template": False,
+            "supplier_id":       supplier_id,
+            "supplier_name":     supplier_name,
+        })
+
+    return ApiSuccess(data=result)
+
+
 class TransferToSiteRequest(BaseModel):
     item_id:  uuid.UUID
     site_id:  uuid.UUID
