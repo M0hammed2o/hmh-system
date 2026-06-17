@@ -364,6 +364,17 @@ export const boqApi = {
     return res.data.data;
   },
 
+  pushSiteItemToLots: async (
+    itemId: string,
+    body: BOQItemUpdate,
+  ): Promise<{ updated: number; lots_affected: number; warning?: string | null }> => {
+    const res = await client.post<{ data: { updated: number; lots_affected: number; warning?: string | null } }>(
+      `/boq/items/${itemId}/push-to-lots`,
+      body,
+    );
+    return res.data.data;
+  },
+
   deleteItem: async (itemId: string): Promise<void> => {
     await client.delete(`/boq/items/${itemId}`);
   },

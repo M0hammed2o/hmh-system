@@ -329,20 +329,20 @@ def apply_item_to_all_site_lots(item_id: uuid.UUID, body: BOQItemUpdate, db: DbS
     item_type = updated.item_type
 
     peer_q = (
-        db.query(_BI)
+        db.query(BOQItem)
         .filter(
-            _BI.lot_id.in_(site_lot_ids),
-            _BI.raw_description == desc,
-            _BI.is_active == True,
-            _BI.id != item_id,
+            BOQItem.lot_id.in_(site_lot_ids),
+            BOQItem.raw_description == desc,
+            BOQItem.is_active == True,
+            BOQItem.id != item_id,
         )
     )
     # Add unit/item_type filters only when they are set, to avoid missing
     # items that have NULL unit (treat NULL == NULL as a match).
     if unit is not None:
-        peer_q = peer_q.filter(_BI.unit == unit)
+        peer_q = peer_q.filter(BOQItem.unit == unit)
     if item_type is not None:
-        peer_q = peer_q.filter(_BI.item_type == item_type)
+        peer_q = peer_q.filter(BOQItem.item_type == item_type)
 
     peers = peer_q.all()
 
@@ -363,6 +363,46 @@ def apply_item_to_all_site_lots(item_id: uuid.UUID, body: BOQItemUpdate, db: DbS
     for peer in peers:
         boq_service.update_item(db, peer.id, body)
 
+    # Also push non-quantity fields to the site-level template item in the same header.
+    # Build a body that excludes planned_quantity so individual lot quantities are preserved.
+    from app.schemas.boq import BOQItemUpdate as _ItemUpd
+    site_body_data = {
+        k: v for k, v in body.model_dump(exclude_unset=True).items()
+        if k != "planned_quantity"
+    }
+    if site_body_data:
+        # Find the site-level template item (lot_id IS NULL) matched by
+        # description + unit + item_type, scoped to the same site/project.
+        if unit is not None:
+            site_template_q = (
+                db.query(BOQItem)
+                .filter(
+                    BOQItem.lot_id.is_(None),
+                    BOQItem.is_active == True,
+                    BOQItem.raw_description == desc,
+                    BOQItem.unit == unit,
+                )
+            )
+        else:
+            site_template_q = (
+                db.query(BOQItem)
+                .filter(
+                    BOQItem.lot_id.is_(None),
+                    BOQItem.is_active == True,
+                    BOQItem.raw_description == desc,
+                )
+            )
+        if item_type is not None:
+            site_template_q = site_template_q.filter(BOQItem.item_type == item_type)
+        if effective_site_id:
+            site_template_q = site_template_q.filter(BOQItem.site_id == effective_site_id)
+        else:
+            site_template_q = site_template_q.filter(BOQItem.project_id == project_id)
+
+        site_template = site_template_q.first()
+        if site_template and site_template.id != item_id:
+            boq_service.update_item(db, site_template.id, _ItemUpd(**site_body_data))
+
     db.commit()
 
     warning = (
@@ -380,6 +420,114 @@ def apply_item_to_all_site_lots(item_id: uuid.UUID, body: BOQItemUpdate, db: DbS
             f"Applied to {len(peers) + 1} item(s) across {len(affected_lot_ids)} lot(s)."
             + (f" Warning: {warning}" if warning else "")
         ),
+    )
+
+
+@boq_item_router.post(
+    "/{item_id}/push-to-lots",
+    response_model=ApiSuccess[dict],
+    dependencies=[OFFICE_AND_ABOVE],
+)
+def push_site_item_to_lots(item_id: uuid.UUID, body: BOQItemUpdate, db: DbSession, current_user: CurrentUser):
+    """
+    For a site-level BOQ item (lot_id IS NULL), push the update to all lot-specific
+    copies in the same site. Quantity is NOT pushed — each lot keeps its own quantity.
+    Rate, supplier, description, unit, item_type, specification, notes are propagated.
+    """
+    from app.models.lot import Lot
+
+    get_and_check_project_resource(db, current_user, BOQItem, item_id, "BOQ item not found.")
+
+    # Update the site item itself first
+    updated = boq_service.update_item(db, item_id, body)
+
+    if updated.lot_id is not None:
+        return ApiSuccess(
+            data={"updated": 1, "lots_affected": 0, "warning": "Item belongs to a lot, not a site template. Use apply-to-all-site-lots instead."},
+            message="Item is lot-specific. Use apply-to-all-site-lots for lot items.",
+        )
+
+    site_id    = updated.site_id
+    project_id = updated.project_id
+
+    if not project_id:
+        return ApiSuccess(
+            data={"updated": 1, "lots_affected": 0, "warning": "No project context found."},
+            message="Site item updated. Cannot propagate without project context.",
+        )
+
+    # Collect lot IDs for this site
+    if site_id:
+        lot_ids = [
+            row[0] for row in (
+                db.query(Lot.id)
+                .filter(Lot.site_id == site_id, Lot.project_id == project_id)
+                .all()
+            )
+        ]
+    else:
+        lot_ids = []
+
+    # Fallback: unassigned lots
+    if not lot_ids:
+        lot_ids = [
+            row[0] for row in (
+                db.query(Lot.id)
+                .filter(Lot.project_id == project_id, Lot.site_id.is_(None))
+                .all()
+            )
+        ]
+
+    if not lot_ids:
+        return ApiSuccess(
+            data={"updated": 1, "lots_affected": 0, "warning": "No lots found for this site."},
+            message="Site item updated. No lots found to propagate to.",
+        )
+
+    desc      = updated.raw_description
+    unit      = updated.unit
+    item_type = updated.item_type
+
+    # Build patch without quantity — preserve lot-specific quantities
+    from app.schemas.boq import BOQItemUpdate as _ItemUpd
+    push_data = {
+        k: v for k, v in body.model_dump(exclude_unset=True).items()
+        if k != "planned_quantity"
+    }
+
+    if not push_data:
+        return ApiSuccess(
+            data={"updated": 1, "lots_affected": 0},
+            message="Site item updated. Nothing to push to lots (no non-quantity fields changed).",
+        )
+
+    lot_peer_q = (
+        db.query(BOQItem)
+        .filter(
+            BOQItem.lot_id.in_(lot_ids),
+            BOQItem.raw_description == desc,
+            BOQItem.is_active == True,
+        )
+    )
+    if unit is not None:
+        lot_peer_q = lot_peer_q.filter(BOQItem.unit == unit)
+    if item_type is not None:
+        lot_peer_q = lot_peer_q.filter(BOQItem.item_type == item_type)
+
+    lot_peers = lot_peer_q.all()
+    affected_lot_ids = {str(p.lot_id) for p in lot_peers}
+
+    for peer in lot_peers:
+        boq_service.update_item(db, peer.id, _ItemUpd(**push_data))
+
+    db.commit()
+
+    return ApiSuccess(
+        data={
+            "updated":       len(lot_peers) + 1,
+            "lots_affected": len(affected_lot_ids),
+        },
+        message=f"Site item updated and pushed to {len(lot_peers)} lot item(s) across {len(affected_lot_ids)} lot(s).",
     )
 
 

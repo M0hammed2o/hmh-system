@@ -131,7 +131,7 @@ function itemTotalDisplay(item: BOQItem): number | null {
 interface ItemRowProps {
   item: BOQItem;
   suppliers: Supplier[];
-  onSave: (id: string, patch: Partial<BOQItem>, applyToAllLots?: boolean) => Promise<void>;
+  onSave: (id: string, patch: Partial<BOQItem>, applyToAllLots?: boolean, isSiteItem?: boolean) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
 }
 
@@ -161,7 +161,7 @@ function ItemRow({ item, suppliers, onSave, onDelete }: ItemRowProps) {
       specification: form.specification || null,
       notes: form.notes || null,
       supplier_id: form.supplier_id || null,
-    }, applyToAll);
+    }, applyToAll, !item.lot_id);
     setSaving(false);
     setEditing(false);
     setApplyToAll(false);
@@ -212,8 +212,8 @@ function ItemRow({ item, suppliers, onSave, onDelete }: ItemRowProps) {
               <option value="">— No supplier —</option>
               {suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
             </select>
-            {/* Apply-to-all-lots checkbox — only shown when editing a lot-level item */}
-            {item.lot_id && (
+            {/* Apply-to-all-lots checkbox — shown for both lot-level and site-level items */}
+            {(item.lot_id || item.site_id) && (
               <label className="flex items-center gap-2 text-xs cursor-pointer select-none">
                 <input
                   type="checkbox"
@@ -222,13 +222,15 @@ function ItemRow({ item, suppliers, onSave, onDelete }: ItemRowProps) {
                   className="rounded"
                 />
                 <span className={applyToAll ? "font-semibold text-primary" : "text-muted-foreground"}>
-                  Apply these changes to all lots in this site
+                  {item.lot_id
+                    ? "Apply these changes to all lots in this site"
+                    : "Push these changes to all lot copies (rate, supplier, type — not quantity)"}
                 </span>
               </label>
             )}
             <div className="flex gap-2">
               <Button size="sm" onClick={handleSave} disabled={saving} className="h-7 text-xs">
-                <Save className="w-3 h-3 mr-1" />{saving ? "Saving…" : applyToAll ? "Save (All Lots)" : "Save"}
+                <Save className="w-3 h-3 mr-1" />{saving ? "Saving…" : applyToAll ? (item.lot_id ? "Save (All Lots)" : "Save (Push to Lots)") : "Save"}
               </Button>
               <Button size="sm" variant="outline" onClick={() => { setEditing(false); setApplyToAll(false); }} className="h-7 text-xs">
                 <X className="w-3 h-3 mr-1" />Cancel
@@ -352,9 +354,12 @@ function SectionBlock({ section, items, sectionTotal, headerId, projectId, suppl
   const [editingName, setEditingName] = useState(false);
   const [name, setName] = useState(section.section_name);
 
-  const handleSaveItem = async (id: string, patch: Partial<BOQItem>, applyToAllLots = false) => {
+  const handleSaveItem = async (id: string, patch: Partial<BOQItem>, applyToAllLots = false, isSiteItem = false) => {
     if (applyToAllLots) {
-      const res = await boqApi.applyItemToAllSiteLots(id, patch as Parameters<typeof boqApi.updateItem>[1]);
+      const apiCall = isSiteItem
+        ? boqApi.pushSiteItemToLots(id, patch as Parameters<typeof boqApi.updateItem>[1])
+        : boqApi.applyItemToAllSiteLots(id, patch as Parameters<typeof boqApi.updateItem>[1]);
+      const res = await apiCall;
       const base = `Applied to ${res.updated} item(s) across ${res.lots_affected} lot(s).`;
       if (res.lots_affected === 0) {
         alert(`⚠ ${base}\n\n${res.warning ?? "No peer items were found. Check that lots are assigned to a site."}`);

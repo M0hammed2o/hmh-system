@@ -1247,25 +1247,36 @@ def get_site_boq_summary(db: Session, site_id: uuid.UUID) -> dict:
         .count()
     )
 
-    if derived_from_lots:
-        # Actual site total = sum of every lot's BOQ
-        all_lot_ids = [
-            row[0] for row in db.query(Lot.id)
-            .filter(Lot.project_id == site.project_id, Lot.site_id == site_id).all()
-        ]
-        all_lot_items = (
-            db.query(BOQItem)
-            .filter(BOQItem.lot_id.in_(all_lot_ids), BOQItem.is_active == True)
-            .all()
-        ) if all_lot_ids else []
+    # Always aggregate actual totals from lot-specific items so per-lot quantity
+    # differences are reflected (e.g. 10 lots × 10 bags + 1 lot × 12 = 102).
+    all_lot_ids = [
+        row[0] for row in db.query(Lot.id)
+        .filter(Lot.project_id == site.project_id, Lot.site_id == site_id).all()
+    ]
+    all_lot_items = (
+        db.query(BOQItem)
+        .filter(BOQItem.lot_id.in_(all_lot_ids), BOQItem.is_active == True)
+        .all()
+    ) if all_lot_ids else []
+
+    if all_lot_items:
         actual_site_total = sum(_item_total_safe(i) for i in all_lot_items)
+        # Build a lookup: (raw_description, unit, item_type) → aggregated lot quantity
+        from collections import defaultdict
+        _lot_qty_map: dict[tuple, float] = defaultdict(float)
+        for li in all_lot_items:
+            _key = (li.raw_description, li.unit, _item_type_str(li))
+            if li.planned_quantity:
+                _lot_qty_map[_key] += float(li.planned_quantity)
     else:
         actual_site_total = unit_total * max(lot_count, 1)
+        _lot_qty_map = {}
 
     expected_site_total = unit_total * max(lot_count, 1)
     var = _variance(actual_site_total, expected_site_total)
 
-    # Build sections from template items
+    # Build sections from template items, using aggregated quantities from lots
+    # when available so the site summary reflects the real totals.
     section_map: dict[uuid.UUID, dict] = {}
     header_ids: set[str] = set()
     for item in site_items:
@@ -1281,7 +1292,12 @@ def get_site_boq_summary(db: Session, site_id: uuid.UUID) -> dict:
                 "items":          [],
                 "section_total":  0.0,
             }
-        t = _item_total_safe(item)
+        # Use aggregated lot quantity when lots exist; fall back to template qty.
+        _key = (item.raw_description, item.unit, _item_type_str(item))
+        agg_qty = _lot_qty_map.get(_key, float(item.planned_quantity or 0))
+        rate    = float(item.planned_rate or 0)
+        t       = agg_qty * rate
+
         # Resolve supplier name for display
         _sup_id   = str(item.supplier_id) if item.supplier_id else None
         _sup_name = None
@@ -1295,21 +1311,15 @@ def get_site_boq_summary(db: Session, site_id: uuid.UUID) -> dict:
             "id":               str(item.id),
             "description":      item.raw_description,
             "unit":             item.unit,
-            "planned_quantity": float(item.planned_quantity or 0),
-            "planned_rate":     float(item.planned_rate or 0),
+            "planned_quantity": round(agg_qty, 4),
+            "planned_rate":     rate,
             "line_total":       round(t, 2),
             "item_type":        _item_type_str(item),
             "supplier_id":      _sup_id,
             "supplier_name":    _sup_name,
         })
-        # Accumulate at full precision; round only in the final output to avoid
-        # floating-point drift that causes section totals to diverge from unit_total.
         section_map[sid]["section_total"] += t
 
-    # Round section_totals at output time (not during accumulation) to avoid drift
-    for sec in section_map.values():
-        sec["section_total"] = round(sec["section_total"], 2)
-    # Round section_totals at output time (not during accumulation) to avoid drift
     for sec in section_map.values():
         sec["section_total"] = round(sec["section_total"], 2)
     sections = sorted(section_map.values(), key=lambda s: s["sequence_order"])
