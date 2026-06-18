@@ -554,6 +554,18 @@ def extract_document_text(file_path: str) -> tuple[str, str]:
 
 # ── Field parsers ─────────────────────────────────────────────────────────────
 
+_TABLE_HEADER_WORDS = frozenset({
+    "quantity", "unit", "price", "amount", "description", "item", "total",
+    "material", "rate", "cost", "qty", "vat", "tax",
+})
+
+
+def _is_table_header(name: str) -> bool:
+    """Return True when a candidate company name is actually a table header row."""
+    words = set(name.lower().split())
+    return len(words & _TABLE_HEADER_WORDS) >= 2
+
+
 def _extract_supplier_name(text: str) -> Optional[str]:
     """
     Extract supplier name using label-first strategy:
@@ -565,15 +577,17 @@ def _extract_supplier_name(text: str) -> Optional[str]:
     m = _SUPPLIER_LABEL_RE.search(text)
     if m:
         name = m.group(1).strip().rstrip(".,")
-        if len(name) >= 3:
+        if len(name) >= 3 and not _is_table_header(name):
             return name
 
     # Strategy 2: title-case company header in the first 600 characters (letterhead area)
     header_region = text[:600]
     for m in _COMPANY_HEADER_RE.finditer(header_region):
         name = m.group(1).strip()
-        # Skip common false positives
+        # Skip common false positives (document type labels and table header rows)
         if name.lower() in {"tax invoice", "purchase order", "delivery note", "invoice", "credit note", "receipt"}:
+            continue
+        if _is_table_header(name):
             continue
         if len(name) >= 4:
             return name

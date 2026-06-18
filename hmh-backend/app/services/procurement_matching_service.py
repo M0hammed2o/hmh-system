@@ -42,15 +42,51 @@ def _amount_match(a: float, b: float) -> bool:
 # ── PO number extraction ──────────────────────────────────────────────────────
 
 def _find_po_by_number(db, po_number: str):
-    """Find a PurchaseOrder by PO number (case-insensitive suffix match)."""
+    """
+    Find a PurchaseOrder by PO number with normalized lookup.
+
+    Search order:
+      1. Exact case-insensitive match ("PO-F6EF3D9A-0001")
+      2. With "PO-" prefix added (OCR often strips the prefix, yielding "F6EF3D9A-0001")
+      3. Suffix search on the full value minus leading "PO-" — only when the
+         remaining fragment is longer than 6 chars to avoid false positives
+         (old code split on the first "-" which turned "F6EF3D9A-0001" into
+         just "0001" and matched the wrong PO).
+    """
     try:
         from app.models.purchase_order import PurchaseOrder
-        suffix = po_number.split("-", 1)[-1] if "-" in po_number else po_number
-        return (
-            db.query(PurchaseOrder)
-            .filter(PurchaseOrder.po_number.ilike(f"%{suffix}%"))
-            .first()
-        )
+
+        po_num = (po_number or "").strip().upper()
+        if not po_num:
+            return None
+
+        # 1. Exact match
+        po = db.query(PurchaseOrder).filter(
+            PurchaseOrder.po_number.ilike(po_num)
+        ).first()
+        if po:
+            return po
+
+        # 2. Try with "PO-" prefix added (OCR strips it)
+        if not re.match(r"^PO[-]", po_num):
+            po = db.query(PurchaseOrder).filter(
+                PurchaseOrder.po_number.ilike(f"PO-{po_num}")
+            ).first()
+            if po:
+                return po
+
+        # 3. Suffix search — strip only the "PO-" prefix, keep the rest intact
+        if re.match(r"^PO[-]", po_num):
+            suffix = po_num[3:]
+        else:
+            suffix = po_num
+
+        if len(suffix) > 6:
+            return db.query(PurchaseOrder).filter(
+                PurchaseOrder.po_number.ilike(f"%{suffix}%")
+            ).first()
+
+        return None
     except Exception:
         return None
 

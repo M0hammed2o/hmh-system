@@ -453,18 +453,34 @@ def _auto_create_invoice(db, fields: dict, email, now):
         from app.models.enums import RecordStatus
         from app.services.procurement_matching_service import _find_po_by_number
 
-        po_number_raw = (
-            (fields.get("po_number") or "").strip()
-            or getattr(email, "matched_po_number", None)
-            or ""
-        )
-        if not po_number_raw:
+        # Try email.matched_po_number first (set by subject scanning — more reliable
+        # than OCR extraction, which often strips the "PO-" prefix from the number).
+        _candidates = []
+        _matched = getattr(email, "matched_po_number", None)
+        if _matched:
+            _candidates.append(_matched.strip())
+        _ocr_po = (fields.get("po_number") or "").strip()
+        if _ocr_po and _ocr_po not in _candidates:
+            _candidates.append(_ocr_po)
+
+        if not _candidates:
             logger.info("auto_invoice skip — no PO reference in fields or email")
             return None
 
-        po = _find_po_by_number(db, po_number_raw)
+        po = None
+        po_number_raw = ""
+        for _cand in _candidates:
+            _po = _find_po_by_number(db, _cand)
+            if _po:
+                po = _po
+                po_number_raw = _cand
+                break
+
         if not po:
-            logger.info("auto_invoice skip — PO not found for '%s'", po_number_raw)
+            logger.info(
+                "auto_invoice skip — PO not found for candidates %s",
+                _candidates,
+            )
             return None
 
         existing = db.query(Invoice).filter(Invoice.purchase_order_id == po.id).first()

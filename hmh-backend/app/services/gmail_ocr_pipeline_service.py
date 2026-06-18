@@ -99,14 +99,21 @@ def build_reconciliation_suggestion(db: Session, att_id: uuid.UUID) -> dict:
             duplicate_warning = f"duplicate_invoice_number:{fields['invoice_number']}"
 
     # ── 3. Best PO candidate ─────────────────────────────────────────────────
+    email_matched_po_number = None
+    try:
+        if att.email:
+            email_matched_po_number = getattr(att.email, "matched_po_number", None)
+    except Exception:
+        pass
+
     matched_po = None
     try:
-        matched_po = _find_best_po_match(db, fields, doc_type)
+        matched_po = _find_best_po_match(db, fields, doc_type, email_matched_po_number)
     except Exception:
         logger.exception("build_reconciliation_suggestion: PO match failed att_id=%s", att_id)
 
     # ── 4. Score and collect issues ──────────────────────────────────────────
-    confidence, issues = _score_match(fields, doc_type, matched_po)
+    confidence, issues = _score_match(fields, doc_type, matched_po, email_matched_po_number)
 
     if duplicate_warning:
         issues.insert(0, duplicate_warning)
@@ -116,24 +123,25 @@ def build_reconciliation_suggestion(db: Session, att_id: uuid.UUID) -> dict:
     review_status = getattr(extraction, "review_status", "PENDING_REVIEW") if extraction else "PENDING_REVIEW"
 
     return {
-        "attachment_id":        str(att_id),
-        "filename":             att.filename,
-        "document_type":        doc_type,
-        "extraction_status":    ext_status,
-        "invoice_number":       fields.get("invoice_number"),
-        "delivery_note_number": fields.get("delivery_note_number"),
-        "po_number_from_doc":   fields.get("po_number"),
-        "supplier_name":        fields.get("supplier_name"),
-        "supplier_email":       fields.get("supplier_email"),
-        "total_amount":         fields.get("total_amount"),
-        "date":                 fields.get("date"),
-        "matched_po":           matched_po.po_number if matched_po else None,
-        "matched_po_id":        str(matched_po.id)   if matched_po else None,
-        "match_confidence":     round(confidence, 2),
-        "issues":               issues,
-        "requires_review":      True,   # NEVER omit — human confirmation always required
-        "extraction_warnings":  result.get("warnings", []),
-        "review_status":        review_status,
+        "attachment_id":            str(att_id),
+        "filename":                 att.filename,
+        "document_type":            doc_type,
+        "extraction_status":        ext_status,
+        "invoice_number":           fields.get("invoice_number"),
+        "delivery_note_number":     fields.get("delivery_note_number"),
+        "po_number_from_doc":       fields.get("po_number"),
+        "po_number_from_email":     email_matched_po_number,
+        "supplier_name":            fields.get("supplier_name"),
+        "supplier_email":           fields.get("supplier_email"),
+        "total_amount":             fields.get("total_amount"),
+        "date":                     fields.get("date"),
+        "matched_po":               matched_po.po_number if matched_po else None,
+        "matched_po_id":            str(matched_po.id)   if matched_po else None,
+        "match_confidence":         round(confidence, 2),
+        "issues":                   issues,
+        "requires_review":          True,   # NEVER omit — human confirmation always required
+        "extraction_warnings":      result.get("warnings", []),
+        "review_status":            review_status,
     }
 
 
@@ -248,17 +256,32 @@ def _upsert_extraction(db: Session, att, result: dict, existing=None) -> None:
         logger.exception("_upsert_extraction failed att_id=%s", getattr(att, "id", "?"))
 
 
-def _find_best_po_match(db: Session, fields: dict, doc_type: str):
+def _find_best_po_match(
+    db: Session,
+    fields: dict,
+    doc_type: str,
+    email_matched_po_number: str | None = None,
+):
     """
     Find the most likely PurchaseOrder for the extracted fields.
-    Search order: exact PO number → supplier email → fuzzy supplier name.
+    Search order:
+      0. email.matched_po_number (set by subject scanning — most reliable)
+      1. OCR-extracted PO number from the document
+      2. Supplier email → most recent open PO for that supplier
+      3. Fuzzy supplier name match
     Returns PO object or None.  Never raises.
     """
     try:
         from app.models.purchase_order import PurchaseOrder
         from app.services.procurement_matching_service import _find_po_by_number
 
-        # 1. Exact PO number match (highest signal)
+        # 0. Email subject-matched PO (explicit tag in email subject — highest signal)
+        if email_matched_po_number:
+            po = _find_po_by_number(db, email_matched_po_number)
+            if po:
+                return po
+
+        # 1. OCR-extracted PO number match
         po_num = fields.get("po_number")
         if po_num:
             po = _find_po_by_number(db, po_num)
@@ -303,7 +326,12 @@ def _find_best_po_match(db: Session, fields: dict, doc_type: str):
     return None
 
 
-def _score_match(fields: dict, doc_type: str, matched_po) -> tuple:
+def _score_match(
+    fields: dict,
+    doc_type: str,
+    matched_po,
+    email_matched_po_number: str | None = None,
+) -> tuple:
     """
     Calculate (confidence: float, issues: list[str]).
     confidence is in [0.0, 1.0]. Never raises.
@@ -316,10 +344,19 @@ def _score_match(fields: dict, doc_type: str, matched_po) -> tuple:
 
     confidence = 0.0
 
-    # Signal 1: PO number in document matches the candidate PO
+    # Signal 1: PO number match — check OCR-extracted value AND email subject tag
     po_num_in_doc = (fields.get("po_number") or "").upper().strip()
     candidate_po_num = (matched_po.po_number or "").upper().strip()
-    if po_num_in_doc and po_num_in_doc in candidate_po_num:
+    email_po = (email_matched_po_number or "").upper().strip()
+
+    po_number_matched = False
+    if email_po and (email_po == candidate_po_num or email_po in candidate_po_num or candidate_po_num in email_po):
+        # Email subject explicitly tagged with this PO — highest confidence signal
+        po_number_matched = True
+    elif po_num_in_doc and po_num_in_doc in candidate_po_num:
+        po_number_matched = True
+
+    if po_number_matched:
         confidence += _CONF_PO_NUMBER_EXACT
     elif po_num_in_doc:
         issues.append("po_number_partial_match")
