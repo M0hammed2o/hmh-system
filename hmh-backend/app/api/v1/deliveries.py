@@ -115,6 +115,66 @@ def receive_stock(delivery_id: uuid.UUID, body: ReceiveStockBody, db: DbSession,
     return ApiSuccess(data=DeliveryRead.model_validate(delivery), message="Stock received.")
 
 
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _resolve_or_create_catalog_item(
+    db,
+    boq_item_id: uuid.UUID,
+    description: str,
+    unit: Optional[str],
+) -> Optional[uuid.UUID]:
+    """Return the catalog item_id for a BOQ item, auto-creating one if needed.
+
+    When a BOQ item has no catalog link yet, this function creates a minimal
+    catalog Item and permanently links it to the BOQ item so that subsequent
+    deliveries reuse the same record without creating duplicates.
+    """
+    from app.models.boq import BOQItem
+    from app.models.item import Item
+    from app.models.enums import ItemType
+
+    boq_item = db.get(BOQItem, boq_item_id)
+    if not boq_item:
+        return None
+
+    # Already linked — nothing to do
+    if boq_item.item_id:
+        return boq_item.item_id
+
+    # Use delivery description, fall back to BOQ item raw_description
+    name = (description or boq_item.raw_description or "").strip()
+    if not name:
+        return None
+
+    normalized = name.lower().strip()
+
+    # Check for an existing catalog item with the same normalized name to avoid duplicates
+    existing = (
+        db.query(Item)
+        .filter(Item.normalized_name == normalized)
+        .first()
+    )
+    if existing:
+        boq_item.item_id = existing.id
+        db.flush()
+        return existing.id
+
+    # Create a new minimal catalog item
+    new_item = Item(
+        name            = name,
+        normalized_name = normalized,
+        item_type       = ItemType.MATERIAL,
+        default_unit    = unit or boq_item.unit or None,
+    )
+    db.add(new_item)
+    db.flush()  # populate new_item.id
+
+    boq_item.item_id = new_item.id
+    db.flush()
+    logger.info("auto-created catalog item '%s' (id=%s) for boq_item=%s", name, new_item.id, boq_item_id)
+    return new_item.id
+
+
 # ── Unified receive-with-document ─────────────────────────────────────────────
 
 @delivery_router.post(
@@ -382,8 +442,19 @@ async def receive_delivery_with_document(
             effective_site_id  = None
             effective_lot_id   = None
 
-        # Stock ledger entry — only when item_id is linked to the catalog.
-        # Items without item_id are tracked in unlinked_items so office staff can fix them.
+        # If item_id is still missing but a BOQ item is linked, resolve it via
+        # the BOQ item's own catalog link — or auto-create one so stock always
+        # updates for BOQ-backed deliveries (Option B).
+        if not item_id and boq_item_id:
+            item_id = _resolve_or_create_catalog_item(
+                db, boq_item_id,
+                description=item_data.get("description", ""),
+                unit=item_data.get("unit"),
+            )
+            if item_id:
+                d_item.item_id = item_id  # keep DeliveryItem in sync
+
+        # Stock ledger entry — always written now that BOQ-backed items auto-resolve.
         if item_id:
             db.add(StockLedger(
                 project_id    = uuid.UUID(project_id),
@@ -403,7 +474,7 @@ async def receive_delivery_with_document(
             ))
             stock_updated_count += 1
         else:
-            # No catalog link — stock cannot be updated for this line
+            # Truly unlinked — no BOQ item and no catalog item
             unlinked_items.append({
                 "description":       item_data.get("description", ""),
                 "quantity_received": qty_rec,
