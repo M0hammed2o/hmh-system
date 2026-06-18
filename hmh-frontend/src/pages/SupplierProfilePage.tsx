@@ -3,7 +3,7 @@ import { useParams, useNavigate } from "react-router-dom";
 import {
   ArrowLeft, Building2, Edit2, CheckCircle2, XCircle,
   FileText, Download, Trash2, Upload, ChevronDown, ChevronRight,
-  Plus, ClipboardList, Package, Truck, Receipt, CreditCard,
+  Plus, ClipboardList, Package, Truck, Receipt, CreditCard, ExternalLink,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -135,6 +135,14 @@ function SupplierDocRow({
             title="Open / Download"
           >
             <Download className="w-3.5 h-3.5" />
+          </a>
+        ) : doc.detail_path ? (
+          <a
+            href={doc.detail_path}
+            className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+            title="View record"
+          >
+            <ExternalLink className="w-3.5 h-3.5" />
           </a>
         ) : null}
         {doc.is_attachment && !doc.gmail_attachment_id && (

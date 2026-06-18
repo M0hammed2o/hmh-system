@@ -731,12 +731,34 @@ export default function ReconciliationPage() {
             {[1, 2, 3].map((i) => <Skeleton key={i} className="h-14 rounded-lg" />)}
           </div>
         ) : records.length === 0 ? (
-          <div className="py-12 text-center text-sm text-muted-foreground">
-            <FileCheck2 className="w-8 h-8 mx-auto mb-2 text-muted-foreground/50" />
-            {statusFilter !== "ALL"
-              ? `No ${RECON_STATUS_LABELS[statusFilter as ReconciliationStatus]} records.`
-              : "No reconciliation records yet. Click New Record to start."}
-          </div>
+          statusFilter !== "ALL" ? (
+            <div className="py-10 text-center">
+              <FileCheck2 className="w-8 h-8 mx-auto mb-2 text-muted-foreground/40" />
+              <p className="text-sm text-muted-foreground mb-3">
+                No <span className="font-medium">{RECON_STATUS_LABELS[statusFilter as ReconciliationStatus]}</span> records.
+              </p>
+              <button
+                onClick={() => setStatusFilter("ALL")}
+                className="text-xs text-primary hover:underline"
+              >
+                Show all records
+              </button>
+            </div>
+          ) : (
+            <div className="py-14 text-center px-6">
+              <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-muted mb-4">
+                <FileCheck2 className="w-7 h-7 text-muted-foreground/60" />
+              </div>
+              <h3 className="text-base font-semibold mb-1">No reconciliation records yet</h3>
+              <p className="text-sm text-muted-foreground max-w-xs mx-auto mb-5">
+                Link a Purchase Order to its Invoice to check for variances and approve the match.
+              </p>
+              <Button onClick={() => setShowCreate(true)}>
+                <Plus className="w-4 h-4 mr-2" />
+                New Reconciliation Record
+              </Button>
+            </div>
+          )
         ) : (
           <table className="w-full text-sm">
             <thead>

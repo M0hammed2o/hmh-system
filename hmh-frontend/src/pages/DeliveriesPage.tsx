@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { Plus, Truck, CheckCircle2, AlertCircle, Package, Trash2, RefreshCw, ExternalLink, FileText, PenLine, Link as LinkIcon } from "lucide-react";
+import React, { useEffect, useState } from "react";
+import { Plus, Truck, CheckCircle2, AlertCircle, Package, Trash2, RefreshCw, ExternalLink, FileText, PenLine, Link as LinkIcon, Download } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -634,9 +634,8 @@ export default function DeliveriesPage() {
                         const isUnlinked = !item.item_id;
                         const isLinking  = linkingItemId === item.id;
                         return (
-                          <>
+                          <React.Fragment key={item.id}>
                             <tr
-                              key={item.id}
                               className={`border-t border-border/50 ${isUnlinked ? "bg-amber-50 dark:bg-amber-950/20" : ""}`}
                             >
                               <td className="px-3 py-2">
@@ -702,7 +701,7 @@ export default function DeliveriesPage() {
                                 </td>
                               </tr>
                             )}
-                          </>
+                          </React.Fragment>
                         );
                       })}
                     </tbody>

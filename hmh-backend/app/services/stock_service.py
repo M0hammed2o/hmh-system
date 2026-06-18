@@ -81,6 +81,7 @@ def get_balances(
             sl.lot_id,
             sl.item_id,
             SUM(sl.quantity_in) - SUM(sl.quantity_out)  AS balance,
+            SUM(sl.quantity_in) - SUM(sl.quantity_out)  AS balance_net,
             MAX(sl.movement_date)                        AS last_movement_date,
             i.name         AS item_name,
             i.default_unit AS item_unit

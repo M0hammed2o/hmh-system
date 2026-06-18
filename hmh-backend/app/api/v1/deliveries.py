@@ -409,19 +409,6 @@ async def receive_delivery_with_document(
         )
         db.add(d_item)
 
-        # Update PO item received qty
-        if purchase_order_id and item_id:
-            poi = (
-                db.query(PurchaseOrderItem)
-                .filter(
-                    PurchaseOrderItem.purchase_order_id == uuid.UUID(purchase_order_id),
-                    PurchaseOrderItem.item_id           == item_id,
-                )
-                .first()
-            )
-            if poi:
-                poi.quantity_received = float(poi.quantity_received or 0) + qty_rec
-
         # ── Route stock to the correct warehouse based on destination ─────────
         # Phase 3B: SITE_STORE and MAIN_WAREHOUSE both land in the Project
         # Warehouse (site_id=NULL, lot_id=NULL).  The Delivery record still
@@ -453,6 +440,37 @@ async def receive_delivery_with_document(
             )
             if item_id:
                 d_item.item_id = item_id  # keep DeliveryItem in sync
+
+        # ── Update PO item received qty ───────────────────────────────────────
+        # This runs AFTER the BOQ auto-resolve so item_id is always available.
+        # Two-pass lookup: first try item_id, then fall back to boq_item_id
+        # because PurchaseOrderItems created before the catalog link existed
+        # may still have item_id=None.
+        if purchase_order_id:
+            poi = None
+            if item_id:
+                poi = (
+                    db.query(PurchaseOrderItem)
+                    .filter(
+                        PurchaseOrderItem.purchase_order_id == uuid.UUID(purchase_order_id),
+                        PurchaseOrderItem.item_id           == item_id,
+                    )
+                    .first()
+                )
+            if not poi and boq_item_id:
+                poi = (
+                    db.query(PurchaseOrderItem)
+                    .filter(
+                        PurchaseOrderItem.purchase_order_id == uuid.UUID(purchase_order_id),
+                        PurchaseOrderItem.boq_item_id       == boq_item_id,
+                    )
+                    .first()
+                )
+            if poi:
+                poi.quantity_received = float(poi.quantity_received or 0) + qty_rec
+                # Back-fill item_id on the PO item if it was missing
+                if item_id and not poi.item_id:
+                    poi.item_id = item_id
 
         # Stock ledger entry — always written now that BOQ-backed items auto-resolve.
         if item_id:

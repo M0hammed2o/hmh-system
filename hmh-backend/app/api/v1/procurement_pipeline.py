@@ -191,8 +191,8 @@ def get_pipeline(mr_id: uuid.UUID, db: DbSession):
         if delivery:
             delivery_dict = {
                 "id":                  str(delivery.id),
-                "delivery_note_number": delivery.delivery_note_number,
-                "status":              delivery.status.value if hasattr(delivery.status, "value") else delivery.status,
+                "delivery_note_number": delivery.delivery_number,
+                "status":              delivery.delivery_status.value if hasattr(delivery.delivery_status, "value") else str(delivery.delivery_status),
                 "received_at":         delivery.created_at.isoformat() if delivery.created_at else None,
             }
 
@@ -200,9 +200,10 @@ def get_pipeline(mr_id: uuid.UUID, db: DbSession):
 
     mr_status = mr.status.value if hasattr(mr.status, "value") else str(mr.status)
 
-    is_submitted = mr_status in ("SUBMITTED", "PENDING_APPROVAL", "APPROVED", "CONVERTED_TO_PO")
-    is_approved  = mr_status in ("APPROVED", "CONVERTED_TO_PO")
-    is_converted = mr_status == "CONVERTED_TO_PO"
+    _terminal = {"CONVERTED_TO_PO", "RECEIVED", "CLOSED", "CANCELLED"}
+    is_submitted = mr_status in {"SUBMITTED", "PENDING_APPROVAL", "APPROVED"} | _terminal
+    is_approved  = mr_status in {"APPROVED"} | _terminal
+    is_converted = mr_status in _terminal
 
     def _s(done: bool, current: bool, blocked: bool = False) -> str:
         if done:    return "COMPLETE"
@@ -257,6 +258,15 @@ def get_pipeline(mr_id: uuid.UUID, db: DbSession):
     # Current active step index (first non-COMPLETE step)
     current_step = next((s["step"] for s in steps if s["status"] != "COMPLETE"), 7)
 
+    # Auto-close MR when all 7 steps are complete
+    all_complete = all(s["status"] == "COMPLETE" for s in steps)
+    if all_complete and mr_status not in ("CLOSED", "CANCELLED", "PAID", "MATCHED"):
+        from app.models.enums import RecordStatus as _RS
+        mr.status = _RS.CLOSED
+        db.commit()
+        mr_status = "CLOSED"
+        logger.info("pipeline auto_close mr=%s — all 7 steps complete", mr_id)
+
     mr_items = [
         {
             "id":                 str(i.id),
@@ -269,17 +279,18 @@ def get_pipeline(mr_id: uuid.UUID, db: DbSession):
     ]
 
     return ApiSuccess(data={
-        "mr_id":        str(mr.id),
-        "mr_number":    mr.request_number,
-        "mr_status":    mr_status,
-        "priority":     mr.priority.value if hasattr(mr.priority, "value") else mr.priority,
-        "project_id":   str(mr.project_id) if mr.project_id else None,
-        "lot_id":       str(mr.lot_id) if mr.lot_id else None,
-        "notes":        mr.notes,
-        "over_boq":     mr.over_boq,
-        "items":        mr_items,
-        "current_step": current_step,
-        "steps":        steps,
+        "mr_id":             str(mr.id),
+        "mr_number":         mr.request_number,
+        "mr_status":         mr_status,
+        "pipeline_complete": all_complete,
+        "priority":          mr.priority.value if hasattr(mr.priority, "value") else mr.priority,
+        "project_id":        str(mr.project_id) if mr.project_id else None,
+        "lot_id":            str(mr.lot_id) if mr.lot_id else None,
+        "notes":             mr.notes,
+        "over_boq":          mr.over_boq,
+        "items":             mr_items,
+        "current_step":      current_step,
+        "steps":             steps,
         "supplier": {
             "id":        str(mr.preferred_supplier_id) if mr.preferred_supplier_id else None,
             "name":      supplier_name,

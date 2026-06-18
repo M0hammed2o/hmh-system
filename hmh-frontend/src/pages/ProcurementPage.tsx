@@ -2185,7 +2185,8 @@ export default function ProcurementPage() {
   const [showCaptureExternal, setShowCaptureExternal] = useState(false);
   const [selectedPipelineMRId, setSelectedPipelineMRId] = useState<string | null>(null);
   const [selectedPO, setSelectedPO] = useState<PurchaseOrder | null>(null);
-  const [mrFilter, setMrFilter] = useState("ALL");
+  const [mrFilter] = useState("ALL");
+  const [showHistory, setShowHistory] = useState(false);
 
   useEffect(() => {
     projectsApi.list(1, 100).then((r) => {
@@ -2216,9 +2217,14 @@ export default function ProcurementPage() {
 
   useEffect(() => { loadData(); }, [loadData]);
 
+  const TERMINAL_STATUSES = ["CLOSED", "CANCELLED"];
   const filteredMRs = useMemo(
-    () => mrFilter === "ALL" ? mrs : mrs.filter((m) => m.status === mrFilter),
-    [mrs, mrFilter],
+    () => mrs.filter((m) => !TERMINAL_STATUSES.includes(m.status)),
+    [mrs],
+  );
+  const completedMRs = useMemo(
+    () => mrs.filter((m) => TERMINAL_STATUSES.includes(m.status)),
+    [mrs],
   );
   const pendingCount = useMemo(
     () => mrs.filter((m) => ["SUBMITTED", "PENDING_APPROVAL"].includes(m.status)).length,
@@ -2283,13 +2289,6 @@ export default function ProcurementPage() {
       {/* MR tab */}
       {!isMainWarehouse && tab === "mr" && (
         <div className="space-y-3">
-          <div className="flex overflow-x-auto gap-1 pb-1">
-            {["ALL", "DRAFT", "SUBMITTED", "PENDING_APPROVAL", "APPROVED", "REJECTED", "CONVERTED_TO_PO"].map((s) => (
-              <button key={s} onClick={() => setMrFilter(s)} className={cn("shrink-0 px-2.5 py-1 rounded-lg text-xs font-medium transition-colors", mrFilter === s ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted")}>
-                {s.replace(/_/g, " ")}
-              </button>
-            ))}
-          </div>
           {filteredMRs.length === 0 ? (
             <div className="bg-card border border-border rounded-xl p-10 text-center">
               <FileText className="w-8 h-8 text-muted-foreground mx-auto mb-2" />
@@ -2340,6 +2339,46 @@ export default function ProcurementPage() {
                   )}
                 </div>
               ))}
+            </div>
+          )}
+
+          {/* ── Completed / History ───────────────────────────────────────── */}
+          {completedMRs.length > 0 && (
+            <div className="mt-2">
+              <button
+                onClick={() => setShowHistory(h => !h)}
+                className="flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground transition-colors w-full px-1 py-2"
+              >
+                <ChevronRight className={cn("w-3.5 h-3.5 transition-transform", showHistory && "rotate-90")} />
+                <span className="font-medium">Completed / History ({completedMRs.length})</span>
+              </button>
+              {showHistory && (
+                <div className="space-y-2 mt-1">
+                  {completedMRs.map((mr) => (
+                    <div key={mr.id} className="relative bg-card border border-border/50 rounded-xl flex items-stretch opacity-60 hover:opacity-80 transition-opacity">
+                      <button
+                        onClick={() => setSelectedPipelineMRId(mr.id)}
+                        className="flex-1 text-left px-4 py-3 flex items-center gap-3 min-w-0"
+                      >
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-medium text-sm">{mr.request_number}</span>
+                            <Badge variant={STATUS_BADGE[mr.status] || "outline"} className="text-xs">{mr.status.replace(/_/g, " ")}</Badge>
+                            <span className={cn("text-[10px] font-medium rounded px-1.5 py-0.5", PRIORITY_COLOR[mr.priority])}>{mr.priority}</span>
+                          </div>
+                          <p className="text-xs text-muted-foreground mt-0.5">{mr.items.length} item{mr.items.length !== 1 ? "s" : ""} · {timeAgo(mr.created_at)}</p>
+                        </div>
+                        <div className="flex items-center gap-1 shrink-0">
+                          {[1,2,3,4,5,6,7].map(n => (
+                            <div key={n} className="w-1.5 h-1.5 rounded-full bg-green-500" />
+                          ))}
+                        </div>
+                        <CheckCircle2 className="w-4 h-4 text-green-500 shrink-0" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </div>

@@ -401,6 +401,7 @@ def supplier_documents(supplier_id: uuid.UUID, db: DbSession):
             "file_url":     None,
             "file_name":    None,
             "is_attachment": False,
+            "detail_path":  f"/procurement?po={po.id}",
         })
 
     if po_ids:
@@ -416,6 +417,7 @@ def supplier_documents(supplier_id: uuid.UUID, db: DbSession):
                 "file_url":     None,
                 "file_name":    None,
                 "is_attachment": False,
+                "detail_path":  f"/reconciliation",
             })
         for d in db.query(Delivery).filter(Delivery.purchase_order_id.in_(po_ids)).all():
             docs.append({
@@ -426,9 +428,10 @@ def supplier_documents(supplier_id: uuid.UUID, db: DbSession):
                 "date":         d.delivery_date.date().isoformat() if d.delivery_date else None,
                 "amount":       None,
                 "status":       d.delivery_status.value if d.delivery_status else None,
-                "file_url":     None,
-                "file_name":    None,
+                "file_url":     d.delivery_note_image_url or None,
+                "file_name":    d.delivery_number or str(d.id)[:8],
                 "is_attachment": False,
+                "detail_path":  f"/deliveries",
             })
 
     for q in db.query(Quotation).filter(Quotation.supplier_id == supplier_id).all():
@@ -443,6 +446,7 @@ def supplier_documents(supplier_id: uuid.UUID, db: DbSession):
             "file_url":     None,
             "file_name":    None,
             "is_attachment": False,
+            "detail_path":  f"/procurement",
         })
 
     # ── Gmail email attachments matched to this supplier's POs ────────────────

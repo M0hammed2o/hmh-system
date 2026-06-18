@@ -34,10 +34,11 @@ class StockLedgerRead(BaseModel):
 class StockBalanceRead(BaseModel):
     """Represents a row from the stock_balances materialized view."""
     project_id: uuid.UUID
-    site_id: uuid.UUID
+    site_id: Optional[uuid.UUID] = None
     lot_id: Optional[uuid.UUID] = None
     item_id: uuid.UUID
     balance: float
+    balance_net: Optional[float] = None
     last_movement_date: Optional[datetime] = None
 
     # Populated by joining items table

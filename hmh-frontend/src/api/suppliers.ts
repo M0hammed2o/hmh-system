@@ -167,6 +167,7 @@ export interface SupplierDocument {
   is_image?: boolean;
   caption?: string | null;
   gmail_attachment_id?: string | null;
+  detail_path?: string | null;
 }
 
 export const suppliersApi = {

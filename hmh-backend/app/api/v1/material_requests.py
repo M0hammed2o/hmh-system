@@ -2,6 +2,7 @@
 
 import logging
 import uuid
+from datetime import date
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
@@ -323,7 +324,7 @@ class QuoteCreate(BaseModel):
     quoted_quantity: float
     unit_price: float
     unit: Optional[str] = None
-    delivery_date: Optional[str] = None
+    delivery_date: Optional[date] = None
     notes: Optional[str] = None
     item_id: Optional[uuid.UUID] = None
 
@@ -338,9 +339,11 @@ class QuoteRead(BaseModel):
     unit: Optional[str] = None
     unit_price: float
     total_price: Optional[float] = None
-    delivery_date: Optional[str] = None
+    delivery_date: Optional[date] = None
     notes: Optional[str] = None
     is_selected: bool
+    status: str = "PENDING"
+    source: str = "MANUAL"
 
     class Config:
         from_attributes = True
@@ -356,8 +359,7 @@ def list_quotes(mr_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
 @mr_router.post("/{mr_id}/quotes", response_model=ApiSuccess[QuoteRead], status_code=201, dependencies=[OFFICE_AND_ABOVE])
 def add_quote(mr_id: uuid.UUID, body: QuoteCreate, db: DbSession, current_user: CurrentUser):
     get_and_check_project_resource(db, current_user, MaterialRequest, mr_id, "Material request not found.")
-    from datetime import date
-    delivery_date = date.fromisoformat(body.delivery_date) if body.delivery_date else None
+    delivery_date = body.delivery_date  # already Optional[date] from Pydantic
     quote = mr_service.add_quote(
         db, mr_id, body.supplier_id, body.description,
         body.quoted_quantity, body.unit_price,

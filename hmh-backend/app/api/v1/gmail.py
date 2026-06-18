@@ -153,6 +153,22 @@ def process_email(email_id: uuid.UUID, db: DbSession):
 
         logger.info("gmail_extract status=%s chars=%d", ext_result['status'], len(raw_text))
 
+        # ── Content-based reclassification (post-OCR) ─────────────────────────
+        # The filename classifier never reads PDF content.  A PDF named
+        # "Invoice2.pdf" whose body says "Quotation MR-XXXXXX" gets classified
+        # as INVOICE and _auto_create_mr_quotes never runs.  After OCR we can
+        # check the extracted text and override the type safely.
+        # Only INVOICE→QUOTE is overridden here; no other direction is changed,
+        # so the invoice and delivery-note paths are untouched.
+        if att.detected_type == "INVOICE" and raw_text:
+            content_type = _classify_by_content(raw_text)
+            if content_type == "QUOTE":
+                logger.info(
+                    "gmail_content_reclassify att=%s INVOICE→QUOTE (text has quotation + MR ref)",
+                    att.filename,
+                )
+                att.detected_type = "QUOTE"
+
         # ── Match MR ─────────────────────────────────────────────────────────
         mr_match = _match_mr_from_text(db, raw_text, fields, items)
         logger.debug("gmail_mr_match status=%s ref=%s", mr_match['status'], mr_match.get('mr_number'))
@@ -301,6 +317,31 @@ def suggest_reconciliation(email_id: uuid.UUID, db: DbSession):
 
 
 # ── Processing helpers ────────────────────────────────────────────────────────
+
+def _classify_by_content(raw_text: str) -> Optional[str]:
+    """
+    Content-based document type override — runs AFTER OCR extraction.
+
+    Returns "QUOTE" when the extracted text strongly indicates a supplier
+    quotation (the word "quotation" appears AND an MR reference is present).
+    Returns None when the text gives no clear signal.
+
+    Why an MR reference is required: invoices and delivery notes sometimes
+    contain the word "quote" in passing (e.g. "as per quote ref…"). Requiring
+    an MR reference ensures we only reclassify documents that were sent in
+    response to a specific Material Request, which is the exact scenario where
+    a filename of "Invoice2.pdf" causes a false INVOICE classification.
+    """
+    import re
+    text_lower = (raw_text or "").lower()
+
+    has_quotation_word = bool(re.search(r"\bquotation\b|\bquote\b", text_lower))
+    has_mr_reference   = bool(re.search(r"\bmr[-\s][a-z0-9]", text_lower, re.IGNORECASE))
+
+    if has_quotation_word and has_mr_reference:
+        return "QUOTE"
+    return None
+
 
 def _auto_create_mr_quotes(db, mr_id_str: str, fields: dict, items: list, email, now) -> None:
     """

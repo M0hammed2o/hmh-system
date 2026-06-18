@@ -203,6 +203,25 @@ def create_delivery(
                 if matched:
                     matched.quantity_received = float(matched.quantity_received or 0) + received
 
+        # Write stock ledger entry so stock balances reflect the delivery
+        if item_data.item_id:
+            db.add(StockLedger(
+                project_id     = project_id,
+                site_id        = None,
+                lot_id         = None,
+                item_id        = item_data.item_id,
+                boq_item_id    = getattr(item_data, "boq_item_id", None),
+                movement_type  = MovementType.DELIVERY_RECEIVED,
+                reference_type = "delivery",
+                reference_id   = delivery.id,
+                quantity_in    = received,
+                quantity_out   = 0,
+                unit           = item_data.unit,
+                movement_date  = now,
+                entered_by     = current_user_id,
+                created_at     = now,
+            ))
+
     delivery.delivery_status = (
         RecordStatus.PARTIALLY_RECEIVED if is_partial else RecordStatus.RECEIVED
     )

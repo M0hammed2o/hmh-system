@@ -166,6 +166,7 @@ export interface MRPipeline {
   mr_id: string;
   mr_number: string;
   mr_status: string;
+  pipeline_complete: boolean;
   priority: MRPriority;
   project_id: string | null;
   lot_id: string | null;
