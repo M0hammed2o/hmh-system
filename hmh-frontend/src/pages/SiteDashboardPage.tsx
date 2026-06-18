@@ -1621,6 +1621,33 @@ function UnifiedReceiveModal({ projectId, siteId, lotId, suppliers, materialSumm
   // Items always start empty — user adds only what actually arrived.
   const [items, setItems] = useState<DeliveryLineItem[]>([]);
 
+  // When the BOQ summary loads (async, after PO is auto-selected from OCR), try to
+  // link any unlinked OCR-extracted items to their matching BOQ item by description.
+  // This turns "⚠ No catalog link" into "✓ BOQ item — stock will update" automatically.
+  useEffect(() => {
+    if (effectiveMaterialSummary.length === 0) return;
+    setItems(prev => {
+      const unlinked = prev.filter(i => !i.boq_item_id);
+      if (unlinked.length === 0) return prev; // nothing to do — skip re-render
+      return prev.map(item => {
+        if (item.boq_item_id) return item;
+        const norm = item.description.toLowerCase().trim();
+        if (!norm) return item;
+        const match = effectiveMaterialSummary.find(m => {
+          const mNorm = m.description.toLowerCase().trim();
+          return mNorm === norm || mNorm.includes(norm) || norm.includes(mNorm);
+        });
+        if (!match) return item;
+        return {
+          ...item,
+          boq_item_id: match.boq_item_id,
+          item_id:     match.item_id ?? "",
+          unit:        item.unit || match.unit || "",
+        };
+      });
+    });
+  }, [effectiveMaterialSummary]);
+
   // BOQ picker state
   const [showBOQPicker,    setShowBOQPicker]    = useState(false);
   const [boqSearch,        setBoqSearch]        = useState("");

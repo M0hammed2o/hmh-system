@@ -547,6 +547,69 @@ class TestDeliveryNoteEnhanced:
         assert 30.0 in qtys or 50.0 in qtys
 
 
+class TestDeliveryItemOptionalUnit:
+    """
+    _parse_delivery_items must parse rows with AND without a unit column.
+    Real delivery notes often omit units; the regex change makes unit optional.
+    """
+
+    def test_two_column_row_parsed(self):
+        """'Roof Complete  5' (no unit) must produce quantity=5."""
+        from app.services.document_ai_service import _parse_delivery_items
+        text = "Roof Complete  5\n"
+        items = _parse_delivery_items(text)
+        assert len(items) == 1
+        assert items[0]["quantity"] == 5.0
+        assert items[0]["description"] == "Roof Complete"
+        assert items[0]["unit"] is None
+
+    def test_three_column_row_still_parsed(self):
+        """'Roof Complete  5  Lot' (with unit) must still produce unit='Lot'."""
+        from app.services.document_ai_service import _parse_delivery_items
+        text = "Roof Complete  5  Lot\n"
+        items = _parse_delivery_items(text)
+        assert len(items) == 1
+        assert items[0]["quantity"] == 5.0
+        assert items[0]["unit"] == "Lot"
+
+    def test_alphanumeric_unit_m2(self):
+        """Unit 'm2' (letter + digit) must be captured correctly."""
+        from app.services.document_ai_service import _parse_delivery_items
+        text = "Paving Slabs  20  m2\n"
+        items = _parse_delivery_items(text)
+        assert len(items) == 1
+        assert items[0]["unit"] == "m2"
+
+    def test_date_line_not_parsed_as_item(self):
+        """'Delivery Date: 29 June 2026' must NOT be extracted as an item."""
+        from app.services.document_ai_service import _parse_delivery_items
+        text = "Delivery Date: 29 June 2026\n"
+        items = _parse_delivery_items(text)
+        assert len(items) == 0
+
+    def test_total_line_not_parsed_as_item(self):
+        """'Total:   5' must NOT be extracted as an item."""
+        from app.services.document_ai_service import _parse_delivery_items
+        text = "Total:   5\n"
+        items = _parse_delivery_items(text)
+        assert len(items) == 0
+
+    def test_multiple_items_mixed_units(self):
+        """Multiple rows, some with units and some without, all parsed correctly."""
+        from app.services.document_ai_service import _parse_delivery_items
+        text = (
+            "Roof Complete  5  Lot\n"
+            "Steel Bars  100\n"
+            "Cement Bags  30  bags\n"
+        )
+        items = _parse_delivery_items(text)
+        assert len(items) == 3
+        assert items[0]["unit"] == "Lot"
+        assert items[1]["unit"] is None
+        assert items[1]["quantity"] == 100.0
+        assert items[2]["unit"] == "bags"
+
+
 class TestParseFuelSlip:
     """Fuel slip parser extracts station, litres, vehicle reg, odometer."""
 

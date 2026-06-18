@@ -332,12 +332,13 @@ _RECEIVED_BY_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Delivery note simple items: description  qty  unit
-# Uses \s+ (not \s{2,}) because OCR from table images typically outputs a single
-# tab or space between cells, not multiple spaces.  The non-greedy description
-# match still prevents the separator from being swallowed into the description.
+# Delivery note simple items: description  qty  [unit]
+# Unit is OPTIONAL — many real delivery notes omit it.
+# Unit also allows alphanumeric (m2, m3, kg, etc.), not just letters.
+# Uses \s+ separators; description is non-greedy so it stops before the quantity.
+# The end-anchor ($) prevents partial-line matches like "Required by  29 June 2026".
 _DELIVERY_ITEM_RE = re.compile(
-    r"^[ \t]*([A-Za-z][A-Za-z0-9 ,./\-]{2,50}?)\s+(\d[\d,]*(?:\.\d+)?)\s+([A-Za-z]{1,15})\s*$",
+    r"^[ \t]*([A-Za-z][A-Za-z0-9 ,./\-]{2,50}?)\s+(\d[\d,]*(?:\.\d+)?)(?:\s+([A-Za-z][A-Za-z0-9]{0,14}))?\s*$",
     re.MULTILINE,
 )
 
@@ -770,16 +771,17 @@ def _extract_received_by(text: str) -> Optional[str]:
 
 
 def _parse_delivery_items(text: str) -> list[dict]:
-    """Parse simple 2-3 column delivery item rows (description, qty, unit)."""
+    """Parse 2-or-3-column delivery item rows (description, qty, [unit])."""
     items = []
     for m in _DELIVERY_ITEM_RE.finditer(text):
-        desc, qty_s, unit = m.group(1), m.group(2), m.group(3)
+        desc, qty_s = m.group(1), m.group(2)
+        unit = (m.group(3) or "").strip() or None  # group 3 is optional
         qty = _parse_amount(qty_s)
         if qty is None:
             continue
         items.append({
             "description": desc.strip(),
-            "unit":        unit.strip(),
+            "unit":        unit,
             "quantity":    qty,
             "unit_price":  None,
             "line_total":  None,
