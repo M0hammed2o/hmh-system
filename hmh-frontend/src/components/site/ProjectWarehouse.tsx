@@ -9,7 +9,7 @@
  * The old /sites/{siteId}/warehouse/ endpoints remain as legacy aliases.
  */
 import { useCallback, useEffect, useState } from "react";
-import { Package, ArrowRight, RefreshCw, History, AlertTriangle, X } from "lucide-react";
+import { Package, ArrowRight, RefreshCw, History, AlertTriangle, X, Plus, SlidersHorizontal } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -165,6 +165,200 @@ function TransferModal({
   );
 }
 
+// ── Add Material Modal ────────────────────────────────────────────────────────
+
+function AddMaterialModal({
+  projectId, onClose, onDone,
+}: { projectId: string; onClose: () => void; onDone: () => void }) {
+  const [name,     setName]     = useState("");
+  const [quantity, setQuantity] = useState("");
+  const [unit,     setUnit]     = useState("");
+  const [notes,    setNotes]    = useState("");
+  const [loading,  setLoading]  = useState(false);
+  const [error,    setError]    = useState("");
+
+  const submit = async () => {
+    const qty = parseFloat(quantity);
+    if (!name.trim())        { setError("Enter a material name."); return; }
+    if (!qty || qty <= 0)    { setError("Enter a valid quantity."); return; }
+    setLoading(true); setError("");
+    try {
+      await warehouseApi.addProjectMaterial(projectId, {
+        name: name.trim(),
+        quantity: qty,
+        unit: unit.trim() || undefined,
+        notes: notes.trim() || undefined,
+      });
+      onDone(); onClose();
+    } catch (err: unknown) {
+      const d = (err as { response?: { data?: { detail?: string } } })?.response?.data;
+      setError(d?.detail ?? "Failed to add material.");
+    } finally { setLoading(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
+      <div className="bg-card border border-border rounded-2xl w-full max-w-sm p-6 space-y-4" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between">
+          <h3 className="font-semibold text-base">Add Material to Warehouse</h3>
+          <button onClick={onClose}><X className="w-4 h-4 text-muted-foreground" /></button>
+        </div>
+        <div className="space-y-3">
+          <div>
+            <label className="text-xs text-muted-foreground block mb-1">Material name</label>
+            <input type="text" value={name} onChange={e => setName(e.target.value)}
+              placeholder="e.g. Bag of screws, Cable ties" autoFocus
+              className="w-full h-10 rounded-md border border-input bg-background px-3 text-sm" />
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="text-xs text-muted-foreground block mb-1">Quantity</label>
+              <input type="number" min="0.001" step="any" value={quantity}
+                onChange={e => setQuantity(e.target.value)} placeholder="e.g. 10"
+                className="w-full h-10 rounded-md border border-input bg-background px-3 text-sm" />
+            </div>
+            <div>
+              <label className="text-xs text-muted-foreground block mb-1">Unit (optional)</label>
+              <input type="text" value={unit} onChange={e => setUnit(e.target.value)}
+                placeholder="e.g. pcs, bags"
+                className="w-full h-10 rounded-md border border-input bg-background px-3 text-sm" />
+            </div>
+          </div>
+          <div>
+            <label className="text-xs text-muted-foreground block mb-1">Notes (optional)</label>
+            <input type="text" value={notes} onChange={e => setNotes(e.target.value)}
+              placeholder="e.g. For gate installation"
+              className="w-full h-10 rounded-md border border-input bg-background px-3 text-sm" />
+          </div>
+        </div>
+        {error && <p className="text-xs text-destructive bg-destructive/10 rounded-lg px-3 py-2">{error}</p>}
+        <div className="flex gap-2 pt-1">
+          <Button onClick={submit} disabled={loading} className="flex-1">
+            {loading ? "Adding…" : "Add to Warehouse"}
+          </Button>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Adjust Stock Modal ────────────────────────────────────────────────────────
+
+const ADJUST_OPTIONS = [
+  { value: "CORRECTION_ADD", label: "Correction (Add)",    dir: "in"  },
+  { value: "RETURNED",       label: "Returned to stock",   dir: "in"  },
+  { value: "OTHER_ADD",      label: "Other (Add)",         dir: "in"  },
+  { value: "CORRECTION_SUB", label: "Correction (Remove)", dir: "out" },
+  { value: "DAMAGED",        label: "Damaged",             dir: "out" },
+  { value: "LOST",           label: "Lost",                dir: "out" },
+  { value: "OTHER_SUB",      label: "Other (Remove)",      dir: "out" },
+] as const;
+
+function AdjustStockModal({
+  projectId, item, onClose, onDone,
+}: { projectId: string; item: WarehouseStockItem; onClose: () => void; onDone: () => void }) {
+  const [adjType,  setAdjType]  = useState("CORRECTION_ADD");
+  const [quantity, setQuantity] = useState("");
+  const [notes,    setNotes]    = useState("");
+  const [loading,  setLoading]  = useState(false);
+  const [error,    setError]    = useState("");
+
+  const selected = ADJUST_OPTIONS.find(o => o.value === adjType);
+  const qty      = parseFloat(quantity) || 0;
+  const newStock = selected?.dir === "in"
+    ? item.on_hand + qty
+    : Math.max(0, item.on_hand - qty);
+
+  const submit = async () => {
+    if (!qty || qty <= 0) { setError("Enter a valid quantity."); return; }
+    setLoading(true); setError("");
+    try {
+      await warehouseApi.adjustProjectStock(projectId, {
+        item_id: item.item_id,
+        adjustment_type: adjType,
+        quantity: qty,
+        notes: notes.trim() || undefined,
+      });
+      onDone(); onClose();
+    } catch (err: unknown) {
+      const d = (err as { response?: { data?: { detail?: string } } })?.response?.data;
+      setError(d?.detail ?? "Adjustment failed.");
+    } finally { setLoading(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
+      <div className="bg-card border border-border rounded-2xl w-full max-w-sm p-6 space-y-4" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between">
+          <h3 className="font-semibold text-base">Adjust Stock</h3>
+          <button onClick={onClose}><X className="w-4 h-4 text-muted-foreground" /></button>
+        </div>
+        <div className="bg-primary/5 border border-primary/20 rounded-xl px-4 py-3 flex items-center gap-3">
+          <Package className="w-4 h-4 text-primary shrink-0" />
+          <div>
+            <p className="font-medium text-sm">{item.item_name}</p>
+            <p className="text-xs text-muted-foreground">
+              Current stock: <strong>{item.on_hand} {item.unit ?? ""}</strong>
+            </p>
+          </div>
+        </div>
+        <div className="space-y-3">
+          <div>
+            <label className="text-xs text-muted-foreground block mb-1">Adjustment type</label>
+            <select value={adjType} onChange={e => setAdjType(e.target.value)}
+              className="w-full h-10 rounded-md border border-input bg-background px-3 text-sm">
+              <optgroup label="Add Stock">
+                {ADJUST_OPTIONS.filter(o => o.dir === "in").map(o => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </optgroup>
+              <optgroup label="Remove Stock">
+                {ADJUST_OPTIONS.filter(o => o.dir === "out").map(o => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </optgroup>
+            </select>
+          </div>
+          <div>
+            <label className="text-xs text-muted-foreground block mb-1">
+              Quantity ({item.unit ?? "units"})
+            </label>
+            <input type="number" min="0.001" step="any" value={quantity}
+              onChange={e => setQuantity(e.target.value)} placeholder="Enter quantity" autoFocus
+              className="w-full h-10 rounded-md border border-input bg-background px-3 text-sm" />
+          </div>
+          <div>
+            <label className="text-xs text-muted-foreground block mb-1">Notes (optional)</label>
+            <input type="text" value={notes} onChange={e => setNotes(e.target.value)}
+              placeholder="Reason for adjustment"
+              className="w-full h-10 rounded-md border border-input bg-background px-3 text-sm" />
+          </div>
+        </div>
+        {qty > 0 && selected && (
+          <div className={cn(
+            "flex items-center gap-2 text-xs rounded-lg px-3 py-2 font-medium",
+            selected.dir === "in"
+              ? "text-green-700 bg-green-50 dark:bg-green-950/20 dark:text-green-400"
+              : "text-destructive bg-destructive/10",
+          )}>
+            <span>{selected.dir === "in" ? "+" : "−"}{qty} {item.unit ?? ""}</span>
+            <span className="text-muted-foreground">→</span>
+            <span>{newStock} {item.unit ?? ""} remaining</span>
+          </div>
+        )}
+        {error && <p className="text-xs text-destructive bg-destructive/10 rounded-lg px-3 py-2">{error}</p>}
+        <div className="flex gap-2 pt-1">
+          <Button onClick={submit} disabled={loading} className="flex-1">
+            {loading ? "Adjusting…" : "Confirm Adjustment"}
+          </Button>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── History row ───────────────────────────────────────────────────────────────
 
 function HistoryRow({ m }: { m: WarehouseMovement }) {
@@ -208,14 +402,16 @@ export function ProjectWarehouse({ projectId, siteId }: Props) {
   const userRole    = localStorage.getItem(ROLE_KEY) || "";
   const canTransfer = userRole !== "READ_ONLY";
 
-  const [stock,        setStock]        = useState<WarehouseStockItem[]>([]);
-  const [lots,         setLots]         = useState<Lot[]>([]);
-  const [history,      setHistory]      = useState<WarehouseMovement[]>([]);
-  const [loading,      setLoading]      = useState(true);
-  const [showHistory,  setShowHistory]  = useState(false);
-  const [histLoading,  setHistLoading]  = useState(false);
-  const [transferItem, setTransferItem] = useState<WarehouseStockItem | null>(null);
-  const [error,        setError]        = useState("");
+  const [stock,           setStock]           = useState<WarehouseStockItem[]>([]);
+  const [lots,            setLots]            = useState<Lot[]>([]);
+  const [history,         setHistory]         = useState<WarehouseMovement[]>([]);
+  const [loading,         setLoading]         = useState(true);
+  const [showHistory,     setShowHistory]     = useState(false);
+  const [histLoading,     setHistLoading]     = useState(false);
+  const [transferItem,    setTransferItem]    = useState<WarehouseStockItem | null>(null);
+  const [showAddMaterial, setShowAddMaterial] = useState(false);
+  const [adjustItem,      setAdjustItem]      = useState<WarehouseStockItem | null>(null);
+  const [error,           setError]           = useState("");
 
   const loadStock = useCallback(async () => {
     setLoading(true); setError("");
@@ -261,6 +457,16 @@ export function ProjectWarehouse({ projectId, siteId }: Props) {
           )}
         </div>
         <div className="flex items-center gap-1.5">
+          {canTransfer && (
+            <button
+              onClick={() => setShowAddMaterial(true)}
+              className="flex items-center gap-1 text-xs text-primary hover:text-primary/80 transition-colors px-2 py-1 rounded-lg hover:bg-primary/10 border border-primary/20"
+              title="Add material to warehouse"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              Add
+            </button>
+          )}
           <button
             onClick={toggleHistory}
             className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors px-2 py-1 rounded-lg hover:bg-muted"
@@ -325,19 +531,32 @@ export function ProjectWarehouse({ projectId, siteId }: Props) {
                 </p>
               </div>
 
-              {canTransfer && lots.length > 0 ? (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="shrink-0 gap-1.5 h-8 text-xs"
-                  onClick={() => setTransferItem(item)}
-                >
-                  <ArrowRight className="w-3 h-3" />
-                  To Lot
-                </Button>
-              ) : lots.length === 0 ? (
-                <span className="text-xs text-muted-foreground shrink-0">No lots</span>
-              ) : null}
+              <div className="flex items-center gap-1.5 shrink-0">
+                {canTransfer && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-8 text-xs gap-1 text-muted-foreground hover:text-foreground px-2"
+                    onClick={() => setAdjustItem(item)}
+                    title="Adjust stock"
+                  >
+                    <SlidersHorizontal className="w-3 h-3" />
+                  </Button>
+                )}
+                {canTransfer && lots.length > 0 ? (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="gap-1.5 h-8 text-xs"
+                    onClick={() => setTransferItem(item)}
+                  >
+                    <ArrowRight className="w-3 h-3" />
+                    To Lot
+                  </Button>
+                ) : lots.length === 0 ? (
+                  <span className="text-xs text-muted-foreground">No lots</span>
+                ) : null}
+              </div>
             </div>
           ))}
         </div>
@@ -373,6 +592,25 @@ export function ProjectWarehouse({ projectId, siteId }: Props) {
           item={transferItem}
           lots={lots}
           onClose={() => setTransferItem(null)}
+          onDone={loadStock}
+        />
+      )}
+
+      {/* Add Material modal */}
+      {showAddMaterial && (
+        <AddMaterialModal
+          projectId={projectId}
+          onClose={() => setShowAddMaterial(false)}
+          onDone={loadStock}
+        />
+      )}
+
+      {/* Adjust Stock modal */}
+      {adjustItem && (
+        <AdjustStockModal
+          projectId={projectId}
+          item={adjustItem}
+          onClose={() => setAdjustItem(null)}
           onDone={loadStock}
         />
       )}

@@ -239,6 +239,30 @@ export const warehouseApi = {
     return res.data.data ?? [];
   },
 
+  /** Add an ad-hoc material (not in BOQ) to a project warehouse. Auto-creates catalog item if needed. */
+  addProjectMaterial: async (
+    projectId: string,
+    body: { name: string; quantity: number; unit?: string; notes?: string },
+  ): Promise<{ id: string; item_id: string; item_name: string; quantity_in: number; created_item: boolean }> => {
+    const res = await client.post<{ data: { id: string; item_id: string; item_name: string; quantity_in: number; created_item: boolean } }>(
+      `/projects/${projectId}/warehouse/add-material`,
+      body,
+    );
+    return res.data.data;
+  },
+
+  /** Adjust stock quantity in a project warehouse (DAMAGED / LOST / CORRECTION_ADD / etc.). */
+  adjustProjectStock: async (
+    projectId: string,
+    body: { item_id: string; adjustment_type: string; quantity: number; notes?: string },
+  ): Promise<{ id: string; item_name: string; adjustment_type: string; quantity: number }> => {
+    const res = await client.post<{ data: { id: string; item_name: string; adjustment_type: string; quantity: number } }>(
+      `/projects/${projectId}/warehouse/adjust`,
+      body,
+    );
+    return res.data.data;
+  },
+
   /** Transfer global stock (project_id=null) to a specific site. */
   transferGlobalToSite: async (
     itemId:   string,

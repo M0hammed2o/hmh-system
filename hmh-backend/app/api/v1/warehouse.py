@@ -825,6 +825,202 @@ def get_main_warehouse_history(
     } for r in rows])
 
 
+# ── Project Warehouse: add ad-hoc material ────────────────────────────────────
+
+class AddProjectMaterialBody(BaseModel):
+    name:     str
+    quantity: float
+    unit:     Optional[str] = None
+    notes:    Optional[str] = None
+
+
+@project_warehouse_router.post(
+    "/add-material",
+    response_model=ApiSuccess[dict],
+    status_code=201,
+    dependencies=[OFFICE_AND_ABOVE],
+)
+def add_project_warehouse_material(
+    project_id: uuid.UUID,
+    body: AddProjectMaterialBody,
+    db: DbSession,
+    current_user: CurrentUser,
+):
+    """
+    Add an ad-hoc material to the project warehouse (not in BOQ / PO).
+    If a catalog Item with the same normalized name already exists it is
+    reused (no duplicate).  Otherwise a new MATERIAL Item is auto-created.
+    """
+    from app.models.project import Project
+    from app.models.enums import ItemType
+
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(422, "Material name is required.")
+    if body.quantity <= 0:
+        raise HTTPException(422, "Quantity must be greater than zero.")
+
+    project = db.get(Project, project_id)
+    if not project:
+        raise HTTPException(404, "Project not found.")
+    check_project_access(db, current_user, project_id)
+
+    normalized = name.lower()
+
+    # Find or auto-create catalog item
+    item = db.query(Item).filter(Item.normalized_name == normalized).first()
+    created_item = False
+    if not item:
+        now_dt = datetime.now(timezone.utc)
+        item = Item(
+            name=name,
+            normalized_name=normalized,
+            item_type=ItemType.MATERIAL,
+            default_unit=body.unit or None,
+            is_active=True,
+            created_at=now_dt,
+            updated_at=now_dt,
+        )
+        db.add(item)
+        db.flush()
+        created_item = True
+        _wh_log.info("add_project_material: created catalog item '%s' id=%s", name, item.id)
+
+    now = datetime.now(timezone.utc)
+    entry = StockLedger(
+        project_id=project_id,
+        site_id=None,
+        lot_id=None,
+        item_id=item.id,
+        movement_type=MovementType.DELIVERY_RECEIVED,
+        reference_type="PROJECT_WAREHOUSE_ADD",
+        quantity_in=body.quantity,
+        quantity_out=0,
+        unit=body.unit or item.default_unit,
+        movement_date=now,
+        entered_by=current_user.id,
+        notes=body.notes or None,
+        created_at=now,
+    )
+    db.add(entry)
+    db.flush()
+    audit_service.write_event(
+        db,
+        action=AuditAction.CREATE,
+        entity_type="stock_ledger",
+        actor_id=current_user.id,
+        entity_id=entry.id,
+        after_value={"movement": "PROJECT_WAREHOUSE_ADD", "item": item.name,
+                     "qty": body.quantity, "project_id": str(project_id),
+                     "new_item": created_item},
+    )
+    db.commit()
+
+    return ApiSuccess(
+        data={
+            "id":           str(entry.id),
+            "item_id":      str(item.id),
+            "item_name":    item.name,
+            "quantity_in":  body.quantity,
+            "created_item": created_item,
+        },
+        message=(
+            f"Added {body.quantity} {body.unit or item.default_unit or ''} "
+            f"of {item.name} to project warehouse."
+        ),
+        status_code=201,
+    )
+
+
+# ── Project Warehouse: stock adjustment ──────────────────────────────────────
+
+class AdjustProjectStockBody(BaseModel):
+    item_id:         uuid.UUID
+    adjustment_type: str
+    quantity:        float
+    notes:           Optional[str] = None
+
+
+@project_warehouse_router.post(
+    "/adjust",
+    response_model=ApiSuccess[dict],
+    status_code=201,
+    dependencies=[OFFICE_AND_ABOVE],
+)
+def adjust_project_warehouse_stock(
+    project_id: uuid.UUID,
+    body: AdjustProjectStockBody,
+    db: DbSession,
+    current_user: CurrentUser,
+):
+    """
+    Create a stock adjustment entry in the project warehouse.
+    adjustment_type: DAMAGED | LOST | RETURNED | CORRECTION_ADD | CORRECTION_SUB | OTHER_ADD | OTHER_SUB
+    """
+    from app.models.project import Project
+
+    if body.adjustment_type not in ADJUSTMENT_TYPE_MAP:
+        raise HTTPException(
+            422, f"Invalid adjustment_type. Must be one of: {VALID_ADJUSTMENT_TYPES}"
+        )
+    if body.quantity <= 0:
+        raise HTTPException(422, "Quantity must be greater than zero.")
+
+    project = db.get(Project, project_id)
+    if not project:
+        raise HTTPException(404, "Project not found.")
+    check_project_access(db, current_user, project_id)
+
+    item = db.get(Item, body.item_id)
+    if not item:
+        raise HTTPException(404, "Item not found.")
+
+    movement_type, qty_field = ADJUSTMENT_TYPE_MAP[body.adjustment_type]
+
+    now = datetime.now(timezone.utc)
+    entry = StockLedger(
+        project_id=project_id,
+        site_id=None,
+        lot_id=None,
+        item_id=body.item_id,
+        movement_type=movement_type,
+        reference_type=f"ADJUSTMENT_{body.adjustment_type}",
+        quantity_in=body.quantity  if qty_field == "quantity_in"  else 0,
+        quantity_out=body.quantity if qty_field == "quantity_out" else 0,
+        unit=item.default_unit,
+        movement_date=now,
+        entered_by=current_user.id,
+        notes=body.notes or None,
+        created_at=now,
+    )
+    db.add(entry)
+    db.flush()
+    audit_service.write_event(
+        db,
+        action=AuditAction.CREATE,
+        entity_type="stock_ledger",
+        actor_id=current_user.id,
+        entity_id=entry.id,
+        after_value={"movement": f"ADJUSTMENT_{body.adjustment_type}", "item": item.name,
+                     "qty": body.quantity, "project_id": str(project_id)},
+    )
+    db.commit()
+
+    return ApiSuccess(
+        data={
+            "id":              str(entry.id),
+            "item_name":       item.name,
+            "adjustment_type": body.adjustment_type,
+            "quantity":        body.quantity,
+        },
+        message=(
+            f"Stock adjusted: {body.adjustment_type} {body.quantity} "
+            f"{item.default_unit or ''} of {item.name}."
+        ),
+        status_code=201,
+    )
+
+
 # ── Global Main Warehouse — cross-project aggregate view ─────────────────────
 
 @global_warehouse_router.get("/main/", response_model=ApiSuccess[list[dict]], dependencies=[ALL_ROLES])
