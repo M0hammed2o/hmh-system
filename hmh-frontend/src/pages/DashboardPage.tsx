@@ -31,6 +31,59 @@ import { formatCurrency } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { useAuthContext } from "@/context/AuthContext";
 
+// ── Alert deep-link helper ────────────────────────────────────────────────────
+
+function alertDestination(alert: Alert): string {
+  switch (alert.alert_type) {
+    // Procurement / material requests
+    case "REQUEST_PENDING_TOO_LONG":
+      return "/procurement";
+
+    // Deliveries
+    case "DELIVERY_WITHOUT_PO":
+    case "DELIVERY_DISCREPANCY":
+    case "DELIVERY_SIGNATURE_MISSING":
+    case "SIGNATURE_MISSING":
+      return "/deliveries";
+
+    // Invoices & reconciliation
+    case "INVOICE_MISMATCH":
+    case "INVOICE_UNMATCHED":
+    case "INVOICE_MISSING_DELIVERY_NOTE":
+    case "INVOICE_CAPTURED":
+    case "DUPLICATE_INVOICE":
+      return "/reconciliation";
+
+    // Payments
+    case "OVERDUE_PAYMENT":
+    case "PAYMENT_DUE":
+    case "PAYMENT_COMPLETED":
+    case "PARTIAL_PAYMENT_RECORDED":
+      return "/payments";
+
+    // Stock / warehouse
+    case "MATERIAL_OVERUSE":
+    case "BOQ_VARIANCE_OVERUSE":
+    case "BOQ_ALLOCATION_EXCEEDED":
+    case "NEGATIVE_STOCK":
+    case "LOW_STOCK":
+    case "MISSING_REMAINING_STOCK_PHOTO":
+    case "WAREHOUSE_TRANSFER_COMPLETED":
+      return "/warehouse";
+
+    // Milestones
+    case "MILESTONE_COMPLETED_ALERT":
+      return "/milestones";
+
+    // Gmail / OCR
+    case "OCR_EXTRACTION_FAILED":
+      return "/gmail-inbox";
+
+    default:
+      return "/alerts";
+  }
+}
+
 // ── Alert card ────────────────────────────────────────────────────────────────
 
 const severityColor: Record<string, string> = {
@@ -46,7 +99,7 @@ function AlertCard({ alert, onDismiss }: { alert: Alert; onDismiss?: (id: string
     <div className={cn("border rounded-xl px-4 py-3 flex items-start gap-3",
       severityColor[alert.severity] || severityColor.LOW)}>
       <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
-      <Link to="/alerts" className="flex-1 min-w-0 block active:scale-[0.98] transition-transform">
+      <Link to={alertDestination(alert)} className="flex-1 min-w-0 block active:scale-[0.98] transition-transform">
         <p className="text-sm font-medium leading-snug truncate">{alert.title}</p>
         <p className="text-xs opacity-75 mt-0.5 line-clamp-1">{alert.message}</p>
       </Link>
