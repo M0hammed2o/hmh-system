@@ -622,6 +622,115 @@ class TestProcurementPipelineEndToEnd:
         )
 
 
+    # ─────────────────────────────────────────────────────────────────────────
+    # BONUS — Reconciliation: creating a recon auto-links the existing delivery
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def test_reconciliation_auto_links_delivery(self, client, db, scenario):
+        """
+        After the pipeline completes (delivery + invoice recorded):
+          - Creating a reconciliation for the PO without passing delivery_id
+            must auto-detect and link the existing delivery.
+          - The reconciliation detail must show delivery data and matching quantities.
+          - Status must be MATCHED (no variance: 50 bags ordered == 50 bags received).
+        """
+        s = scenario
+        self.test_step8_office_captures_invoice(client, db, scenario)
+
+        # Create reconciliation via API — do NOT pass delivery_id; let the service auto-detect it
+        r = client.post(
+            _api("/reconciliations/"),
+            json={
+                "purchase_order_id": s["po_id"],
+                "invoice_id":        s["invoice_id"],
+            },
+            headers=auth(s["office_tok"]),
+        )
+        assert r.status_code == 201, r.text
+        recon = r.json()["data"]
+        s["recon_id"] = recon["id"]
+
+        # Delivery must be auto-linked — service resolves most-recent RECEIVED delivery for the PO
+        assert recon["delivery_id"] is not None, (
+            "Reconciliation must auto-link the existing delivery when delivery_id is omitted"
+        )
+        assert recon["delivery_id"] == s["delivery_id"], (
+            f"Auto-linked delivery must match the recorded delivery; "
+            f"got {recon['delivery_id']}, expected {s['delivery_id']}"
+        )
+
+        # Delivery detail must be present in the response
+        assert recon["delivery"] is not None, "Reconciliation detail must include delivery summary"
+        assert recon["delivery"]["delivery_id"] == s["delivery_id"]
+
+        # Quantity comparison: PO ordered == Delivery received (no variance expected)
+        variance = recon.get("variance_data") or {}
+        comparisons = variance.get("comparisons", [])
+        po_vs_delivery = next(
+            (c for c in comparisons if c.get("label") == "PO vs Delivery"), None
+        )
+        assert po_vs_delivery is not None, (
+            "variance_data must include a 'PO vs Delivery' comparison section"
+        )
+        qty_field = next(
+            (f for f in po_vs_delivery["fields"] if f["name"] == "Total Quantity"), None
+        )
+        assert qty_field is not None, "PO vs Delivery comparison must include Total Quantity"
+        assert float(qty_field["b_value"]) == pytest.approx(CEMENT_QTY), (
+            f"Delivery received quantity must be {CEMENT_QTY}, got {qty_field['b_value']}"
+        )
+        assert not qty_field["has_variance"], (
+            "No quantity variance expected when delivery matches PO"
+        )
+
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # BONUS — Supplier document centre: PO, Invoice, Delivery all appear
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def test_supplier_documents_include_po_invoice_delivery(self, client, db, scenario):
+        """
+        After the full pipeline completes, the supplier document centre
+        (GET /suppliers/{id}/documents) must include at minimum:
+          - one PURCHASE_ORDER document with the correct PO number
+          - one INVOICE document linked to the PO
+          - one DELIVERY_NOTE document linked to the PO
+        """
+        s = scenario
+        self.test_step8_office_captures_invoice(client, db, scenario)
+
+        r = client.get(
+            _api(f"/suppliers/{s['supplier_id']}/documents"),
+            headers=auth(s["office_tok"]),
+        )
+        assert r.status_code == 200, r.text
+        docs = r.json()["data"]
+        assert len(docs) > 0, "Supplier document centre must not be empty after pipeline completes"
+
+        doc_types = {d["doc_type"] for d in docs}
+        assert "PURCHASE_ORDER" in doc_types, (
+            f"Supplier documents must include a PURCHASE_ORDER; found types: {doc_types}"
+        )
+        assert "INVOICE" in doc_types, (
+            f"Supplier documents must include an INVOICE; found types: {doc_types}"
+        )
+        assert "DELIVERY_NOTE" in doc_types, (
+            f"Supplier documents must include a DELIVERY_NOTE; found types: {doc_types}"
+        )
+
+        # The PO document must reference the correct PO id
+        po_docs = [d for d in docs if d["doc_type"] == "PURCHASE_ORDER"]
+        assert any(d["doc_id"] == s["po_id"] for d in po_docs), (
+            "Supplier documents must include the PO from this procurement cycle"
+        )
+
+        # The Delivery document must reference the correct delivery id
+        del_docs = [d for d in docs if d["doc_type"] == "DELIVERY_NOTE"]
+        assert any(d["doc_id"] == s["delivery_id"] for d in del_docs), (
+            "Supplier documents must include the delivery from this procurement cycle"
+        )
+
+
 # ── Quick-smoke: each pipeline step status transition ────────────────────────
 
 class TestPipelineStepProgressions:

@@ -148,12 +148,22 @@ def _resolve_or_create_catalog_item(
 
     normalized = name.lower().strip()
 
-    # Check for an existing catalog item with the same normalized name to avoid duplicates
+    # Check for an existing catalog item with the same normalized name to avoid duplicates.
+    # Use case-insensitive DB comparison to catch items whose normalized_name column
+    # was written in a different case or whose normalized_name was never set.
+    from sqlalchemy import func as _func
     existing = (
         db.query(Item)
-        .filter(Item.normalized_name == normalized)
+        .filter(_func.lower(Item.normalized_name) == normalized)
         .first()
     )
+    if not existing:
+        # Fallback: match by item name (case-insensitive) in case normalized_name is NULL/stale
+        existing = (
+            db.query(Item)
+            .filter(_func.lower(Item.name) == normalized)
+            .first()
+        )
     if existing:
         boq_item.item_id = existing.id
         db.flush()

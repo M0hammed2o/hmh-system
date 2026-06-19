@@ -158,6 +158,19 @@ def create_reconciliation(
     if not quotation and po.quotation_id:
         quotation = db.get(Quotation, po.quotation_id)
 
+    # Auto-resolve delivery from PO if not supplied — picks the most recent RECEIVED delivery
+    if not delivery and data.purchase_order_id:
+        from app.models.enums import RecordStatus as _RS
+        delivery = (
+            db.query(Delivery)
+            .filter(
+                Delivery.purchase_order_id == data.purchase_order_id,
+                Delivery.delivery_status.in_([_RS.RECEIVED, _RS.PARTIALLY_RECEIVED]),
+            )
+            .order_by(Delivery.delivery_date.desc())
+            .first()
+        )
+
     # Compute variances
     variance_data = compute_variances(po, invoice, quotation, delivery)
 
@@ -174,7 +187,7 @@ def create_reconciliation(
         status=status,
         purchase_order_id=data.purchase_order_id,
         invoice_id=data.invoice_id,
-        delivery_id=data.delivery_id,
+        delivery_id=delivery.id if delivery else data.delivery_id,
         quotation_id=quotation.id if quotation else data.quotation_id,
         material_request_id=data.material_request_id or po.material_request_id,
         variance_data=variance_data,
@@ -397,7 +410,7 @@ def build_detail(db: Session, recon: ProcurementReconciliation) -> dict:
         if mr:
             base["material_request"] = {
                 "mr_id": str(mr.id),
-                "mr_number": mr.mr_number,
+                "mr_number": mr.request_number,
                 "status": mr.status.value,
             }
         else:

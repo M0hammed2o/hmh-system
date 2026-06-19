@@ -256,6 +256,38 @@ def create_delivery(
             created_at=now,
         ))
 
+    # Auto-link delivery to an existing ProcurementReconciliation for this PO.
+    # This ensures the reconciliation page shows the correct delivery and qty_received
+    # instead of "No delivery linked / 0 received".
+    if data.purchase_order_id:
+        try:
+            from app.models.procurement_reconciliation import ProcurementReconciliation
+            from app.services import procurement_reconciliation_service as _recon_svc
+            recon = (
+                db.query(ProcurementReconciliation)
+                .filter(
+                    ProcurementReconciliation.purchase_order_id == data.purchase_order_id,
+                    ProcurementReconciliation.delivery_id.is_(None),
+                )
+                .order_by(ProcurementReconciliation.created_at.desc())
+                .first()
+            )
+            if recon:
+                recon.delivery_id = delivery.id
+                po_obj = db.get(PurchaseOrder, data.purchase_order_id)
+                from app.models.invoice import Invoice
+                from app.models.quotation import Quotation
+                invoice_obj  = db.get(Invoice,   recon.invoice_id)  if recon.invoice_id  else None
+                quotation_obj = db.get(Quotation, recon.quotation_id) if recon.quotation_id else None
+                recon.variance_data = _recon_svc.compute_variances(po_obj, invoice_obj, quotation_obj, delivery)
+                from app.models.enums import ReconciliationStatus
+                if recon.variance_data["has_variance"]:
+                    recon.status = ReconciliationStatus.VARIANCE_DETECTED
+                else:
+                    recon.status = ReconciliationStatus.MATCHED
+        except Exception:
+            pass  # reconciliation auto-link is non-critical; never block delivery creation
+
     db.commit()
 
     # Refresh stock balances view so StockPage shows up-to-date data
