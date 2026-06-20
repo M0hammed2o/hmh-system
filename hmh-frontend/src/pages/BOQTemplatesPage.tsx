@@ -4,7 +4,7 @@
  */
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Copy, FileSpreadsheet, Check, ChevronRight, Trash2, Pencil } from "lucide-react";
+import { Copy, FileSpreadsheet, Check, ChevronRight, Trash2, Pencil, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
@@ -191,6 +191,38 @@ export default function BOQTemplatesPage() {
   const [error, setError] = useState("");
   const [cloneTarget, setCloneTarget] = useState<BOQTemplate | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [projects, setProjects] = useState<Array<{ id: string; name: string; code: string }>>([]);
+  const [showNewDialog, setShowNewDialog] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [newProjectId, setNewProjectId] = useState("");
+  const [newSaving, setNewSaving] = useState(false);
+  const [newError, setNewError] = useState("");
+
+  useEffect(() => {
+    client.get<{ data: { items: Array<{ id: string; name: string; code: string }> } }>("/projects/")
+      .then((r) => {
+        const items = r.data.data?.items || [];
+        setProjects(items);
+        if (items.length > 0) setNewProjectId(items[0].id);
+      })
+      .catch(() => {});
+  }, []);
+
+  const handleCreateTemplate = async () => {
+    if (!newName.trim() || !newProjectId) { setNewError("Template name and project are required."); return; }
+    setNewSaving(true); setNewError("");
+    try {
+      const res = await client.post<{ data: { id: string } }>(
+        `/projects/${newProjectId}/boq/`,
+        { version_name: newName.trim(), is_template: true, template_name: newName.trim() },
+      );
+      navigate(`/boq/${newProjectId}/${res.data.data.id}/build`);
+    } catch (err: unknown) {
+      const d = (err as { response?: { data?: { detail?: string; message?: string } } })?.response?.data;
+      setNewError(d?.detail || d?.message || "Failed to create template.");
+      setNewSaving(false);
+    }
+  };
 
   const handleDeleteTemplate = async (t: BOQTemplate) => {
     const confirmed = window.confirm(
@@ -218,9 +250,16 @@ export default function BOQTemplatesPage() {
 
   return (
     <div className="space-y-5 animate-fade-in">
-      <div>
-        <h1 className="text-xl font-bold">BOQ Templates</h1>
-        <p className="text-sm text-muted-foreground">Reusable BOQ templates. Clone to multiple lots at once.</p>
+      <div className="flex items-center justify-between gap-4">
+        <div>
+          <h1 className="text-xl font-bold">BOQ Templates</h1>
+          <p className="text-sm text-muted-foreground">Reusable BOQ templates. Clone to multiple lots at once.</p>
+        </div>
+        <WriteGuard>
+          <Button onClick={() => { setShowNewDialog(true); setNewName(""); setNewError(""); }}>
+            <Plus className="w-4 h-4 mr-2" />New Template
+          </Button>
+        </WriteGuard>
       </div>
 
       {error && (
@@ -234,7 +273,7 @@ export default function BOQTemplatesPage() {
           <FileSpreadsheet className="w-8 h-8 text-muted-foreground mx-auto mb-2" />
           <p className="text-sm text-muted-foreground">No BOQ templates yet.</p>
           <p className="text-xs text-muted-foreground mt-1">
-            Mark a BOQ as a template using the BOQ page, then clone it here.
+            Click <strong>New Template</strong> to create one, then clone it to any lots.
           </p>
         </div>
       ) : (
@@ -279,6 +318,47 @@ export default function BOQTemplatesPage() {
               </div>
             </div>
           ))}
+        </div>
+      )}
+
+      {showNewDialog && (
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-foreground/40">
+          <div className="bg-card border border-border rounded-t-2xl sm:rounded-2xl w-full sm:max-w-md flex flex-col">
+            <div className="flex items-center justify-between px-5 pt-5 pb-4 border-b border-border shrink-0">
+              <h2 className="text-base font-semibold">New BOQ Template</h2>
+              <button onClick={() => setShowNewDialog(false)} className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground">✕</button>
+            </div>
+            <div className="p-5 space-y-4">
+              <div>
+                <label className="text-xs text-muted-foreground block mb-1">Template Name</label>
+                <input
+                  type="text"
+                  value={newName}
+                  onChange={(e) => setNewName(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && handleCreateTemplate()}
+                  placeholder="e.g. Standard Residential Unit"
+                  className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
+                  autoFocus
+                />
+              </div>
+              {projects.length > 1 && (
+                <div>
+                  <label className="text-xs text-muted-foreground block mb-1">Project</label>
+                  <select
+                    value={newProjectId}
+                    onChange={(e) => setNewProjectId(e.target.value)}
+                    className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm"
+                  >
+                    {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  </select>
+                </div>
+              )}
+              {newError && <p className="text-sm text-destructive">{newError}</p>}
+              <Button onClick={handleCreateTemplate} disabled={newSaving || !newName.trim()} className="w-full">
+                {newSaving ? "Creating…" : "Create & Open Editor"}
+              </Button>
+            </div>
+          </div>
         </div>
       )}
 

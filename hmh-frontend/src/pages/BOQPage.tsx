@@ -367,6 +367,15 @@ export default function BOQPage() {
     navigate(`/boq/${selectedProjectId}/${headerId}/build`);
   };
 
+  const goToLot = (lot: LotBOQRow) => {
+    const headerId = lot.boq_header_ids[0] ?? null;
+    if (headerId) {
+      navigate(`/boq/${selectedProjectId}/${headerId}/build`);
+    } else {
+      setSelectedLotId(lot.lot_id);
+    }
+  };
+
   const handleResetLot = async (lotId: string) => {
     if (!confirm("Reset this lot's BOQ to the site template? Custom changes will be lost.")) return;
     setResetBusy(true);
@@ -468,7 +477,14 @@ export default function BOQPage() {
               <Sel
                 label={freestandingMode ? "Lot / Unit" : "Lot"}
                 value={selectedLotId}
-                onChange={setSelectedLotId}
+                onChange={(v) => {
+                  if (!v) { setSelectedLotId(""); return; }
+                  if (!freestandingMode) {
+                    const lotRow = siteLots.find(l => l.lot_id === v);
+                    if (lotRow) { goToLot(lotRow); return; }
+                  }
+                  setSelectedLotId(v);
+                }}
                 disabled={(() => {
                   const avail = freestandingMode
                     ? lots.filter(l => !l.site_id)
@@ -635,7 +651,7 @@ export default function BOQPage() {
                         </div>
                         <div className="text-right"><VariancePill pct={lot.variance_pct} amount={lot.variance_amount} /></div>
                         <Button size="sm" variant="outline" className="h-7 text-xs"
-                          onClick={() => { setSelectedLotId(lot.lot_id); changeMode("lot"); }}>
+                          onClick={() => goToLot(lot)}>
                           Edit
                         </Button>
                       </div>
@@ -660,7 +676,7 @@ export default function BOQPage() {
               <p className="text-sm text-muted-foreground px-1">Select a lot from the dropdown, or click one below.</p>
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                 {siteLots.map((lot) => (
-                  <button key={lot.lot_id} onClick={() => setSelectedLotId(lot.lot_id)}
+                  <button key={lot.lot_id} onClick={() => goToLot(lot)}
                     className="bg-card border border-border rounded-xl p-4 text-left hover:border-primary/40 hover:bg-primary/5 transition-colors">
                     <div className="flex items-center justify-between mb-1.5">
                       <span className="font-semibold text-sm">{lot.lot_number}</span>

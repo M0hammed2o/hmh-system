@@ -24,6 +24,7 @@ class BOQTemplateRead(BaseModel):
     version_name: str
     template_name: Optional[str]
     notes: Optional[str]
+    project_id: Optional[uuid.UUID]
 
 
 class CloneToLotsRequest(BaseModel):
@@ -51,6 +52,7 @@ def list_templates(db: DbSession):
             version_name=t.version_name,
             template_name=t.template_name,
             notes=t.notes,
+            project_id=t.project_id,
         )
         for t in templates
     ])
