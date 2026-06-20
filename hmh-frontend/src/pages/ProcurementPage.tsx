@@ -570,6 +570,7 @@ function MRDetailModal({ mr, suppliers, onClose, onUpdated }: {
   const [error, setError] = useState("");
   const [result, setResult] = useState("");
   const [overBoqReason, setOverBoqReason] = useState("");
+  const [issuingCompany, setIssuingCompany] = useState("HMH_GROUP");
   const [showReject, setShowReject] = useState(false);
   const [rejectReason, setRejectReason] = useState("");
   const [showConvert, setShowConvert] = useState(false);
@@ -844,6 +845,20 @@ function MRDetailModal({ mr, suppliers, onClose, onUpdated }: {
             </div>
           )}
 
+          {canApprove && (
+            <div className="bg-muted/40 border border-border rounded-lg p-3 space-y-2">
+              <p className="text-xs font-medium text-muted-foreground">Issuing company for this order</p>
+              <select
+                value={issuingCompany}
+                onChange={(e) => setIssuingCompany(e.target.value)}
+                className="h-8 w-full rounded-md border border-input bg-background px-2 text-xs"
+              >
+                <option value="HMH_GROUP">HMH Group</option>
+                <option value="MINERAT">Minerat Construction &amp; Civils</option>
+              </select>
+            </div>
+          )}
+
           {mr.over_boq && canApprove && (
             <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-3 space-y-2">
               <p className="text-xs font-medium text-amber-600 dark:text-amber-400">⚠ Over BOQ — reason required to approve.</p>
@@ -965,7 +980,7 @@ function MRDetailModal({ mr, suppliers, onClose, onUpdated }: {
 
           <div className="flex flex-wrap gap-2">
             <WriteGuard>
-              {canApprove && <Button size="sm" onClick={() => act(() => procurementApi.approveMR(mr.id, overBoqReason || undefined), "approve")} disabled={loading !== null || (mr.over_boq && !overBoqReason.trim())} className="h-8 text-xs"><Check className="w-3.5 h-3.5 mr-1" />{loading === "approve" ? "Approving…" : "Approve"}</Button>}
+              {canApprove && <Button size="sm" onClick={() => act(() => procurementApi.approveMR(mr.id, overBoqReason || undefined, issuingCompany), "approve")} disabled={loading !== null || (mr.over_boq && !overBoqReason.trim())} className="h-8 text-xs"><Check className="w-3.5 h-3.5 mr-1" />{loading === "approve" ? "Approving…" : "Approve"}</Button>}
               {["SUBMITTED", "PENDING_APPROVAL", "DRAFT"].includes(mr.status) && !showReject && <Button size="sm" variant="outline" onClick={() => setShowReject(true)} className="h-8 text-xs"><X className="w-3.5 h-3.5 mr-1" />Reject</Button>}
               {showReject && <Button size="sm" variant="destructive" onClick={() => act(() => procurementApi.rejectMR(mr.id, rejectReason), "reject")} disabled={!rejectReason.trim() || loading !== null} className="h-8 text-xs">{loading === "reject" ? "Rejecting…" : "Confirm Reject"}</Button>}
               {mr.status === "DRAFT" && <Button size="sm" variant="outline" onClick={() => act(() => procurementApi.submitMR(mr.id), "submit")} disabled={loading !== null} className="h-8 text-xs">{loading === "submit" ? "Submitting…" : "Submit"}</Button>}
@@ -1150,6 +1165,7 @@ function PipelinePanelModal({ mrId, suppliers, onClose, onUpdated }: {
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [actionError, setActionError] = useState("");
   const [overBoqReason, setOverBoqReason] = useState("");
+  const [pipelineIssuingCompany, setPipelineIssuingCompany] = useState("HMH_GROUP");
   const [showRejectMR, setShowRejectMR] = useState(false);
   const [rejectMRReason, setRejectMRReason] = useState("");
   const [rejectQuoteId, setRejectQuoteId] = useState<string | null>(null);
@@ -1267,6 +1283,17 @@ function PipelinePanelModal({ mrId, suppliers, onClose, onUpdated }: {
                     )}
                     {step.status === "CURRENT" && canApproveMR && (
                       <div className="space-y-2">
+                        <div className="bg-muted/40 border border-border rounded-lg p-2.5 space-y-1.5">
+                          <p className="text-xs font-medium text-muted-foreground">Issuing company</p>
+                          <select
+                            value={pipelineIssuingCompany}
+                            onChange={(e) => setPipelineIssuingCompany(e.target.value)}
+                            className="h-8 w-full rounded-md border border-input bg-background px-2 text-xs"
+                          >
+                            <option value="HMH_GROUP">HMH Group</option>
+                            <option value="MINERAT">Minerat Construction &amp; Civils</option>
+                          </select>
+                        </div>
                         {pipeline.over_boq && (
                           <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-2.5 space-y-2">
                             <p className="text-xs font-medium text-amber-600">Over BOQ — reason required</p>
@@ -1296,7 +1323,7 @@ function PipelinePanelModal({ mrId, suppliers, onClose, onUpdated }: {
                               <Button size="sm" className="h-8 text-xs flex-1 bg-green-600 hover:bg-green-700"
                                 disabled={!!actionLoading || (pipeline.over_boq && !overBoqReason.trim())}
                                 onClick={() => act(async () => {
-                                  await procurementApi.approveMR(mrId, overBoqReason || undefined);
+                                  await procurementApi.approveMR(mrId, overBoqReason || undefined, pipelineIssuingCompany);
                                 }, "approve_mr")}>
                                 {actionLoading === "approve_mr" ? "Approving…" : "Approve MR"}
                               </Button>

@@ -243,10 +243,10 @@ export const procurementApi = {
     return res.data.data;
   },
 
-  approveMR: async (mrId: string, overBoqReason?: string): Promise<MaterialRequest> => {
+  approveMR: async (mrId: string, overBoqReason?: string, issuingCompany?: string): Promise<MaterialRequest> => {
     const res = await client.post<{ data: MaterialRequest }>(
       `/material-requests/${mrId}/approve`,
-      { over_boq_reason: overBoqReason ?? null }
+      { over_boq_reason: overBoqReason ?? null, issuing_company: issuingCompany ?? "HMH_GROUP" }
     );
     return res.data.data;
   },

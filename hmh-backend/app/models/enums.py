@@ -261,6 +261,11 @@ class PricingMethod(str, enum.Enum):
     INCL_VAT = "INCL_VAT"  # supplier quotes prices that already include VAT
 
 
+class IssuingCompany(str, enum.Enum):
+    HMH_GROUP = "HMH_GROUP"
+    MINERAT   = "MINERAT"
+
+
 class ReconciliationStatus(str, enum.Enum):
     PENDING           = "PENDING"
     MATCHED           = "MATCHED"

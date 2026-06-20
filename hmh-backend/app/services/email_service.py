@@ -204,11 +204,37 @@ def send_email(
     return {"status": "SENT", "error": None, "provider_message_id": None}
 
 
+# ── Company details lookup ────────────────────────────────────────────────────
+
+_COMPANY_DETAILS: dict[str, dict] = {
+    "HMH_GROUP": {
+        "name":    "HMH Group",
+        "address": "",
+        "vat":     "",
+        "tel":     "",
+        "color":   "#1e3a5f",
+    },
+    "MINERAT": {
+        "name":    "Minerat Construction & Civils",
+        "address": "361 Mont Blank, 51 OR Tambo Pamde, Durban, 4001",
+        "vat":     "4380258618",
+        "tel":     "(031) 301 3038",
+        "color":   "#1e3a5f",
+    },
+}
+
+
+def _company(key: Optional[str]) -> dict:
+    return _COMPANY_DETAILS.get(key or "HMH_GROUP", _COMPANY_DETAILS["HMH_GROUP"])
+
+
 # ── PO email builder ──────────────────────────────────────────────────────────
 
 def build_po_email_body(po: PurchaseOrder) -> tuple[str, str]:
     """Return (subject, html_body) for a purchase-order email."""
-    subject = f"Purchase Order {po.po_number} — HMH Group"
+    co = _company(getattr(po, "issuing_company", None))
+    co_name = co["name"]
+    subject = f"Purchase Order {po.po_number} — {co_name}"
 
     items_html = ""
     for item in po.order_items:
@@ -230,11 +256,17 @@ def build_po_email_body(po: PurchaseOrder) -> tuple[str, str]:
         if po.expected_delivery_date else "To be confirmed"
     )
 
+    co_meta = ""
+    if co["address"] or co["vat"] or co["tel"]:
+        parts = [p for p in [co["address"], f"VAT: {co['vat']}" if co["vat"] else "", f"Tel: {co['tel']}" if co["tel"] else ""] if p]
+        co_meta = f"<p style='color:#aabbd4;font-size:12px;margin:2px 0 0'>{' | '.join(parts)}</p>"
+
     body = f"""
 <html><body style="font-family:Arial,sans-serif;color:#333;max-width:700px;margin:0 auto">
-<div style="background:#1e3a5f;padding:20px 30px">
-  <h2 style="color:white;margin:0">HMH Group — Purchase Order</h2>
+<div style="background:{co['color']};padding:20px 30px">
+  <h2 style="color:white;margin:0">{co_name} — Purchase Order</h2>
   <p style="color:#aabbd4;margin:4px 0 0">{po.po_number}</p>
+  {co_meta}
 </div>
 <div style="padding:24px 30px">
   <p>Dear Supplier,</p>
@@ -272,7 +304,7 @@ def build_po_email_body(po: PurchaseOrder) -> tuple[str, str]:
     Quote reference <strong>{po.po_number}</strong> in the subject line of all correspondence
     so your documents can be automatically matched to this order.
   </p>
-  <p style="color:#888;font-size:12px">HMH Group Procurement &mdash; NextGen Intelligence</p>
+  <p style="color:#888;font-size:12px">{co_name} Procurement &mdash; NextGen Intelligence</p>
 </div>
 </body></html>
 """
@@ -423,7 +455,9 @@ def build_mr_email_body(db: Session, mr) -> tuple[str, str]:
     from app.models.supplier import Supplier
 
     request_number = mr.request_number
-    subject = f"Material Request {request_number} — HMH Group"
+    co = _company(getattr(mr, "issuing_company", None))
+    co_name = co["name"]
+    subject = f"Material Request {request_number} — {co_name}"
 
     site     = db.get(Site, mr.site_id) if mr.site_id else None
     lot      = db.get(Lot,  mr.lot_id)  if mr.lot_id  else None
@@ -460,7 +494,7 @@ def build_mr_email_body(db: Session, mr) -> tuple[str, str]:
     body = f"""
 <html><body style="font-family:Arial,sans-serif;color:#1a1a1a;max-width:680px;margin:0 auto;background:#f7f7f7">
 <div style="background:#e85d04;padding:22px 32px">
-  <h2 style="color:white;margin:0;font-size:20px">HMH Group — Material Request</h2>
+  <h2 style="color:white;margin:0;font-size:20px">{co_name} — Material Request</h2>
   <p style="color:#ffd7b5;margin:4px 0 0;font-size:14px">{request_number}</p>
 </div>
 <div style="background:white;padding:28px 32px">
@@ -495,7 +529,7 @@ def build_mr_email_body(db: Session, mr) -> tuple[str, str]:
     </a><br>
     Quote reference <strong>{request_number}</strong> on all correspondence.
   </p>
-  <p style="color:#999;font-size:12px">HMH Group Procurement &mdash; NextGen Intelligence</p>
+  <p style="color:#999;font-size:12px">{co_name} Procurement &mdash; NextGen Intelligence</p>
 </div>
 </body></html>
 """

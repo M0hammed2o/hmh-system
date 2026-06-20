@@ -95,6 +95,7 @@ class MaterialRequest(TimestampMixin, Base):
     )
     approved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     converted_to_po_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    issuing_company: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
 
     items: Mapped[list["MaterialRequestItem"]] = relationship(
         "MaterialRequestItem", back_populates="request", cascade="all, delete-orphan"

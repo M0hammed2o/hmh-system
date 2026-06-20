@@ -245,6 +245,7 @@ def _create_mr_submitted_alert(db: Session, mr: "MaterialRequest") -> None:
 def approve_request(
     db: Session, mr_id: uuid.UUID, approver_id: uuid.UUID,
     over_boq_reason: Optional[str] = None,
+    issuing_company: Optional[str] = "HMH_GROUP",
 ) -> MaterialRequest:
     mr = get_request(db, mr_id)
     if mr.status not in (RecordStatus.SUBMITTED, RecordStatus.PENDING_APPROVAL):
@@ -256,6 +257,7 @@ def approve_request(
     mr.status = RecordStatus.APPROVED
     mr.approved_by = approver_id
     mr.approved_at = now
+    mr.issuing_company = issuing_company or "HMH_GROUP"
     if over_boq_reason:
         mr.over_boq_reason = over_boq_reason
 
@@ -451,6 +453,7 @@ def convert_to_po(
         supplier_id=supplier_id,
         material_request_id=mr_id,
         delivery_destination=mr.delivery_destination,
+        issuing_company=mr.issuing_company or "HMH_GROUP",
         status=RecordStatus.APPROVED,
         po_date=now,
         expected_delivery_date=expected_delivery_date,

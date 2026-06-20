@@ -101,13 +101,18 @@ def submit_request(mr_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
 
 class ApproveBody(BaseModel):
     over_boq_reason: Optional[str] = None
+    issuing_company: Optional[str] = "HMH_GROUP"
 
 
 @mr_router.post("/{mr_id}/approve", response_model=ApiSuccess[MaterialRequestRead], dependencies=[OFFICE_AND_ABOVE])
 def approve_request(mr_id: uuid.UUID, body: ApproveBody, db: DbSession, current_user: CurrentUser):
     get_and_check_project_resource(db, current_user, MaterialRequest, mr_id, "Material request not found.")
     logger.info("mr_approve mr_id=%s user=%s role=%s", mr_id, current_user.id, current_user.role.value)
-    mr = mr_service.approve_request(db, mr_id, current_user.id, body.over_boq_reason)
+    mr = mr_service.approve_request(
+        db, mr_id, current_user.id,
+        body.over_boq_reason,
+        issuing_company=body.issuing_company or "HMH_GROUP",
+    )
     return ApiSuccess(data=MaterialRequestRead.model_validate(mr), message="Request approved.")
 
 

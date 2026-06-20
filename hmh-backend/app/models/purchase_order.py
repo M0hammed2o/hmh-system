@@ -82,6 +82,7 @@ class PurchaseOrder(TimestampMixin, Base):
         nullable=True,
         index=True,
     )
+    issuing_company: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
 
     supplier: Mapped["Supplier"] = relationship("Supplier", back_populates="purchase_orders")  # type: ignore[name-defined]
     quotation: Mapped[Optional["Quotation"]] = relationship("Quotation", back_populates="purchase_orders", foreign_keys=[quotation_id])  # type: ignore[name-defined]

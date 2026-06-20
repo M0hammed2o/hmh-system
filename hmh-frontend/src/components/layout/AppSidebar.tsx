@@ -2,7 +2,7 @@ import { NavLink, useLocation } from "react-router-dom";
 import {
   LayoutDashboard, Users, FolderKanban, FileSpreadsheet,
   ShoppingCart, Truck, Package, CreditCard, Bell, Settings, LogOut, HardHat,
-  Droplet, Building2, Car, FileCheck2, Smartphone, Mail, Clock, Flag, Warehouse, BarChart2, ClipboardList, Receipt,
+  Droplet, Building2, Car, FileCheck2, Smartphone, Mail, Clock, Flag, Warehouse, BarChart2, ClipboardList, Receipt, GitMerge,
 } from "lucide-react";
 import { HMHLogo } from "@/components/HMHLogo";
 import { TOKEN_KEY, REFRESH_TOKEN_KEY, ROLE_KEY } from "@/lib/constants";
@@ -27,10 +27,12 @@ const navGroups = [
   {
     label: "Procurement",
     items: [
-      { title: "Procurement",     path: "/procurement",    icon: ShoppingCart },
-      { title: "Suppliers",       path: "/suppliers",      icon: Building2 },
-      { title: "Deliveries",      path: "/deliveries",     icon: Truck },
-      { title: "Gmail Inbox",     path: "/gmail-inbox",    icon: Mail },
+      { title: "Procurement",          path: "/procurement",           icon: ShoppingCart },
+      { title: "Suppliers",            path: "/suppliers",             icon: Building2 },
+      { title: "Deliveries",           path: "/deliveries",            icon: Truck },
+      { title: "Reconciliation",       path: "/reconciliation",        icon: GitMerge },
+      { title: "Procurement Analytics",path: "/procurement-analytics", icon: BarChart2 },
+      { title: "Gmail Inbox",          path: "/gmail-inbox",           icon: Mail },
     ],
   },
   {
@@ -51,11 +53,9 @@ const navGroups = [
   {
     label: "Finance",
     items: [
-      { title: "Municipality Invoices", path: "/municipality-invoices",          icon: Receipt },
-      { title: "Payments",              path: "/payments",                       icon: CreditCard },
-      { title: "Payment Reports",     path: "/payment-reports",                 icon: FileCheck2 },
-      { title: "Reconciliation",      path: "/reconciliation",                  icon: FileCheck2 },
-      { title: "Procurement Analytics", path: "/procurement-analytics",          icon: BarChart2  },
+      { title: "Municipality Invoices", path: "/municipality-invoices", icon: Receipt },
+      { title: "Payments",              path: "/payments",              icon: CreditCard },
+      { title: "Payment Reports",       path: "/payment-reports",       icon: FileCheck2 },
     ],
   },
   {
