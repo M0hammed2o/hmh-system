@@ -133,9 +133,11 @@ interface ItemRowProps {
   suppliers: Supplier[];
   onSave: (id: string, patch: Partial<BOQItem>, applyToAllLots?: boolean, isSiteItem?: boolean) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
+  globalEdit?: boolean;
+  onDirty?: (id: string, patch: Partial<BOQItem> | null) => void;
 }
 
-function ItemRow({ item, suppliers, onSave, onDelete }: ItemRowProps) {
+function ItemRow({ item, suppliers, onSave, onDelete, globalEdit, onDirty }: ItemRowProps) {
   const [editing, setEditing] = useState(false);
   const [form, setForm] = useState({
     raw_description: item.raw_description,
@@ -149,6 +151,28 @@ function ItemRow({ item, suppliers, onSave, onDelete }: ItemRowProps) {
   });
   const [applyToAll, setApplyToAll] = useState(false);
   const [saving, setSaving] = useState(false);
+
+  // Sync with global edit mode — enter edit mode when parent activates it
+  useEffect(() => {
+    if (globalEdit) setEditing(true);
+  }, [globalEdit]);
+
+  const updateForm = (patch: Partial<typeof form>) => {
+    const next = { ...form, ...patch };
+    setForm(next);
+    if (globalEdit && onDirty) {
+      onDirty(item.id, {
+        raw_description: next.raw_description,
+        unit: next.unit || null,
+        planned_quantity: next.planned_quantity ? parseFloat(next.planned_quantity) : null,
+        planned_rate: next.planned_rate ? parseFloat(next.planned_rate) : null,
+        item_type: next.item_type,
+        specification: next.specification || null,
+        notes: next.notes || null,
+        supplier_id: next.supplier_id || null,
+      });
+    }
+  };
 
   const handleSave = async () => {
     setSaving(true);
@@ -182,31 +206,31 @@ function ItemRow({ item, suppliers, onSave, onDelete }: ItemRowProps) {
               <div className="sm:col-span-2">
                 <Input
                   value={form.raw_description}
-                  onChange={(e) => setForm({ ...form, raw_description: e.target.value })}
+                  onChange={(e) => updateForm({ raw_description: e.target.value })}
                   placeholder="Description"
                   className="text-sm h-8"
                 />
               </div>
               <select
                 value={form.item_type}
-                onChange={(e) => setForm({ ...form, item_type: e.target.value as ItemType })}
+                onChange={(e) => updateForm({ item_type: e.target.value as ItemType })}
                 className="h-8 rounded-md border border-input bg-background px-2 text-sm"
               >
                 {TYPE_OPTIONS.map((t) => <option key={t} value={t}>{t}</option>)}
               </select>
             </div>
             <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
-              <Input value={form.unit} onChange={(e) => setForm({ ...form, unit: e.target.value })} placeholder="Unit" className="text-sm h-8" />
-              <Input type="number" value={form.planned_quantity} onChange={(e) => setForm({ ...form, planned_quantity: e.target.value })} placeholder="Qty" className="text-sm h-8" />
-              <Input type="number" value={form.planned_rate} onChange={(e) => setForm({ ...form, planned_rate: e.target.value })} placeholder="Rate" className="text-sm h-8" />
+              <Input value={form.unit} onChange={(e) => updateForm({ unit: e.target.value })} placeholder="Unit" className="text-sm h-8" />
+              <Input type="number" value={form.planned_quantity} onChange={(e) => updateForm({ planned_quantity: e.target.value })} placeholder="Qty" className="text-sm h-8" />
+              <Input type="number" value={form.planned_rate} onChange={(e) => updateForm({ planned_rate: e.target.value })} placeholder="Rate" className="text-sm h-8" />
               <div className="flex items-center gap-1 text-sm font-medium">
                 {total != null ? fmt(total) : "—"}
               </div>
             </div>
-            <Input value={form.specification} onChange={(e) => setForm({ ...form, specification: e.target.value })} placeholder="Specification (optional)" className="text-sm h-8" />
+            <Input value={form.specification} onChange={(e) => updateForm({ specification: e.target.value })} placeholder="Specification (optional)" className="text-sm h-8" />
             <select
               value={form.supplier_id}
-              onChange={(e) => setForm({ ...form, supplier_id: e.target.value })}
+              onChange={(e) => updateForm({ supplier_id: e.target.value })}
               className="h-8 w-full rounded-md border border-input bg-background px-2 text-sm"
             >
               <option value="">— No supplier —</option>
@@ -228,14 +252,19 @@ function ItemRow({ item, suppliers, onSave, onDelete }: ItemRowProps) {
                 </span>
               </label>
             )}
-            <div className="flex gap-2">
-              <Button size="sm" onClick={handleSave} disabled={saving} className="h-7 text-xs">
-                <Save className="w-3 h-3 mr-1" />{saving ? "Saving…" : applyToAll ? (item.lot_id ? "Save (All Lots)" : "Save (Push to Lots)") : "Save"}
-              </Button>
-              <Button size="sm" variant="outline" onClick={() => { setEditing(false); setApplyToAll(false); }} className="h-7 text-xs">
-                <X className="w-3 h-3 mr-1" />Cancel
-              </Button>
-            </div>
+            {!globalEdit && (
+              <div className="flex gap-2">
+                <Button size="sm" onClick={handleSave} disabled={saving} className="h-7 text-xs">
+                  <Save className="w-3 h-3 mr-1" />{saving ? "Saving…" : applyToAll ? (item.lot_id ? "Save (All Lots)" : "Save (Push to Lots)") : "Save"}
+                </Button>
+                <Button size="sm" variant="outline" onClick={() => { setEditing(false); setApplyToAll(false); onDirty?.(item.id, null); }} className="h-7 text-xs">
+                  <X className="w-3 h-3 mr-1" />Cancel
+                </Button>
+              </div>
+            )}
+            {globalEdit && onDirty && (
+              <p className="text-[10px] text-primary opacity-70">Changes tracked — use "Save All" above</p>
+            )}
           </div>
         </td>
       </tr>
@@ -347,9 +376,11 @@ interface SectionBlockProps {
   suppliers: Supplier[];
   onRefresh: () => void;
   onDeleteSection: (id: string) => Promise<void>;
+  globalEdit?: boolean;
+  onDirty?: (id: string, patch: Partial<BOQItem> | null) => void;
 }
 
-function SectionBlock({ section, items, sectionTotal, headerId, projectId, suppliers, onRefresh, onDeleteSection }: SectionBlockProps) {
+function SectionBlock({ section, items, sectionTotal, headerId, projectId, suppliers, onRefresh, onDeleteSection, globalEdit, onDirty }: SectionBlockProps) {
   const [collapsed, setCollapsed] = useState(false);
   const [editingName, setEditingName] = useState(false);
   const [name, setName] = useState(section.section_name);
@@ -431,7 +462,7 @@ function SectionBlock({ section, items, sectionTotal, headerId, projectId, suppl
             </thead>
             <tbody>
               {items.map((item) => (
-                <ItemRow key={item.id} item={item} suppliers={suppliers} onSave={handleSaveItem} onDelete={handleDeleteItem} />
+                <ItemRow key={item.id} item={item} suppliers={suppliers} onSave={handleSaveItem} onDelete={handleDeleteItem} globalEdit={globalEdit} onDirty={onDirty} />
               ))}
               <AddItemRow sectionId={section.id} onAdded={onRefresh} />
             </tbody>
@@ -458,6 +489,9 @@ export default function BOQBuilderPage() {
   const [templateDone, setTemplateDone] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
   const [deleteResult, setDeleteResult] = useState<string | null>(null);
+  const [globalEdit, setGlobalEdit]         = useState(false);
+  const [pendingChanges, setPendingChanges] = useState<Record<string, Partial<BOQItem>>>({});
+  const [bulkSaving, setBulkSaving]         = useState(false);
   // Detect if this BOQ was cloned to a specific lot (version name contains "— Lot X")
   const lotMatch = boq?.header.version_name.match(/— Lot (\S+)$/);
   const lotNumber = lotMatch ? lotMatch[1] : null;
@@ -516,6 +550,33 @@ export default function BOQBuilderPage() {
     load();
   };
 
+  const handleDirty = (id: string, patch: Partial<BOQItem> | null) => {
+    if (patch === null) {
+      setPendingChanges((prev) => { const next = { ...prev }; delete next[id]; return next; });
+    } else {
+      setPendingChanges((prev) => ({ ...prev, [id]: patch }));
+    }
+  };
+
+  const handleSaveAll = async () => {
+    const ids = Object.keys(pendingChanges);
+    if (ids.length === 0) { setGlobalEdit(false); return; }
+    setBulkSaving(true);
+    try {
+      await Promise.all(ids.map((id) => boqApi.updateItem(id, pendingChanges[id] as Parameters<typeof boqApi.updateItem>[1])));
+      setGlobalEdit(false);
+      setPendingChanges({});
+      load();
+    } finally {
+      setBulkSaving(false);
+    }
+  };
+
+  const handleCancelAll = () => {
+    setGlobalEdit(false);
+    setPendingChanges({});
+  };
+
   if (loading) {
     return (
       <div className="space-y-4 animate-fade-in">
@@ -563,11 +624,27 @@ export default function BOQBuilderPage() {
             {boq.sections.length} sections · {boq.sections.reduce((sum, s) => sum + s.items.length, 0)} items · Grand total: <span className="font-semibold text-foreground">{fmt(computedGrandTotal)}</span>
           </p>
         </div>
-        <div className="flex gap-2 shrink-0">
-          {!boq.header.is_template && (
-            <Button size="sm" variant="outline" onClick={() => setMarkingTemplate(true)}>
-              <BookTemplate className="w-4 h-4 mr-1" />Make Template
-            </Button>
+        <div className="flex gap-2 shrink-0 flex-wrap">
+          {globalEdit ? (
+            <>
+              <Button size="sm" onClick={handleSaveAll} disabled={bulkSaving}>
+                <Save className="w-4 h-4 mr-1" />{bulkSaving ? "Saving…" : `Save All${Object.keys(pendingChanges).length > 0 ? ` (${Object.keys(pendingChanges).length})` : ""}`}
+              </Button>
+              <Button size="sm" variant="outline" onClick={handleCancelAll} disabled={bulkSaving}>
+                <X className="w-4 h-4 mr-1" />Cancel
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button size="sm" variant="outline" onClick={() => setGlobalEdit(true)}>
+                <Pencil className="w-4 h-4 mr-1" />Edit All
+              </Button>
+              {!boq.header.is_template && (
+                <Button size="sm" variant="outline" onClick={() => setMarkingTemplate(true)}>
+                  <BookTemplate className="w-4 h-4 mr-1" />Make Template
+                </Button>
+              )}
+            </>
           )}
         </div>
       </div>
@@ -613,6 +690,8 @@ export default function BOQBuilderPage() {
               suppliers={suppliers}
               onRefresh={load}
               onDeleteSection={handleDeleteSection}
+              globalEdit={globalEdit}
+              onDirty={handleDirty}
             />
           );
         })}

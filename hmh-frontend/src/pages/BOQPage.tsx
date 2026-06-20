@@ -233,12 +233,19 @@ function SiteBOQTable({ summary }: { summary: SiteBOQSummary }) {
                 <th className="text-right px-4 py-2 text-xs font-medium text-muted-foreground">Unit</th>
                 <th className="text-right px-4 py-2 text-xs font-medium text-muted-foreground">Rate (R)</th>
                 <th className="text-right px-4 py-2 text-xs font-medium text-muted-foreground">Total</th>
+                <th className="text-right px-4 py-2 text-xs font-medium text-green-600 dark:text-green-400">Received</th>
+                <th className="text-right px-4 py-2 text-xs font-medium text-amber-600 dark:text-amber-400">Used</th>
+                <th className="text-right px-4 py-2 text-xs font-medium text-blue-600 dark:text-blue-400">Remaining</th>
                 <th className="text-left px-4 py-2 text-xs font-medium text-muted-foreground">Type</th>
               </tr>
             </thead>
             <tbody>
               {sec.items.map((item) => {
                 const total = siteItemTotal(item);
+                const recv  = item.received_qty ?? 0;
+                const used  = item.used_qty ?? 0;
+                const rem   = item.remaining_qty ?? (recv - used);
+                const remColor = rem < 0 ? "text-destructive font-semibold" : rem === 0 && recv > 0 ? "text-muted-foreground" : "";
                 return (
                   <tr key={item.id} className="border-b border-border last:border-0 hover:bg-muted/20">
                     <td className="px-4 py-2.5">
@@ -253,6 +260,9 @@ function SiteBOQTable({ summary }: { summary: SiteBOQSummary }) {
                     <td className="px-4 py-2.5 text-right text-muted-foreground">{item.unit ?? "—"}</td>
                     <td className="px-4 py-2.5 text-right tabular-nums">{item.planned_rate ?? "—"}</td>
                     <td className="px-4 py-2.5 text-right tabular-nums font-medium">{total > 0 ? fmt(total) : "—"}</td>
+                    <td className="px-4 py-2.5 text-right tabular-nums text-green-600 dark:text-green-400">{recv > 0 ? recv : "—"}</td>
+                    <td className="px-4 py-2.5 text-right tabular-nums text-amber-600 dark:text-amber-400">{used > 0 ? used : "—"}</td>
+                    <td className={`px-4 py-2.5 text-right tabular-nums ${remColor}`}>{recv > 0 || used > 0 ? rem : "—"}</td>
                     <td className="px-4 py-2.5 text-xs text-muted-foreground">{item.item_type}</td>
                   </tr>
                 );
@@ -262,7 +272,7 @@ function SiteBOQTable({ summary }: { summary: SiteBOQSummary }) {
               <tr className="bg-muted/30 border-t border-border">
                 <td colSpan={4} className="px-4 py-2 text-xs font-semibold text-muted-foreground text-right">Section Total</td>
                 <td className="px-4 py-2 text-right font-semibold tabular-nums">{fmt(sec.section_total)}</td>
-                <td />
+                <td colSpan={4} />
               </tr>
             </tfoot>
           </table>

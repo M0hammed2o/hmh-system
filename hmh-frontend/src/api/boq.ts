@@ -180,12 +180,16 @@ export interface ProjectMasterSummary extends TypeBreakdown {
 
 export interface SiteBOQItem {
   id: string;
+  item_id: string | null;
   description: string;
   unit: string | null;
   planned_quantity: number;
   planned_rate: number;
   line_total: number;
   item_type: ItemType;
+  received_qty?: number;
+  used_qty?: number;
+  remaining_qty?: number;
 }
 
 export interface SiteBOQSection {

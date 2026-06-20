@@ -1275,6 +1275,42 @@ def get_site_boq_summary(db: Session, site_id: uuid.UUID) -> dict:
     expected_site_total = unit_total * max(lot_count, 1)
     var = _variance(actual_site_total, expected_site_total)
 
+    # ── Stock aggregates per catalog item (Received / Used / Remaining) ─────────
+    from sqlalchemy import func as _func
+    from app.models.stock import StockLedger as _SL
+    from app.models.enums import MovementType as _MT
+
+    _item_ids = [item.item_id for item in site_items if item.item_id]
+    _received_map: dict[str, float] = {}
+    _used_map:     dict[str, float] = {}
+
+    if _item_ids:
+        _recv_rows = (
+            db.query(_SL.item_id, _func.sum(_SL.quantity_in).label("total"))
+            .filter(
+                _SL.project_id == site.project_id,
+                _SL.item_id.in_(_item_ids),
+                _SL.movement_type == _MT.DELIVERY_RECEIVED,
+            )
+            .group_by(_SL.item_id)
+            .all()
+        )
+        for _r in _recv_rows:
+            _received_map[str(_r.item_id)] = round(float(_r.total or 0), 4)
+
+        _used_rows = (
+            db.query(_SL.item_id, _func.sum(_SL.quantity_out).label("total"))
+            .filter(
+                _SL.project_id == site.project_id,
+                _SL.item_id.in_(_item_ids),
+                _SL.movement_type == _MT.USAGE,
+            )
+            .group_by(_SL.item_id)
+            .all()
+        )
+        for _r in _used_rows:
+            _used_map[str(_r.item_id)] = round(float(_r.total or 0), 4)
+
     # Build sections from template items, using aggregated quantities from lots
     # when available so the site summary reflects the real totals.
     section_map: dict[uuid.UUID, dict] = {}
@@ -1307,8 +1343,13 @@ def get_site_boq_summary(db: Session, site_id: uuid.UUID) -> dict:
             if _sup:
                 _sup_name = _sup.name
 
+        _iid  = str(item.item_id) if item.item_id else None
+        _recv = _received_map.get(_iid, 0.0) if _iid else 0.0
+        _used = _used_map.get(_iid, 0.0) if _iid else 0.0
+
         section_map[sid]["items"].append({
             "id":               str(item.id),
+            "item_id":          _iid,
             "description":      item.raw_description,
             "unit":             item.unit,
             "planned_quantity": round(agg_qty, 4),
@@ -1317,6 +1358,9 @@ def get_site_boq_summary(db: Session, site_id: uuid.UUID) -> dict:
             "item_type":        _item_type_str(item),
             "supplier_id":      _sup_id,
             "supplier_name":    _sup_name,
+            "received_qty":     _recv,
+            "used_qty":         _used,
+            "remaining_qty":    round(_recv - _used, 4),
         })
         section_map[sid]["section_total"] += t
 

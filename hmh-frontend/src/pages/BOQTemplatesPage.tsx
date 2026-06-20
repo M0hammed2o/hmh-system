@@ -3,7 +3,8 @@
  * Lists reusable templates, lets office users clone to selected lots.
  */
 import { useEffect, useState } from "react";
-import { Copy, FileSpreadsheet, Check, ChevronRight, Trash2 } from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import { Copy, FileSpreadsheet, Check, ChevronRight, Trash2, Pencil } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
@@ -15,6 +16,7 @@ interface BOQTemplate {
   version_name: string;
   template_name: string | null;
   notes: string | null;
+  project_id: string | null;
 }
 
 interface Lot {
@@ -183,6 +185,7 @@ function CloneWizard({ template, onClose, onDone }: CloneWizardProps) {
 }
 
 export default function BOQTemplatesPage() {
+  const navigate = useNavigate();
   const [templates, setTemplates] = useState<BOQTemplate[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -239,17 +242,25 @@ export default function BOQTemplatesPage() {
           {templates.map((t, i) => (
             <div
               key={t.id}
-              className={`flex items-center gap-4 px-4 py-3 hover:bg-muted/30 transition-colors ${
+              className={`flex items-center gap-4 px-4 py-3 transition-colors ${
                 i < templates.length - 1 ? "border-b border-border" : ""
               }`}
             >
-              <div className="flex items-center justify-center w-9 h-9 rounded-lg bg-primary/10 shrink-0">
-                <FileSpreadsheet className="w-4 h-4 text-primary" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className="font-medium text-sm">{t.template_name || t.version_name}</p>
-                {t.notes && <p className="text-xs text-muted-foreground truncate">{t.notes}</p>}
-              </div>
+              <button
+                onClick={() => t.project_id && navigate(`/boq/${t.project_id}/${t.id}/build`)}
+                disabled={!t.project_id}
+                className="flex items-center gap-4 flex-1 min-w-0 text-left hover:opacity-80 transition-opacity disabled:opacity-40"
+                title={t.project_id ? "Click to view/edit template" : "No project associated"}
+              >
+                <div className="flex items-center justify-center w-9 h-9 rounded-lg bg-primary/10 shrink-0">
+                  <FileSpreadsheet className="w-4 h-4 text-primary" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="font-medium text-sm">{t.template_name || t.version_name}</p>
+                  {t.notes && <p className="text-xs text-muted-foreground truncate">{t.notes}</p>}
+                </div>
+                <Pencil className="w-3.5 h-3.5 text-muted-foreground opacity-50 shrink-0" />
+              </button>
               <div className="flex items-center gap-2 shrink-0">
                 <Button size="sm" variant="outline" onClick={() => setCloneTarget(t)}>
                   <Copy className="w-3.5 h-3.5 mr-1.5" />
