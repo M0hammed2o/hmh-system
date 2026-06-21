@@ -1048,11 +1048,12 @@ function RequestMaterialModal({ projectId, siteId, lotId, onClose, onDone }: {
         notes:                 notes    || null,
         preferred_supplier_id: supplierFromBOQ ?? null,
         items: validItems.map(c => ({
-          description:        c.description.trim(),
-          quantity_requested: parseFloat(c.qty),
-          unit:               c.unit.trim() || null,
-          boq_item_id:        c.boq_item_id,
-          notes:              c.mode === "custom" ? "Outside BOQ — one-time purchase" : null,
+          description:          c.description.trim(),
+          quantity_requested:   parseFloat(c.qty),
+          unit:                 c.unit.trim() || null,
+          boq_item_id:          c.boq_item_id,
+          preferred_supplier_id: c.supplier_id || null,
+          notes:                c.mode === "custom" ? "Outside BOQ — one-time purchase" : null,
         })),
       });
       await materialRequestsApi.submit(mr.id);

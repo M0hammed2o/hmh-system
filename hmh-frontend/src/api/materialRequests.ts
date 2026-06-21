@@ -46,6 +46,7 @@ export interface MRItemCreate {
   unit?: string | null;
   item_id?: string | null;
   boq_item_id?: string | null;
+  preferred_supplier_id?: string | null;
   notes?: string | null;
 }
 

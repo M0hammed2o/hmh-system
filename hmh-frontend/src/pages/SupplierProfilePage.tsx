@@ -990,6 +990,7 @@ function EditSupplierModal({
   const [vatRegistered, setVatRegistered] = useState(supplier.vat_registered);
   const [pricingMethod, setPricingMethod] = useState<PricingMethod>(supplier.pricing_method);
   const [defaultVatRate, setDefaultVatRate] = useState(String(supplier.default_vat_rate));
+  const [accountCode, setAccountCode] = useState(supplier.customer_account_code ?? "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
@@ -1008,6 +1009,7 @@ function EditSupplierModal({
     setVatRegistered(supplier.vat_registered);
     setPricingMethod(supplier.pricing_method);
     setDefaultVatRate(String(supplier.default_vat_rate));
+    setAccountCode(supplier.customer_account_code ?? "");
     setError("");
   }, [open, supplier]);
 
@@ -1029,6 +1031,7 @@ function EditSupplierModal({
         address: address.trim() || null,
         contact_person: contactPerson.trim() || null,
         payment_terms: paymentTerms.trim() || null,
+        customer_account_code: accountCode.trim() || null,
         vat_number: vatNumber.trim() || null,
         notes: notes.trim() || null,
         vat_registered: vatRegistered,
@@ -1123,6 +1126,16 @@ function EditSupplierModal({
                 onChange={(e) => setPaymentTerms(e.target.value)}
                 className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm"
                 placeholder="e.g. 30 days EOM"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-muted-foreground block mb-1">Customer Account No.</label>
+              <input
+                type="text"
+                value={accountCode}
+                onChange={(e) => setAccountCode(e.target.value)}
+                className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm"
+                placeholder="e.g. MIN003"
               />
             </div>
             <div className="col-span-2">
