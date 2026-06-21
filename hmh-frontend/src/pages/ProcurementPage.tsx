@@ -7,7 +7,7 @@ import {
   Plus, Check, X, ChevronRight, AlertTriangle, Mail,
   MailCheck, RefreshCw, FileText, ShoppingCart, Warehouse, ArrowRight,
   CheckCircle2, Circle, Clock, Package, Receipt, CreditCard,
-  Search, Lock, Unlock, AlertCircle, Trash2,
+  Search, Lock, Unlock, AlertCircle, Trash2, Info,
 } from "lucide-react";
 import { useAuthContext } from "@/context/AuthContext";
 import { suppliersApi } from "@/api/suppliers";
@@ -114,6 +114,7 @@ interface MRCartItem {
   boq_supplier_id: string | null;
   boq_supplier_name: string | null;
   boq_planned_qty: number | null;
+  supplier_override_id: string | null;
 }
 
 type MRModalStage = "location" | "items" | "supplier";
@@ -166,12 +167,27 @@ function CreateMRModal({ projectId: defaultProjectId, sites, isMainWarehouse = f
   // A: BOQ+supplier auto-selected; B: BOQ+no supplier → must select; C: outside BOQ → must select
   const scenario: "A" | "B" | "C" = firstBOQSupplier ? "A" : hasBOQItems ? "B" : "C";
 
-  // ── Load suppliers when entering supplier stage ───────────────────────────
+  // ── Load suppliers on entering items stage (so per-item dropdowns are ready) ─
+  useEffect(() => {
+    if (stage !== "items") return;
+    suppliersApi.list(false).then((list) => setAllSuppliers(list.map((s) => ({ id: s.id, name: s.name })))).catch(() => {});
+  }, [stage]);
+
+  // ── Load suppliers + set MR-level fallback supplier when entering stage 3 ──
   useEffect(() => {
     if (stage !== "supplier") return;
-    suppliersApi.list(false).then((list) => setAllSuppliers(list.map((s) => ({ id: s.id, name: s.name })))).catch(() => {});
-    if (scenario === "A" && firstBOQSupplier?.boq_supplier_id && !supplierOverridden) {
+    // Reload suppliers only if not already loaded from stage 2
+    if (allSuppliers.length === 0) {
+      suppliersApi.list(false).then((list) => setAllSuppliers(list.map((s) => ({ id: s.id, name: s.name })))).catch(() => {});
+    }
+    if (supplierOverridden) return;
+    // Scenario A: single BOQ supplier auto-selected
+    if (scenario === "A" && firstBOQSupplier?.boq_supplier_id) {
       setPreferredSupplierId(firstBOQSupplier.boq_supplier_id);
+    } else {
+      // Fallback: use first per-item supplier so MR-level is never blank
+      const firstSid = cart.map(i => i.supplier_override_id || i.boq_supplier_id).find(Boolean);
+      if (firstSid) setPreferredSupplierId(firstSid);
     }
   }, [stage]);
 
@@ -201,6 +217,7 @@ function CreateMRModal({ projectId: defaultProjectId, sites, isMainWarehouse = f
       boq_supplier_id: r.preferred_supplier_id,
       boq_supplier_name: r.supplier_name,
       boq_planned_qty: r.planned_quantity,
+      supplier_override_id: r.preferred_supplier_id,
     }]);
     setSearchQ(""); setSearchResults([]);
   };
@@ -215,6 +232,7 @@ function CreateMRModal({ projectId: defaultProjectId, sites, isMainWarehouse = f
       boq_supplier_id: null,
       boq_supplier_name: null,
       boq_planned_qty: null,
+      supplier_override_id: null,
     }]);
     setCustomDesc(""); setCustomUnit(""); setCustomQty("1");
   };
@@ -222,6 +240,8 @@ function CreateMRModal({ projectId: defaultProjectId, sites, isMainWarehouse = f
   const removeCartItem = (i: number) => setCart((prev) => prev.filter((_, idx) => idx !== i));
   const updateCartQty = (i: number, v: string) =>
     setCart((prev) => prev.map((item, idx) => idx === i ? { ...item, quantity: parseFloat(v) || 1 } : item));
+  const updateCartSupplier = (i: number, supplierId: string) =>
+    setCart((prev) => prev.map((item, idx) => idx === i ? { ...item, supplier_override_id: supplierId || null } : item));
 
   // ── Submit ─────────────────────────────────────────────────────────────────
   const handleSubmit = async () => {
@@ -242,7 +262,7 @@ function CreateMRModal({ projectId: defaultProjectId, sites, isMainWarehouse = f
       unit: item.unit || undefined,
       boq_item_id: item.boq_item_id,
       item_id: item.item_id,
-      preferred_supplier_id: item.boq_supplier_id || null,
+      preferred_supplier_id: item.supplier_override_id || item.boq_supplier_id || null,
       remarks: !item.is_boq ? "Outside BOQ — one-time purchase" : undefined,
     }));
     try {
@@ -423,8 +443,21 @@ function CreateMRModal({ projectId: defaultProjectId, sites, isMainWarehouse = f
                           onChange={(e) => updateCartQty(i, e.target.value)}
                           className="h-7 w-20 text-xs text-right"
                         />
-                        <span className="text-xs text-muted-foreground w-10">{item.unit || "—"}</span>
-                        <button onClick={() => removeCartItem(i)} className="text-muted-foreground hover:text-destructive">
+                        <span className="text-xs text-muted-foreground w-8 shrink-0">{item.unit || "—"}</span>
+                        {allSuppliers.length > 0 && (
+                          <select
+                            value={item.supplier_override_id ?? ""}
+                            onChange={(e) => updateCartSupplier(i, e.target.value)}
+                            className="h-7 text-[11px] rounded border border-input bg-background px-1.5 w-32 shrink-0 text-muted-foreground"
+                            title="Assign supplier for this item"
+                          >
+                            <option value="">Supplier…</option>
+                            {allSuppliers.map((s) => (
+                              <option key={s.id} value={s.id}>{s.name}</option>
+                            ))}
+                          </select>
+                        )}
+                        <button onClick={() => removeCartItem(i)} className="text-muted-foreground hover:text-destructive shrink-0">
                           <X className="w-3.5 h-3.5" />
                         </button>
                       </div>
