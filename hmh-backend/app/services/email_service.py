@@ -228,6 +228,248 @@ def _company(key: Optional[str]) -> dict:
     return _COMPANY_DETAILS.get(key or "HMH_GROUP", _COMPANY_DETAILS["HMH_GROUP"])
 
 
+# ── PDF generators ───────────────────────────────────────────────────────────
+
+def _generate_po_pdf(po) -> bytes:
+    """Return raw PDF bytes for a purchase order."""
+    from io import BytesIO
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.units import cm
+    from reportlab.lib.colors import HexColor, white, black
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.lib.enums import TA_RIGHT, TA_CENTER, TA_LEFT
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+
+    co    = _company(getattr(po, "issuing_company", None))
+    brand = HexColor(co["color"])
+    light = HexColor("#f0f4f8")
+
+    buf = BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4,
+                            leftMargin=2*cm, rightMargin=2*cm,
+                            topMargin=2*cm, bottomMargin=2*cm)
+    W = doc.width
+
+    def _p(text, size=9, bold=False, align=TA_LEFT, color=black):
+        font = "Helvetica-Bold" if bold else "Helvetica"
+        return Paragraph(str(text), ParagraphStyle(
+            "_", fontName=font, fontSize=size,
+            textColor=color, alignment=align, spaceAfter=0,
+        ))
+
+    story = []
+
+    # Header
+    hdr = Table([
+        [_p(co["name"], 16, bold=True, color=white),
+         _p(f"Purchase Order<br/>{po.po_number}", 10, align=TA_RIGHT, color=white)],
+        [_p(po.po_date.strftime("%d %B %Y"), 9, color=HexColor("#aabbd4")),
+         _p(f"VAT: {co['vat']}" if co.get("vat") else "", 9, align=TA_RIGHT, color=HexColor("#aabbd4"))],
+    ], colWidths=[W * 0.6, W * 0.4])
+    hdr.setStyle(TableStyle([
+        ("BACKGROUND",    (0, 0), (-1, -1), brand),
+        ("TOPPADDING",    (0, 0), (-1, -1), 10),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
+        ("LEFTPADDING",   (0, 0), (0,  -1), 16),
+        ("RIGHTPADDING",  (1, 0), (1,  -1), 16),
+        ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
+    ]))
+    story.append(hdr)
+    story.append(Spacer(1, 0.5 * cm))
+
+    # Items table
+    col_w = [190, 35, 40, 65, 35, 35, 81]
+    rows = [[_p(h, 8, bold=True) for h in
+             ["Description", "QTY", "Unit", "Unit Price", "Disc%", "VAT%", "Nett Price"]]]
+    for item in po.order_items:
+        rate = float(item.rate or 0)
+        qty  = float(item.quantity_ordered)
+        line = float(item.line_total or 0)
+        rows.append([
+            _p(item.description, 8),
+            _p(f"{qty:g}",      8, align=TA_CENTER),
+            _p(item.unit or "", 8, align=TA_CENTER),
+            _p(f"R{rate:,.2f}", 8, align=TA_RIGHT),
+            _p("0%",            8, align=TA_CENTER),
+            _p("15%",           8, align=TA_CENTER),
+            _p(f"R{line:,.2f}", 8, align=TA_RIGHT),
+        ])
+
+    subtotal = float(po.subtotal_amount or 0)
+    vat_amt  = float(po.vat_amount or 0)
+    total    = float(po.total_amount or 0)
+    n        = len(po.order_items)
+    for label, val in [("Subtotal:", subtotal), ("VAT (15%):", vat_amt)]:
+        rows.append(["", "", "", "", "", _p(label, 8, align=TA_RIGHT), _p(f"R{val:,.2f}", 8, align=TA_RIGHT)])
+    rows.append(["", "", "", "", "",
+                 _p("Total:", 9, bold=True, align=TA_RIGHT),
+                 _p(f"R{total:,.2f}", 9, bold=True, align=TA_RIGHT)])
+
+    tbl = Table(rows, colWidths=col_w, repeatRows=1)
+    tbl.setStyle(TableStyle([
+        ("BACKGROUND",    (0, 0),  (-1, 0),    brand),
+        ("TEXTCOLOR",     (0, 0),  (-1, 0),    white),
+        ("TOPPADDING",    (0, 0),  (-1, 0),    7),
+        ("BOTTOMPADDING", (0, 0),  (-1, 0),    7),
+        ("TOPPADDING",    (0, 1),  (-1, n),    5),
+        ("BOTTOMPADDING", (0, 1),  (-1, n),    5),
+        ("LEFTPADDING",   (0, 0),  (0,  -1),   6),
+        ("RIGHTPADDING",  (-1, 0), (-1, -1),   6),
+        ("ROWBACKGROUNDS",(0, 1),  (-1, n),    [white, light]),
+        ("GRID",          (0, 0),  (-1, n),    0.3, HexColor("#dddddd")),
+        ("BACKGROUND",    (0, n+1),(-1, n+2),  HexColor("#fafafa")),
+        ("BACKGROUND",    (0, n+3),(-1, n+3),  light),
+        ("LINEABOVE",     (0, n+1),(-1, n+1),  1, HexColor("#cccccc")),
+        ("SPAN",          (0, n+1),(4,  n+1)),
+        ("SPAN",          (0, n+2),(4,  n+2)),
+        ("SPAN",          (0, n+3),(4,  n+3)),
+    ]))
+    story.append(tbl)
+    story.append(Spacer(1, 0.5 * cm))
+
+    # Metadata
+    delivery_date = (po.expected_delivery_date.strftime("%d %B %Y")
+                     if po.expected_delivery_date else "To be confirmed")
+    meta_rows = [[_p("Required delivery date:", 9, bold=True), _p(delivery_date, 9)]]
+    if po.notes:
+        meta_rows.append([_p("Notes:", 9, bold=True), _p(po.notes, 9)])
+    meta = Table(meta_rows, colWidths=[160, W - 160])
+    meta.setStyle(TableStyle([
+        ("TOPPADDING",    (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+    ]))
+    story.append(meta)
+    story.append(Spacer(1, 0.4 * cm))
+    story.append(_p(
+        f"Please confirm receipt of this order and advise your estimated delivery date. "
+        f"Quote reference {po.po_number} on all correspondence.",
+        8, color=HexColor("#666666"),
+    ))
+
+    doc.build(story)
+    return buf.getvalue()
+
+
+def _generate_mr_pdf(db: Session, mr, supplier_override=None, items_override=None) -> bytes:
+    """Return raw PDF bytes for a material-request approval."""
+    from io import BytesIO
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.units import cm
+    from reportlab.lib.colors import HexColor, white, black
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.lib.enums import TA_RIGHT, TA_LEFT
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+
+    from app.models.site import Site
+    from app.models.lot import Lot
+    from app.models.user import User
+    from app.models.supplier import Supplier
+
+    co    = _company(getattr(mr, "issuing_company", None))
+    brand = HexColor("#e85d04")
+    light = HexColor("#f5f5f5")
+
+    site      = db.get(Site, mr.site_id)     if mr.site_id      else None
+    lot       = db.get(Lot,  mr.lot_id)      if mr.lot_id       else None
+    requester = db.get(User, mr.requested_by) if mr.requested_by else None
+    approver  = db.get(User, mr.approved_by)  if mr.approved_by  else None
+    supplier  = supplier_override or (
+        db.get(Supplier, mr.preferred_supplier_id) if mr.preferred_supplier_id else None
+    )
+
+    buf = BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4,
+                            leftMargin=2*cm, rightMargin=2*cm,
+                            topMargin=2*cm, bottomMargin=2*cm)
+    W = doc.width
+
+    def _p(text, size=9, bold=False, align=TA_LEFT, color=black):
+        font = "Helvetica-Bold" if bold else "Helvetica"
+        return Paragraph(str(text), ParagraphStyle(
+            "_", fontName=font, fontSize=size,
+            textColor=color, alignment=align, spaceAfter=0,
+        ))
+
+    story = []
+
+    # Header
+    hdr = Table([
+        [_p(co["name"], 16, bold=True, color=white),
+         _p(f"Material Request<br/>{mr.request_number}", 10, align=TA_RIGHT, color=white)],
+        [_p("Approved", 9, color=HexColor("#ffd7b5")),
+         _p(mr.approved_at.strftime("%d %B %Y") if getattr(mr, "approved_at", None) else "",
+            9, align=TA_RIGHT, color=HexColor("#ffd7b5"))],
+    ], colWidths=[W * 0.6, W * 0.4])
+    hdr.setStyle(TableStyle([
+        ("BACKGROUND",    (0, 0), (-1, -1), brand),
+        ("TOPPADDING",    (0, 0), (-1, -1), 10),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
+        ("LEFTPADDING",   (0, 0), (0,  -1), 16),
+        ("RIGHTPADDING",  (1, 0), (1,  -1), 16),
+        ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
+    ]))
+    story.append(hdr)
+    story.append(Spacer(1, 0.5 * cm))
+
+    # Items table
+    col_w = [310, 90, 81]
+    rows = [[_p("Material", 8, bold=True),
+             _p("Quantity", 8, bold=True, align=TA_RIGHT),
+             _p("Unit",     8, bold=True)]]
+    for item in (items_override if items_override is not None else getattr(mr, "items", [])):
+        qty  = float(getattr(item, "requested_quantity", 0) or 0)
+        unit = getattr(item, "unit", "") or ""
+        desc = getattr(item, "description", "Material")
+        rows.append([_p(desc, 8), _p(f"{qty:g}", 8, align=TA_RIGHT), _p(unit, 8)])
+
+    tbl = Table(rows, colWidths=col_w, repeatRows=1)
+    tbl.setStyle(TableStyle([
+        ("BACKGROUND",    (0, 0), (-1, 0),  brand),
+        ("TEXTCOLOR",     (0, 0), (-1, 0),  white),
+        ("TOPPADDING",    (0, 0), (-1, 0),  7),
+        ("BOTTOMPADDING", (0, 0), (-1, 0),  7),
+        ("TOPPADDING",    (0, 1), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 1), (-1, -1), 5),
+        ("LEFTPADDING",   (0, 0), (0,  -1), 8),
+        ("ROWBACKGROUNDS",(0, 1), (-1, -1), [white, light]),
+        ("GRID",          (0, 0), (-1, -1), 0.3, HexColor("#dddddd")),
+    ]))
+    story.append(tbl)
+    story.append(Spacer(1, 0.5 * cm))
+
+    # Metadata
+    needed_by = (mr.needed_by_date.strftime("%d %B %Y")
+                 if getattr(mr, "needed_by_date", None) else "As soon as possible")
+    meta_rows = [[_p("Site:", 9, bold=True), _p(site.name if site else "—", 9)]]
+    if lot:
+        meta_rows.append([_p("Lot:", 9, bold=True), _p(lot.lot_number, 9)])
+    meta_rows.append([_p("Required by:", 9, bold=True), _p(needed_by, 9)])
+    if requester:
+        meta_rows.append([_p("Requested by:", 9, bold=True), _p(requester.full_name, 9)])
+    if approver:
+        meta_rows.append([_p("Approved by:", 9, bold=True), _p(approver.full_name, 9)])
+    if supplier:
+        meta_rows.append([_p("Supplier:", 9, bold=True), _p(supplier.name, 9)])
+    if mr.notes:
+        meta_rows.append([_p("Notes:", 9, bold=True), _p(mr.notes, 9)])
+
+    meta = Table(meta_rows, colWidths=[130, W - 130])
+    meta.setStyle(TableStyle([
+        ("TOPPADDING",    (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+    ]))
+    story.append(meta)
+    story.append(Spacer(1, 0.4 * cm))
+    story.append(_p(
+        f"Please reply with your quote or confirm availability. "
+        f"Quote reference {mr.request_number} on all correspondence.",
+        8, color=HexColor("#666666"),
+    ))
+
+    doc.build(story)
+    return buf.getvalue()
+
+
 # ── PO email builder ──────────────────────────────────────────────────────────
 
 def build_po_email_body(po: PurchaseOrder) -> tuple[str, str]:
@@ -371,9 +613,18 @@ def send_po_email(
         logger.info("email po_mock_sent po=%s to=%s reason=%s", po.po_number, to_email, reason)
         status = EmailStatus.sent
     else:
+        try:
+            pdf_bytes = _generate_po_pdf(po)
+            attachments: list | None = [(f"PO-{po.po_number}.pdf", pdf_bytes, "application/pdf")]
+        except Exception as pdf_exc:
+            logger.warning("PO PDF generation failed for %s: %s", po.po_number, pdf_exc)
+            attachments = None
+
         cc  = settings.procurement_cc_list
         bcc = settings.procurement_bcc_list
-        error_msg = _send_smtp(to_email, subject, body_html, cc=cc or None, bcc=bcc or None)
+        error_msg = _send_smtp(to_email, subject, body_html,
+                               cc=cc or None, bcc=bcc or None,
+                               attachments=attachments)
         status = EmailStatus.sent if error_msg is None else EmailStatus.failed
         if error_msg:
             logger.error("PO email failed for %s: %s", po.po_number, error_msg)
@@ -658,10 +909,18 @@ def send_mr_approval_email(
             logger.info("email mr_mock_sent mr=%s to=%s reason=%s", mr.request_number, to_email, reason)
             status_str = "MOCK_SENT"
         else:
+            try:
+                pdf_bytes = _generate_mr_pdf(db, mr, supplier_override=supplier, items_override=items)
+                mr_attachments: list | None = [(f"MR-{mr.request_number}.pdf", pdf_bytes, "application/pdf")]
+            except Exception as pdf_exc:
+                logger.warning("MR PDF generation failed for %s: %s", mr.request_number, pdf_exc)
+                mr_attachments = None
+
             err = _send_smtp(
                 to_email, subject, body_html,
                 cc=settings.procurement_cc_list or None,
                 bcc=settings.procurement_bcc_list or None,
+                attachments=mr_attachments,
             )
             if err:
                 status_str = "FAILED"
