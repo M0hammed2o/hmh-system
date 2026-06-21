@@ -28,6 +28,7 @@ export interface Delivery {
   delivery_status: RecordStatus;
   comments: string | null;
   receiver_name: string | null;
+  driver_name: string | null;
   delivery_note_image_url: string | null;
   signature_image_url: string | null;
   ocr_raw_data: { driver_name?: string; driver_signature_path?: string; signed_at?: string; receiver_name?: string } | null;

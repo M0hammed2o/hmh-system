@@ -37,6 +37,7 @@ const DEST_LABEL: Record<DeliveryDestination, string> = {
   SITE_STORE:      "Project Warehouse",
   MAIN_WAREHOUSE:  "Main Warehouse (bulk)",
   LOT:             "Direct to Lot",
+  PICKUP:          "Supplier Pickup / Will Collect",
 };
 
 function timeAgo(iso: string) {
@@ -133,9 +134,9 @@ function CreateMRModal({ projectId: defaultProjectId, sites, isMainWarehouse = f
   const warehouseSite = sites.find(s => s.site_type === "warehouse");
   const [siteId] = useState(warehouseSite?.id || sites[0]?.id || "");
   const [priority, setPriority] = useState<MRPriority>("NORMAL");
-  // Destination is always SITE_STORE (Project Warehouse) for project MRs;
-  // MAIN_WAREHOUSE for main warehouse MRs.
-  const destination: DeliveryDestination = isMainWarehouse ? "MAIN_WAREHOUSE" : "SITE_STORE";
+  const [destination, setDestination] = useState<DeliveryDestination>(
+    isMainWarehouse ? "MAIN_WAREHOUSE" : "SITE_STORE"
+  );
   const [neededBy, setNeededBy] = useState("");
   const [notes, setNotes] = useState("");
 
@@ -324,9 +325,20 @@ function CreateMRModal({ projectId: defaultProjectId, sites, isMainWarehouse = f
                 </div>
                 <div className="space-y-1.5">
                   <Label>Destination</Label>
-                  <div className="h-9 w-full rounded-md border border-input bg-muted/30 px-3 text-sm flex items-center text-muted-foreground">
-                    {isMainWarehouse ? "Main Warehouse (bulk)" : "Project Warehouse"}
-                  </div>
+                  {isMainWarehouse ? (
+                    <div className="h-9 w-full rounded-md border border-input bg-muted/30 px-3 text-sm flex items-center text-muted-foreground">
+                      Main Warehouse (bulk)
+                    </div>
+                  ) : (
+                    <select
+                      value={destination}
+                      onChange={(e) => setDestination(e.target.value as DeliveryDestination)}
+                      className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm"
+                    >
+                      <option value="SITE_STORE">Project Warehouse</option>
+                      <option value="PICKUP">Supplier Pickup / Will Collect</option>
+                    </select>
+                  )}
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-3">
@@ -582,7 +594,7 @@ function MRDetailModal({ mr, suppliers, onClose, onUpdated }: {
   );
   const [quotes, setQuotes] = useState<MRQuote[]>([]);
   const [showAddQuote, setShowAddQuote] = useState(false);
-  const [quoteForm, setQuoteForm] = useState({ supplier_id: mr.preferred_supplier_id || "", description: "", unit_price: "", quoted_quantity: "", unit: "", notes: "" });
+  const [quoteForm, setQuoteForm] = useState({ supplier_id: mr.preferred_supplier_id || "", description: mr.items[0]?.description || "", unit_price: "", quoted_quantity: String(mr.items[0]?.requested_quantity || ""), unit: mr.items[0]?.unit || "", notes: "" });
   const [showMREmail, setShowMREmail] = useState(false);
 
   // Phase 3I: activity timeline
@@ -768,6 +780,14 @@ function MRDetailModal({ mr, suppliers, onClose, onUpdated }: {
 
               {showAddQuote && (
                 <div className="border border-border rounded-lg p-3 space-y-2 bg-muted/20">
+                  {mr.items.length > 0 && (
+                    <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 rounded px-2 py-1.5">
+                      <p className="text-[10px] font-semibold text-amber-700 dark:text-amber-400 mb-0.5">MR Items (use exact descriptions):</p>
+                      {mr.items.map((it) => (
+                        <p key={it.id} className="text-[10px] text-amber-800 dark:text-amber-300">• {it.description} — {it.requested_quantity} {it.unit || ""}</p>
+                      ))}
+                    </div>
+                  )}
                   <div className="space-y-1.5">
                     <Label className="text-xs">Supplier *</Label>
                     <select value={quoteForm.supplier_id} onChange={e => setQuoteForm(f => ({ ...f, supplier_id: e.target.value }))}
@@ -814,7 +834,7 @@ function MRDetailModal({ mr, suppliers, onClose, onUpdated }: {
                         });
                         setQuotes(prev => [...prev, q]);
                         setShowAddQuote(false);
-                        setQuoteForm({ supplier_id: mr.preferred_supplier_id || "", description: "", unit_price: "", quoted_quantity: "", unit: "", notes: "" });
+                        setQuoteForm({ supplier_id: mr.preferred_supplier_id || "", description: mr.items[0]?.description || "", unit_price: "", quoted_quantity: String(mr.items[0]?.requested_quantity || ""), unit: mr.items[0]?.unit || "", notes: "" });
                       }, "addquote");
                     }}>
                     {loading === "addquote" ? "Saving…" : "Save Quote"}
@@ -1563,12 +1583,24 @@ function PipelinePanelModal({ mrId, suppliers, onClose, onUpdated }: {
                         {!showAddQuote ? (
                           <WriteGuard>
                             <Button size="sm" variant="outline" className="h-7 text-xs gap-1"
-                              onClick={() => setShowAddQuote(true)}>
+                              onClick={() => {
+                                const fi = pipeline.items[0];
+                                setQuoteForm({ supplier_id: pipeline.supplier.id || "", description: fi?.description || "", unit_price: "", quoted_quantity: String(fi?.requested_quantity || "1"), unit: fi?.unit || "" });
+                                setShowAddQuote(true);
+                              }}>
                               <Plus className="w-3 h-3" />Record quote manually
                             </Button>
                           </WriteGuard>
                         ) : (
                           <div className="border border-border rounded-lg p-3 space-y-2 bg-muted/20">
+                            {pipeline.items.length > 0 && (
+                              <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 rounded px-2 py-1.5">
+                                <p className="text-[10px] font-semibold text-amber-700 dark:text-amber-400 mb-0.5">MR Items (use exact descriptions):</p>
+                                {pipeline.items.map((it) => (
+                                  <p key={it.id} className="text-[10px] text-amber-800 dark:text-amber-300">• {it.description} — {it.requested_quantity} {it.unit || ""}</p>
+                                ))}
+                              </div>
+                            )}
                             <select value={quoteForm.supplier_id}
                               onChange={e => setQuoteForm(f => ({ ...f, supplier_id: e.target.value }))}
                               className="h-7 w-full rounded border border-input bg-background px-2 text-xs">
@@ -1599,7 +1631,8 @@ function PipelinePanelModal({ mrId, suppliers, onClose, onUpdated }: {
                                     unit: quoteForm.unit.trim() || undefined,
                                   });
                                   setShowAddQuote(false);
-                                  setQuoteForm({ supplier_id: "", description: "", unit_price: "", quoted_quantity: "1", unit: "" });
+                                  const fi2 = pipeline.items[0];
+                                  setQuoteForm({ supplier_id: "", description: fi2?.description || "", unit_price: "", quoted_quantity: String(fi2?.requested_quantity || "1"), unit: fi2?.unit || "" });
                                 }, "add_quote")}>
                                 {actionLoading === "add_quote" ? "Saving…" : "Save Quote"}
                               </Button>

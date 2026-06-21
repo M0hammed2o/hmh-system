@@ -14,6 +14,7 @@ export interface Supplier {
   vat_number: string | null;
   payment_terms: string | null;
   notes: string | null;
+  customer_account_code: string | null;
   is_active: boolean;
   vat_registered: boolean;
   pricing_method: PricingMethod;
@@ -43,6 +44,7 @@ export interface SupplierCreate {
   vat_number?: string | null;
   payment_terms?: string | null;
   notes?: string | null;
+  customer_account_code?: string | null;
   vat_registered?: boolean;
   pricing_method?: PricingMethod;
   default_vat_rate?: number;
@@ -59,6 +61,7 @@ export interface SupplierUpdate {
   vat_number?: string | null;
   payment_terms?: string | null;
   notes?: string | null;
+  customer_account_code?: string | null;
   is_active?: boolean;
   vat_registered?: boolean;
   pricing_method?: PricingMethod;

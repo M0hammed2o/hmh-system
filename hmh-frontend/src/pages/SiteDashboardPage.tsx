@@ -863,6 +863,10 @@ export default function SiteDashboardPage() {
                         </p>
                         <p className="text-xs text-muted-foreground">
                           {d.delivery_status.replace(/_/g, " ")}
+                          {(d.driver_name ?? (d.ocr_raw_data as { driver_name?: string } | null)?.driver_name) && (
+                            <span> · Driver: {d.driver_name ?? (d.ocr_raw_data as { driver_name?: string } | null)?.driver_name}</span>
+                          )}
+                          {d.receiver_name && <span> · Recv: {d.receiver_name}</span>}
                         </p>
                       </div>
                       <span className="text-xs text-muted-foreground shrink-0">

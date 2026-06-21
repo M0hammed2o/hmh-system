@@ -332,6 +332,7 @@ async def receive_delivery_with_document(
         comments                       = comments,
         delivery_note_image_url        = delivery_note_url,
         receiver_name                  = receiver_name,
+        driver_name                    = driver_name,
         signature_image_url            = receiver_sig_url,
         ocr_raw_data                   = sig_meta,
     )

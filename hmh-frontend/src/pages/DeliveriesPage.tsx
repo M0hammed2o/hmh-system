@@ -785,7 +785,7 @@ export default function DeliveriesPage() {
                     <div className="flex-1 min-w-0">
                       <p className="text-xs font-medium">Driver Signature</p>
                       <p className="text-[10px] text-muted-foreground">
-                        {selectedDelivery.ocr_raw_data?.driver_name ?? "Driver / Supplier rep"}
+                        {selectedDelivery.driver_name ?? selectedDelivery.ocr_raw_data?.driver_name ?? "Driver / Supplier rep"}
                       </p>
                     </div>
                     <a href={fileUrl(selectedDelivery.ocr_raw_data.driver_signature_path)} target="_blank" rel="noopener noreferrer">

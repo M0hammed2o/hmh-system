@@ -21,6 +21,7 @@ class SupplierRead(BaseModel):
     vat_number: Optional[str] = None
     payment_terms: Optional[str] = None
     notes: Optional[str] = None
+    customer_account_code: Optional[str] = None
     is_active: bool
     vat_registered: bool = False
     pricing_method: str = "EX_VAT"
@@ -40,6 +41,7 @@ class SupplierCreate(BaseModel):
     vat_number: Optional[str] = None
     payment_terms: Optional[str] = None
     notes: Optional[str] = None
+    customer_account_code: Optional[str] = None
     # Defaults to False so quick-create forms don't require a VAT number.
     # VAT configuration is done via the supplier profile page.
     vat_registered: bool = False
@@ -83,6 +85,7 @@ class SupplierUpdate(BaseModel):
     vat_number: Optional[str] = None
     payment_terms: Optional[str] = None
     notes: Optional[str] = None
+    customer_account_code: Optional[str] = None
     is_active: Optional[bool] = None
     vat_registered: Optional[bool] = None
     pricing_method: Optional[str] = None

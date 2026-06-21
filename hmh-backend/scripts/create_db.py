@@ -40,7 +40,7 @@ _ALERT_TYPE_NEW_VALUES = [
 
 # New PG enum types to create (Python enums not yet in initial migration)
 _NEW_PG_ENUMS = {
-    "delivery_destination_enum": ["MAIN_WAREHOUSE", "SITE_STORE", "LOT"],
+    "delivery_destination_enum": ["MAIN_WAREHOUSE", "SITE_STORE", "LOT", "PICKUP"],
     "mr_priority_enum": ["URGENT", "HIGH", "NORMAL", "LOW"],
     "notification_channel_enum": ["WHATSAPP", "EMAIL", "IN_APP"],
     "notification_status_enum": [

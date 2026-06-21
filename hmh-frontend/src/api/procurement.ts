@@ -16,7 +16,7 @@ export interface ProcurementActivityEntry {
 }
 
 export type MRPriority = "URGENT" | "HIGH" | "NORMAL" | "LOW";
-export type DeliveryDestination = "MAIN_WAREHOUSE" | "SITE_STORE" | "LOT";
+export type DeliveryDestination = "MAIN_WAREHOUSE" | "SITE_STORE" | "LOT" | "PICKUP";
 export type POStatus = MRStatus;
 
 export interface MRItem {

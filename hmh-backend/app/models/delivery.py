@@ -60,6 +60,7 @@ class Delivery(TimestampMixin, Base):
     delivery_note_image_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     signature_image_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     receiver_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    driver_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     gps_lat: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     gps_lng: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     ocr_raw_data: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)

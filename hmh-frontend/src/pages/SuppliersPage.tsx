@@ -31,6 +31,7 @@ function SupplierModal({
   const [contactPerson, setContactPerson] = useState(existing?.contact_person ?? "");
   const [paymentTerms, setPaymentTerms] = useState(existing?.payment_terms ?? "");
   const [notes, setNotes] = useState(existing?.notes ?? "");
+  const [accountCode, setAccountCode] = useState(existing?.customer_account_code ?? "");
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -43,6 +44,7 @@ function SupplierModal({
     setContactPerson(existing?.contact_person ?? "");
     setPaymentTerms(existing?.payment_terms ?? "");
     setNotes(existing?.notes ?? "");
+    setAccountCode(existing?.customer_account_code ?? "");
   }, [existing, open]);
 
   const handleSubmit = async () => {
@@ -61,6 +63,7 @@ function SupplierModal({
         contact_person: contactPerson.trim() || null,
         payment_terms: paymentTerms.trim() || null,
         notes: notes.trim() || null,
+        customer_account_code: accountCode.trim() || null,
       };
       await onSave(payload, existing?.id);
       onClose();
@@ -143,7 +146,7 @@ function SupplierModal({
               className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm"
             />
           </div>
-          <div className="col-span-2">
+          <div>
             <label className="text-xs text-muted-foreground block mb-1">Payment Terms</label>
             <input
               type="text"
@@ -151,6 +154,16 @@ function SupplierModal({
               onChange={(e) => setPaymentTerms(e.target.value)}
               className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm"
               placeholder="e.g. 30 days EOM"
+            />
+          </div>
+          <div>
+            <label className="text-xs text-muted-foreground block mb-1">Customer Account No.</label>
+            <input
+              type="text"
+              value={accountCode}
+              onChange={(e) => setAccountCode(e.target.value)}
+              className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm"
+              placeholder="e.g. MIN003"
             />
           </div>
           <div className="col-span-2">

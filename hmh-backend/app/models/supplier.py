@@ -30,6 +30,8 @@ class Supplier(TimestampMixin, Base):
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
+    customer_account_code: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+
     # VAT configuration (Phase 1)
     vat_registered: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
     pricing_method: Mapped[PricingMethod] = mapped_column(

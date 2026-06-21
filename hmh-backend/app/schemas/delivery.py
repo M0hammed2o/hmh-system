@@ -58,6 +58,7 @@ class DeliveryRead(BaseModel):
     delivery_status: RecordStatus
     comments: Optional[str] = None
     receiver_name: Optional[str] = None
+    driver_name: Optional[str] = None
     delivery_note_image_url: Optional[str] = None
     signature_image_url: Optional[str] = None
     ocr_raw_data: Optional[dict] = None

@@ -232,24 +232,34 @@ def _company(key: Optional[str]) -> dict:
 
 def build_po_email_body(po: PurchaseOrder) -> tuple[str, str]:
     """Return (subject, html_body) for a purchase-order email."""
+    from app.models.supplier import Supplier as _Supplier
+
     co = _company(getattr(po, "issuing_company", None))
     co_name = co["name"]
     subject = f"Purchase Order {po.po_number} — {co_name}"
 
+    # Build items table rows
     items_html = ""
     for item in po.order_items:
-        line = float(item.line_total or 0)
+        rate  = float(item.rate or 0)
+        qty   = float(item.quantity_ordered)
+        line  = float(item.line_total or 0)
+        unit  = item.unit or ""
         items_html += (
             f"<tr>"
-            f"<td style='padding:6px 10px;border-bottom:1px solid #eee'>{item.description}</td>"
-            f"<td style='padding:6px 10px;border-bottom:1px solid #eee;text-align:right'>"
-            f"{item.quantity_ordered} {item.unit or ''}</td>"
-            f"<td style='padding:6px 10px;border-bottom:1px solid #eee;text-align:right'>"
-            f"R{float(item.rate or 0):,.2f}</td>"
-            f"<td style='padding:6px 10px;border-bottom:1px solid #eee;text-align:right'>"
-            f"R{line:,.2f}</td>"
+            f"<td style='padding:6px 10px;border-bottom:1px solid #eee;font-size:13px'>{item.description}</td>"
+            f"<td style='padding:6px 10px;border-bottom:1px solid #eee;text-align:center;font-size:13px'>{qty:g}</td>"
+            f"<td style='padding:6px 10px;border-bottom:1px solid #eee;text-align:center;font-size:13px'>{unit}</td>"
+            f"<td style='padding:6px 10px;border-bottom:1px solid #eee;text-align:right;font-size:13px'>R{rate:,.2f}</td>"
+            f"<td style='padding:6px 10px;border-bottom:1px solid #eee;text-align:center;font-size:13px'>0%</td>"
+            f"<td style='padding:6px 10px;border-bottom:1px solid #eee;text-align:center;font-size:13px'>15%</td>"
+            f"<td style='padding:6px 10px;border-bottom:1px solid #eee;text-align:right;font-size:13px'>R{line:,.2f}</td>"
             f"</tr>"
         )
+
+    subtotal = float(po.subtotal_amount or 0)
+    vat_amt  = float(po.vat_amount or 0)
+    total    = float(po.total_amount or 0)
 
     delivery_date = (
         po.expected_delivery_date.strftime("%d %B %Y")
@@ -262,40 +272,55 @@ def build_po_email_body(po: PurchaseOrder) -> tuple[str, str]:
         co_meta = f"<p style='color:#aabbd4;font-size:12px;margin:2px 0 0'>{' | '.join(parts)}</p>"
 
     body = f"""
-<html><body style="font-family:Arial,sans-serif;color:#333;max-width:700px;margin:0 auto">
+<html><body style="font-family:Arial,sans-serif;color:#333;max-width:750px;margin:0 auto">
 <div style="background:{co['color']};padding:20px 30px">
   <h2 style="color:white;margin:0">{co_name} — Purchase Order</h2>
-  <p style="color:#aabbd4;margin:4px 0 0">{po.po_number}</p>
+  <p style="color:#aabbd4;margin:4px 0 0;font-size:14px">{po.po_number} &nbsp;|&nbsp; {po.po_date.strftime('%d %B %Y')}</p>
   {co_meta}
 </div>
 <div style="padding:24px 30px">
   <p>Dear Supplier,</p>
-  <p>Please find our purchase order <strong>{po.po_number}</strong>
-     dated {po.po_date.strftime('%d %B %Y')}.</p>
+  <p>Please find our purchase order <strong>{po.po_number}</strong> dated {po.po_date.strftime('%d %B %Y')}.</p>
 
-  <table style="width:100%;border-collapse:collapse;margin:20px 0">
+  <table style="width:100%;border-collapse:collapse;margin:20px 0;font-size:13px">
     <thead>
-      <tr style="background:#f5f5f5">
-        <th style="text-align:left;padding:8px 10px">Description</th>
-        <th style="text-align:right;padding:8px 10px">Qty</th>
-        <th style="text-align:right;padding:8px 10px">Unit Price</th>
-        <th style="text-align:right;padding:8px 10px">Total</th>
+      <tr style="background:#f0f4f8">
+        <th style="text-align:left;padding:9px 10px;border-bottom:2px solid {co['color']}">Description</th>
+        <th style="text-align:center;padding:9px 10px;border-bottom:2px solid {co['color']}">QTY</th>
+        <th style="text-align:center;padding:9px 10px;border-bottom:2px solid {co['color']}">Unit</th>
+        <th style="text-align:right;padding:9px 10px;border-bottom:2px solid {co['color']}">Unit Price</th>
+        <th style="text-align:center;padding:9px 10px;border-bottom:2px solid {co['color']}">Disc%</th>
+        <th style="text-align:center;padding:9px 10px;border-bottom:2px solid {co['color']}">VAT%</th>
+        <th style="text-align:right;padding:9px 10px;border-bottom:2px solid {co['color']}">Nett Price</th>
       </tr>
     </thead>
     <tbody>{items_html}</tbody>
     <tfoot>
-      <tr style="background:#f9f9f9;font-weight:bold">
-        <td colspan="3" style="padding:10px;text-align:right">Order Total (incl. VAT):</td>
-        <td style="padding:10px;text-align:right">R{float(po.total_amount):,.2f}</td>
+      <tr style="background:#fafafa">
+        <td colspan="6" style="padding:7px 10px;text-align:right;font-size:13px">Subtotal (excl. VAT):</td>
+        <td style="padding:7px 10px;text-align:right;font-size:13px">R{subtotal:,.2f}</td>
+      </tr>
+      <tr style="background:#fafafa">
+        <td colspan="6" style="padding:7px 10px;text-align:right;font-size:13px">VAT (15%):</td>
+        <td style="padding:7px 10px;text-align:right;font-size:13px">R{vat_amt:,.2f}</td>
+      </tr>
+      <tr style="background:#f0f4f8;font-weight:bold">
+        <td colspan="6" style="padding:9px 10px;text-align:right">Total (incl. VAT):</td>
+        <td style="padding:9px 10px;text-align:right">R{total:,.2f}</td>
       </tr>
     </tfoot>
   </table>
 
-  <p><strong>Required delivery date:</strong> {delivery_date}</p>
-  {f'<p><strong>Notes:</strong> {po.notes}</p>' if po.notes else ''}
+  <table style="width:100%;font-size:13px;margin-bottom:16px">
+    <tr>
+      <td style="color:#666;width:180px;padding:3px 0">Required delivery date:</td>
+      <td style="font-weight:500">{delivery_date}</td>
+    </tr>
+    {f'<tr><td style="color:#666;padding:3px 0">Notes:</td><td>{po.notes}</td></tr>' if po.notes else ''}
+  </table>
 
-  <p style="color:#555;font-size:13px;margin-top:24px">
-    Please confirm receipt and advise your delivery date.<br><br>
+  <p style="color:#555;font-size:13px;margin-top:20px;border-top:1px solid #eee;padding-top:16px">
+    Please confirm receipt of this order and advise your estimated delivery date.<br><br>
     <strong>IMPORTANT — Document submission:</strong><br>
     Send your invoice, delivery note, and any supporting documents directly to:<br>
     <a href="mailto:{settings.smtp_sender_address}" style="color:#e85d04">
@@ -304,7 +329,7 @@ def build_po_email_body(po: PurchaseOrder) -> tuple[str, str]:
     Quote reference <strong>{po.po_number}</strong> in the subject line of all correspondence
     so your documents can be automatically matched to this order.
   </p>
-  <p style="color:#888;font-size:12px">{co_name} Procurement &mdash; NextGen Intelligence</p>
+  <p style="color:#aaa;font-size:11px;margin-top:16px">{co_name} Procurement &mdash; NextGen Intelligence</p>
 </div>
 </body></html>
 """

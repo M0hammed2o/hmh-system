@@ -146,6 +146,7 @@ def create_delivery(
         delivery_status=RecordStatus.RECEIVED,
         comments=data.comments,
         receiver_name=getattr(data, "receiver_name", None),
+        driver_name=getattr(data, "driver_name", None),
         signature_image_url=receiver_sig_url,
         ocr_raw_data=sig_meta,
     )

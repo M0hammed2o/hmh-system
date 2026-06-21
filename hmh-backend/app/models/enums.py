@@ -48,6 +48,7 @@ class DeliveryDestination(str, enum.Enum):
     MAIN_WAREHOUSE = "MAIN_WAREHOUSE"
     SITE_STORE = "SITE_STORE"
     LOT = "LOT"
+    PICKUP = "PICKUP"
 
 
 class MRPriority(str, enum.Enum):
