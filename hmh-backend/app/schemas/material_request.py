@@ -16,6 +16,7 @@ class MaterialRequestItemRead(BaseModel):
     material_request_id: uuid.UUID
     item_id: Optional[uuid.UUID] = None
     boq_item_id: Optional[uuid.UUID] = None
+    preferred_supplier_id: Optional[uuid.UUID] = None
     description: str = ""
     requested_quantity: float
     approved_quantity: Optional[float] = None
@@ -29,6 +30,7 @@ class MaterialRequestItemCreate(BaseModel):
 
     item_id: Optional[uuid.UUID] = None
     boq_item_id: Optional[uuid.UUID] = None
+    preferred_supplier_id: Optional[uuid.UUID] = None
     description: str = ""
     # Accept both "requested_quantity" (canonical) and "quantity_requested" (legacy/test)
     requested_quantity: float = Field(

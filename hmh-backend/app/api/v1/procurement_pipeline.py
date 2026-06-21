@@ -269,11 +269,12 @@ def get_pipeline(mr_id: uuid.UUID, db: DbSession):
 
     mr_items = [
         {
-            "id":                 str(i.id),
-            "description":        i.description,
-            "requested_quantity": float(i.requested_quantity or 0),
-            "unit":               i.unit,
-            "over_boq_quantity":  float(i.over_boq_quantity) if i.over_boq_quantity else None,
+            "id":                     str(i.id),
+            "description":            i.description,
+            "requested_quantity":     float(i.requested_quantity or 0),
+            "unit":                   i.unit,
+            "over_boq_quantity":      float(i.over_boq_quantity) if i.over_boq_quantity else None,
+            "preferred_supplier_id":  str(i.preferred_supplier_id) if i.preferred_supplier_id else None,
         }
         for i in (mr.items or [])
     ]

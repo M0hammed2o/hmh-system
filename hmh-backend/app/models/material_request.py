@@ -127,6 +127,11 @@ class MaterialRequestItem(Base):
         ForeignKey("boq_items.id", ondelete="SET NULL"),
         nullable=True,
     )
+    preferred_supplier_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("suppliers.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     description: Mapped[str] = mapped_column(String(500), nullable=False, default="")
     requested_quantity: Mapped[float] = mapped_column(Numeric(14, 3), nullable=False)
     approved_quantity: Mapped[Optional[float]] = mapped_column(Numeric(14, 3), nullable=True)

@@ -242,6 +242,7 @@ function CreateMRModal({ projectId: defaultProjectId, sites, isMainWarehouse = f
       unit: item.unit || undefined,
       boq_item_id: item.boq_item_id,
       item_id: item.item_id,
+      preferred_supplier_id: item.boq_supplier_id || null,
       remarks: !item.is_boq ? "Outside BOQ — one-time purchase" : undefined,
     }));
     try {
@@ -705,17 +706,27 @@ function MRDetailModal({ mr, suppliers, onClose, onUpdated }: {
         <div className="p-5 space-y-4">
           {/* Items */}
           <div className="bg-muted/30 rounded-lg divide-y divide-border">
-            {mr.items.map((item) => (
-              <div key={item.id} className="flex items-center justify-between px-3 py-2.5">
-                <span className="text-sm">{item.description || "Item"}</span>
-                <div className="flex items-center gap-2 text-xs">
-                  <span className="font-medium">{item.requested_quantity} {item.unit || ""}</span>
-                  {item.over_boq_quantity && item.over_boq_quantity > 0 && (
-                    <span className="text-destructive">+{item.over_boq_quantity} over</span>
-                  )}
+            {mr.items.map((item) => {
+              const itemSupplier = item.preferred_supplier_id
+                ? suppliers.find(s => s.id === item.preferred_supplier_id)
+                : null;
+              return (
+                <div key={item.id} className="flex items-center justify-between px-3 py-2.5">
+                  <div className="min-w-0 flex-1">
+                    <span className="text-sm">{item.description || "Item"}</span>
+                    {itemSupplier && (
+                      <p className="text-[10px] text-muted-foreground mt-0.5">→ {itemSupplier.name}</p>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2 text-xs shrink-0">
+                    <span className="font-medium">{item.requested_quantity} {item.unit || ""}</span>
+                    {item.over_boq_quantity && item.over_boq_quantity > 0 && (
+                      <span className="text-destructive">+{item.over_boq_quantity} over</span>
+                    )}
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
 
           {mr.notes && <p className="text-sm text-muted-foreground bg-muted/30 rounded-lg px-3 py-2">{mr.notes}</p>}
@@ -1284,12 +1295,22 @@ function PipelinePanelModal({ mrId, suppliers, onClose, onUpdated }: {
                   <div className="space-y-1">
                     <p className="text-xs text-muted-foreground">{pipeline.items.length} item{pipeline.items.length !== 1 ? "s" : ""} requested</p>
                     <div className="bg-muted/30 rounded-lg divide-y divide-border">
-                      {pipeline.items.map((item) => (
-                        <div key={item.id} className="flex items-center justify-between px-3 py-1.5">
-                          <span className="text-xs">{item.description}</span>
-                          <span className="text-xs font-medium text-muted-foreground">{item.requested_quantity} {item.unit || ""}</span>
-                        </div>
-                      ))}
+                      {pipeline.items.map((item) => {
+                        const itemSupplier = item.preferred_supplier_id
+                          ? suppliers.find(s => s.id === item.preferred_supplier_id)
+                          : null;
+                        return (
+                          <div key={item.id} className="flex items-center justify-between px-3 py-1.5">
+                            <div className="min-w-0 flex-1">
+                              <span className="text-xs">{item.description}</span>
+                              {itemSupplier && (
+                                <p className="text-[10px] text-muted-foreground">→ {itemSupplier.name}</p>
+                              )}
+                            </div>
+                            <span className="text-xs font-medium text-muted-foreground shrink-0 ml-2">{item.requested_quantity} {item.unit || ""}</span>
+                          </div>
+                        );
+                      })}
                     </div>
                     {pipeline.notes && <p className="text-xs text-muted-foreground italic">{pipeline.notes}</p>}
                   </div>

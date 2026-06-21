@@ -24,6 +24,7 @@ export interface MRItem {
   material_request_id: string;
   item_id: string | null;
   boq_item_id: string | null;
+  preferred_supplier_id: string | null;
   description: string;
   requested_quantity: number;
   approved_quantity: number | null;
@@ -68,6 +69,7 @@ export interface MaterialRequest {
 export interface MRItemCreate {
   item_id?: string;
   boq_item_id?: string;
+  preferred_supplier_id?: string | null;
   description: string;
   requested_quantity: number;
   unit?: string;
@@ -172,7 +174,7 @@ export interface MRPipeline {
   lot_id: string | null;
   notes: string | null;
   over_boq: boolean;
-  items: Array<{ id: string; description: string; requested_quantity: number; unit: string | null; over_boq_quantity: number | null }>;
+  items: Array<{ id: string; description: string; requested_quantity: number; unit: string | null; over_boq_quantity: number | null; preferred_supplier_id: string | null }>;
   current_step: number;
   steps: PipelineStep[];
   supplier: PipelineSupplier;

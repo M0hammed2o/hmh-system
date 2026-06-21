@@ -472,8 +472,12 @@ def send_supplier_po_email(
 
 # ── Material Request approval email ───────────────────────────────────────────
 
-def build_mr_email_body(db: Session, mr) -> tuple[str, str]:
-    """Return (subject, html_body) for a material-request approval email."""
+def build_mr_email_body(db: Session, mr, supplier_override=None, items_override=None) -> tuple[str, str]:
+    """Return (subject, html_body) for a material-request approval email.
+
+    supplier_override: Supplier ORM object to address email to (overrides mr.preferred_supplier_id lookup).
+    items_override: list of MR item objects to include (overrides mr.items — used for per-supplier splits).
+    """
     from app.models.site import Site
     from app.models.lot import Lot
     from app.models.user import User
@@ -488,7 +492,7 @@ def build_mr_email_body(db: Session, mr) -> tuple[str, str]:
     lot      = db.get(Lot,  mr.lot_id)  if mr.lot_id  else None
     requester = db.get(User, mr.requested_by) if mr.requested_by else None
     approver  = db.get(User, mr.approved_by)  if mr.approved_by  else None
-    supplier  = db.get(Supplier, mr.preferred_supplier_id) if mr.preferred_supplier_id else None
+    supplier  = supplier_override or (db.get(Supplier, mr.preferred_supplier_id) if mr.preferred_supplier_id else None)
 
     site_name      = site.name       if site      else "—"
     lot_number     = lot.lot_number  if lot       else None
@@ -499,9 +503,9 @@ def build_mr_email_body(db: Session, mr) -> tuple[str, str]:
     contact_name   = (supplier.contact_person or supplier.name) if supplier else "Supplier"
     needed_by      = mr.needed_by_date.strftime("%d %B %Y") if mr.needed_by_date else "As soon as possible"
 
-    # Items
+    # Items — use override list (per-supplier slice) if provided, otherwise all items
     items_html = ""
-    for item in getattr(mr, "items", []):
+    for item in (items_override if items_override is not None else getattr(mr, "items", [])):
         qty  = float(getattr(item, "requested_quantity", 0) or 0)
         unit = getattr(item, "unit", "") or ""
         desc = getattr(item, "description", "Material")
@@ -568,12 +572,14 @@ def send_mr_approval_email(
     force_resend: bool = False,
 ) -> "MREmailLog":
     """
-    Send an approval email to the preferred supplier for a material request.
+    Send approval emails to all suppliers referenced by MR items.
 
-    - If SMTP_ENABLED=false, creates a MOCK_SENT record.
-    - If already sent successfully and force_resend=False, returns the existing log.
-    - On failure, creates a SystemAlert.
-    - Never raises — caller should handle the returned log.
+    Each unique preferred_supplier_id on the MR items gets its own email containing
+    only the items assigned to that supplier.  Items with no per-item supplier fall
+    back to mr.preferred_supplier_id.  One MREmailLog row is written per email sent.
+
+    Returns the last log created (or the existing one when skipping a duplicate).
+    Never raises — failures are recorded in the log and trigger an alert.
     """
     from app.models.mr_email_log import MREmailLog
     from app.models.supplier import Supplier
@@ -595,15 +601,24 @@ def send_mr_approval_email(
             logger.info("MR %s email already sent (%s) — skipping duplicate.", mr.request_number, existing.status)
             return existing
 
-    # ── Resolve supplier ──────────────────────────────────────────────────────
-    if not mr.preferred_supplier_id:
-        # No supplier — create a placeholder log and return
+    # ── Group items by supplier ───────────────────────────────────────────────
+    # Each item carries preferred_supplier_id; fall back to the MR-level supplier.
+    fallback_sid = mr.preferred_supplier_id
+    supplier_items: dict = {}   # supplier_id (uuid) → list of items
+
+    for item in getattr(mr, "items", []):
+        sid = getattr(item, "preferred_supplier_id", None) or fallback_sid
+        if sid:
+            supplier_items.setdefault(sid, []).append(item)
+
+    # If no grouping possible, record a failure
+    if not supplier_items:
         log = MREmailLog(
             material_request_id=mr.id,
             sent_to_email="(no supplier)",
             email_subject=f"MR {mr.request_number} — no supplier assigned",
             status="FAILED",
-            error_message="No preferred supplier set on the material request.",
+            error_message="No preferred supplier set on the material request or its items.",
             sent_by=sent_by_id,
             created_at=now,
         )
@@ -611,70 +626,83 @@ def send_mr_approval_email(
         db.commit()
         return log
 
-    supplier = db.get(Supplier, mr.preferred_supplier_id)
-    if not supplier:
+    # ── Send one email per supplier group ─────────────────────────────────────
+    last_log: Optional["MREmailLog"] = None
+    total = len(supplier_items)
+
+    for idx, (supplier_id, items) in enumerate(supplier_items.items(), 1):
+        supplier = db.get(Supplier, supplier_id)
+        if not supplier:
+            logger.warning("MR %s: supplier %s not found — skipping.", mr.request_number, supplier_id)
+            continue
+
+        to_email = supplier.email or ""
+        subject, body_html = build_mr_email_body(db, mr, supplier_override=supplier, items_override=items)
+
+        # Append supplier indicator when there are multiple recipients
+        if total > 1:
+            subject = f"{subject} [{idx}/{total}]"
+
+        logger.info(
+            "email mr_send mr=%s supplier=%s to=%s items=%d",
+            mr.request_number, supplier.name, to_email or "(no email)", len(items),
+        )
+
+        error_msg: Optional[str] = None
+        if not to_email:
+            status_str = "FAILED"
+            error_msg  = f"Supplier '{supplier.name}' has no email address — add email to supplier record."
+            logger.warning("email mr_send_failed mr=%s supplier=%s reason=no_email", mr.request_number, supplier.name)
+        elif not _smtp_is_real():
+            reason = "pytest" if _in_pytest() else ("EMAIL_MOCK_MODE" if settings.EMAIL_MOCK_MODE else "SMTP_ENABLED=false")
+            logger.info("email mr_mock_sent mr=%s to=%s reason=%s", mr.request_number, to_email, reason)
+            status_str = "MOCK_SENT"
+        else:
+            err = _send_smtp(
+                to_email, subject, body_html,
+                cc=settings.procurement_cc_list or None,
+                bcc=settings.procurement_bcc_list or None,
+            )
+            if err:
+                status_str = "FAILED"
+                error_msg  = err
+                logger.error("MR email failed for %s → %s: %s", mr.request_number, supplier.name, err)
+            else:
+                status_str = "SENT"
+
         log = MREmailLog(
             material_request_id=mr.id,
-            sent_to_email="(supplier not found)",
-            status="FAILED",
-            error_message=f"Supplier {mr.preferred_supplier_id} not found.",
+            supplier_id=supplier.id,
+            sent_to_email=to_email,
+            email_subject=subject,
+            email_body=body_html,
+            status=status_str,
+            error_message=error_msg,
             sent_by=sent_by_id,
+            sent_at=now if status_str in ("SENT", "MOCK_SENT") else None,
             created_at=now,
         )
         db.add(log)
-        db.commit()
-        return log
+        last_log = log
 
-    to_email = supplier.email or ""
-    subject, body_html = build_mr_email_body(db, mr)
+        if status_str == "FAILED":
+            db.flush()   # get log.id before alert
+            _create_mr_email_failure_alert(db, mr, error_msg or "Unknown error")
 
-    # ── Send ──────────────────────────────────────────────────────────────────
-    error_msg: Optional[str] = None
-    status_str: str
-
-    logger.info("email mr_send mr=%s to=%s", mr.request_number, to_email or "(no email)")
-
-    if not to_email:
-        status_str = "FAILED"
-        error_msg  = f"Supplier '{supplier.name}' has no email address — add email to supplier record."
-        logger.warning("email mr_send_failed mr=%s reason=no_supplier_email", mr.request_number)
-    elif not _smtp_is_real():
-        reason = "pytest" if _in_pytest() else ("EMAIL_MOCK_MODE" if settings.EMAIL_MOCK_MODE else "SMTP_ENABLED=false")
-        logger.info("email mr_mock_sent mr=%s to=%s reason=%s", mr.request_number, to_email, reason)
-        status_str = "MOCK_SENT"
-    else:
-        err = _send_smtp(
-            to_email, subject, body_html,
-            cc=settings.procurement_cc_list or None,
-            bcc=settings.procurement_bcc_list or None,
+    if last_log is None:
+        # All suppliers were missing — return a failure stub
+        last_log = MREmailLog(
+            material_request_id=mr.id,
+            sent_to_email="(all suppliers missing)",
+            status="FAILED",
+            error_message="All referenced suppliers could not be found in the database.",
+            sent_by=sent_by_id,
+            created_at=now,
         )
-        if err:
-            status_str = "FAILED"
-            error_msg  = err
-            logger.error("MR email failed for %s: %s", mr.request_number, err)
-        else:
-            status_str = "SENT"
+        db.add(last_log)
 
-    log = MREmailLog(
-        material_request_id=mr.id,
-        supplier_id=supplier.id,
-        sent_to_email=to_email,
-        email_subject=subject,
-        email_body=body_html,
-        status=status_str,
-        error_message=error_msg,
-        sent_by=sent_by_id,
-        sent_at=now if status_str in ("SENT", "MOCK_SENT") else None,
-        created_at=now,
-    )
-    db.add(log)
     db.commit()
-
-    # ── Alert on failure ──────────────────────────────────────────────────────
-    if status_str == "FAILED":
-        _create_mr_email_failure_alert(db, mr, error_msg or "Unknown error")
-
-    return log
+    return last_log
 
 
 def _create_mr_email_failure_alert(db: Session, mr, error: str) -> None:

@@ -141,6 +141,7 @@ def create_request(
             material_request_id=mr.id,
             item_id=getattr(item_data, "item_id", None),
             boq_item_id=getattr(item_data, "boq_item_id", None),
+            preferred_supplier_id=getattr(item_data, "preferred_supplier_id", None),
             description=getattr(item_data, "description", "") or "",
             requested_quantity=item_data.requested_quantity,
             unit=getattr(item_data, "unit", None),
