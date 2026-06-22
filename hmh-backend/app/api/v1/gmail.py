@@ -499,15 +499,17 @@ def _auto_create_invoice(db, fields: dict, email, now):
         from app.models.enums import RecordStatus
         from app.services.procurement_matching_service import _find_po_by_number
 
-        # Try email.matched_po_number first (set by subject scanning — more reliable
-        # than OCR extraction, which often strips the "PO-" prefix from the number).
+        # Attachment-specific OCR po_number takes priority so that emails with
+        # multiple invoice attachments (different suppliers/POs) each match their
+        # own PO. email.matched_po_number is an email-level fallback only —
+        # _find_po_by_number already handles OCR stripping the "PO-" prefix.
         _candidates = []
-        _matched = getattr(email, "matched_po_number", None)
-        if _matched:
-            _candidates.append(_matched.strip())
         _ocr_po = (fields.get("po_number") or "").strip()
-        if _ocr_po and _ocr_po not in _candidates:
+        if _ocr_po:
             _candidates.append(_ocr_po)
+        _matched = getattr(email, "matched_po_number", None)
+        if _matched and _matched.strip() not in _candidates:
+            _candidates.append(_matched.strip())
 
         if not _candidates:
             logger.info("auto_invoice skip — no PO reference in fields or email")
