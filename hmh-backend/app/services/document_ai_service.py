@@ -654,7 +654,15 @@ def _parse_amount(raw: Optional[str]) -> Optional[float]:
                 # Comma thousands: "12,200" → 12200
                 cleaned = s.replace(' ', '').replace(',', '')
         else:
-            # Dot decimal or plain digits; remove spaces (SA/standard thousands)
+            # Dot decimal or plain digits; remove spaces (SA/standard thousands).
+            # Guard: "12200 12200" is a 3-col regex capturing rate+total as one group.
+            # SA thousands uses exactly 3 digits after a space ("12 200"); two
+            # concatenated values have 4+ digits after the space.  In that case
+            # take only the first number (the rate).
+            import re as _re2
+            _two_nums = _re2.match(r'^(\d[\d.]*)\s+\d{4,}', s)
+            if _two_nums:
+                s = _two_nums.group(1)
             cleaned = s.replace(' ', '')
 
         return float(cleaned)

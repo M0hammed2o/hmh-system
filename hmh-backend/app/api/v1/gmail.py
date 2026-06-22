@@ -376,16 +376,21 @@ def _auto_create_mr_quotes(db, mr_id_str: str, fields: dict, items: list, email,
         if not mr:
             return
 
-        # Resolve supplier — use preferred supplier from MR or match by email
-        supplier_id = mr.preferred_supplier_id
-        if not supplier_id:
+        # Resolve supplier — match by sender email first (multi-supplier MRs send to
+        # different suppliers; using mr.preferred_supplier_id here would tag every
+        # reply with the same fallback supplier regardless of who actually sent it).
+        supplier_id = None
+        if email.from_email:
             s = db.query(Supplier).filter(Supplier.email == email.from_email).first()
             if s:
                 supplier_id = s.id
         if not supplier_id:
+            supplier_id = mr.preferred_supplier_id
+        if not supplier_id:
             return  # cannot create quote without a supplier
 
-        # Idempotency: skip if we already have EMAIL quotes from this sender for this MR
+        # Idempotency: skip if we already have EMAIL quotes from THIS supplier for this MR.
+        # Keyed on (mr_id, supplier_id) so each supplier's reply is processed independently.
         existing_email_supplier = (
             db.query(MRQuote)
             .filter(

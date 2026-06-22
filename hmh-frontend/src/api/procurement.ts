@@ -126,6 +126,17 @@ export interface MRQuote {
 
 export type PipelineStepStatus = "COMPLETE" | "CURRENT" | "WAITING" | "BLOCKED";
 
+export interface POEntry {
+  id: string;
+  po_number: string;
+  status: string;
+  total: number;
+  sent: boolean;
+  supplier_name: string | null;
+  invoice: { id: string; invoice_number: string; total_amount: number; status: string; matches_po: boolean } | null;
+  delivery: { id: string; delivery_note_number: string; status: string; received_at: string | null } | null;
+}
+
 export interface PipelineStep {
   step: number;
   key: string;
@@ -139,6 +150,7 @@ export interface PipelineStep {
   over_boq?: boolean;
   // step 3
   email_sent?: boolean;
+  email_logs?: Array<{ sent_to: string; sent_at: string | null; status: string }>;
   sent_to?: string | null;
   sent_at?: string | null;
   email_status?: string | null;
@@ -149,11 +161,12 @@ export interface PipelineStep {
   quotes?: MRQuote[];
   pending_count?: number;
   approved_count?: number;
-  // step 5
-  po?: { id: string; po_number: string; status: string; total: number; sent: boolean } | null;
-  // step 6
+  // step 5 — pos covers all POs for multi-supplier MRs; po is latest for compat
+  po?: POEntry | null;
+  pos?: POEntry[];
+  // step 6 — invoice is latest for compat; per-PO invoices are in pos[*].invoice
   invoice?: { id: string; invoice_number: string; total_amount: number; status: string; matches_po: boolean } | null;
-  // step 7
+  // step 7 — delivery is latest for compat; per-PO deliveries are in pos[*].delivery
   delivery?: { id: string; delivery_note_number: string; status: string; received_at: string | null } | null;
 }
 

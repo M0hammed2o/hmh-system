@@ -119,14 +119,25 @@ def get_pipeline(mr_id: uuid.UUID, db: DbSession):
     supplier_name      = supplier.name if supplier else None
     supplier_email     = supplier.email if supplier else None
 
-    # Latest email log for this MR
-    email_log = (
+    # All email logs for this MR (chronological) — multi-supplier MRs send one
+    # email per supplier so there may be several logs.
+    email_logs_raw = (
         db.query(MREmailLog)
         .filter(MREmailLog.material_request_id == mr_id)
-        .order_by(MREmailLog.created_at.desc())
-        .first()
+        .order_by(MREmailLog.created_at.asc())
+        .all()
     )
-    email_sent = email_log and email_log.status in ("SENT", "MOCK_SENT")
+    email_log = email_logs_raw[-1] if email_logs_raw else None  # latest, kept for compat
+    email_sent = any(l.status in ("SENT", "MOCK_SENT") for l in email_logs_raw)
+    email_logs_list = [
+        {
+            "sent_to":  l.sent_to_email,
+            "sent_at":  l.sent_at.isoformat() if l.sent_at else None,
+            "status":   l.status,
+        }
+        for l in email_logs_raw
+        if l.status in ("SENT", "MOCK_SENT")
+    ]
 
     # Quotes
     quotes_raw = (
@@ -139,62 +150,70 @@ def get_pipeline(mr_id: uuid.UUID, db: DbSession):
     pending_quotes  = [q for q in quotes if q["status"] == "PENDING"]
     approved_quotes = [q for q in quotes if q["status"] == "APPROVED"]
 
-    # PO linked to this MR
-    po = (
+    # All POs linked to this MR — multi-supplier MRs produce one PO per supplier.
+    from app.models.invoice import Invoice
+    from app.models.delivery import Delivery
+
+    pos_raw = (
         db.query(PurchaseOrder)
         .filter(PurchaseOrder.material_request_id == mr_id)
-        .order_by(PurchaseOrder.created_at.desc())
-        .first()
+        .order_by(PurchaseOrder.created_at.asc())
+        .all()
     )
-    po_dict = None
-    if po:
-        po_sent = bool(po.email_logs and any(
-            l.status in ("SENT", "MOCK_SENT") for l in po.email_logs
+    po_dicts: list[dict] = []
+    for p in pos_raw:
+        po_sent = bool(p.email_logs and any(
+            l.status in ("SENT", "MOCK_SENT") for l in p.email_logs
         ))
-        po_dict = {
-            "id":        str(po.id),
-            "po_number": po.po_number,
-            "status":    po.status.value if po.status else po.status,
-            "total":     float(po.total_amount or 0),
-            "sent":      po_sent,
-        }
-
-    # Invoice linked to PO
-    invoice_dict = None
-    if po:
-        from app.models.invoice import Invoice
+        p_supplier = db.get(Supplier, p.supplier_id) if p.supplier_id else None
         inv = (
             db.query(Invoice)
-            .filter(Invoice.purchase_order_id == po.id)
+            .filter(Invoice.purchase_order_id == p.id)
             .order_by(Invoice.created_at.desc())
             .first()
         )
+        inv_dict = None
         if inv:
-            invoice_dict = {
+            inv_dict = {
                 "id":             str(inv.id),
                 "invoice_number": inv.invoice_number,
                 "total_amount":   float(inv.total_amount or 0),
                 "status":         inv.status.value if hasattr(inv.status, "value") else inv.status,
-                "matches_po":     abs(float(inv.total_amount or 0) - float(po.total_amount or 0)) < 1,
+                "matches_po":     abs(float(inv.total_amount or 0) - float(p.total_amount or 0)) < 1,
             }
-
-    # Delivery linked to PO
-    delivery_dict = None
-    if po:
-        from app.models.delivery import Delivery
-        delivery = (
+        dlv = (
             db.query(Delivery)
-            .filter(Delivery.purchase_order_id == po.id)
+            .filter(Delivery.purchase_order_id == p.id)
             .order_by(Delivery.created_at.desc())
             .first()
         )
-        if delivery:
-            delivery_dict = {
-                "id":                  str(delivery.id),
-                "delivery_note_number": delivery.delivery_number,
-                "status":              delivery.delivery_status.value if hasattr(delivery.delivery_status, "value") else str(delivery.delivery_status),
-                "received_at":         delivery.created_at.isoformat() if delivery.created_at else None,
+        dlv_dict = None
+        if dlv:
+            dlv_dict = {
+                "id":                   str(dlv.id),
+                "delivery_note_number": dlv.delivery_number,
+                "status":               dlv.delivery_status.value if hasattr(dlv.delivery_status, "value") else str(dlv.delivery_status),
+                "received_at":          dlv.created_at.isoformat() if dlv.created_at else None,
             }
+        po_dicts.append({
+            "id":            str(p.id),
+            "po_number":     p.po_number,
+            "status":        p.status.value if p.status else p.status,
+            "total":         float(p.total_amount or 0),
+            "sent":          po_sent,
+            "supplier_name": p_supplier.name if p_supplier else None,
+            "invoice":       inv_dict,
+            "delivery":      dlv_dict,
+        })
+
+    # Aggregate helpers for step-status logic
+    has_any_po       = bool(pos_raw)
+    has_any_invoice  = any(p["invoice"]  for p in po_dicts)
+    has_any_delivery = any(p["delivery"] for p in po_dicts)
+    # Keep single-item references for legacy fields
+    po_dict       = po_dicts[-1] if po_dicts else None
+    invoice_dict  = next((p["invoice"]  for p in reversed(po_dicts) if p["invoice"]),  None)
+    delivery_dict = next((p["delivery"] for p in reversed(po_dicts) if p["delivery"]), None)
 
     # ── Build step annotations ────────────────────────────────────────────────
 
@@ -227,8 +246,9 @@ def get_pipeline(mr_id: uuid.UUID, db: DbSession):
                  is_approved and not email_sent,
                  blocked=is_approved and not email_sent and not supplier_has_email),
               email_sent=email_sent,
-              sent_to=email_log.sent_to_email if email_log else None,
-              sent_at=email_log.sent_at.isoformat() if email_log and email_log.sent_at else None,
+              email_logs=email_logs_list,
+              sent_to=email_logs_list[0]["sent_to"] if email_logs_list else (email_log.sent_to_email if email_log else None),
+              sent_at=email_logs_list[0]["sent_at"] if email_logs_list else (email_log.sent_at.isoformat() if email_log and email_log.sent_at else None),
               email_status=email_log.status if email_log else None,
               supplier_name=supplier_name,
               supplier_email=supplier_email,
@@ -243,16 +263,19 @@ def get_pipeline(mr_id: uuid.UUID, db: DbSession):
               approved_count=len(approved_quotes)),
 
         _step(5, "PURCHASE_ORDER", "Purchase Order",
-              _s(bool(po), is_converted or bool(approved_quotes) and not po),
-              po=po_dict),
+              _s(has_any_po, is_converted or bool(approved_quotes) and not has_any_po),
+              po=po_dict,
+              pos=po_dicts),
 
         _step(6, "INVOICE", "Invoice Received",
-              _s(bool(invoice_dict), bool(po) and not invoice_dict),
-              invoice=invoice_dict),
+              _s(has_any_invoice, has_any_po and not has_any_invoice),
+              invoice=invoice_dict,
+              pos=po_dicts),
 
         _step(7, "DELIVERY", "Delivery Confirmed",
-              _s(bool(delivery_dict), bool(invoice_dict) and not delivery_dict),
-              delivery=delivery_dict),
+              _s(has_any_delivery, has_any_invoice and not has_any_delivery),
+              delivery=delivery_dict,
+              pos=po_dicts),
     ]
 
     # Current active step index (first non-COMPLETE step)

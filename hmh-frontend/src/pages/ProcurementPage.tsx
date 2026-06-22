@@ -1510,17 +1510,27 @@ function PipelinePanelModal({ mrId, suppliers, onClose, onUpdated }: {
                         )}
                       </div>
                     ) : step.status !== "WAITING" ? (
-                      <div className="flex items-center gap-2">
-                        <p className="text-xs text-muted-foreground flex-1">Email to {pipeline.supplier.email}</p>
+                      <div className="space-y-1.5">
+                        {(step.email_logs ?? []).length > 0 ? (
+                          (step.email_logs!).map((log, i) => (
+                            <div key={i} className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                              <Mail className="w-3 h-3 shrink-0 text-green-500" />
+                              <span>{log.sent_to}</span>
+                              {log.sent_at && <span>· {formatDate(log.sent_at)}</span>}
+                            </div>
+                          ))
+                        ) : (
+                          <p className="text-xs text-muted-foreground">Email to {pipeline.supplier.email}</p>
+                        )}
                         <WriteGuard>
-                          <Button size="sm" variant="outline" className="h-7 text-xs gap-1"
+                          <Button size="sm" variant="outline" className="h-7 text-xs gap-1 mt-1"
                             disabled={!!actionLoading}
                             onClick={() => act(async () => {
                               const { materialRequestsApi } = await import("@/api/materialRequests");
                               return materialRequestsApi.sendEmail(mrId);
                             }, "send_email")}>
                             <Mail className="w-3 h-3" />
-                            {actionLoading === "send_email" ? "Sending…" : "Send Email"}
+                            {actionLoading === "send_email" ? "Sending…" : "Resend Email"}
                           </Button>
                         </WriteGuard>
                       </div>
@@ -1699,43 +1709,58 @@ function PipelinePanelModal({ mrId, suppliers, onClose, onUpdated }: {
                   </div>
                 )}
 
-                {/* Step 5: Purchase Order */}
-                {step.step === 5 && step.po && (
-                  <div className="bg-muted/30 rounded-lg px-3 py-2.5 space-y-1">
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs font-medium">{step.po.po_number}</span>
-                      <Badge variant={STATUS_BADGE[step.po.status] || "outline"} className="text-[10px] h-4">{step.po.status.replace(/_/g, " ")}</Badge>
-                      {step.po.sent && <MailCheck className="w-3.5 h-3.5 text-green-500" />}
-                    </div>
-                    <p className="text-xs text-muted-foreground">Total: R{step.po.total.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
+                {/* Step 5: Purchase Order(s) */}
+                {step.step === 5 && (step.pos ?? []).length > 0 && (
+                  <div className="space-y-2">
+                    {(step.pos!).map(po => (
+                      <div key={po.id} className="bg-muted/30 rounded-lg px-3 py-2.5 space-y-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-xs font-medium">{po.po_number}</span>
+                          <Badge variant={STATUS_BADGE[po.status] || "outline"} className="text-[10px] h-4">{po.status.replace(/_/g, " ")}</Badge>
+                          {po.sent && <MailCheck className="w-3.5 h-3.5 text-green-500" />}
+                          {po.supplier_name && <span className="text-[10px] text-muted-foreground">— {po.supplier_name}</span>}
+                        </div>
+                        <p className="text-xs text-muted-foreground">Total: R{po.total.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
+                      </div>
+                    ))}
                   </div>
                 )}
-                {step.step === 5 && !step.po && step.status === "WAITING" && (
+                {step.step === 5 && (step.pos ?? []).length === 0 && step.status === "WAITING" && (
                   <p className="text-xs text-muted-foreground">Will be created automatically when a quote is approved.</p>
                 )}
 
-                {/* Step 6: Invoice */}
-                {step.step === 6 && step.invoice && (
-                  <div className="bg-muted/30 rounded-lg px-3 py-2.5 space-y-1">
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs font-medium">{step.invoice.invoice_number}</span>
-                      <Badge variant={STATUS_BADGE[step.invoice.status] || "outline"} className="text-[10px] h-4">{step.invoice.status.replace(/_/g, " ")}</Badge>
-                      {step.invoice.matches_po && <span className="text-[10px] text-green-600 bg-green-500/10 rounded px-1.5 py-0.5">Matches PO</span>}
-                    </div>
-                    <p className="text-xs text-muted-foreground">Amount: R{step.invoice.total_amount.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
+                {/* Step 6: Invoice(s) — one per PO */}
+                {step.step === 6 && (step.pos ?? []).some(p => p.invoice) && (
+                  <div className="space-y-2">
+                    {(step.pos!).filter(p => p.invoice).map(p => (
+                      <div key={p.invoice!.id} className="bg-muted/30 rounded-lg px-3 py-2.5 space-y-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-xs font-medium">{p.invoice!.invoice_number}</span>
+                          <Badge variant={STATUS_BADGE[p.invoice!.status] || "outline"} className="text-[10px] h-4">{p.invoice!.status.replace(/_/g, " ")}</Badge>
+                          {p.invoice!.matches_po && <span className="text-[10px] text-green-600 bg-green-500/10 rounded px-1.5 py-0.5">Matches PO</span>}
+                          {p.supplier_name && <span className="text-[10px] text-muted-foreground">— {p.supplier_name}</span>}
+                        </div>
+                        <p className="text-xs text-muted-foreground">Amount: R{p.invoice!.total_amount.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
+                      </div>
+                    ))}
                   </div>
                 )}
 
-                {/* Step 7: Delivery */}
-                {step.step === 7 && step.delivery && (
-                  <div className="bg-muted/30 rounded-lg px-3 py-2.5 space-y-1">
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs font-medium">{step.delivery.delivery_note_number}</span>
-                      <Badge variant={STATUS_BADGE[step.delivery.status] || "outline"} className="text-[10px] h-4">{step.delivery.status.replace(/_/g, " ")}</Badge>
-                    </div>
-                    {step.delivery.received_at && (
-                      <p className="text-xs text-muted-foreground">Received: {formatDate(step.delivery.received_at)}</p>
-                    )}
+                {/* Step 7: Delivery note(s) — one per PO */}
+                {step.step === 7 && (step.pos ?? []).some(p => p.delivery) && (
+                  <div className="space-y-2">
+                    {(step.pos!).filter(p => p.delivery).map(p => (
+                      <div key={p.delivery!.id} className="bg-muted/30 rounded-lg px-3 py-2.5 space-y-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-xs font-medium">{p.delivery!.delivery_note_number}</span>
+                          <Badge variant={STATUS_BADGE[p.delivery!.status] || "outline"} className="text-[10px] h-4">{p.delivery!.status.replace(/_/g, " ")}</Badge>
+                          {p.supplier_name && <span className="text-[10px] text-muted-foreground">— {p.supplier_name}</span>}
+                        </div>
+                        {p.delivery!.received_at && (
+                          <p className="text-xs text-muted-foreground">Received: {formatDate(p.delivery!.received_at)}</p>
+                        )}
+                      </div>
+                    ))}
                   </div>
                 )}
               </div>
