@@ -274,6 +274,161 @@ def get_warehouse_history(
     ])
 
 
+# ── Site warehouse: TOOL items ────────────────────────────────────────────────
+
+@router.get("/tools", response_model=ApiSuccess[list[dict]], dependencies=[ALL_ROLES])
+def get_site_tools(site_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
+    """List TOOL items currently in this site warehouse (lot_id IS NULL, item_type = TOOL)."""
+    site = db.get(Site, site_id)
+    if not site:
+        raise HTTPException(404, "Site not found.")
+    check_project_access(db, current_user, site.project_id)
+
+    rows = db.execute(text("""
+        SELECT
+            sl.item_id,
+            i.name                              AS item_name,
+            i.default_unit                      AS unit,
+            SUM(sl.quantity_in)                 AS total_in,
+            SUM(sl.quantity_out)                AS total_out,
+            SUM(sl.quantity_in) - SUM(sl.quantity_out) AS on_hand,
+            MAX(sl.movement_date)               AS last_movement
+        FROM stock_ledger sl
+        JOIN items i ON i.id = sl.item_id
+        WHERE sl.site_id = :site_id
+          AND sl.lot_id IS NULL
+          AND i.item_type = 'TOOL'
+        GROUP BY sl.item_id, i.name, i.default_unit
+        HAVING SUM(sl.quantity_in) - SUM(sl.quantity_out) > 0
+        ORDER BY i.name
+    """), {"site_id": str(site_id)}).mappings().all()
+
+    return ApiSuccess(data=[{
+        "item_id":       str(r["item_id"]),
+        "item_name":     r["item_name"],
+        "unit":          r["unit"],
+        "on_hand":       float(r["on_hand"]),
+        "total_in":      float(r["total_in"]),
+        "total_out":     float(r["total_out"]),
+        "last_movement": r["last_movement"].isoformat() if r["last_movement"] else None,
+    } for r in rows], message=f"{len(rows)} tool(s) at site.")
+
+
+class ReturnToolsRequest(BaseModel):
+    item_id:  uuid.UUID
+    quantity: float
+    notes:    Optional[str] = None
+
+
+@router.post("/return-tools", response_model=ApiSuccess[dict], dependencies=[WRITE_ROLES])
+def return_tools_to_main(
+    site_id: uuid.UUID,
+    body: ReturnToolsRequest,
+    db: DbSession,
+    current_user: CurrentUser,
+):
+    """
+    Return tools from a site warehouse back to the global main warehouse (project_id=NULL).
+
+    TRANSFER_OUT — leaves site   (project_id=site.project_id, site_id=X, lot_id=NULL)
+    TRANSFER_IN  — enters global (project_id=NULL, site_id=NULL, lot_id=NULL)
+    """
+    site = db.get(Site, site_id)
+    if not site:
+        raise HTTPException(404, "Site not found.")
+    check_project_access(db, current_user, site.project_id)
+
+    item = db.get(Item, body.item_id)
+    if not item:
+        raise HTTPException(404, "Item not found.")
+
+    if body.quantity <= 0:
+        raise HTTPException(422, "Return quantity must be greater than zero.")
+
+    balance_row = db.execute(text("""
+        SELECT SUM(quantity_in) - SUM(quantity_out) AS balance
+        FROM stock_ledger
+        WHERE site_id = :site_id
+          AND lot_id IS NULL
+          AND item_id = :item_id
+    """), {"site_id": str(site_id), "item_id": str(body.item_id)}).fetchone()
+
+    available = float(balance_row[0] or 0)
+    if body.quantity > available:
+        raise HTTPException(422,
+            f"Insufficient tools at site. "
+            f"Available: {available:.3g} {item.default_unit or ''} of {item.name}; "
+            f"requested {body.quantity:.3g}."
+        )
+
+    now = datetime.now(timezone.utc)
+    transfer_ref = uuid.uuid4()
+
+    db.add(StockLedger(
+        project_id     = site.project_id,
+        site_id        = site_id,
+        lot_id         = None,
+        item_id        = body.item_id,
+        movement_type  = MovementType.TRANSFER_OUT,
+        reference_type = "site_to_global_tool_return",
+        reference_id   = transfer_ref,
+        quantity_in    = 0,
+        quantity_out   = body.quantity,
+        unit           = item.default_unit,
+        movement_date  = now,
+        entered_by     = current_user.id,
+        notes          = body.notes or "Tool returned to Main Warehouse",
+        created_at     = now,
+    ))
+
+    db.add(StockLedger(
+        project_id     = None,
+        site_id        = None,
+        lot_id         = None,
+        item_id        = body.item_id,
+        movement_type  = MovementType.TRANSFER_IN,
+        reference_type = "site_to_global_tool_return",
+        reference_id   = transfer_ref,
+        quantity_in    = body.quantity,
+        quantity_out   = 0,
+        unit           = item.default_unit,
+        movement_date  = now,
+        entered_by     = current_user.id,
+        notes          = body.notes or f"Tool returned from {site.name}",
+        created_at     = now,
+    ))
+
+    audit_service.write_event(
+        db,
+        action=AuditAction.TRANSFER,
+        entity_type="site_warehouse",
+        actor_id=current_user.id,
+        entity_id=site_id,
+        after_value={
+            "direction":    "site_to_global",
+            "item":         item.name,
+            "quantity":     body.quantity,
+            "unit":         item.default_unit,
+            "site":         site.name,
+            "transfer_ref": str(transfer_ref),
+        },
+    )
+
+    db.commit()
+    return ApiSuccess(
+        data={
+            "transfer_ref": str(transfer_ref),
+            "item_id":      str(body.item_id),
+            "item_name":    item.name,
+            "quantity":     body.quantity,
+            "unit":         item.default_unit,
+            "site_name":    site.name,
+            "new_balance":  available - body.quantity,
+        },
+        message=f"Returned {body.quantity} {item.default_unit or ''} of {item.name} to Main Warehouse.",
+    )
+
+
 # ── Main Warehouse (project-level stock: site_id IS NULL, lot_id IS NULL) ─────
 
 @project_warehouse_router.get("/", response_model=ApiSuccess[list[dict]], dependencies=[ALL_ROLES])
@@ -1113,6 +1268,48 @@ def get_global_main_warehouse_history(
         "reference_type": r["reference_type"],
         "entered_by":     r["entered_by_name"],
     } for r in rows])
+
+
+# ── Global Main Warehouse: TOOL items ─────────────────────────────────────────
+
+@global_warehouse_router.get("/main/tools", response_model=ApiSuccess[list[dict]], dependencies=[ALL_ROLES])
+def get_global_main_warehouse_tools(db: DbSession, current_user: CurrentUser):
+    """List TOOL items in the global main warehouse (project_id IS NULL, item_type = TOOL)."""
+    rows = db.execute(text("""
+        SELECT
+            sl.item_id,
+            i.name                              AS item_name,
+            i.default_unit                      AS unit,
+            SUM(sl.quantity_in)                 AS total_in,
+            SUM(sl.quantity_out)                AS total_out,
+            SUM(sl.quantity_in) - SUM(sl.quantity_out) AS on_hand,
+            MAX(sl.movement_date)               AS last_movement
+        FROM stock_ledger sl
+        JOIN items i ON i.id = sl.item_id
+        WHERE sl.project_id IS NULL
+          AND sl.site_id IS NULL
+          AND sl.lot_id  IS NULL
+          AND i.item_type = 'TOOL'
+        GROUP BY sl.item_id, i.name, i.default_unit
+        HAVING SUM(sl.quantity_in) - SUM(sl.quantity_out) > 0
+        ORDER BY i.name
+    """)).mappings().all()
+
+    return ApiSuccess(
+        data=[{
+            "project_id":    None,
+            "project_name":  "Global",
+            "project_code":  "GLOBAL",
+            "item_id":       str(r["item_id"]),
+            "item_name":     r["item_name"],
+            "unit":          r["unit"],
+            "on_hand":       float(r["on_hand"]),
+            "total_in":      float(r["total_in"]),
+            "total_out":     float(r["total_out"]),
+            "last_movement": r["last_movement"].isoformat() if r["last_movement"] else None,
+        } for r in rows],
+        message=f"{len(rows)} tool(s) in main warehouse.",
+    )
 
 
 # ── Main Warehouse: receive stock from supplier ───────────────────────────────

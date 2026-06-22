@@ -9,7 +9,7 @@
  * The old /sites/{siteId}/warehouse/ endpoints remain as legacy aliases.
  */
 import { useCallback, useEffect, useState } from "react";
-import { Package, ArrowRight, RefreshCw, History, AlertTriangle, X, Plus, SlidersHorizontal } from "lucide-react";
+import { Package, ArrowRight, RefreshCw, History, AlertTriangle, X, Plus, SlidersHorizontal, Wrench } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -359,6 +359,85 @@ function AdjustStockModal({
   );
 }
 
+// ── Return Tool Modal ─────────────────────────────────────────────────────────
+
+function ReturnToolModal({
+  siteId,
+  item,
+  onClose,
+  onDone,
+}: {
+  siteId:  string;
+  item:    WarehouseStockItem;
+  onClose: () => void;
+  onDone:  () => void;
+}) {
+  const [quantity, setQuantity] = useState("");
+  const [notes,    setNotes]    = useState("");
+  const [loading,  setLoading]  = useState(false);
+  const [error,    setError]    = useState("");
+
+  const submit = async () => {
+    const qty = parseFloat(quantity);
+    if (!qty || qty <= 0)    { setError("Enter a valid quantity."); return; }
+    if (qty > item.on_hand)  { setError(`Only ${item.on_hand} ${item.unit ?? ""} available.`); return; }
+    setLoading(true); setError("");
+    try {
+      await warehouseApi.returnToolsToMain(siteId, item.item_id, qty, notes || undefined);
+      onDone(); onClose();
+    } catch (err: unknown) {
+      const d = (err as { response?: { data?: { detail?: string } } })?.response?.data;
+      setError(d?.detail ?? "Return failed.");
+    } finally { setLoading(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
+      <div className="bg-card border border-border rounded-2xl w-full max-w-sm p-6 space-y-4" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between">
+          <h3 className="font-semibold text-base">Return Tool to Main Warehouse</h3>
+          <button onClick={onClose}><X className="w-4 h-4 text-muted-foreground" /></button>
+        </div>
+        <div className="bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 rounded-xl px-4 py-3 flex items-center gap-3">
+          <Wrench className="w-4 h-4 text-amber-600 shrink-0" />
+          <div>
+            <p className="font-medium text-sm">{item.item_name}</p>
+            <p className="text-xs text-muted-foreground">
+              At site: <strong>{item.on_hand} {item.unit ?? ""}</strong>
+            </p>
+          </div>
+        </div>
+        <div className="space-y-3">
+          <div>
+            <label className="text-xs text-muted-foreground block mb-1">Quantity to return ({item.unit ?? "units"})</label>
+            <input
+              type="number" min="0.001" step="any" max={item.on_hand}
+              value={quantity} onChange={e => setQuantity(e.target.value)}
+              placeholder={`Max ${item.on_hand}`} autoFocus
+              className="w-full h-10 rounded-md border border-input bg-background px-3 text-sm"
+            />
+          </div>
+          <div>
+            <label className="text-xs text-muted-foreground block mb-1">Notes (optional)</label>
+            <input
+              type="text" value={notes} onChange={e => setNotes(e.target.value)}
+              placeholder="e.g. Job complete, returning drill"
+              className="w-full h-10 rounded-md border border-input bg-background px-3 text-sm"
+            />
+          </div>
+        </div>
+        {error && <p className="text-xs text-destructive bg-destructive/10 rounded-lg px-3 py-2">{error}</p>}
+        <div className="flex gap-2 pt-1">
+          <Button onClick={submit} disabled={loading} className="flex-1">
+            {loading ? "Returning…" : "Return to Main Warehouse"}
+          </Button>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── History row ───────────────────────────────────────────────────────────────
 
 function HistoryRow({ m }: { m: WarehouseMovement }) {
@@ -405,27 +484,32 @@ export function ProjectWarehouse({ projectId, siteId }: Props) {
   const [stock,           setStock]           = useState<WarehouseStockItem[]>([]);
   const [lots,            setLots]            = useState<Lot[]>([]);
   const [history,         setHistory]         = useState<WarehouseMovement[]>([]);
+  const [siteTools,       setSiteTools]       = useState<WarehouseStockItem[]>([]);
   const [loading,         setLoading]         = useState(true);
   const [showHistory,     setShowHistory]     = useState(false);
   const [histLoading,     setHistLoading]     = useState(false);
   const [transferItem,    setTransferItem]    = useState<WarehouseStockItem | null>(null);
   const [showAddMaterial, setShowAddMaterial] = useState(false);
   const [adjustItem,      setAdjustItem]      = useState<WarehouseStockItem | null>(null);
+  const [returnTool,      setReturnTool]      = useState<WarehouseStockItem | null>(null);
   const [error,           setError]           = useState("");
 
   const loadStock = useCallback(async () => {
     setLoading(true); setError("");
     try {
-      const [s, l] = await Promise.all([
-        warehouseApi.getMainStock(projectId),   // Project Warehouse = site_id=NULL
+      const calls: Promise<unknown>[] = [
+        warehouseApi.getMainStock(projectId),
         lotsApi.list(projectId),
-      ]);
-      setStock(s);
-      setLots(l);
+      ];
+      if (siteId) calls.push(warehouseApi.getSiteTools(siteId));
+      const [s, l, t] = await Promise.all(calls);
+      setStock(s as WarehouseStockItem[]);
+      setLots(l as Lot[]);
+      if (t) setSiteTools(t as WarehouseStockItem[]);
     } catch {
       setError("Failed to load project warehouse.");
     } finally { setLoading(false); }
-  }, [projectId]);
+  }, [projectId, siteId]);
 
   const loadHistory = useCallback(async () => {
     setHistLoading(true);
@@ -611,6 +695,72 @@ export function ProjectWarehouse({ projectId, siteId }: Props) {
           projectId={projectId}
           item={adjustItem}
           onClose={() => setAdjustItem(null)}
+          onDone={loadStock}
+        />
+      )}
+
+      {/* ── Tools at this Site ─────────────────────────────────────────────── */}
+      {siteId && (
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            <Wrench className="w-4 h-4 text-primary" />
+            <span className="font-semibold text-sm">Tools at this Site</span>
+            {siteTools.length > 0 && (
+              <span className="text-xs bg-primary/10 text-primary rounded-full px-2 py-0.5">
+                {siteTools.length}
+              </span>
+            )}
+          </div>
+
+          {loading ? (
+            <Skeleton className="h-12 rounded-xl" />
+          ) : siteTools.length === 0 ? (
+            <div className="bg-card border border-border rounded-xl px-4 py-5 text-center">
+              <p className="text-sm text-muted-foreground">No tools at this site.</p>
+              <p className="text-xs text-muted-foreground mt-1">
+                Tools are sent from the Main Warehouse.
+              </p>
+            </div>
+          ) : (
+            <div className="bg-card border border-border rounded-xl overflow-hidden">
+              {siteTools.map((tool, i) => (
+                <div
+                  key={tool.item_id}
+                  className={cn(
+                    "flex items-center gap-4 px-4 py-3 hover:bg-muted/30 transition-colors",
+                    i < siteTools.length - 1 && "border-b border-border",
+                  )}
+                >
+                  <Wrench className="w-4 h-4 text-muted-foreground shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium truncate">{tool.item_name}</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      On hand: <span className="font-semibold text-foreground">{tool.on_hand} {tool.unit ?? ""}</span>
+                    </p>
+                  </div>
+                  {canTransfer && (
+                    <Button
+                      size="sm" variant="outline"
+                      className="h-8 text-xs gap-1.5 shrink-0"
+                      onClick={() => setReturnTool(tool)}
+                    >
+                      <ArrowRight className="w-3 h-3 rotate-180" />
+                      Return to Main
+                    </Button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Return tool modal */}
+      {returnTool && siteId && (
+        <ReturnToolModal
+          siteId={siteId}
+          item={returnTool}
+          onClose={() => setReturnTool(null)}
           onDone={loadStock}
         />
       )}

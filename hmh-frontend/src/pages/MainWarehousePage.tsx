@@ -17,7 +17,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
   ArrowRight, RefreshCw, History,
   AlertTriangle, X, ChevronDown, ChevronUp, Warehouse,
-  PackagePlus, SlidersHorizontal,
+  PackagePlus, SlidersHorizontal, Wrench,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -473,10 +473,12 @@ function HistoryRow({ m }: { m: GlobalWarehouseMovement }) {
 
 export default function MainWarehousePage() {
   const [stock,       setStock]       = useState<GlobalWarehouseStockItem[]>([]);
+  const [tools,       setTools]       = useState<GlobalWarehouseStockItem[]>([]);
   const [history,     setHistory]     = useState<GlobalWarehouseMovement[]>([]);
   const [loading,     setLoading]     = useState(false);
   const [histLoading, setHistLoading] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
+  const [showTools,   setShowTools]   = useState(false);
   const [error,       setError]       = useState("");
 
   const [transferItem,  setTransferItem]  = useState<GlobalWarehouseStockItem | null>(null);
@@ -486,7 +488,12 @@ export default function MainWarehousePage() {
   const loadStock = useCallback(async () => {
     setLoading(true); setError("");
     try {
-      setStock(await warehouseApi.getGlobalStock());
+      const [s, t] = await Promise.all([
+        warehouseApi.getGlobalStock(),
+        warehouseApi.getGlobalTools(),
+      ]);
+      setStock(s);
+      setTools(t);
     } catch {
       setError("Failed to load main warehouse stock.");
     } finally { setLoading(false); }
@@ -627,6 +634,70 @@ export default function MainWarehousePage() {
           ))}
         </div>
       )}
+
+      {/* Tools panel */}
+      <div className="bg-card border border-border rounded-xl overflow-hidden">
+        <button
+          className="w-full flex items-center justify-between px-4 py-3 hover:bg-muted/30 transition-colors"
+          onClick={() => setShowTools(p => !p)}
+        >
+          <div className="flex items-center gap-2">
+            <Wrench className="w-4 h-4 text-primary" />
+            <span className="font-semibold text-sm">Tools in Main Warehouse</span>
+            {tools.length > 0 && (
+              <span className="text-xs bg-primary/10 text-primary rounded-full px-2 py-0.5">
+                {tools.length}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            {loading && <RefreshCw className="w-3.5 h-3.5 animate-spin text-muted-foreground" />}
+            {showTools
+              ? <ChevronUp className="w-4 h-4 text-muted-foreground" />
+              : <ChevronDown className="w-4 h-4 text-muted-foreground" />}
+          </div>
+        </button>
+
+        {showTools && (
+          <div className="border-t border-border">
+            {loading ? (
+              <div className="px-4 py-3 space-y-2">
+                {[1, 2, 3].map(i => <Skeleton key={i} className="h-12 rounded-lg" />)}
+              </div>
+            ) : tools.length === 0 ? (
+              <p className="text-xs text-muted-foreground text-center px-4 py-6">
+                No tools in main warehouse. Receive stock with a TOOL-type item to see it here.
+              </p>
+            ) : (
+              <div className="divide-y divide-border">
+                {tools.map(tool => (
+                  <div
+                    key={tool.item_id}
+                    className="flex items-center gap-4 px-4 py-3 hover:bg-muted/30 transition-colors"
+                  >
+                    <Wrench className="w-4 h-4 text-muted-foreground shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium truncate">{tool.item_name}</p>
+                      <p className="text-xs text-muted-foreground">
+                        On hand: <strong>{fmt(tool.on_hand)} {tool.unit ?? ""}</strong>
+                        {tool.last_movement ? ` · Last: ${formatDate(tool.last_movement)}` : ""}
+                      </p>
+                    </div>
+                    <Button
+                      size="sm" variant="outline"
+                      className="h-8 text-xs gap-1.5 shrink-0"
+                      onClick={() => setTransferItem(tool)}
+                    >
+                      <ArrowRight className="w-3 h-3" />
+                      Send to Site
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
 
       {/* Movement history */}
       <div className="bg-card border border-border rounded-xl overflow-hidden">

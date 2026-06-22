@@ -276,4 +276,34 @@ export const warehouseApi = {
     );
     return res.data.data;
   },
+
+  // ── Tool transfer (Phase 3AA) ─────────────────────────────────────────────
+
+  /** TOOL items in the global main warehouse (project_id IS NULL, item_type = TOOL). */
+  getGlobalTools: async (): Promise<GlobalWarehouseStockItem[]> => {
+    const res = await client.get<{ data: GlobalWarehouseStockItem[] }>("/warehouse/main/tools");
+    return res.data.data ?? [];
+  },
+
+  /** TOOL items currently at a site warehouse. */
+  getSiteTools: async (siteId: string): Promise<WarehouseStockItem[]> => {
+    const res = await client.get<{ data: WarehouseStockItem[] }>(
+      `/sites/${siteId}/warehouse/tools`
+    );
+    return res.data.data ?? [];
+  },
+
+  /** Return tools from a site warehouse back to the global main warehouse. */
+  returnToolsToMain: async (
+    siteId:   string,
+    itemId:   string,
+    quantity: number,
+    notes?:   string,
+  ): Promise<TransferResult> => {
+    const res = await client.post<{ data: TransferResult }>(
+      `/sites/${siteId}/warehouse/return-tools`,
+      { item_id: itemId, quantity, notes: notes || null }
+    );
+    return res.data.data;
+  },
 };
