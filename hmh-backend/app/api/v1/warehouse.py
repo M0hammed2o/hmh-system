@@ -1376,12 +1376,14 @@ def receive_main_warehouse_stock(
     db.commit()
     db.refresh(entry)
 
-    audit_service.log(
-        db, current_user.id,
-        AuditAction.CREATE,
-        "stock_ledger", str(entry.id),
-        {"movement": "MAIN_WAREHOUSE_RECEIVE", "item": item.name, "qty": body.quantity,
-         "supplier_ref": body.supplier_ref},
+    audit_service.write_event(
+        db,
+        action=AuditAction.CREATE,
+        entity_type="stock_ledger",
+        actor_id=current_user.id,
+        entity_id=entry.id,
+        after_value={"movement": "MAIN_WAREHOUSE_RECEIVE", "item": item.name,
+                     "qty": body.quantity, "supplier_ref": body.supplier_ref},
     )
 
     return ApiSuccess(
@@ -1467,11 +1469,14 @@ def adjust_main_warehouse_stock(
     db.commit()
     db.refresh(entry)
 
-    audit_service.log(
-        db, current_user.id,
-        AuditAction.CREATE,
-        "stock_ledger", str(entry.id),
-        {"movement": f"ADJUSTMENT_{body.adjustment_type}", "item": item.name, "qty": body.quantity},
+    audit_service.write_event(
+        db,
+        action=AuditAction.CREATE,
+        entity_type="stock_ledger",
+        actor_id=current_user.id,
+        entity_id=entry.id,
+        after_value={"movement": f"ADJUSTMENT_{body.adjustment_type}",
+                     "item": item.name, "qty": body.quantity},
     )
 
     return ApiSuccess(
@@ -1556,12 +1561,14 @@ def add_main_warehouse_tool(
     db.add(entry)
     db.flush()
 
-    audit_service.log(
-        db, current_user.id,
-        AuditAction.CREATE,
-        "stock_ledger", str(entry.id),
-        {"movement": "MAIN_WAREHOUSE_TOOL_ADD", "item": item.name,
-         "qty": body.quantity, "new_item": created_item},
+    audit_service.write_event(
+        db,
+        action=AuditAction.CREATE,
+        entity_type="stock_ledger",
+        actor_id=current_user.id,
+        entity_id=entry.id,
+        after_value={"movement": "MAIN_WAREHOUSE_TOOL_ADD", "item": item.name,
+                     "qty": body.quantity, "new_item": created_item},
     )
     db.commit()
 

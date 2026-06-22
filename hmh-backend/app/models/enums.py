@@ -80,6 +80,7 @@ class ItemType(str, enum.Enum):
     PLANT = "PLANT"
     SERVICE = "SERVICE"
     PACKAGE = "PACKAGE"
+    TOOL = "TOOL"
 
 
 class MovementType(str, enum.Enum):
