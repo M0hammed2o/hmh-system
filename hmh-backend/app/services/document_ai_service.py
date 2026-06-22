@@ -893,7 +893,42 @@ def _parse_quote_line_items(text: str) -> list[dict]:
     if wide:
         return wide
 
-    # 3. SA loose pattern: single-space separators, R or @ is MANDATORY before price.
+    # 3. Code-table pattern: handles "Code Description Qty Unit Rate Total" format common in
+    # SA quotation templates.  The leading numeric item code (010, 0001) is consumed but
+    # not captured. Two numeric columns at the end (Rate + Total) anchor the match so
+    # bare date/metadata lines (which have at most one trailing number) are not captured.
+    # No R/@ required — the double-number anchor provides the false-positive protection.
+    _QUOTE_CODE_TABLE = _re.compile(
+        r"^(?:\d{1,6}\s+)?([A-Za-z][A-Za-z0-9 ,./\-]{1,59}?)\s+"
+        r"(\d+(?:[.,]\d+)?)\s+(?:[a-zA-Z]{1,10}\s+)?"
+        r"([\d][\d ,]*(?:[,.]\d{1,2})?)\s+([\d][\d ,]*(?:[,.]\d{1,2})?)\s*$",
+        _re.MULTILINE,
+    )
+    code_table: list[dict] = []
+    for m in _QUOTE_CODE_TABLE.finditer(text):
+        desc, qty_s, rate_s, total_s = m.groups()
+        qty   = _parse_amount(qty_s)
+        rate  = _parse_amount(rate_s)
+        total = _parse_amount(total_s)
+        if qty is None or rate is None or rate < 0.01:
+            continue
+        # Sanity: rate × qty should be close to total (within 2%) when total is present
+        if total is not None and total > 0:
+            expected = qty * rate
+            if abs(expected - total) / total > 0.02:
+                continue  # numbers don't multiply correctly — not an item row
+        code_table.append({
+            "description": desc.strip(),
+            "unit":        None,
+            "quantity":    qty,
+            "unit_price":  rate,
+            "line_total":  total if total is not None else round(qty * rate, 2),
+            "confidence":  0.55,
+        })
+    if code_table:
+        return code_table
+
+    # 4. SA loose pattern: single-space separators, R or @ is MANDATORY before price.
     # Mandatory R/@ prevents false matches on date lines, signature lines, etc.
     # Supports both "R 7066.65" (SA currency) and "@ 7066.65" (quotation template style).
     # The price group is last → _AMT greedily captures "12 200" without split.

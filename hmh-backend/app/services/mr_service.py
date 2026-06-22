@@ -442,7 +442,7 @@ def convert_to_po(
     notes: Optional[str] = None,
 ) -> PurchaseOrder:
     mr = get_request(db, mr_id)
-    if mr.status != RecordStatus.APPROVED:
+    if mr.status not in (RecordStatus.APPROVED, RecordStatus.CONVERTED_TO_PO):
         raise ValidationError("Only APPROVED requests can be converted to PO.")
 
     now = datetime.now(timezone.utc)
