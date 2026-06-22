@@ -17,7 +17,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
   ArrowRight, RefreshCw, History,
   AlertTriangle, X, ChevronDown, ChevronUp, Warehouse,
-  PackagePlus, SlidersHorizontal, Wrench,
+  PackagePlus, SlidersHorizontal, Wrench, Plus,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -438,6 +438,98 @@ function TransferModal({
   );
 }
 
+// ── Add Tool Modal ────────────────────────────────────────────────────────────
+
+function AddToolModal({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
+  const [name,     setName]     = useState("");
+  const [quantity, setQuantity] = useState("");
+  const [unit,     setUnit]     = useState("");
+  const [notes,    setNotes]    = useState("");
+  const [saving,   setSaving]   = useState(false);
+  const [error,    setError]    = useState("");
+
+  const submit = async () => {
+    const qty = parseFloat(quantity);
+    if (!name.trim())     { setError("Enter a tool name."); return; }
+    if (!qty || qty <= 0) { setError("Enter a valid quantity."); return; }
+    setSaving(true); setError("");
+    try {
+      await warehouseApi.addTool({
+        name:     name.trim(),
+        quantity: qty,
+        unit:     unit.trim() || undefined,
+        notes:    notes.trim() || undefined,
+      });
+      onDone();
+      onClose();
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      setError(detail ?? "Failed to add tool.");
+    } finally { setSaving(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
+      <div className="bg-card border border-border rounded-2xl w-full max-w-sm p-6 space-y-4" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between">
+          <h3 className="font-semibold text-base">Add Tools to Main Warehouse</h3>
+          <button onClick={onClose}><X className="w-4 h-4 text-muted-foreground" /></button>
+        </div>
+
+        <div className="bg-primary/5 border border-primary/20 rounded-xl px-3 py-2 text-xs text-muted-foreground">
+          Tools are re-usable and can be sent to sites and returned. If a tool with this name already exists its stock will be topped up.
+        </div>
+
+        <div className="space-y-3">
+          <div>
+            <label className="text-xs text-muted-foreground block mb-1">Tool name *</label>
+            <input
+              type="text" value={name} onChange={e => setName(e.target.value)}
+              placeholder="e.g. Shovel, Drill, Spirit Level" autoFocus
+              className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm"
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="text-xs text-muted-foreground block mb-1">Quantity *</label>
+              <input
+                type="number" min="1" step="1" value={quantity}
+                onChange={e => setQuantity(e.target.value)} placeholder="e.g. 100"
+                className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-muted-foreground block mb-1">Unit (optional)</label>
+              <input
+                type="text" value={unit} onChange={e => setUnit(e.target.value)}
+                placeholder="e.g. pcs"
+                className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm"
+              />
+            </div>
+          </div>
+          <div>
+            <label className="text-xs text-muted-foreground block mb-1">Notes (optional)</label>
+            <input
+              type="text" value={notes} onChange={e => setNotes(e.target.value)}
+              placeholder="e.g. New purchase from supplier"
+              className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm"
+            />
+          </div>
+        </div>
+
+        {error && <p className="text-xs text-destructive bg-destructive/10 rounded-lg px-3 py-2">{error}</p>}
+
+        <div className="flex gap-2">
+          <Button onClick={submit} disabled={saving} className="flex-1">
+            {saving ? "Adding…" : "Add to Warehouse"}
+          </Button>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── History row ───────────────────────────────────────────────────────────────
 
 function HistoryRow({ m }: { m: GlobalWarehouseMovement }) {
@@ -484,6 +576,7 @@ export default function MainWarehousePage() {
   const [transferItem,  setTransferItem]  = useState<GlobalWarehouseStockItem | null>(null);
   const [showReceive,   setShowReceive]   = useState(false);
   const [showAdjust,    setShowAdjust]    = useState(false);
+  const [showAddTool,   setShowAddTool]   = useState(false);
 
   const loadStock = useCallback(async () => {
     setLoading(true); setError("");
@@ -637,11 +730,11 @@ export default function MainWarehousePage() {
 
       {/* Tools panel */}
       <div className="bg-card border border-border rounded-xl overflow-hidden">
-        <button
-          className="w-full flex items-center justify-between px-4 py-3 hover:bg-muted/30 transition-colors"
-          onClick={() => setShowTools(p => !p)}
-        >
-          <div className="flex items-center gap-2">
+        <div className="flex items-center justify-between px-4 py-3">
+          <button
+            className="flex items-center gap-2 flex-1 text-left hover:opacity-80 transition-opacity"
+            onClick={() => setShowTools(p => !p)}
+          >
             <Wrench className="w-4 h-4 text-primary" />
             <span className="font-semibold text-sm">Tools in Main Warehouse</span>
             {tools.length > 0 && (
@@ -649,14 +742,24 @@ export default function MainWarehousePage() {
                 {tools.length}
               </span>
             )}
-          </div>
+          </button>
           <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowAddTool(true)}
+              className="flex items-center gap-1 text-xs text-primary hover:text-primary/80 transition-colors px-2 py-1 rounded-lg hover:bg-primary/10 border border-primary/20"
+              title="Add tools to warehouse"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              Add Tool
+            </button>
             {loading && <RefreshCw className="w-3.5 h-3.5 animate-spin text-muted-foreground" />}
-            {showTools
-              ? <ChevronUp className="w-4 h-4 text-muted-foreground" />
-              : <ChevronDown className="w-4 h-4 text-muted-foreground" />}
+            <button onClick={() => setShowTools(p => !p)}>
+              {showTools
+                ? <ChevronUp className="w-4 h-4 text-muted-foreground" />
+                : <ChevronDown className="w-4 h-4 text-muted-foreground" />}
+            </button>
           </div>
-        </button>
+        </div>
 
         {showTools && (
           <div className="border-t border-border">
@@ -761,6 +864,13 @@ export default function MainWarehousePage() {
         <AdjustStockModal
           onClose={() => setShowAdjust(false)}
           onDone={() => { loadStock(); loadHistory(); }}
+        />
+      )}
+
+      {showAddTool && (
+        <AddToolModal
+          onClose={() => setShowAddTool(false)}
+          onDone={loadStock}
         />
       )}
     </div>

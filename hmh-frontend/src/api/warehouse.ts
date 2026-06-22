@@ -277,6 +277,20 @@ export const warehouseApi = {
     return res.data.data;
   },
 
+  /** Add or top-up a tool in the global main warehouse (auto-creates TOOL catalog item). */
+  addTool: async (body: {
+    name: string;
+    quantity: number;
+    unit?: string;
+    notes?: string;
+  }): Promise<{ id: string; item_id: string; item_name: string; quantity_in: number; created_item: boolean }> => {
+    const res = await client.post<{ data: { id: string; item_id: string; item_name: string; quantity_in: number; created_item: boolean } }>(
+      "/warehouse/main/add-tool",
+      body,
+    );
+    return res.data.data;
+  },
+
   // ── Tool transfer (Phase 3AA) ─────────────────────────────────────────────
 
   /** TOOL items in the global main warehouse (project_id IS NULL, item_type = TOOL). */

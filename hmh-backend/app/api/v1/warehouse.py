@@ -1481,6 +1481,103 @@ def adjust_main_warehouse_stock(
     )
 
 
+# ── Global Main Warehouse: add / top-up a tool ───────────────────────────────
+
+class AddToolBody(BaseModel):
+    name:     str
+    quantity: float
+    unit:     Optional[str] = None
+    notes:    Optional[str] = None
+
+
+@global_warehouse_router.post(
+    "/main/add-tool",
+    response_model=ApiSuccess[dict],
+    status_code=201,
+    dependencies=[WRITE_ROLES],
+)
+def add_main_warehouse_tool(
+    body: AddToolBody,
+    db: DbSession,
+    current_user: CurrentUser,
+):
+    """
+    Add or top-up a tool in the global main warehouse (project_id=NULL).
+    Finds an existing TOOL catalog item by normalized name, or auto-creates one.
+    Creates a DELIVERY_RECEIVED ledger entry.
+    """
+    from app.models.enums import ItemType
+
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(422, "Tool name is required.")
+    if body.quantity <= 0:
+        raise HTTPException(422, "Quantity must be greater than zero.")
+
+    normalized = name.lower()
+
+    item = (
+        db.query(Item)
+        .filter(Item.normalized_name == normalized, Item.item_type == ItemType.TOOL)
+        .first()
+    )
+    created_item = False
+    if not item:
+        now_dt = datetime.now(timezone.utc)
+        item = Item(
+            name=name,
+            normalized_name=normalized,
+            item_type=ItemType.TOOL,
+            default_unit=body.unit or None,
+            is_active=True,
+            created_at=now_dt,
+            updated_at=now_dt,
+        )
+        db.add(item)
+        db.flush()
+        created_item = True
+
+    now = datetime.now(timezone.utc)
+    entry = StockLedger(
+        project_id=None,
+        site_id=None,
+        lot_id=None,
+        item_id=item.id,
+        movement_type=MovementType.DELIVERY_RECEIVED,
+        reference_type="MAIN_WAREHOUSE_TOOL_ADD",
+        quantity_in=body.quantity,
+        quantity_out=0,
+        unit=body.unit or item.default_unit,
+        movement_date=now,
+        entered_by=current_user.id,
+        notes=body.notes or None,
+        created_at=now,
+    )
+    db.add(entry)
+    db.flush()
+
+    audit_service.log(
+        db, current_user.id,
+        AuditAction.CREATE,
+        "stock_ledger", str(entry.id),
+        {"movement": "MAIN_WAREHOUSE_TOOL_ADD", "item": item.name,
+         "qty": body.quantity, "new_item": created_item},
+    )
+    db.commit()
+
+    return ApiSuccess(
+        data={
+            "id":           str(entry.id),
+            "item_id":      str(item.id),
+            "item_name":    item.name,
+            "quantity_in":  body.quantity,
+            "created_item": created_item,
+        },
+        message=f"Added {body.quantity} {body.unit or item.default_unit or ''} of {item.name} to main warehouse.",
+        status_code=201,
+    )
+
+
 # ── Global Main Warehouse: transfer to site (for stock with no project) ───────
 
 @global_warehouse_router.get("/main/sites", response_model=ApiSuccess[list[dict]], dependencies=[ALL_ROLES])
