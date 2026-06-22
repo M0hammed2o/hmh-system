@@ -59,5 +59,13 @@ class MRQuote(Base):
     rejected_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     approved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
+    # ── Phase 3Z: tracks which PO this quote was included in (migration 0024) ─
+    purchase_order_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("purchase_orders.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
     def __repr__(self) -> str:
         return f"<MRQuote mr={self.material_request_id} supplier={self.supplier_id} status={self.status}>"

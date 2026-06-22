@@ -1,5 +1,5 @@
 """
-Procurement Pipeline API — Phase 4A.
+Procurement Pipeline API — Phase 4A / Phase 3Z.
 
 Exposes the full 7-step procurement lifecycle for a Material Request so the
 Procurement page can show a single, linear pipeline view instead of two
@@ -12,8 +12,13 @@ GET  /procurement/mrs/{mr_id}/pipeline
     delivery, and a missing-email warning when the supplier has no email.
 
 POST /procurement/mrs/{mr_id}/quotes/{quote_id}/approve
-    Approve a quote → auto-create PO → send PO email to supplier.
-    Returns the new PO.
+    Mark a quote as APPROVED (no PO created, no email sent yet).
+    Call finalize-pos when all desired quotes are approved.
+
+POST /procurement/mrs/{mr_id}/finalize-pos
+    Group all newly approved quotes by supplier, create ONE PO per supplier
+    with all that supplier's items as line items, and send ONE email per
+    supplier. Quotes already linked to a PO are skipped.
 
 POST /procurement/mrs/{mr_id}/quotes/{quote_id}/reject
     Reject a quote with a reason → send rejection email → mark quote REJECTED.
@@ -339,18 +344,14 @@ def approve_quote(
     current_user: CurrentUser,
 ):
     """
-    Approve a supplier quote.
+    Mark a supplier quote as APPROVED.
 
-    1. Marks the quote as APPROVED (all other quotes for this MR stay PENDING).
-    2. Converts the MR to a Purchase Order using the approved quote's price.
-    3. Sends the PO email to the supplier.
-    4. Returns the created PO.
+    Does NOT create a PO or send an email. Once all desired quotes are
+    approved, call POST /finalize-pos to batch them into one PO per supplier
+    and send one email per supplier.
     """
     from app.models.material_request import MaterialRequest
     from app.models.mr_quote import MRQuote
-    from app.models.supplier import Supplier
-    from app.services import mr_service
-    from app.services.email_service import send_po_email
 
     mr = db.get(MaterialRequest, mr_id)
     if not mr:
@@ -367,56 +368,119 @@ def approve_quote(
         raise HTTPException(422, f"MR must be APPROVED before a quote can be accepted. Current status: {mr_status}")
 
     now = datetime.now(timezone.utc)
-
-    # Mark quote approved
     quote.status      = "APPROVED"
     quote.is_selected = True
     quote.approved_at = now
 
-    # Build PO line items from this quote
-    po_items = [{
-        "description": quote.description,
-        "quantity":    float(quote.quoted_quantity),
-        "unit":        quote.unit or "",
-        "rate":        float(quote.unit_price),
-        "item_id":     str(quote.item_id) if quote.item_id else None,
-    }]
-
-    # Convert MR → PO using existing service
-    try:
-        result = mr_service.convert_to_po(
-            db,
-            mr_id=mr_id,
-            supplier_id=quote.supplier_id,
-            items_with_rates=po_items,
-            actor_id=current_user.id,
-        )
-    except Exception as exc:
-        raise HTTPException(422, str(exc)) from exc
-
-    po = result if not isinstance(result, dict) else result.get("po")
-
-    # Send PO email (best-effort)
-    email_result: dict = {"status": "NOT_SENT", "sent_to": None}
-    try:
-        log = send_po_email(db, po, sent_by_id=current_user.id, mr_id=mr_id)
-        email_result = {
-            "status":  log.status if hasattr(log, "status") else str(log),
-            "sent_to": log.sent_to_email if hasattr(log, "sent_to_email") else None,
-        }
-    except Exception:
-        logger.exception("PO email failed after quote approval mr=%s", mr_id)
-
     db.commit()
 
     return ApiSuccess(
-        data={
-            "po_id":        str(po.id),
-            "po_number":    po.po_number,
-            "total_amount": float(po.total_amount or 0),
-            "email":        email_result,
-        },
-        message=f"Quote approved. Purchase Order {po.po_number} created and emailed to supplier.",
+        data={"quote_id": str(quote.id), "status": "APPROVED"},
+        message="Quote approved. Click 'Send PO to Suppliers' when ready to create POs.",
+    )
+
+
+# ── POST finalize-pos ─────────────────────────────────────────────────────────
+
+@router.post(
+    "/mrs/{mr_id}/finalize-pos",
+    response_model=ApiSuccess[dict],
+    dependencies=[OFFICE_AND_ABOVE],
+)
+def finalize_pos(mr_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
+    """
+    Create one PO per supplier from all newly approved quotes and send one
+    email per supplier. Quotes already linked to a PO are skipped so this
+    endpoint is safe to call multiple times.
+    """
+    from collections import defaultdict
+    from app.models.material_request import MaterialRequest
+    from app.models.mr_quote import MRQuote
+    from app.models.supplier import Supplier
+    from app.services import mr_service
+    from app.services.email_service import send_po_email
+
+    mr = db.get(MaterialRequest, mr_id)
+    if not mr:
+        raise HTTPException(404, "Material request not found.")
+
+    mr_status = mr.status.value if hasattr(mr.status, "value") else str(mr.status)
+    if mr_status not in ("APPROVED", "CONVERTED_TO_PO"):
+        raise HTTPException(422, f"MR must be APPROVED to create POs. Current status: {mr_status}")
+
+    # Only process approved quotes not yet linked to a PO
+    pending_quotes = (
+        db.query(MRQuote)
+        .filter(
+            MRQuote.material_request_id == mr_id,
+            MRQuote.status == "APPROVED",
+            MRQuote.purchase_order_id.is_(None),
+        )
+        .order_by(MRQuote.created_at)
+        .all()
+    )
+
+    if not pending_quotes:
+        raise HTTPException(422, "No approved quotes without a PO. Approve at least one quote first.")
+
+    # Group by supplier
+    by_supplier: dict = defaultdict(list)
+    for q in pending_quotes:
+        by_supplier[q.supplier_id].append(q)
+
+    created_pos = []
+    for supplier_id, quotes in by_supplier.items():
+        po_items = [
+            {
+                "description": q.description,
+                "quantity":    float(q.quoted_quantity),
+                "unit":        q.unit or "",
+                "rate":        float(q.unit_price),
+                "item_id":     str(q.item_id) if q.item_id else None,
+            }
+            for q in quotes
+        ]
+        try:
+            po = mr_service.convert_to_po(
+                db,
+                mr_id=mr_id,
+                supplier_id=supplier_id,
+                items_with_rates=po_items,
+                actor_id=current_user.id,
+            )
+        except Exception as exc:
+            raise HTTPException(422, str(exc)) from exc
+
+        # Link each quote to the created PO so re-runs skip them
+        for q in quotes:
+            q.purchase_order_id = po.id
+
+        # Send PO email (best-effort)
+        email_result: dict = {"status": "NOT_SENT", "sent_to": None}
+        try:
+            log = send_po_email(db, po, sent_by_id=current_user.id, mr_id=mr_id)
+            email_result = {
+                "status":  log.status if hasattr(log, "status") else str(log),
+                "sent_to": log.sent_to_email if hasattr(log, "sent_to_email") else None,
+            }
+        except Exception:
+            logger.exception("PO email failed in finalize-pos mr=%s supplier=%s", mr_id, supplier_id)
+
+        supplier = db.get(Supplier, supplier_id)
+        created_pos.append({
+            "po_id":         str(po.id),
+            "po_number":     po.po_number,
+            "supplier_name": supplier.name if supplier else None,
+            "total_amount":  float(po.total_amount or 0),
+            "email":         email_result,
+        })
+
+    db.commit()
+
+    count = len(created_pos)
+    return ApiSuccess(
+        data={"pos": created_pos, "count": count},
+        message=f"Created {count} PO(s) and emailed supplier(s).",
     )
 
 

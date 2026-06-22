@@ -380,10 +380,20 @@ export const procurementApi = {
     return res.data.data;
   },
 
-  approveQuote: async (mrId: string, quoteId: string, notes?: string): Promise<{ po_id: string; po_number: string; email: unknown }> => {
-    const res = await client.post<{ data: { po_id: string; po_number: string; email: unknown } }>(
+  approveQuote: async (mrId: string, quoteId: string, notes?: string): Promise<{ quote_id: string; status: string }> => {
+    const res = await client.post<{ data: { quote_id: string; status: string } }>(
       `/procurement/mrs/${mrId}/quotes/${quoteId}/approve`,
       { notes: notes ?? null },
+    );
+    return res.data.data;
+  },
+
+  finalizePOs: async (mrId: string): Promise<{
+    pos: Array<{ po_id: string; po_number: string; supplier_name: string | null; total_amount: number; email: { status: string; sent_to: string | null } }>;
+    count: number;
+  }> => {
+    const res = await client.post<{ data: { pos: Array<{ po_id: string; po_number: string; supplier_name: string | null; total_amount: number; email: { status: string; sent_to: string | null } }>; count: number } }>(
+      `/procurement/mrs/${mrId}/finalize-pos`,
     );
     return res.data.data;
   },

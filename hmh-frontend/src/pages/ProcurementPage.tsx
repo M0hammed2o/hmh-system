@@ -1726,7 +1726,23 @@ function PipelinePanelModal({ mrId, suppliers, onClose, onUpdated }: {
                   </div>
                 )}
                 {step.step === 5 && (step.pos ?? []).length === 0 && step.status === "WAITING" && (
-                  <p className="text-xs text-muted-foreground">Will be created automatically when a quote is approved.</p>
+                  <p className="text-xs text-muted-foreground">Waiting for quote approval in the previous step.</p>
+                )}
+                {step.step === 5 && step.status === "CURRENT" && (step.pos ?? []).length === 0 && (
+                  <WriteGuard>
+                    <div className="space-y-2">
+                      <p className="text-xs text-muted-foreground">All approved quotes will be grouped by supplier — one PO and one email per supplier.</p>
+                      <Button
+                        size="sm"
+                        className="h-7 text-xs gap-1.5 bg-blue-600 hover:bg-blue-700"
+                        disabled={!!actionLoading}
+                        onClick={() => act(() => procurementApi.finalizePOs(mrId), "finalize_pos")}
+                      >
+                        <Mail className="w-3 h-3" />
+                        {actionLoading === "finalize_pos" ? "Sending…" : "Send PO to Suppliers"}
+                      </Button>
+                    </div>
+                  </WriteGuard>
                 )}
 
                 {/* Step 6: Invoice(s) — one per PO */}
