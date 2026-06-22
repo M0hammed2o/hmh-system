@@ -1,7 +1,7 @@
 """Phase 3Z — link mr_quotes to the PO they were converted into.
 
-Revision ID: 0024
-Revises:     0023
+Revision ID: 0052
+Revises:     0051
 Create Date: 2026-06-22
 
 Changes:
@@ -17,8 +17,8 @@ from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import UUID
 
-revision      = "0024"
-down_revision = "0023"
+revision      = "0052"
+down_revision = "0051"
 branch_labels = None
 depends_on    = None
 
