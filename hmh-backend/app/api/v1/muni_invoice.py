@@ -19,6 +19,25 @@ project_muni_router = APIRouter(
 )
 muni_router = APIRouter(prefix="/municipality-invoices", tags=["municipality-invoices"])
 
+# Standard line items from the Ethekweni Municipality contract format (Cert 26 template)
+_TEMPLATE_ITEMS = [
+    {"line_number": "1",  "description": "P&G",                                         "quantity": 0, "unit_price": None, "total": None, "disc_pct": None, "comments": None, "sort_order": 0},
+    {"line_number": "2",  "description": "Time Related P&Gs",                           "quantity": 0, "unit_price": None, "total": None, "disc_pct": None, "comments": None, "sort_order": 1},
+    {"line_number": "3",  "description": "Structural & Geotechnical Engineers",         "quantity": 0, "unit_price": None, "total": None, "disc_pct": None, "comments": None, "sort_order": 2},
+    {"line_number": "4",  "description": "OH & SA for client",                          "quantity": 0, "unit_price": None, "total": None, "disc_pct": None, "comments": None, "sort_order": 3},
+    {"line_number": "5",  "description": "Platforms",                                   "quantity": 0, "unit_price": None, "total": None, "disc_pct": None, "comments": None, "sort_order": 4},
+    {"line_number": "6",  "description": "Raft Slab",                                   "quantity": 0, "unit_price": None, "total": None, "disc_pct": None, "comments": None, "sort_order": 5},
+    {"line_number": "7",  "description": "Wall-plate , door & window ceiling",          "quantity": 0, "unit_price": None, "total": None, "disc_pct": None, "comments": None, "sort_order": 6},
+    {"line_number": "8",  "description": "Roof & Ceiling",                              "quantity": 0, "unit_price": None, "total": None, "disc_pct": None, "comments": None, "sort_order": 7},
+    {"line_number": "9",  "description": "Electrical",                                  "quantity": 0, "unit_price": None, "total": None, "disc_pct": None, "comments": None, "sort_order": 8},
+    {"line_number": "10", "description": "Concrete Aprons",                             "quantity": 0, "unit_price": None, "total": None, "disc_pct": None, "comments": None, "sort_order": 9},
+    {"line_number": "11", "description": "Finishing-plaster, paint , windows & doors", "quantity": 0, "unit_price": None, "total": None, "disc_pct": None, "comments": None, "sort_order": 10},
+    {"line_number": "12", "description": "Undercut to spoil",                           "quantity": 0, "unit_price": None, "total": None, "disc_pct": None, "comments": None, "sort_order": 11},
+    {"line_number": "13", "description": "Realignment costs",                           "quantity": 0, "unit_price": None, "total": None, "disc_pct": None, "comments": None, "sort_order": 12},
+    {"line_number": "14", "description": "VO 002 - E/O for earthworks",                "quantity": 0, "unit_price": None, "total": None, "disc_pct": None, "comments": None, "sort_order": 13},
+    {"line_number": "15", "description": "Difference in LOA",                           "quantity": 0, "unit_price": None, "total": None, "disc_pct": None, "comments": None, "sort_order": 14},
+]
+
 
 # ── Schemas ───────────────────────────────────────────────────────────────────
 
@@ -150,6 +169,35 @@ class InvoiceUpdate(BaseModel):
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
+
+@project_muni_router.get("/template", dependencies=[ALL_ROLES])
+def get_invoice_template(project_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
+    """
+    Return a pre-filled invoice template for this project.
+
+    Pre-populates all 15 standard Ethekweni Municipality contract line items (quantity=0)
+    plus default client info and banking details. The user adjusts only the cert number,
+    date, previously-paid amount, and the quantities for completed items.
+    """
+    from app.models.project import Project
+    check_project_access(db, current_user, project_id)
+    project = db.get(Project, project_id)
+    return ApiSuccess(data={
+        "client_name":         "Ethekweni Municipality",
+        "client_vat_no":       "4880193505",
+        "client_address":      "PO BOX 828,Durban\n4001",
+        "company_email":       "dwt786@gmail.com",
+        "project_description": project.name if project else "",
+        "contract_reference":  "",
+        "previously_paid":     0,
+        "vat_rate":            15,
+        "bank_name":           "FIRST NATIONAL BANK",
+        "account_number":      "62381077893",
+        "branch_name":         "FLORIDA ROAD",
+        "branch_code":         "220526",
+        "items":               _TEMPLATE_ITEMS,
+    }, message="Municipality invoice template loaded.")
+
 
 @project_muni_router.get("/", response_model=ApiSuccess[list[InvoiceRead]], dependencies=[ALL_ROLES])
 def list_invoices(

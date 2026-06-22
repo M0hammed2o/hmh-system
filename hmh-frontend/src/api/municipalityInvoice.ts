@@ -75,4 +75,17 @@ export const muniInvoiceApi = {
 
   exportExcel: (id: string): string =>
     `/municipality-invoices/${id}/export/excel`,
+
+  getTemplate: async (projectId: string): Promise<{
+    client_name: string; client_vat_no: string; client_address: string;
+    company_email: string; project_description: string; contract_reference: string;
+    previously_paid: number; vat_rate: number;
+    bank_name: string; account_number: string; branch_name: string; branch_code: string;
+    items: MuniInvoiceItem[];
+  }> => {
+    const res = await client.get(
+      `/projects/${projectId}/municipality-invoices/template`
+    );
+    return res.data.data;
+  },
 };

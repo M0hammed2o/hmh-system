@@ -5,7 +5,7 @@ import {
   ListChecks, Upload, PenLine, AlertTriangle, CheckCircle2,
   Clock, Circle, ChevronRight, Box, Bell, Camera, Image, X,
   Plus, Trash2, ClipboardList, Flag, Ban, Lock, CalendarClock,
-  ShieldOff, Briefcase, RotateCcw, Search,
+  ShieldOff, Briefcase, RotateCcw, Search, FileSpreadsheet,
 } from "lucide-react";
 import { siteCaptureApi, type ExtractedItem } from "@/api/siteCapture";
 import { siteDashboardApi, type MaterialSummaryItem, type ActivityItem } from "@/api/siteDashboard";
@@ -654,6 +654,15 @@ export default function SiteDashboardPage() {
                     label="View Milestones"
                     onClick={() => {
                       document.getElementById("milestones-section")?.scrollIntoView({ behavior: "smooth" });
+                    }}
+                  />
+                )}
+                {!isWarehouse && projectId && (
+                  <ActionBtn
+                    icon={FileSpreadsheet}
+                    label="Invoices"
+                    onClick={() => {
+                      window.location.href = `/municipality-invoices?projectId=${projectId}`;
                     }}
                   />
                 )}

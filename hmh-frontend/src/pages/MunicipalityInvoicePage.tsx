@@ -4,9 +4,10 @@
  */
 
 import { useEffect, useState, useCallback } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
   Plus, Download, Trash2, Edit2, X, ChevronDown, ChevronUp,
-  FileSpreadsheet, CheckCircle, RefreshCw,
+  FileSpreadsheet, CheckCircle, RefreshCw, Copy,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -78,6 +79,34 @@ const defaultForm = (): InvoiceFormData => ({
   branch_code:         "",
   items:               [emptyItem()],
 });
+
+function fromTemplate(t: {
+  client_name: string; client_vat_no: string; client_address: string;
+  company_email: string; project_description: string; contract_reference: string;
+  previously_paid: number; vat_rate: number;
+  bank_name: string; account_number: string; branch_name: string; branch_code: string;
+  items: MuniInvoiceItem[];
+}): InvoiceFormData {
+  return {
+    cert_number:         "",
+    invoice_number:      "",
+    invoice_date:        new Date().toISOString().slice(0, 10),
+    client_name:         t.client_name,
+    client_vat_no:       t.client_vat_no,
+    client_address:      t.client_address,
+    company_email:       t.company_email,
+    project_description: t.project_description,
+    contract_reference:  t.contract_reference,
+    previously_paid:     String(t.previously_paid ?? 0),
+    vat_rate:            String(t.vat_rate ?? 15),
+    notes:               "",
+    bank_name:           t.bank_name,
+    account_number:      t.account_number,
+    branch_name:         t.branch_name,
+    branch_code:         t.branch_code,
+    items:               t.items.length ? t.items : [emptyItem()],
+  };
+}
 
 function fromInvoice(inv: MuniInvoice): InvoiceFormData {
   return {
@@ -175,15 +204,16 @@ function ItemRow({
 // ── Invoice form modal ────────────────────────────────────────────────────────
 
 function InvoiceFormModal({
-  projectId, editInvoice, onClose, onSaved,
+  projectId, editInvoice, initialForm, onClose, onSaved,
 }: {
   projectId: string;
   editInvoice: MuniInvoice | null;
+  initialForm?: InvoiceFormData;
   onClose: () => void;
   onSaved: () => void;
 }) {
   const [form, setForm] = useState<InvoiceFormData>(
-    editInvoice ? fromInvoice(editInvoice) : defaultForm()
+    initialForm ?? (editInvoice ? fromInvoice(editInvoice) : defaultForm())
   );
   const [loading, setLoading] = useState(false);
   const [error,   setError]   = useState("");
@@ -620,17 +650,32 @@ function InvoiceCard({
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function MunicipalityInvoicePage() {
-  const [projects,  setProjects]  = useState<Project[]>([]);
-  const [projectId, setProjectId] = useState("");
-  const [invoices,  setInvoices]  = useState<MuniInvoice[]>([]);
-  const [loading,   setLoading]   = useState(false);
-  const [showForm,  setShowForm]  = useState(false);
-  const [editInv,   setEditInv]   = useState<MuniInvoice | null>(null);
+  const [searchParams]             = useSearchParams();
+  const [projects,  setProjects]   = useState<Project[]>([]);
+  const [projectId, setProjectId]  = useState(searchParams.get("projectId") ?? "");
+  const [invoices,  setInvoices]   = useState<MuniInvoice[]>([]);
+  const [loading,   setLoading]    = useState(false);
+  const [showForm,  setShowForm]   = useState(false);
+  const [editInv,   setEditInv]    = useState<MuniInvoice | null>(null);
   const [filterStatus, setFilterStatus] = useState("");
+  const [templateForm, setTemplateForm] = useState<InvoiceFormData | undefined>(undefined);
+  const [loadingTemplate, setLoadingTemplate] = useState(false);
 
   useEffect(() => {
     projectsApi.list().then(r => setProjects(r.items)).catch(() => {});
   }, []);
+
+  const handleFromTemplate = async () => {
+    if (!projectId) return;
+    setLoadingTemplate(true);
+    try {
+      const t = await muniInvoiceApi.getTemplate(projectId);
+      setTemplateForm(fromTemplate(t));
+      setEditInv(null);
+      setShowForm(true);
+    } catch { alert("Failed to load template."); }
+    finally { setLoadingTemplate(false); }
+  };
 
   const load = useCallback(async () => {
     if (!projectId) { setInvoices([]); return; }
@@ -686,9 +731,17 @@ export default function MunicipalityInvoicePage() {
             Manual invoice capture — download as Excel, send yourself
           </p>
         </div>
-        <Button size="sm" onClick={() => { setEditInv(null); setShowForm(true); }} disabled={!projectId}>
-          <Plus className="w-4 h-4 mr-1" />New Invoice
-        </Button>
+        <div className="flex gap-2">
+          <Button size="sm" variant="outline" onClick={handleFromTemplate}
+            disabled={!projectId || loadingTemplate}>
+            <Copy className="w-4 h-4 mr-1" />
+            {loadingTemplate ? "Loading…" : "From Template"}
+          </Button>
+          <Button size="sm" onClick={() => { setEditInv(null); setTemplateForm(undefined); setShowForm(true); }}
+            disabled={!projectId}>
+            <Plus className="w-4 h-4 mr-1" />New Invoice
+          </Button>
+        </div>
       </div>
 
       {/* Filters */}
@@ -757,7 +810,8 @@ export default function MunicipalityInvoicePage() {
         <InvoiceFormModal
           projectId={projectId}
           editInvoice={editInv}
-          onClose={() => { setShowForm(false); setEditInv(null); }}
+          initialForm={templateForm}
+          onClose={() => { setShowForm(false); setEditInv(null); setTemplateForm(undefined); }}
           onSaved={load}
         />
       )}
