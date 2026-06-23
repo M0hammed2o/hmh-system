@@ -18,7 +18,7 @@ import { useEffect, useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import {
   FolderKanban, Bell, ShoppingCart, CreditCard,
-  Truck, FileSpreadsheet, AlertTriangle, ChevronRight, X, Warehouse,
+  Truck, FileSpreadsheet, AlertTriangle, ChevronRight, Warehouse,
   Package, HardHat, Flag, CheckCircle2, RefreshCw, Ban, Droplet, Car,
   TrendingDown, TrendingUp, ArrowRight, Clock,
 } from "lucide-react";
@@ -26,93 +26,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { useAuth } from "@/hooks/useAuth";
 import { dashboardApi, type DashboardStats, type ProjectOperation, type OpsSummary } from "@/api/dashboard";
-import { alertsApi, type Alert } from "@/api/alerts";
 import { formatCurrency } from "@/lib/format";
 import { cn } from "@/lib/utils";
-import { useAuthContext } from "@/context/AuthContext";
-
-// ── Alert deep-link helper ────────────────────────────────────────────────────
-
-function alertDestination(alert: Alert): string {
-  switch (alert.alert_type) {
-    // Procurement / material requests
-    case "REQUEST_PENDING_TOO_LONG":
-      return "/procurement";
-
-    // Deliveries
-    case "DELIVERY_WITHOUT_PO":
-    case "DELIVERY_DISCREPANCY":
-    case "DELIVERY_SIGNATURE_MISSING":
-    case "SIGNATURE_MISSING":
-      return "/deliveries";
-
-    // Invoices & reconciliation
-    case "INVOICE_MISMATCH":
-    case "INVOICE_UNMATCHED":
-    case "INVOICE_MISSING_DELIVERY_NOTE":
-    case "INVOICE_CAPTURED":
-    case "DUPLICATE_INVOICE":
-      return "/reconciliation";
-
-    // Payments
-    case "OVERDUE_PAYMENT":
-    case "PAYMENT_DUE":
-    case "PAYMENT_COMPLETED":
-    case "PARTIAL_PAYMENT_RECORDED":
-      return "/payments";
-
-    // Stock / warehouse
-    case "MATERIAL_OVERUSE":
-    case "BOQ_VARIANCE_OVERUSE":
-    case "BOQ_ALLOCATION_EXCEEDED":
-    case "NEGATIVE_STOCK":
-    case "LOW_STOCK":
-    case "MISSING_REMAINING_STOCK_PHOTO":
-    case "WAREHOUSE_TRANSFER_COMPLETED":
-      return "/warehouse";
-
-    // Milestones
-    case "MILESTONE_COMPLETED_ALERT":
-      return "/milestones";
-
-    // Gmail / OCR
-    case "OCR_EXTRACTION_FAILED":
-      return "/gmail-inbox";
-
-    default:
-      return "/alerts";
-  }
-}
-
-// ── Alert card ────────────────────────────────────────────────────────────────
-
-const severityColor: Record<string, string> = {
-  CRITICAL: "text-destructive bg-destructive/10 border-destructive/30",
-  HIGH:     "text-destructive bg-destructive/10 border-destructive/20",
-  MEDIUM:   "text-amber-600 bg-amber-500/10 border-amber-500/20 dark:text-amber-400",
-  LOW:      "text-muted-foreground bg-muted border-border",
-};
-
-function AlertCard({ alert, onDismiss }: { alert: Alert; onDismiss?: (id: string) => void }) {
-  const { isReadOnly } = useAuthContext();
-  return (
-    <div className={cn("border rounded-xl px-4 py-3 flex items-start gap-3",
-      severityColor[alert.severity] || severityColor.LOW)}>
-      <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
-      <Link to={alertDestination(alert)} className="flex-1 min-w-0 block active:scale-[0.98] transition-transform">
-        <p className="text-sm font-medium leading-snug truncate">{alert.title}</p>
-        <p className="text-xs opacity-75 mt-0.5 line-clamp-1">{alert.message}</p>
-      </Link>
-      <Badge variant="outline" className="text-[10px] shrink-0 border-current opacity-80">{alert.severity}</Badge>
-      {!isReadOnly && onDismiss && (
-        <button onClick={(e) => { e.stopPropagation(); onDismiss(alert.id); }}
-          className="shrink-0 p-0.5 rounded hover:bg-black/10 transition-colors opacity-60 hover:opacity-100">
-          <X className="w-3.5 h-3.5" />
-        </button>
-      )}
-    </div>
-  );
-}
 
 // ── Ops summary section card ──────────────────────────────────────────────────
 
@@ -259,15 +174,7 @@ export default function DashboardPage() {
   const [stats,      setStats]      = useState<DashboardStats | null>(null);
   const [operations, setOperations] = useState<ProjectOperation[]>([]);
   const [ops,        setOps]        = useState<OpsSummary | null>(null);
-  const [alerts,     setAlerts]     = useState<Alert[]>([]);
   const [loading,    setLoading]    = useState(true);
-
-  const handleDismissAlert = async (id: string) => {
-    try {
-      await alertsApi.acknowledge(id);
-      setAlerts(prev => prev.filter(a => a.id !== id));
-    } catch { /* silent */ }
-  };
 
   const load = () => {
     setLoading(true);
@@ -275,12 +182,10 @@ export default function DashboardPage() {
       dashboardApi.getStats().catch(() => null),
       dashboardApi.getProjectOperations().catch(() => []),
       dashboardApi.getOpsSummary().catch(() => null),
-      alertsApi.list({ status: "OPEN", limit: 5 }).catch(() => []),
-    ]).then(([s, op, o, al]) => {
+    ]).then(([s, op, o]) => {
       setStats(s);
       setOperations(op);
       setOps(o);
-      setAlerts(al);
     }).finally(() => setLoading(false));
   };
 
@@ -343,19 +248,6 @@ export default function DashboardPage() {
           </button>
         </div>
       </div>
-
-      {/* ── Alert banner ── */}
-      {alerts.length > 0 && (
-        <div className="space-y-2">
-          <div className="flex items-center justify-between">
-            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-              Open Alerts ({alerts.length})
-            </p>
-            <Link to="/alerts" className="text-xs text-primary hover:underline">View all →</Link>
-          </div>
-          {alerts.map(a => <AlertCard key={a.id} alert={a} onDismiss={handleDismissAlert} />)}
-        </div>
-      )}
 
       {/* ── Attention bar ── */}
       {attentionItems.length > 0 && !loading && (

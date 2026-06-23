@@ -1,7 +1,8 @@
 import { lazy, Suspense, useEffect, useState, useCallback, useMemo } from "react";
+import { Link } from "react-router-dom";
 import {
   Bell, AlertTriangle, AlertCircle, CheckCircle2,
-  MessageSquare, RefreshCw, FileText, X,
+  MessageSquare, RefreshCw, FileText, X, ExternalLink,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -57,23 +58,55 @@ function StatBox({ label, value, warn, icon: Icon }: { label: string; value: num
   );
 }
 
+// ── Alert deep-link helper ────────────────────────────────────────────────────
+
+function alertDestination(alert: Alert): string {
+  switch (alert.alert_type) {
+    case "REQUEST_PENDING_TOO_LONG":
+      return "/procurement";
+    case "DELIVERY_WITHOUT_PO":
+    case "DELIVERY_DISCREPANCY":
+    case "DELIVERY_SIGNATURE_MISSING":
+    case "SIGNATURE_MISSING":
+    case "DELIVERY_MISMATCH":
+    case "DELIVERY_NOTE_MISSING":
+      return "/deliveries";
+    case "INVOICE_MISMATCH":
+    case "INVOICE_UNMATCHED":
+    case "INVOICE_MISSING_DELIVERY_NOTE":
+    case "INVOICE_CAPTURED":
+    case "DUPLICATE_INVOICE":
+      return "/reconciliation";
+    case "OVERDUE_PAYMENT":
+    case "PAYMENT_DUE":
+    case "PAYMENT_COMPLETED":
+    case "PARTIAL_PAYMENT_RECORDED":
+      return "/payments";
+    case "MATERIAL_OVERUSE":
+    case "BOQ_VARIANCE_OVERUSE":
+    case "BOQ_ALLOCATION_EXCEEDED":
+    case "NEGATIVE_STOCK":
+    case "LOW_STOCK":
+    case "MISSING_REMAINING_STOCK_PHOTO":
+    case "WAREHOUSE_TRANSFER_COMPLETED":
+      return "/warehouse";
+    case "MILESTONE_COMPLETED_ALERT":
+    case "LOT_DELAYED":
+    case "STAGE_DELAYED":
+    case "SITE_DELAY":
+      return "/milestones";
+    case "OCR_EXTRACTION_FAILED":
+      return "/gmail-inbox";
+    default:
+      return "/alerts";
+  }
+}
+
 // ── Alert card ────────────────────────────────────────────────────────────────
 
-function AlertCard({ alert, onAck, onResolve }: { alert: Alert; onAck: (id: string) => void; onResolve: (id: string) => void }) {
-  const [loading, setLoading] = useState<"ack" | "resolve" | null>(null);
+function AlertCard({ alert }: { alert: Alert }) {
   const [expanded, setExpanded] = useState(false);
-
-  const handleAck = async () => {
-    setLoading("ack");
-    await onAck(alert.id);
-    setLoading(null);
-  };
-  const handleResolve = async () => {
-    setLoading("resolve");
-    await onResolve(alert.id);
-    setLoading(null);
-  };
-
+  const dest = alertDestination(alert);
   const typeLabel = alert.alert_type.replace(/_/g, " ");
 
   return (
@@ -99,17 +132,9 @@ function AlertCard({ alert, onAck, onResolve }: { alert: Alert; onAck: (id: stri
           {alert.status}
         </Badge>
       </div>
-
-      {alert.status === "OPEN" && (
-        <div className="flex gap-2 pt-1">
-          <Button size="sm" variant="outline" onClick={handleAck} disabled={loading !== null} className="h-7 text-xs px-2.5">
-            {loading === "ack" ? "…" : <><CheckCircle2 className="w-3 h-3 mr-1" />Acknowledge</>}
-          </Button>
-          <Button size="sm" variant="outline" onClick={handleResolve} disabled={loading !== null} className="h-7 text-xs px-2.5">
-            {loading === "resolve" ? "…" : <><X className="w-3 h-3 mr-1" />Resolve</>}
-          </Button>
-        </div>
-      )}
+      <Link to={dest} className="inline-flex items-center gap-1 text-xs text-primary hover:underline pt-1">
+        <ExternalLink className="w-3 h-3" />View details
+      </Link>
     </div>
   );
 }
@@ -214,16 +239,6 @@ export default function AlertsPage() {
   }, []);
 
   useEffect(() => { loadAll(); }, [loadAll]);
-
-  const handleAck = async (id: string) => {
-    await alertsApi.acknowledge(id);
-    loadAll(true);
-  };
-
-  const handleResolve = async (id: string) => {
-    await alertsApi.resolve(id);
-    loadAll(true);
-  };
 
   const handleScan = async () => {
     setScanning(true);
@@ -379,7 +394,7 @@ export default function AlertsPage() {
                 </div>
               ) : (
                 filteredAlerts.map((a) => (
-                  <AlertCard key={a.id} alert={a} onAck={handleAck} onResolve={handleResolve} />
+                  <AlertCard key={a.id} alert={a} />
                 ))
               )}
             </div>
