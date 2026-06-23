@@ -662,9 +662,9 @@ export default function SiteDashboardPage() {
             {/* ── Quick actions ── */}
             <Section title="Quick Actions">
               <div className="grid grid-cols-3 gap-2">
-                {/* Site / lot actions — hide when in warehouse mode or when a lot is selected */}
-                {!isViewOnly && !isWarehouse && !lotId && <ActionBtn icon={PackagePlus} label="Request Materials" onClick={() => setModal("request")} />}
-                {!isViewOnly && !isWarehouse && !lotId && <ActionBtn icon={Truck}       label="Receive Delivery"  onClick={() => setModal("delivery")} />}
+                {/* Hide Request / Receive when a lot is selected (site/lot view) */}
+                {!isViewOnly && !lotId && <ActionBtn icon={PackagePlus} label="Request Materials" onClick={() => setModal("request")} />}
+                {!isViewOnly && !lotId && <ActionBtn icon={Truck}       label="Receive Delivery"  onClick={() => setModal("delivery")} />}
                 {!isViewOnly && !isWarehouse && <ActionBtn icon={Home}       label="Record Usage"     onClick={() => setModal("usage")} />}
                 {!isViewOnly && !isWarehouse && <ActionBtn icon={ListChecks} label="Update Milestone" onClick={() => setModal("stage")} />}
                 {!isViewOnly && siteId && !isWarehouse && <ActionBtn icon={Briefcase} label="Log Job Card" onClick={() => setModal("jobcard")} />}
