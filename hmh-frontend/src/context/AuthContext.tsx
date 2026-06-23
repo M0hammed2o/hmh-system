@@ -67,4 +67,4 @@ export const ADMIN_ROLES: UserRole[] = ["OWNER", "OFFICE_ADMIN"];
 /** READ_ONLY role — view-only, all write actions blocked at both backend and frontend */
 export const READ_ONLY_ROLE: UserRole = "READ_ONLY";
 /** Roles that can access general office data (read-only modules) */
-export const OFFICE_ROLES: UserRole[] = ["OWNER", "OFFICE_ADMIN", "OFFICE_USER"];
+export const OFFICE_ROLES: UserRole[] = ["OWNER", "OFFICE_ADMIN", "OFFICE_USER", "PROCUREMENT_LEAD"];

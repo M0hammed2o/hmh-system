@@ -4,7 +4,7 @@ import uuid
 from datetime import date, datetime
 from typing import Optional
 
-from sqlalchemy import Boolean, Date, DateTime, Enum, ForeignKey, Numeric, String, Text
+from sqlalchemy import Boolean, Date, DateTime, Enum, ForeignKey, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -143,3 +143,34 @@ class MaterialRequestItem(Base):
 
     def __repr__(self) -> str:
         return f"<MRItem item={self.item_id} qty={self.requested_quantity}>"
+
+
+class MRApproval(Base):
+    """Individual approval vote for a material request.
+
+    Each user may cast exactly one vote per MR (enforced by unique constraint).
+    PROCUREMENT_LEAD approvals set is_override=True when staff vote count < threshold.
+    """
+    __tablename__ = "mr_approvals"
+    __table_args__ = (
+        UniqueConstraint("mr_id", "approved_by", name="uq_mr_approvals_mr_approver"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    mr_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("material_requests.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    approved_by: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    approved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    is_override: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    def __repr__(self) -> str:
+        return f"<MRApproval mr={self.mr_id} by={self.approved_by} override={self.is_override}>"

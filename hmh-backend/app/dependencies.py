@@ -140,7 +140,7 @@ def require_roles(*roles: UserRole):
 OWNER_ONLY = require_roles(UserRole.OWNER)
 OFFICE_ADMIN_AND_ABOVE = require_roles(UserRole.OWNER, UserRole.OFFICE_ADMIN)
 OFFICE_AND_ABOVE = require_roles(
-    UserRole.OWNER, UserRole.OFFICE_ADMIN, UserRole.OFFICE_USER
+    UserRole.OWNER, UserRole.OFFICE_ADMIN, UserRole.OFFICE_USER, UserRole.PROCUREMENT_LEAD
 )
 ALL_ROLES = require_roles(*list(UserRole))
 # All roles that can perform write operations (excludes READ_ONLY view-only accounts)
@@ -148,9 +148,12 @@ WRITE_ROLES = require_roles(
     UserRole.OWNER,
     UserRole.OFFICE_ADMIN,
     UserRole.OFFICE_USER,
+    UserRole.PROCUREMENT_LEAD,
     UserRole.SITE_MANAGER,
     UserRole.SITE_STAFF,
 )
+# Restricted to the procurement lead role — used for final MR approval and override
+PROCUREMENT_LEAD_ONLY = require_roles(UserRole.OWNER, UserRole.PROCUREMENT_LEAD)
 
 
 # ── Project isolation helper ──────────────────────────────────────────────────

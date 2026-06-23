@@ -13,7 +13,7 @@ from app.core.logging_config import get_logger
 logger = get_logger(__name__)
 
 from app.core.resource_access import get_and_check_project_resource, secure_project_lookup
-from app.dependencies import ALL_ROLES, CurrentUser, DbSession, OFFICE_AND_ABOVE, WRITE_ROLES, check_project_access
+from app.dependencies import ALL_ROLES, CurrentUser, DbSession, OFFICE_AND_ABOVE, WRITE_ROLES, PROCUREMENT_LEAD_ONLY, check_project_access
 from app.models.enums import RecordStatus
 from app.models.material_request import MaterialRequest
 from app.schemas.common import ApiSuccess
@@ -118,6 +118,76 @@ def approve_request(mr_id: uuid.UUID, body: ApproveBody, db: DbSession, current_
 
 class RejectBody(BaseModel):
     reason: str
+
+
+# ── 4-way approval endpoints ──────────────────────────────────────────────────
+
+class VoteBody(BaseModel):
+    notes: Optional[str] = None
+
+
+class ApprovalRead(BaseModel):
+    id: uuid.UUID
+    mr_id: uuid.UUID
+    approved_by: Optional[uuid.UUID] = None
+    approved_by_name: Optional[str] = None
+    approved_at: str
+    is_override: bool
+    notes: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+@mr_router.get("/{mr_id}/approvals", response_model=ApiSuccess[list[ApprovalRead]], dependencies=[ALL_ROLES])
+def list_mr_approvals(mr_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
+    """Return all approval votes for this MR, enriched with voter name."""
+    get_and_check_project_resource(db, current_user, MaterialRequest, mr_id, "Material request not found.")
+    approvals = mr_service.list_mr_approvals(db, mr_id)
+    from app.models.user import User
+    user_ids = {a.approved_by for a in approvals if a.approved_by}
+    name_map: dict = {}
+    if user_ids:
+        users = db.query(User.id, User.full_name).filter(User.id.in_(user_ids)).all()
+        name_map = {str(u.id): u.full_name for u in users}
+    result = []
+    for a in approvals:
+        result.append(ApprovalRead(
+            id=a.id,
+            mr_id=a.mr_id,
+            approved_by=a.approved_by,
+            approved_by_name=name_map.get(str(a.approved_by)) if a.approved_by else None,
+            approved_at=a.approved_at.isoformat(),
+            is_override=a.is_override,
+            notes=a.notes,
+        ))
+    return ApiSuccess(data=result)
+
+
+@mr_router.post("/{mr_id}/vote", response_model=ApiSuccess[MaterialRequestRead], dependencies=[OFFICE_AND_ABOVE])
+def vote_approve(mr_id: uuid.UUID, body: VoteBody, db: DbSession, current_user: CurrentUser):
+    """Cast a staff approval vote. Any OFFICE_AND_ABOVE user (except PROCUREMENT_LEAD) may vote."""
+    from app.models.enums import UserRole
+    if current_user.role == UserRole.PROCUREMENT_LEAD:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=403, detail="PROCUREMENT_LEAD must use /procurement-approve instead.")
+    get_and_check_project_resource(db, current_user, MaterialRequest, mr_id, "Material request not found.")
+    logger.info("mr_vote mr_id=%s user=%s role=%s", mr_id, current_user.id, current_user.role.value)
+    mr = mr_service.cast_staff_vote(db, mr_id, current_user.id, notes=body.notes)
+    return ApiSuccess(data=MaterialRequestRead.model_validate(mr), message="Vote recorded.")
+
+
+@mr_router.post("/{mr_id}/procurement-approve", response_model=ApiSuccess[MaterialRequestRead], dependencies=[PROCUREMENT_LEAD_ONLY])
+def procurement_approve(mr_id: uuid.UUID, body: ApproveBody, db: DbSession, current_user: CurrentUser):
+    """PROCUREMENT_LEAD final approval. Works from any pending status; auto-sets override flag."""
+    get_and_check_project_resource(db, current_user, MaterialRequest, mr_id, "Material request not found.")
+    logger.info("mr_procurement_approve mr_id=%s user=%s role=%s", mr_id, current_user.id, current_user.role.value)
+    mr = mr_service.procurement_lead_approve(
+        db, mr_id, current_user.id,
+        body.over_boq_reason,
+        issuing_company=body.issuing_company or "HMH_GROUP",
+    )
+    return ApiSuccess(data=MaterialRequestRead.model_validate(mr), message="MR approved.")
 
 
 @mr_router.post("/{mr_id}/send-email", dependencies=[OFFICE_AND_ABOVE])

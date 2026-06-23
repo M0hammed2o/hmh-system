@@ -1,6 +1,6 @@
 import client from "./client";
 
-export type UserRole = "OWNER" | "OFFICE_ADMIN" | "OFFICE_USER" | "SITE_MANAGER" | "SITE_MANAGER_VIEW" | "SITE_STAFF" | "READ_ONLY";
+export type UserRole = "OWNER" | "OFFICE_ADMIN" | "OFFICE_USER" | "PROCUREMENT_LEAD" | "SITE_MANAGER" | "SITE_MANAGER_VIEW" | "SITE_STAFF" | "READ_ONLY";
 
 export const SITE_REQUIRING_ROLES: ReadonlySet<UserRole> = new Set(["SITE_MANAGER", "SITE_MANAGER_VIEW", "SITE_STAFF"]);
 

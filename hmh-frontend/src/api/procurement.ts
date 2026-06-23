@@ -1,9 +1,19 @@
 import client from "./client";
 
 export type MRStatus =
-  | "DRAFT" | "SUBMITTED" | "PENDING_APPROVAL" | "APPROVED" | "REJECTED"
+  | "DRAFT" | "SUBMITTED" | "PENDING_APPROVAL" | "STAFF_APPROVED" | "APPROVED" | "REJECTED"
   | "CONVERTED_TO_PO" | "ORDERED" | "PARTIALLY_RECEIVED" | "RECEIVED"
-  | "INVOICED" | "CLOSED" | "CANCELLED";   // INVOICED added Phase 3I
+  | "INVOICED" | "CLOSED" | "CANCELLED";
+
+export interface MRApprovalVote {
+  id: string;
+  mr_id: string;
+  approved_by: string | null;
+  approved_by_name: string | null;
+  approved_at: string;
+  is_override: boolean;
+  notes: string | null;
+}
 
 export interface ProcurementActivityEntry {
   type:          "status" | "document";
@@ -261,6 +271,27 @@ export const procurementApi = {
   approveMR: async (mrId: string, overBoqReason?: string, issuingCompany?: string): Promise<MaterialRequest> => {
     const res = await client.post<{ data: MaterialRequest }>(
       `/material-requests/${mrId}/approve`,
+      { over_boq_reason: overBoqReason ?? null, issuing_company: issuingCompany ?? "HMH_GROUP" }
+    );
+    return res.data.data;
+  },
+
+  listMRApprovals: async (mrId: string): Promise<MRApprovalVote[]> => {
+    const res = await client.get<{ data: MRApprovalVote[] }>(`/material-requests/${mrId}/approvals`);
+    return res.data.data;
+  },
+
+  voteMR: async (mrId: string, notes?: string): Promise<MaterialRequest> => {
+    const res = await client.post<{ data: MaterialRequest }>(
+      `/material-requests/${mrId}/vote`,
+      { notes: notes ?? null }
+    );
+    return res.data.data;
+  },
+
+  procurementApproveMR: async (mrId: string, overBoqReason?: string, issuingCompany?: string): Promise<MaterialRequest> => {
+    const res = await client.post<{ data: MaterialRequest }>(
+      `/material-requests/${mrId}/procurement-approve`,
       { over_boq_reason: overBoqReason ?? null, issuing_company: issuingCompany ?? "HMH_GROUP" }
     );
     return res.data.data;

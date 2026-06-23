@@ -21,7 +21,7 @@ import {
   procurementApi,
   type MaterialRequest, type MRCreate, type MRItemCreate, type BOQSearchResult,
   type MRQuote, type PurchaseOrder, type MRPriority, type DeliveryDestination,
-  type MRPipeline,
+  type MRPipeline, type MRApprovalVote,
 } from "@/api/procurement";
 import { purchaseOrdersApi, type POLinkedDocs } from "@/api/purchaseOrders";
 import { warehouseApi, type WarehouseStockItem } from "@/api/warehouse";
@@ -50,7 +50,7 @@ function timeAgo(iso: string) {
 }
 
 const STATUS_BADGE: Record<string, "default" | "secondary" | "outline" | "destructive" | "success"> = {
-  DRAFT: "outline", SUBMITTED: "secondary", PENDING_APPROVAL: "secondary",
+  DRAFT: "outline", SUBMITTED: "secondary", PENDING_APPROVAL: "secondary", STAFF_APPROVED: "secondary",
   APPROVED: "success", REJECTED: "destructive", CONVERTED_TO_PO: "default",
   SENT: "default", SUPPLIER_CONFIRMED: "success",
   ORDERED: "default", PARTIALLY_RECEIVED: "secondary", RECEIVED: "success",
@@ -66,7 +66,7 @@ const PRIORITY_COLOR: Record<MRPriority, string> = {
 };
 
 const MR_STATUS_TO_STEP: Record<string, number> = {
-  DRAFT: 1, SUBMITTED: 2, PENDING_APPROVAL: 2,
+  DRAFT: 1, SUBMITTED: 2, PENDING_APPROVAL: 2, STAFF_APPROVED: 2,
   APPROVED: 3, CONVERTED_TO_PO: 5, ORDERED: 5,
   PARTIALLY_RECEIVED: 7, RECEIVED: 7, INVOICED: 6,
   PARTIALLY_PAID: 7, PAID: 7, MATCHED: 7,
@@ -119,7 +119,7 @@ interface MRCartItem {
 
 type MRModalStage = "location" | "items" | "supplier";
 
-const OFFICE_ROLES = ["OWNER", "OFFICE_ADMIN", "OFFICE_USER"];
+const OFFICE_ROLES = ["OWNER", "OFFICE_ADMIN", "OFFICE_USER", "PROCUREMENT_LEAD"];
 
 function CreateMRModal({ projectId: defaultProjectId, sites, isMainWarehouse = false, onClose, onCreated }: {
   projectId: string; sites: Site[]; isMainWarehouse?: boolean; onClose: () => void; onCreated: () => void;
@@ -612,6 +612,8 @@ function CreateMRModal({ projectId: defaultProjectId, sites, isMainWarehouse = f
 function MRDetailModal({ mr, suppliers, onClose, onUpdated }: {
   mr: MaterialRequest; suppliers: Supplier[]; onClose: () => void; onUpdated: () => void;
 }) {
+  const { role, user } = useAuthContext();
+  const isProcurementLead = role === "PROCUREMENT_LEAD" || role === "OWNER";
   const [loading, setLoading] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [result, setResult] = useState("");
@@ -630,6 +632,10 @@ function MRDetailModal({ mr, suppliers, onClose, onUpdated }: {
   const [showAddQuote, setShowAddQuote] = useState(false);
   const [quoteForm, setQuoteForm] = useState({ supplier_id: mr.preferred_supplier_id || "", description: mr.items[0]?.description || "", unit_price: "", quoted_quantity: String(mr.items[0]?.requested_quantity || ""), unit: mr.items[0]?.unit || "", notes: "" });
   const [showMREmail, setShowMREmail] = useState(false);
+
+  // 4-way approval
+  const [approvals,       setApprovals]       = useState<MRApprovalVote[]>([]);
+  const [approvalsLoaded, setApprovalsLoaded] = useState(false);
 
   // Phase 3I: activity timeline
   const [showMRActivity,  setShowMRActivity]  = useState(false);
@@ -682,7 +688,10 @@ function MRDetailModal({ mr, suppliers, onClose, onUpdated }: {
     } finally { setTransferring(null); }
   };
 
-  useEffect(() => { procurementApi.listQuotes(mr.id).then(setQuotes).catch(() => {}); }, [mr.id]);
+  useEffect(() => {
+    procurementApi.listQuotes(mr.id).then(setQuotes).catch(() => {});
+    procurementApi.listMRApprovals(mr.id).then((a) => { setApprovals(a); setApprovalsLoaded(true); }).catch(() => setApprovalsLoaded(true));
+  }, [mr.id]);
 
   const act = async (fn: () => Promise<unknown>, label: string) => {
     setLoading(label); setError("");
@@ -717,8 +726,16 @@ function MRDetailModal({ mr, suppliers, onClose, onUpdated }: {
     setShowConvert(false);
   };
 
-  const canApprove = ["SUBMITTED", "PENDING_APPROVAL"].includes(mr.status);
+  const canApprove = ["SUBMITTED", "PENDING_APPROVAL", "STAFF_APPROVED"].includes(mr.status);
   const canConvert = mr.status === "APPROVED";
+
+  // 4-way approval derived state
+  const staffVotes      = approvals.filter((a) => !a.is_override);
+  const staffVoteCount  = staffVotes.length;
+  const hasVoted        = approvals.some((a) => a.approved_by === user?.id && !a.is_override);
+  const canVote         = canApprove && !isProcurementLead && !hasVoted;
+  const canFinalApprove = canApprove && isProcurementLead;
+  const isOverride      = isProcurementLead && staffVoteCount < 3;
 
   return (
     <>
@@ -909,6 +926,49 @@ function MRDetailModal({ mr, suppliers, onClose, onUpdated }: {
             </div>
           )}
 
+          {/* ── Approval chain ──────────────────────────────────────────── */}
+          {canApprove && approvalsLoaded && (
+            <div className="border border-border rounded-lg p-3 space-y-3">
+              <div className="flex items-center justify-between">
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Approval Chain</p>
+                <span className="text-xs text-muted-foreground">
+                  {staffVoteCount} / 3 staff votes
+                  {mr.status === "STAFF_APPROVED" && " · awaiting procurement lead"}
+                </span>
+              </div>
+
+              {/* Progress bar */}
+              <div className="w-full bg-muted rounded-full h-1.5">
+                <div
+                  className="bg-primary h-1.5 rounded-full transition-all"
+                  style={{ width: `${Math.min((staffVoteCount / 3) * 100, 100)}%` }}
+                />
+              </div>
+
+              {/* Existing votes */}
+              {approvals.length > 0 && (
+                <div className="space-y-1">
+                  {approvals.map((a) => (
+                    <div key={a.id} className="flex items-center gap-2 text-xs">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-green-500 shrink-0" />
+                      <span className="font-medium">{a.approved_by_name ?? "Unknown"}</span>
+                      {a.is_override && (
+                        <span className="text-[10px] bg-amber-500/15 text-amber-600 px-1.5 py-0.5 rounded-full font-medium">Override</span>
+                      )}
+                      <span className="text-muted-foreground ml-auto">
+                        {new Date(a.approved_at).toLocaleDateString("en-ZA", { day: "2-digit", month: "short" })}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {approvals.length === 0 && (
+                <p className="text-xs text-muted-foreground">No approvals yet.</p>
+              )}
+            </div>
+          )}
+
           {canApprove && (
             <div className="bg-muted/40 border border-border rounded-lg p-3 space-y-2">
               <p className="text-xs font-medium text-muted-foreground">Issuing company for this order</p>
@@ -1044,8 +1104,44 @@ function MRDetailModal({ mr, suppliers, onClose, onUpdated }: {
 
           <div className="flex flex-wrap gap-2">
             <WriteGuard>
-              {canApprove && <Button size="sm" onClick={() => act(() => procurementApi.approveMR(mr.id, overBoqReason || undefined, issuingCompany), "approve")} disabled={loading !== null || (mr.over_boq && !overBoqReason.trim())} className="h-8 text-xs"><Check className="w-3.5 h-3.5 mr-1" />{loading === "approve" ? "Approving…" : "Approve"}</Button>}
-              {["SUBMITTED", "PENDING_APPROVAL", "DRAFT"].includes(mr.status) && !showReject && <Button size="sm" variant="outline" onClick={() => setShowReject(true)} className="h-8 text-xs"><X className="w-3.5 h-3.5 mr-1" />Reject</Button>}
+              {/* Staff vote button — non-procurement-lead office users */}
+              {canVote && (
+                <Button
+                  size="sm"
+                  onClick={() => act(async () => {
+                    const updated = await procurementApi.voteMR(mr.id);
+                    const fresh = await procurementApi.listMRApprovals(mr.id);
+                    setApprovals(fresh);
+                    return updated;
+                  }, "vote")}
+                  disabled={loading !== null || (mr.over_boq && !overBoqReason.trim())}
+                  className="h-8 text-xs"
+                >
+                  <Check className="w-3.5 h-3.5 mr-1" />
+                  {loading === "vote" ? "Voting…" : "Vote to Approve"}
+                </Button>
+              )}
+              {canVote && hasVoted && (
+                <span className="text-xs text-muted-foreground flex items-center gap-1 h-8">
+                  <CheckCircle2 className="w-3.5 h-3.5 text-green-500" /> Your vote recorded
+                </span>
+              )}
+              {/* Procurement lead final / override approval */}
+              {canFinalApprove && (
+                <Button
+                  size="sm"
+                  onClick={() => act(async () => {
+                    const updated = await procurementApi.procurementApproveMR(mr.id, overBoqReason || undefined, issuingCompany);
+                    return updated;
+                  }, "approve")}
+                  disabled={loading !== null || (mr.over_boq && !overBoqReason.trim())}
+                  className={`h-8 text-xs ${isOverride ? "bg-amber-500 hover:bg-amber-600" : ""}`}
+                >
+                  <Check className="w-3.5 h-3.5 mr-1" />
+                  {loading === "approve" ? "Approving…" : isOverride ? "Override & Approve" : "Final Approval"}
+                </Button>
+              )}
+              {["SUBMITTED", "PENDING_APPROVAL", "STAFF_APPROVED", "DRAFT"].includes(mr.status) && !showReject && <Button size="sm" variant="outline" onClick={() => setShowReject(true)} className="h-8 text-xs"><X className="w-3.5 h-3.5 mr-1" />Reject</Button>}
               {showReject && <Button size="sm" variant="destructive" onClick={() => act(() => procurementApi.rejectMR(mr.id, rejectReason), "reject")} disabled={!rejectReason.trim() || loading !== null} className="h-8 text-xs">{loading === "reject" ? "Rejecting…" : "Confirm Reject"}</Button>}
               {mr.status === "DRAFT" && <Button size="sm" variant="outline" onClick={() => act(() => procurementApi.submitMR(mr.id), "submit")} disabled={loading !== null} className="h-8 text-xs">{loading === "submit" ? "Submitting…" : "Submit"}</Button>}
               {canConvert && !showConvert && (
@@ -1224,6 +1320,8 @@ function PipelinePanelModal({ mrId, suppliers, onClose, onUpdated }: {
   onClose: () => void;
   onUpdated: () => void;
 }) {
+  const { role: pipelineRole, user: pipelineUser } = useAuthContext();
+  const pipelineIsProcurementLead = pipelineRole === "PROCUREMENT_LEAD" || pipelineRole === "OWNER";
   const [pipeline, setPipeline] = useState<MRPipeline | null>(null);
   const [fetching, setFetching] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
@@ -1232,6 +1330,7 @@ function PipelinePanelModal({ mrId, suppliers, onClose, onUpdated }: {
   const [pipelineIssuingCompany, setPipelineIssuingCompany] = useState("HMH_GROUP");
   const [showRejectMR, setShowRejectMR] = useState(false);
   const [rejectMRReason, setRejectMRReason] = useState("");
+  const [pipelineApprovals, setPipelineApprovals] = useState<MRApprovalVote[]>([]);
   const [rejectQuoteId, setRejectQuoteId] = useState<string | null>(null);
   const [rejectReason, setRejectReason] = useState("");
   const [showAddQuote, setShowAddQuote] = useState(false);
@@ -1241,8 +1340,14 @@ function PipelinePanelModal({ mrId, suppliers, onClose, onUpdated }: {
   const [switchSupplierId, setSwitchSupplierId] = useState("");
 
   const load = useCallback(async () => {
-    try { setPipeline(await procurementApi.getPipeline(mrId)); }
-    catch { /* ignore 404 */ }
+    try {
+      const [pl, ap] = await Promise.all([
+        procurementApi.getPipeline(mrId),
+        procurementApi.listMRApprovals(mrId).catch(() => [] as MRApprovalVote[]),
+      ]);
+      setPipeline(pl);
+      setPipelineApprovals(ap);
+    } catch { /* ignore 404 */ }
     finally { setFetching(false); }
   }, [mrId]);
 
@@ -1271,7 +1376,11 @@ function PipelinePanelModal({ mrId, suppliers, onClose, onUpdated }: {
   const step4 = pipeline.steps.find(s => s.step === 4);
   const pendingQuotes = (step4?.quotes ?? []).filter(q => q.status === "PENDING");
   const mrStatus = pipeline.mr_status;
-  const canApproveMR = ["SUBMITTED", "PENDING_APPROVAL"].includes(mrStatus);
+  const canApproveMR = ["SUBMITTED", "PENDING_APPROVAL", "STAFF_APPROVED"].includes(mrStatus);
+  const pipelineStaffVotes = pipelineApprovals.filter((a) => !a.is_override);
+  const pipelineHasVoted = pipelineApprovals.some((a) => a.approved_by === pipelineUser?.id && !a.is_override);
+  const pipelineCanVote = canApproveMR && !pipelineIsProcurementLead && !pipelineHasVoted;
+  const pipelineIsOverride = pipelineIsProcurementLead && pipelineStaffVotes.length < 3;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-foreground/40">
@@ -1349,7 +1458,7 @@ function PipelinePanelModal({ mrId, suppliers, onClose, onUpdated }: {
                   </div>
                 )}
 
-                {/* Step 2: Office approval */}
+                {/* Step 2: 4-way approval */}
                 {step.step === 2 && (
                   <div className="space-y-2">
                     {step.status === "COMPLETE" && (
@@ -1357,6 +1466,25 @@ function PipelinePanelModal({ mrId, suppliers, onClose, onUpdated }: {
                     )}
                     {step.status === "CURRENT" && canApproveMR && (
                       <div className="space-y-2">
+                        {/* Approval chain progress */}
+                        <div className="border border-border rounded-lg p-2.5 space-y-2">
+                          <div className="flex items-center justify-between">
+                            <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Approval Chain</p>
+                            <span className="text-[10px] text-muted-foreground">{pipelineStaffVotes.length} / 3 staff</span>
+                          </div>
+                          <div className="w-full bg-muted rounded-full h-1">
+                            <div className="bg-primary h-1 rounded-full transition-all" style={{ width: `${Math.min((pipelineStaffVotes.length / 3) * 100, 100)}%` }} />
+                          </div>
+                          {pipelineApprovals.map((a) => (
+                            <div key={a.id} className="flex items-center gap-1.5 text-[11px]">
+                              <CheckCircle2 className="w-3 h-3 text-green-500 shrink-0" />
+                              <span>{a.approved_by_name ?? "Unknown"}</span>
+                              {a.is_override && <span className="text-amber-600 text-[10px]">(override)</span>}
+                            </div>
+                          ))}
+                          {pipelineApprovals.length === 0 && <p className="text-[11px] text-muted-foreground">No votes yet.</p>}
+                        </div>
+
                         <div className="bg-muted/40 border border-border rounded-lg p-2.5 space-y-1.5">
                           <p className="text-xs font-medium text-muted-foreground">Issuing company</p>
                           <select
@@ -1392,15 +1520,33 @@ function PipelinePanelModal({ mrId, suppliers, onClose, onUpdated }: {
                             </div>
                           </div>
                         ) : (
-                          <div className="flex gap-2">
+                          <div className="flex gap-2 flex-wrap">
                             <WriteGuard>
-                              <Button size="sm" className="h-8 text-xs flex-1 bg-green-600 hover:bg-green-700"
-                                disabled={!!actionLoading || (pipeline.over_boq && !overBoqReason.trim())}
-                                onClick={() => act(async () => {
-                                  await procurementApi.approveMR(mrId, overBoqReason || undefined, pipelineIssuingCompany);
-                                }, "approve_mr")}>
-                                {actionLoading === "approve_mr" ? "Approving…" : "Approve MR"}
-                              </Button>
+                              {pipelineCanVote && (
+                                <Button size="sm" className="h-8 text-xs flex-1"
+                                  disabled={!!actionLoading || (pipeline.over_boq && !overBoqReason.trim())}
+                                  onClick={() => act(async () => {
+                                    await procurementApi.voteMR(mrId);
+                                  }, "vote_mr")}>
+                                  <Check className="w-3 h-3 mr-1" />
+                                  {actionLoading === "vote_mr" ? "Voting…" : "Vote to Approve"}
+                                </Button>
+                              )}
+                              {!pipelineCanVote && !pipelineIsProcurementLead && pipelineHasVoted && (
+                                <span className="text-xs text-muted-foreground flex items-center gap-1 h-8">
+                                  <CheckCircle2 className="w-3 h-3 text-green-500" /> Your vote recorded
+                                </span>
+                              )}
+                              {pipelineIsProcurementLead && (
+                                <Button size="sm" className={`h-8 text-xs flex-1 ${pipelineIsOverride ? "bg-amber-500 hover:bg-amber-600" : "bg-green-600 hover:bg-green-700"}`}
+                                  disabled={!!actionLoading || (pipeline.over_boq && !overBoqReason.trim())}
+                                  onClick={() => act(async () => {
+                                    await procurementApi.procurementApproveMR(mrId, overBoqReason || undefined, pipelineIssuingCompany);
+                                  }, "approve_mr")}>
+                                  <Check className="w-3 h-3 mr-1" />
+                                  {actionLoading === "approve_mr" ? "Approving…" : pipelineIsOverride ? "Override & Approve" : "Final Approval"}
+                                </Button>
+                              )}
                               <Button size="sm" variant="outline" className="h-8 text-xs border-destructive text-destructive hover:bg-destructive/10"
                                 disabled={!!actionLoading}
                                 onClick={() => setShowRejectMR(true)}>
@@ -2382,7 +2528,7 @@ export default function ProcurementPage() {
     [mrs],
   );
   const pendingCount = useMemo(
-    () => mrs.filter((m) => ["SUBMITTED", "PENDING_APPROVAL"].includes(m.status)).length,
+    () => mrs.filter((m) => ["SUBMITTED", "PENDING_APPROVAL", "STAFF_APPROVED"].includes(m.status)).length,
     [mrs],
   );
   const overBoqCount = useMemo(

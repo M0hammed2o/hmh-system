@@ -10,6 +10,7 @@ class UserRole(str, enum.Enum):
     OWNER = "OWNER"
     OFFICE_ADMIN = "OFFICE_ADMIN"
     OFFICE_USER = "OFFICE_USER"
+    PROCUREMENT_LEAD = "PROCUREMENT_LEAD"  # Final approver for material requests; can override staff vote count
     SITE_MANAGER = "SITE_MANAGER"
     SITE_MANAGER_VIEW = "SITE_MANAGER_VIEW"  # View-only site manager: can see site data, cannot write
     SITE_STAFF = "SITE_STAFF"
@@ -31,6 +32,7 @@ class RecordStatus(str, enum.Enum):
     REJECTED = "REJECTED"
     SENT = "SENT"
     SUPPLIER_CONFIRMED = "SUPPLIER_CONFIRMED"  # Phase 3I: supplier acknowledged the PO
+    STAFF_APPROVED = "STAFF_APPROVED"    # MR has enough staff votes; awaiting PROCUREMENT_LEAD final approval
     CONVERTED_TO_PO = "CONVERTED_TO_PO"
     ORDERED = "ORDERED"
     PARTIALLY_RECEIVED = "PARTIALLY_RECEIVED"

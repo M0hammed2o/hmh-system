@@ -17,7 +17,7 @@ from app.models.enums import (
     AlertSeverity, AlertStatus, AlertType,
     AuditAction, DeliveryDestination, MRPriority, RecordStatus, VatMode,
 )
-from app.models.material_request import MaterialRequest, MaterialRequestItem
+from app.models.material_request import MaterialRequest, MaterialRequestItem, MRApproval
 from app.models.mr_quote import MRQuote
 from app.models.project import Project
 from app.models.purchase_order import PurchaseOrder, PurchaseOrderItem
@@ -249,8 +249,8 @@ def approve_request(
     issuing_company: Optional[str] = "HMH_GROUP",
 ) -> MaterialRequest:
     mr = get_request(db, mr_id)
-    if mr.status not in (RecordStatus.SUBMITTED, RecordStatus.PENDING_APPROVAL):
-        raise ValidationError("Only SUBMITTED or PENDING_APPROVAL requests can be approved.")
+    if mr.status not in (RecordStatus.SUBMITTED, RecordStatus.PENDING_APPROVAL, RecordStatus.STAFF_APPROVED):
+        raise ValidationError("Only SUBMITTED, PENDING_APPROVAL, or STAFF_APPROVED requests can be approved.")
     if mr.over_boq and not over_boq_reason:
         raise ValidationError("over_boq_reason is required for over-BOQ requests.")
 
@@ -359,7 +359,7 @@ def reject_request(
     db: Session, mr_id: uuid.UUID, reviewer_id: uuid.UUID, reason: str
 ) -> MaterialRequest:
     mr = get_request(db, mr_id)
-    if mr.status not in (RecordStatus.SUBMITTED, RecordStatus.PENDING_APPROVAL, RecordStatus.DRAFT):
+    if mr.status not in (RecordStatus.SUBMITTED, RecordStatus.PENDING_APPROVAL, RecordStatus.STAFF_APPROVED, RecordStatus.DRAFT):
         raise ValidationError("Cannot reject a request in this status.")
     now = datetime.now(timezone.utc)
     mr.status = RecordStatus.REJECTED
@@ -530,7 +530,7 @@ def update_request(
 
     if "status" in fields and data.status is not None:
         if data.status in (RecordStatus.APPROVED, RecordStatus.REJECTED):
-            if mr.status not in (RecordStatus.SUBMITTED, RecordStatus.PENDING_APPROVAL):
+            if mr.status not in (RecordStatus.SUBMITTED, RecordStatus.PENDING_APPROVAL, RecordStatus.STAFF_APPROVED):
                 raise ValidationError("Cannot approve/reject from this status.")
             mr.reviewed_by = reviewed_by_id
             mr.reviewed_at = datetime.now(timezone.utc)
@@ -548,6 +548,115 @@ def update_request(
     db.commit()
     db.refresh(mr)
     return mr
+
+
+# ── 4-way approval system ─────────────────────────────────────────────────────
+
+STAFF_VOTES_REQUIRED = 3
+
+
+def list_mr_approvals(db: Session, mr_id: uuid.UUID) -> list[MRApproval]:
+    return (
+        db.query(MRApproval)
+        .filter(MRApproval.mr_id == mr_id)
+        .order_by(MRApproval.approved_at.asc())
+        .all()
+    )
+
+
+def cast_staff_vote(
+    db: Session,
+    mr_id: uuid.UUID,
+    voter_id: uuid.UUID,
+    notes: Optional[str] = None,
+) -> MaterialRequest:
+    """Cast a staff approval vote on an MR.
+
+    Allowed statuses: SUBMITTED or PENDING_APPROVAL.
+    Each user may vote only once.  When vote count reaches STAFF_VOTES_REQUIRED
+    the MR moves to STAFF_APPROVED, awaiting PROCUREMENT_LEAD final approval.
+    """
+    mr = get_request(db, mr_id)
+    if mr.status not in (RecordStatus.SUBMITTED, RecordStatus.PENDING_APPROVAL):
+        raise ValidationError("Can only vote on SUBMITTED or PENDING_APPROVAL requests.")
+
+    existing = db.query(MRApproval).filter(
+        MRApproval.mr_id == mr_id,
+        MRApproval.approved_by == voter_id,
+    ).first()
+    if existing:
+        raise ValidationError("You have already voted on this request.")
+
+    now = datetime.now(timezone.utc)
+    db.add(MRApproval(
+        mr_id=mr_id,
+        approved_by=voter_id,
+        approved_at=now,
+        is_override=False,
+        notes=notes,
+    ))
+    db.flush()
+
+    staff_votes = db.query(MRApproval).filter(
+        MRApproval.mr_id == mr_id,
+        MRApproval.is_override.is_(False),
+    ).count()
+
+    if staff_votes >= STAFF_VOTES_REQUIRED:
+        mr.status = RecordStatus.STAFF_APPROVED
+
+    audit_service.write_event(
+        db, AuditAction.APPROVE, "material_request", voter_id, mr_id,
+        after_value={"staff_vote": True, "vote_count": staff_votes},
+    )
+    db.commit()
+    db.refresh(mr)
+    return mr
+
+
+def procurement_lead_approve(
+    db: Session,
+    mr_id: uuid.UUID,
+    approver_id: uuid.UUID,
+    over_boq_reason: Optional[str] = None,
+    issuing_company: Optional[str] = "HMH_GROUP",
+) -> MaterialRequest:
+    """Final procurement-lead approval — also works as an override when staff vote count is below threshold.
+
+    Records the approval in mr_approvals with is_override=True when bypassing
+    the staff vote requirement, then calls the standard approval flow.
+    """
+    mr = get_request(db, mr_id)
+    allowed = (RecordStatus.SUBMITTED, RecordStatus.PENDING_APPROVAL, RecordStatus.STAFF_APPROVED)
+    if mr.status not in allowed:
+        raise ValidationError(
+            "MR must be SUBMITTED, PENDING_APPROVAL, or STAFF_APPROVED to receive procurement approval."
+        )
+    if mr.over_boq and not over_boq_reason:
+        raise ValidationError("over_boq_reason is required for over-BOQ requests.")
+
+    staff_votes = db.query(MRApproval).filter(
+        MRApproval.mr_id == mr_id,
+        MRApproval.is_override.is_(False),
+    ).count()
+    is_override = staff_votes < STAFF_VOTES_REQUIRED
+
+    # Avoid duplicate procurement lead entry if somehow called twice
+    existing = db.query(MRApproval).filter(
+        MRApproval.mr_id == mr_id,
+        MRApproval.approved_by == approver_id,
+    ).first()
+    if not existing:
+        db.add(MRApproval(
+            mr_id=mr_id,
+            approved_by=approver_id,
+            approved_at=datetime.now(timezone.utc),
+            is_override=is_override,
+            notes=over_boq_reason,
+        ))
+
+    # Delegate to the standard approval function for notifications/email/audit
+    return approve_request(db, mr_id, approver_id, over_boq_reason, issuing_company)
 
 
 # ── Quotes ────────────────────────────────────────────────────────────────────
