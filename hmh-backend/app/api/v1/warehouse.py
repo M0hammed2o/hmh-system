@@ -928,6 +928,142 @@ def return_from_site_to_main(
     )
 
 
+# ── Transfer between project warehouses ──────────────────────────────────────
+
+class TransferToProjectRequest(BaseModel):
+    to_project_id: uuid.UUID
+    item_id:       uuid.UUID
+    quantity:      float
+    notes:         Optional[str] = None
+
+
+@project_warehouse_router.post("/transfer-to-project", response_model=ApiSuccess[dict], dependencies=[OFFICE_AND_ABOVE])
+def transfer_project_to_project(
+    project_id: uuid.UUID,
+    body: TransferToProjectRequest,
+    db: DbSession,
+    current_user: CurrentUser,
+):
+    """
+    Transfer stock from one project's main warehouse to another project's main
+    warehouse.  Both projects must be accessible to the current user.
+
+    Creates two StockLedger entries:
+      TRANSFER_OUT — stock leaves source project  (site=NULL, lot=NULL)
+      TRANSFER_IN  — stock enters target project   (site=NULL, lot=NULL)
+    """
+    from app.models.project import Project
+
+    if project_id == body.to_project_id:
+        raise HTTPException(422, "Source and destination projects must be different.")
+
+    src_project = db.get(Project, project_id)
+    if not src_project:
+        raise HTTPException(404, "Source project not found.")
+    check_project_access(db, current_user, project_id)
+
+    dst_project = db.get(Project, body.to_project_id)
+    if not dst_project:
+        raise HTTPException(404, "Destination project not found.")
+    check_project_access(db, current_user, body.to_project_id)
+
+    item = db.get(Item, body.item_id)
+    if not item:
+        raise HTTPException(404, "Item not found.")
+
+    if body.quantity <= 0:
+        raise HTTPException(422, "Transfer quantity must be greater than zero.")
+
+    balance_row = db.execute(text("""
+        SELECT SUM(quantity_in) - SUM(quantity_out) AS balance
+        FROM stock_ledger
+        WHERE project_id = :project_id
+          AND site_id  IS NULL
+          AND lot_id   IS NULL
+          AND item_id  = :item_id
+    """), {"project_id": str(project_id), "item_id": str(body.item_id)}).fetchone()
+
+    available = float(balance_row[0] or 0)
+    if body.quantity > available:
+        raise HTTPException(422,
+            f"Insufficient stock in {src_project.name}. "
+            f"Available: {available:.3g} {item.default_unit or ''} of {item.name}; "
+            f"requested {body.quantity:.3g}."
+        )
+
+    now = datetime.now(timezone.utc)
+    transfer_ref = uuid.uuid4()
+
+    db.add(StockLedger(
+        project_id     = project_id,
+        site_id        = None,
+        lot_id         = None,
+        item_id        = body.item_id,
+        movement_type  = MovementType.TRANSFER_OUT,
+        reference_type = "project_to_project_transfer",
+        reference_id   = transfer_ref,
+        quantity_in    = 0,
+        quantity_out   = body.quantity,
+        unit           = item.default_unit,
+        movement_date  = now,
+        entered_by     = current_user.id,
+        notes          = body.notes or f"Transferred to {dst_project.name}",
+        created_at     = now,
+    ))
+
+    db.add(StockLedger(
+        project_id     = body.to_project_id,
+        site_id        = None,
+        lot_id         = None,
+        item_id        = body.item_id,
+        movement_type  = MovementType.TRANSFER_IN,
+        reference_type = "project_to_project_transfer",
+        reference_id   = transfer_ref,
+        quantity_in    = body.quantity,
+        quantity_out   = 0,
+        unit           = item.default_unit,
+        movement_date  = now,
+        entered_by     = current_user.id,
+        notes          = body.notes or f"Received from {src_project.name}",
+        created_at     = now,
+    ))
+
+    audit_service.write_event(
+        db,
+        action=AuditAction.TRANSFER,
+        entity_type="main_warehouse",
+        actor_id=current_user.id,
+        entity_id=project_id,
+        after_value={
+            "direction":      "project_to_project",
+            "item":           item.name,
+            "quantity":       body.quantity,
+            "unit":           item.default_unit,
+            "from_project":   src_project.name,
+            "to_project":     dst_project.name,
+            "transfer_ref":   str(transfer_ref),
+        },
+    )
+
+    db.commit()
+    return ApiSuccess(
+        data={
+            "transfer_ref":   str(transfer_ref),
+            "item_id":        str(body.item_id),
+            "item_name":      item.name,
+            "quantity":       body.quantity,
+            "unit":           item.default_unit,
+            "from_project":   src_project.name,
+            "to_project":     dst_project.name,
+            "new_balance":    available - body.quantity,
+        },
+        message=(
+            f"Transferred {body.quantity} {item.default_unit or ''} of {item.name} "
+            f"from {src_project.name} to {dst_project.name}."
+        ),
+    )
+
+
 # ── Main Warehouse movement history ───────────────────────────────────────────
 
 @project_warehouse_router.get("/history", response_model=ApiSuccess[list[dict]], dependencies=[ALL_ROLES])

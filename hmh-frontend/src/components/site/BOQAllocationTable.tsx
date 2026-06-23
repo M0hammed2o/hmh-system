@@ -29,6 +29,7 @@ interface Props {
   items:             MaterialSummaryItem[];
   loading?:          boolean;
   fromSiteTemplate?: boolean;
+  hideActions?:      boolean;
   onRecordUsage:     (item: MaterialSummaryItem) => void;
   onReceiveDelivery: (item: MaterialSummaryItem) => void;
   onGenerateLotBoq?: () => void;
@@ -125,11 +126,12 @@ function KpiCard({ label, value, icon: Icon, accent, sub = "" }: {
 
 // ── Detail Drawer ─────────────────────────────────────────────────────────────
 
-function DetailDrawer({ item, onClose, onRecordUsage, onReceiveDelivery }: {
+function DetailDrawer({ item, onClose, onRecordUsage, onReceiveDelivery, hideActions = false }: {
   item: MaterialSummaryItem;
   onClose: () => void;
   onRecordUsage: (item: MaterialSummaryItem) => void;
   onReceiveDelivery: (item: MaterialSummaryItem) => void;
+  hideActions?: boolean;
 }) {
   const pct       = progressPct(item);
   const variance  = item.boq_allocated_qty > 0
@@ -215,15 +217,17 @@ function DetailDrawer({ item, onClose, onRecordUsage, onReceiveDelivery }: {
         </div>
 
         {/* Actions */}
-        <div className="px-5 py-4 space-y-2 mt-auto">
-          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3">Quick actions</p>
-          <Button className="w-full" size="sm" onClick={() => { onRecordUsage(item); onClose(); }}>
-            <Minus className="w-3.5 h-3.5 mr-1.5" />Record Usage
-          </Button>
-          <Button variant="outline" className="w-full" size="sm" onClick={() => { onReceiveDelivery(item); onClose(); }}>
-            <Truck className="w-3.5 h-3.5 mr-1.5" />Receive Delivery
-          </Button>
-        </div>
+        {!hideActions && (
+          <div className="px-5 py-4 space-y-2 mt-auto">
+            <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3">Quick actions</p>
+            <Button className="w-full" size="sm" onClick={() => { onRecordUsage(item); onClose(); }}>
+              <Minus className="w-3.5 h-3.5 mr-1.5" />Record Usage
+            </Button>
+            <Button variant="outline" className="w-full" size="sm" onClick={() => { onReceiveDelivery(item); onClose(); }}>
+              <Truck className="w-3.5 h-3.5 mr-1.5" />Receive Delivery
+            </Button>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -258,7 +262,7 @@ function SortTh({ children, col, sortBy, sortDir, onSort, className = "" }: {
 // ── Main component ────────────────────────────────────────────────────────────
 
 export function BOQAllocationTable({
-  items, loading = false, fromSiteTemplate = false,
+  items, loading = false, fromSiteTemplate = false, hideActions = false,
   onRecordUsage, onReceiveDelivery, onGenerateLotBoq,
 }: Props) {
   const [search,       setSearch]       = useState("");
@@ -433,7 +437,7 @@ export function BOQAllocationTable({
                 <SortTh col="remaining_qty"     sortBy={sortBy} sortDir={sortDir} onSort={handleSort} className="text-right">Remaining</SortTh>
                 <SortTh col="progress"          sortBy={sortBy} sortDir={sortDir} onSort={handleSort} className="text-left min-w-[120px]">Progress</SortTh>
                 <SortTh col="status"            sortBy={sortBy} sortDir={sortDir} onSort={handleSort} className="text-center">Status</SortTh>
-                <th className="px-3 py-3 text-xs font-semibold text-muted-foreground text-right">Actions</th>
+                {!hideActions && <th className="px-3 py-3 text-xs font-semibold text-muted-foreground text-right">Actions</th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
@@ -469,19 +473,21 @@ export function BOQAllocationTable({
                     </td>
                     <td className="px-3 py-3"><ProgressBar item={item} /></td>
                     <td className="px-3 py-3 text-center"><StatusBadge status={item.status} /></td>
-                    <td className="px-3 py-3">
-                      <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity" onClick={e => e.stopPropagation()}>
-                        <button onClick={() => setDrawer(item)} className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground hover:text-foreground" title="View details">
-                          <Eye className="w-3.5 h-3.5" />
-                        </button>
-                        <button onClick={() => onRecordUsage(item)} className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground hover:text-foreground" title="Record usage">
-                          <Minus className="w-3.5 h-3.5" />
-                        </button>
-                        <button onClick={() => onReceiveDelivery(item)} className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground hover:text-foreground" title="Receive delivery">
-                          <Truck className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    </td>
+                    {!hideActions && (
+                      <td className="px-3 py-3">
+                        <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity" onClick={e => e.stopPropagation()}>
+                          <button onClick={() => setDrawer(item)} className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground hover:text-foreground" title="View details">
+                            <Eye className="w-3.5 h-3.5" />
+                          </button>
+                          <button onClick={() => onRecordUsage(item)} className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground hover:text-foreground" title="Record usage">
+                            <Minus className="w-3.5 h-3.5" />
+                          </button>
+                          <button onClick={() => onReceiveDelivery(item)} className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground hover:text-foreground" title="Receive delivery">
+                            <Truck className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </td>
+                    )}
                   </tr>
                 );
               })}
@@ -499,7 +505,7 @@ export function BOQAllocationTable({
                 <td className="px-3 py-3 text-right tabular-nums text-blue-600">{fmt(items.reduce((s, i) => s + i.delivered_qty, 0))}</td>
                 <td className="px-3 py-3 text-right tabular-nums text-orange-600">{fmt(items.reduce((s, i) => s + i.used_qty, 0))}</td>
                 <td className="px-3 py-3 text-right tabular-nums text-green-600">{fmt(Math.max(0, items.reduce((s, i) => s + i.remaining_qty, 0)))}</td>
-                <td colSpan={3} />
+                <td colSpan={hideActions ? 2 : 3} />
               </tr>
             </tfoot>
           </table>
@@ -587,6 +593,7 @@ export function BOQAllocationTable({
           onClose={() => setDrawer(null)}
           onRecordUsage={onRecordUsage}
           onReceiveDelivery={onReceiveDelivery}
+          hideActions={hideActions}
         />
       )}
     </div>

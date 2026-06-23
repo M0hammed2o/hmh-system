@@ -6,6 +6,7 @@ import {
   Clock, Circle, ChevronRight, Box, Bell, Camera, Image, X,
   Plus, Trash2, ClipboardList, Flag, Ban, Lock, CalendarClock,
   ShieldOff, Briefcase, RotateCcw, Search, FileSpreadsheet,
+  Home, Warehouse, ArrowRightLeft, Wrench,
 } from "lucide-react";
 import { siteCaptureApi, type ExtractedItem } from "@/api/siteCapture";
 import { siteDashboardApi, type MaterialSummaryItem, type ActivityItem } from "@/api/siteDashboard";
@@ -183,7 +184,10 @@ function ModalShell({ title, onClose, children }: {
 }
 
 // ── Main page ─────────────────────────────────────────────────────────────────
-type ModalType = "request" | "delivery" | "usage" | "stage" | "jobcard" | null;
+type ModalType = "request" | "delivery" | "usage" | "stage" | "jobcard" | "add_warehouse" | "warehouse_transfer" | null;
+
+// Virtual sentinel used for the view-only Global Main Warehouse option
+const MAIN_WAREHOUSE_SENTINEL = "__main_warehouse__";
 
 export default function SiteDashboardPage() {
 
@@ -215,12 +219,10 @@ export default function SiteDashboardPage() {
   const [materialSummary, setMaterialSummary] = useState<MaterialSummaryItem[]>([]);
   const [activity,        setActivity]        = useState<ActivityItem[]>([]);
 
-  const [jobCards,       setJobCards]       = useState<JobCard[]>([]);
-  const [stagePhotos,    setStagePhotos]    = useState<MilestonePhoto[]>([]);
-  const [pwBOQSummary,   setPwBOQSummary]   = useState<Array<{
-    item_id: string | null; description: string; unit: string | null;
-    total_boq_qty: number; on_hand_qty: number; shortfall_qty: number; lots_count: number;
-  }>>([]);
+  const [jobCards,          setJobCards]          = useState<JobCard[]>([]);
+  const [stagePhotos,       setStagePhotos]       = useState<MilestonePhoto[]>([]);
+  const [pwMaterialSummary, setPwMaterialSummary] = useState<MaterialSummaryItem[]>([]);
+  const [pwMainStock,       setPwMainStock]       = useState<import("@/api/warehouse").WarehouseStockItem[]>([]);
   const [offlineDrafts, setOfflineDrafts] = useState<OfflineDraft[]>(getDrafts);
   const [discardConfirm, setDiscardConfirm] = useState(false);
   const [syncingDrafts, setSyncingDrafts] = useState(false);
@@ -294,6 +296,14 @@ export default function SiteDashboardPage() {
   // ── Load live data ──
   const loadData = useCallback(() => {
     if (!projectId) return;
+
+    // Main Warehouse sentinel: only fetch global stock, skip all project APIs
+    if (projectId === MAIN_WAREHOUSE_SENTINEL) {
+      warehouseApi.getGlobalStock()
+        .then(setPwMainStock).catch(() => setPwMainStock([]));
+      return;
+    }
+
     setLoading(true);
     setLoadErr("");
 
@@ -352,13 +362,21 @@ export default function SiteDashboardPage() {
         .then(jcs => setJobCards(jcs.slice(0, 20))).catch(() => setJobCards([]));
     }
 
-    // Project Warehouse BOQ summary (only when a warehouse site is selected)
+    // Project Warehouse material summary (only when a warehouse site is selected)
     const _isWarehouse = !!siteId && !!sites.find(s => s.id === siteId && s.site_type === "warehouse");
     if (_isWarehouse) {
-      warehouseApi.getProjectWarehouseBOQSummary(projectId)
-        .then(setPwBOQSummary).catch(() => setPwBOQSummary([]));
+      warehouseApi.getWarehouseMaterialSummary(projectId)
+        .then(setPwMaterialSummary).catch(() => setPwMaterialSummary([]));
     } else {
-      setPwBOQSummary([]);
+      setPwMaterialSummary([]);
+    }
+
+    // Global Main Warehouse view-only
+    if (projectId === MAIN_WAREHOUSE_SENTINEL) {
+      warehouseApi.getGlobalStock()
+        .then(setPwMainStock).catch(() => setPwMainStock([]));
+    } else {
+      setPwMainStock([]);
     }
   }, [projectId, siteId, lotId, sites]);
 
@@ -501,6 +519,7 @@ export default function SiteDashboardPage() {
             <Select value={projectId} onChange={selectProject}>
               <option value="">— Select project —</option>
               {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+              <option value={MAIN_WAREHOUSE_SENTINEL}>🏭 Main Warehouse (view only)</option>
             </Select>
           )}
 
@@ -643,9 +662,10 @@ export default function SiteDashboardPage() {
             {/* ── Quick actions ── */}
             <Section title="Quick Actions">
               <div className="grid grid-cols-3 gap-2">
-                {!isViewOnly && <ActionBtn icon={PackagePlus} label="Request Materials" onClick={() => setModal("request")} />}
-                {!isViewOnly && <ActionBtn icon={Truck}       label="Receive Delivery"  onClick={() => setModal("delivery")} />}
-                {!isViewOnly && !isWarehouse && <ActionBtn icon={Minus}      label="Record Usage"     onClick={() => setModal("usage")} />}
+                {/* Site / lot actions — hide when in warehouse mode or when a lot is selected */}
+                {!isViewOnly && !isWarehouse && !lotId && <ActionBtn icon={PackagePlus} label="Request Materials" onClick={() => setModal("request")} />}
+                {!isViewOnly && !isWarehouse && !lotId && <ActionBtn icon={Truck}       label="Receive Delivery"  onClick={() => setModal("delivery")} />}
+                {!isViewOnly && !isWarehouse && <ActionBtn icon={Home}       label="Record Usage"     onClick={() => setModal("usage")} />}
                 {!isViewOnly && !isWarehouse && <ActionBtn icon={ListChecks} label="Update Milestone" onClick={() => setModal("stage")} />}
                 {!isViewOnly && siteId && !isWarehouse && <ActionBtn icon={Briefcase} label="Log Job Card" onClick={() => setModal("jobcard")} />}
                 {!isWarehouse && (
@@ -657,7 +677,7 @@ export default function SiteDashboardPage() {
                     }}
                   />
                 )}
-                {!isWarehouse && projectId && (
+                {!isWarehouse && projectId && projectId !== MAIN_WAREHOUSE_SENTINEL && (
                   <ActionBtn
                     icon={FileSpreadsheet}
                     label="Invoices"
@@ -665,6 +685,13 @@ export default function SiteDashboardPage() {
                       window.location.href = `/municipality-invoices?projectId=${projectId}`;
                     }}
                   />
+                )}
+                {/* Warehouse actions */}
+                {!isViewOnly && isWarehouse && (
+                  <ActionBtn icon={PackagePlus} label="Add to Warehouse" onClick={() => setModal("add_warehouse")} />
+                )}
+                {!isViewOnly && isWarehouse && (
+                  <ActionBtn icon={ArrowRightLeft} label="Project Transfer" onClick={() => setModal("warehouse_transfer")} />
                 )}
               </div>
               {isViewOnly && (
@@ -674,42 +701,65 @@ export default function SiteDashboardPage() {
               )}
             </Section>
 
-            {/* ── Project Warehouse: Stock On Hand + Transfer ── */}
+            {/* ── Project Warehouse: BOQ Allocation (materials then tools) ── */}
             {isWarehouse && siteId && projectId && (
-              <ProjectWarehouse projectId={projectId} siteId={siteId} />
+              <>
+                <BOQAllocationTable
+                  items={pwMaterialSummary.filter(i => !i.description.toLowerCase().startsWith("tool:"))}
+                  loading={loading}
+                  hideActions={true}
+                  onRecordUsage={() => {}}
+                  onReceiveDelivery={() => {}}
+                />
+                {/* Tools section at the bottom */}
+                {pwMaterialSummary.filter(i => i.description.toLowerCase().startsWith("tool:")).length > 0 && (
+                  <Section title="Tools">
+                    <div className="divide-y divide-border border border-border rounded-xl overflow-hidden">
+                      <div className="grid grid-cols-4 gap-2 px-3 py-2 bg-muted/50 text-xs font-medium text-muted-foreground">
+                        <span className="col-span-2 flex items-center gap-1.5"><Wrench className="w-3.5 h-3.5" />Tool</span>
+                        <span className="text-right">Allocated</span>
+                        <span className="text-right">Remaining</span>
+                      </div>
+                      {pwMaterialSummary.filter(i => i.description.toLowerCase().startsWith("tool:")).map(row => (
+                        <div key={row.boq_item_id} className="grid grid-cols-4 gap-2 px-3 py-2.5 bg-card items-center">
+                          <div className="col-span-2 min-w-0">
+                            <p className="text-sm font-medium truncate">{row.description.replace(/^tool:\s*/i, "")}</p>
+                            <p className="text-xs text-muted-foreground">{row.unit ?? "—"}</p>
+                          </div>
+                          <p className="text-sm text-right font-mono">{row.boq_allocated_qty}</p>
+                          <p className={cn("text-sm text-right font-mono font-semibold",
+                            row.remaining_qty <= 0 ? "text-red-600" : row.status === "LOW" ? "text-amber-600" : "text-green-600"
+                          )}>{row.remaining_qty}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </Section>
+                )}
+              </>
             )}
 
-            {/* ── Project Warehouse: Outstanding BOQ Materials ── */}
-            {isWarehouse && pwBOQSummary.length > 0 && (
-              <Section title="Outstanding BOQ Materials">
-                <div className="divide-y divide-border border border-border rounded-xl overflow-hidden">
-                  <div className="grid grid-cols-4 gap-2 px-3 py-2 bg-muted/50 text-xs font-medium text-muted-foreground">
-                    <span className="col-span-2">Material</span>
-                    <span className="text-right">BOQ Total</span>
-                    <span className="text-right">On Hand</span>
-                  </div>
-                  {pwBOQSummary.map((row, i) => (
-                    <div key={row.item_id ?? i} className="grid grid-cols-4 gap-2 px-3 py-2.5 bg-card items-center">
-                      <div className="col-span-2 min-w-0">
-                        <p className="text-sm font-medium truncate">{row.description}</p>
-                        <p className="text-xs text-muted-foreground">{row.lots_count} lot{row.lots_count !== 1 ? "s" : ""} · {row.unit ?? "—"}</p>
-                      </div>
-                      <p className="text-sm text-right font-mono">{row.total_boq_qty}</p>
-                      <div className="text-right">
-                        <p className={cn("text-sm font-mono font-semibold",
-                          row.on_hand_qty >= row.total_boq_qty ? "text-green-600"
-                          : row.on_hand_qty > 0 ? "text-amber-600"
-                          : "text-red-600"
-                        )}>
-                          {row.on_hand_qty}
-                        </p>
-                        {row.shortfall_qty > 0 && (
-                          <p className="text-xs text-red-500">-{row.shortfall_qty} short</p>
-                        )}
-                      </div>
+            {/* ── Main Warehouse view-only ── */}
+            {projectId === MAIN_WAREHOUSE_SENTINEL && (
+              <Section title="Main Warehouse — Stock On Hand">
+                {pwMainStock.length === 0 ? (
+                  <p className="text-sm text-muted-foreground text-center py-6">No stock in the Main Warehouse.</p>
+                ) : (
+                  <div className="divide-y divide-border border border-border rounded-xl overflow-hidden">
+                    <div className="grid grid-cols-3 gap-2 px-3 py-2 bg-muted/50 text-xs font-medium text-muted-foreground">
+                      <span className="col-span-2">Item</span>
+                      <span className="text-right">On Hand</span>
                     </div>
-                  ))}
-                </div>
+                    {pwMainStock.map(row => (
+                      <div key={row.item_id} className="grid grid-cols-3 gap-2 px-3 py-2.5 bg-card items-center">
+                        <div className="col-span-2 min-w-0">
+                          <p className="text-sm font-medium truncate">{row.item_name}</p>
+                          <p className="text-xs text-muted-foreground">{row.unit ?? "—"}</p>
+                        </div>
+                        <p className="text-sm text-right font-mono font-semibold">{row.on_hand}</p>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </Section>
             )}
 
@@ -948,6 +998,7 @@ export default function SiteDashboardPage() {
         <RecordUsageModal
           projectId={projectId} siteId={siteId} lotId={lotId}
           balances={balances} materialSummary={materialSummary}
+          stageMasters={stageMasters} stages={stages}
           onClose={() => setModal(null)} onDone={() => { setModal(null); loadData(); }}
         />
       )}
@@ -962,6 +1013,23 @@ export default function SiteDashboardPage() {
         <CreateJobCardModal
           projectId={projectId} siteId={siteId} lotId={lotId}
           onClose={() => setModal(null)} onDone={() => { setModal(null); loadData(); }}
+        />
+      )}
+      {modal === "add_warehouse" && (
+        <AddToWarehouseModal
+          projectId={projectId}
+          boqItems={pwMaterialSummary}
+          onClose={() => setModal(null)}
+          onDone={() => { setModal(null); loadData(); }}
+        />
+      )}
+      {modal === "warehouse_transfer" && (
+        <ProjectToProjectTransferModal
+          fromProjectId={projectId}
+          projects={projects}
+          warehouseStock={[]}
+          onClose={() => setModal(null)}
+          onDone={() => { setModal(null); loadData(); }}
         />
       )}
       {/* Upload Delivery Note removed — use Receive Delivery for the unified flow */}
@@ -2268,9 +2336,10 @@ function UnifiedReceiveModal({ projectId, siteId, lotId, suppliers, materialSumm
 }
 
 // ── Record Usage ──────────────────────────────────────────────────────────────
-function RecordUsageModal({ projectId, siteId, lotId, balances, materialSummary, onClose, onDone }: {
+function RecordUsageModal({ projectId, siteId, lotId, balances, materialSummary, stageMasters, stages, onClose, onDone }: {
   projectId: string; siteId: string; lotId: string;
   balances: StockBalance[]; materialSummary: MaterialSummaryItem[];
+  stageMasters: StageMaster[]; stages: ProjectStageStatus[];
   onClose: () => void; onDone: () => void;
 }) {
   const evidenceRef = useRef<HTMLInputElement>(null);
@@ -2278,6 +2347,7 @@ function RecordUsageModal({ projectId, siteId, lotId, balances, materialSummary,
   const [qty,           setQty]          = useState("");
   const [usedBy,        setUsedBy]       = useState("");
   const [team,          setTeam]         = useState("");
+  const [stageId,       setStageId]      = useState("");
   const [overrunReason, setOverrunReason] = useState("");
   const [evidenceFile,  setEvidenceFile] = useState<File | null>(null);
   const [loading,       setLoading]      = useState(false);
@@ -2318,6 +2388,7 @@ function RecordUsageModal({ projectId, siteId, lotId, balances, materialSummary,
         if (lotId)              fd.append("lot_id",              lotId);
         if (usedBy)             fd.append("used_by_person_name", usedBy);
         if (team)               fd.append("used_by_team_name",   team);
+        if (stageId)            fd.append("stage_id",            stageId);
         if (overrunReason)      fd.append("overrun_reason",      overrunReason);
         fd.append("evidence_file", evidenceFile);
         await stockApi.recordUsageWithEvidence(projectId, fd);
@@ -2326,9 +2397,10 @@ function RecordUsageModal({ projectId, siteId, lotId, balances, materialSummary,
           site_id:             siteId,
           item_id:             catalogItemId,
           quantity_used:       parseFloat(qty),
-          lot_id:              lotId  || null,
-          used_by_person_name: usedBy || null,
-          used_by_team_name:   team   || null,
+          lot_id:              lotId   || null,
+          stage_id:            stageId || null,
+          used_by_person_name: usedBy  || null,
+          used_by_team_name:   team    || null,
           usage_date:          new Date().toISOString(),
         }, overrunReason || undefined);
       }
@@ -2398,6 +2470,23 @@ function RecordUsageModal({ projectId, siteId, lotId, balances, materialSummary,
           <Label htmlFor="us-team">Team</Label>
           <Input id="us-team" value={team} onChange={e => setTeam(e.target.value)} placeholder="Foundation crew" />
         </div>
+        {stageMasters.length > 0 && (
+          <div className="space-y-1">
+            <Label htmlFor="us-stage">Milestone (optional)</Label>
+            <select id="us-stage" value={stageId} onChange={e => setStageId(e.target.value)}
+                    className="w-full h-10 px-3 text-sm rounded-md border border-border bg-background">
+              <option value="">— No milestone —</option>
+              {stageMasters.map(m => {
+                const s = stages.find(st => st.stage_id === m.id);
+                return (
+                  <option key={m.id} value={m.id}>
+                    {m.name}{s ? ` · ${STAGE_LABEL[s.status] ?? s.status}` : ""}
+                  </option>
+                );
+              })}
+            </select>
+          </div>
+        )}
 
         {/* Optional evidence photo */}
         <div className="space-y-1">
@@ -2421,6 +2510,244 @@ function RecordUsageModal({ projectId, siteId, lotId, balances, materialSummary,
         {error && <p className="text-xs text-destructive">{error}</p>}
         <Button type="submit" className="w-full" disabled={loading}>
           {loading ? "Recording…" : "Record Usage"}
+        </Button>
+      </form>
+    </ModalShell>
+  );
+}
+
+// ── Add to Warehouse (BOQ-linked) ────────────────────────────────────────────
+function AddToWarehouseModal({ projectId, boqItems, onClose, onDone }: {
+  projectId: string;
+  boqItems: MaterialSummaryItem[];
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [mode,     setMode]     = useState<"boq" | "adhoc">("boq");
+  const [boqItemId, setBoqItemId] = useState("");
+  const [name,     setName]     = useState("");
+  const [qty,      setQty]      = useState("");
+  const [unit,     setUnit]     = useState("");
+  const [notes,    setNotes]    = useState("");
+  const [loading,  setLoading]  = useState(false);
+  const [error,    setError]    = useState("");
+
+  const selected = boqItems.find(i => i.boq_item_id === boqItemId);
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (mode === "boq" && !boqItemId) { setError("Select a BOQ item."); return; }
+    if (mode === "adhoc" && !name.trim()) { setError("Enter a material name."); return; }
+    const quantity = parseFloat(qty);
+    if (!qty || isNaN(quantity) || quantity <= 0) { setError("Enter a valid quantity."); return; }
+
+    setLoading(true); setError("");
+    try {
+      if (mode === "boq" && selected) {
+        await warehouseApi.addProjectMaterial(projectId, {
+          name:     selected.description,
+          quantity,
+          unit:     selected.unit ?? unit || undefined,
+          notes:    notes || undefined,
+        });
+      } else {
+        await warehouseApi.addProjectMaterial(projectId, {
+          name:     name.trim(),
+          quantity,
+          unit:     unit || undefined,
+          notes:    notes || undefined,
+        });
+      }
+      onDone();
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      setError(msg ?? "Failed to add material. Try again.");
+    } finally { setLoading(false); }
+  };
+
+  return (
+    <ModalShell title="Add to Warehouse" onClose={onClose}>
+      <form onSubmit={submit} className="space-y-3">
+        {/* Mode toggle */}
+        <div className="flex gap-2">
+          <button type="button"
+            className={cn("flex-1 py-2 text-xs font-semibold rounded-lg border transition-colors",
+              mode === "boq" ? "bg-primary text-primary-foreground border-primary" : "bg-background border-border hover:bg-muted")}
+            onClick={() => setMode("boq")}>
+            From BOQ
+          </button>
+          <button type="button"
+            className={cn("flex-1 py-2 text-xs font-semibold rounded-lg border transition-colors",
+              mode === "adhoc" ? "bg-primary text-primary-foreground border-primary" : "bg-background border-border hover:bg-muted")}
+            onClick={() => setMode("adhoc")}>
+            Ad-hoc
+          </button>
+        </div>
+
+        {mode === "boq" ? (
+          <div className="space-y-1">
+            <Label>BOQ Item</Label>
+            <select value={boqItemId} onChange={e => {
+                setBoqItemId(e.target.value);
+                const it = boqItems.find(i => i.boq_item_id === e.target.value);
+                if (it) setUnit(it.unit ?? "");
+              }}
+              className="w-full h-10 px-3 text-sm rounded-md border border-border bg-background">
+              <option value="">— Select BOQ item —</option>
+              {boqItems.map(i => (
+                <option key={i.boq_item_id} value={i.boq_item_id ?? ""}>
+                  {i.description} · {i.boq_allocated_qty} {i.unit ?? ""}
+                </option>
+              ))}
+            </select>
+            {selected && (
+              <div className="bg-muted/40 rounded-lg px-3 py-2 text-xs space-y-0.5">
+                <div className="flex justify-between"><span className="text-muted-foreground">BOQ Allocated</span><span className="font-medium">{selected.boq_allocated_qty} {selected.unit ?? ""}</span></div>
+                <div className="flex justify-between"><span className="text-muted-foreground">Already Delivered</span><span className="font-medium">{selected.delivered_qty} {selected.unit ?? ""}</span></div>
+                <div className="flex justify-between"><span className="text-muted-foreground">Remaining</span>
+                  <span className={cn("font-semibold", selected.remaining_qty <= 0 ? "text-destructive" : "text-green-600")}>{selected.remaining_qty} {selected.unit ?? ""}</span>
+                </div>
+              </div>
+            )}
+          </div>
+        ) : (
+          <>
+            <div className="space-y-1">
+              <Label>Material Name</Label>
+              <Input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Cement 32.5N" required />
+            </div>
+            <div className="space-y-1">
+              <Label>Unit</Label>
+              <Input value={unit} onChange={e => setUnit(e.target.value)} placeholder="e.g. bags, m³" />
+            </div>
+          </>
+        )}
+
+        <div className="space-y-1">
+          <Label htmlFor="aw-qty">Quantity received</Label>
+          <Input id="aw-qty" type="number" min="0.01" step="0.01"
+                 value={qty} onChange={e => setQty(e.target.value)} required />
+        </div>
+        <div className="space-y-1">
+          <Label htmlFor="aw-notes">Notes (optional)</Label>
+          <Input id="aw-notes" value={notes} onChange={e => setNotes(e.target.value)} placeholder="Supplier ref, batch no, etc." />
+        </div>
+
+        {error && <p className="text-xs text-destructive">{error}</p>}
+        <Button type="submit" className="w-full" disabled={loading}>
+          {loading ? "Adding…" : "Add to Warehouse"}
+        </Button>
+      </form>
+    </ModalShell>
+  );
+}
+
+// ── Project-to-Project Transfer ───────────────────────────────────────────────
+function ProjectToProjectTransferModal({ fromProjectId, projects, onClose, onDone }: {
+  fromProjectId: string;
+  projects: Project[];
+  warehouseStock: import("@/api/warehouse").WarehouseStockItem[];
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [toProjectId,  setToProjectId]  = useState("");
+  const [stock,        setStock]        = useState<import("@/api/warehouse").WarehouseStockItem[]>([]);
+  const [loadingStock, setLoadingStock] = useState(false);
+  const [itemId,       setItemId]       = useState("");
+  const [qty,          setQty]          = useState("");
+  const [notes,        setNotes]        = useState("");
+  const [loading,      setLoading]      = useState(false);
+  const [error,        setError]        = useState("");
+
+  // Load source warehouse stock
+  useEffect(() => {
+    if (!fromProjectId) return;
+    setLoadingStock(true);
+    warehouseApi.getMainStock(fromProjectId)
+      .then(setStock).catch(() => setStock([])).finally(() => setLoadingStock(false));
+  }, [fromProjectId]);
+
+  const selected = stock.find(s => s.item_id === itemId);
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!toProjectId) { setError("Select a destination project."); return; }
+    if (!itemId)      { setError("Select an item."); return; }
+    const quantity = parseFloat(qty);
+    if (!qty || isNaN(quantity) || quantity <= 0) { setError("Enter a valid quantity."); return; }
+    if (selected && quantity > selected.on_hand) {
+      setError(`Only ${selected.on_hand} ${selected.unit ?? ""} available.`);
+      return;
+    }
+
+    setLoading(true); setError("");
+    try {
+      await warehouseApi.transferToProject(fromProjectId, toProjectId, itemId, quantity, notes || undefined);
+      onDone();
+    } catch (err: unknown) {
+      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      setError(msg ?? "Transfer failed. Try again.");
+    } finally { setLoading(false); }
+  };
+
+  const otherProjects = projects.filter(p => p.id !== fromProjectId);
+
+  return (
+    <ModalShell title="Project Warehouse Transfer" onClose={onClose}>
+      <form onSubmit={submit} className="space-y-3">
+        <p className="text-xs text-muted-foreground">
+          Transfer stock from this project's warehouse to another project's warehouse.
+        </p>
+
+        <div className="space-y-1">
+          <Label>Destination Project</Label>
+          <select value={toProjectId} onChange={e => setToProjectId(e.target.value)} required
+                  className="w-full h-10 px-3 text-sm rounded-md border border-border bg-background">
+            <option value="">— Select project —</option>
+            {otherProjects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+        </div>
+
+        <div className="space-y-1">
+          <Label>Item</Label>
+          {loadingStock ? (
+            <p className="text-xs text-muted-foreground py-2">Loading stock…</p>
+          ) : stock.length === 0 ? (
+            <p className="text-xs text-muted-foreground py-2">No stock in this warehouse.</p>
+          ) : (
+            <select value={itemId} onChange={e => setItemId(e.target.value)} required
+                    className="w-full h-10 px-3 text-sm rounded-md border border-border bg-background">
+              <option value="">— Select item —</option>
+              {stock.map(s => (
+                <option key={s.item_id} value={s.item_id}>
+                  {s.item_name} · {s.on_hand} {s.unit ?? ""} available
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
+
+        {selected && (
+          <div className="bg-muted/40 rounded-lg px-3 py-2 text-xs">
+            <div className="flex justify-between"><span className="text-muted-foreground">Available</span>
+              <span className="font-semibold text-green-600">{selected.on_hand} {selected.unit ?? ""}</span>
+            </div>
+          </div>
+        )}
+
+        <div className="space-y-1">
+          <Label htmlFor="pt-qty">Quantity to transfer</Label>
+          <Input id="pt-qty" type="number" min="0.01" step="0.01"
+                 value={qty} onChange={e => setQty(e.target.value)} required />
+        </div>
+        <div className="space-y-1">
+          <Label htmlFor="pt-notes">Notes (optional)</Label>
+          <Input id="pt-notes" value={notes} onChange={e => setNotes(e.target.value)} placeholder="Reason for transfer" />
+        </div>
+
+        {error && <p className="text-xs text-destructive">{error}</p>}
+        <Button type="submit" className="w-full" disabled={loading || stock.length === 0}>
+          {loading ? "Transferring…" : "Transfer Stock"}
         </Button>
       </form>
     </ModalShell>

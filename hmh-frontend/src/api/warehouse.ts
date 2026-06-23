@@ -320,4 +320,29 @@ export const warehouseApi = {
     );
     return res.data.data;
   },
+
+  /** Full BOQ summary (allocated / delivered / used / remaining) for a project warehouse. */
+  getWarehouseMaterialSummary: async (projectId: string): Promise<import("./siteDashboard").MaterialSummaryItem[]> => {
+    const res = await client.get(`/projects/${projectId}/warehouse/material-summary`);
+    return res.data.data ?? [];
+  },
+
+  /** Transfer stock from one project's main warehouse to another project's main warehouse. */
+  transferToProject: async (
+    fromProjectId: string,
+    toProjectId:   string,
+    itemId:        string,
+    quantity:      number,
+    notes?:        string,
+  ): Promise<{
+    transfer_ref: string; item_id: string; item_name: string;
+    quantity: number; unit: string | null;
+    from_project: string; to_project: string; new_balance: number;
+  }> => {
+    const res = await client.post(
+      `/projects/${fromProjectId}/warehouse/transfer-to-project`,
+      { to_project_id: toProjectId, item_id: itemId, quantity, notes: notes || null }
+    );
+    return res.data.data;
+  },
 };
