@@ -2547,7 +2547,7 @@ function AddToWarehouseModal({ projectId, boqItems, onClose, onDone }: {
         await warehouseApi.addProjectMaterial(projectId, {
           name:     selected.description,
           quantity,
-          unit:     selected.unit ?? unit || undefined,
+          unit:     (selected.unit ?? unit) || undefined,
           notes:    notes || undefined,
         });
       } else {
