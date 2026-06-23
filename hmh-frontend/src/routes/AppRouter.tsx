@@ -43,6 +43,7 @@ const SettingsPage            = lazy(() => import("@/pages/SettingsPage"));
 const WorkDonePage            = lazy(() => import("@/pages/WorkDonePage"));
 const MonthlySubcontractorSummaryPage = lazy(() => import("@/pages/MonthlySubcontractorSummaryPage"));
 const MunicipalityInvoicePage         = lazy(() => import("@/pages/MunicipalityInvoicePage"));
+const DocumentCenterPage              = lazy(() => import("@/pages/DocumentCenterPage"));
 
 function PageLoader() {
   return (
@@ -116,6 +117,7 @@ export function AppRouter() {
             <Route path="work-done" element={<WorkDonePage />} />
             <Route path="work-done/monthly-summary" element={<MonthlySubcontractorSummaryPage />} />
             <Route path="municipality-invoices" element={<MunicipalityInvoicePage />} />
+            <Route path="documents" element={<DocumentCenterPage />} />
           </Route>
 
           <Route path="*" element={<Navigate to="/" replace />} />

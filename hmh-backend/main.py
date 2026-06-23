@@ -365,6 +365,9 @@ from app.api.v1.lot_types import project_lot_types_router, lot_types_router
 app.include_router(project_lot_types_router, prefix="/api/v1")
 app.include_router(lot_types_router, prefix="/api/v1")
 
+from app.api.v1.document_center import router as document_center_router
+app.include_router(document_center_router)
+
 # ── Static file serving for uploaded documents ────────────────────────────────
 # Use settings.UPLOAD_DIR (absolute path from env) so the static mount and all
 # file-save calls (stages, deliveries, usage, gmail) reference the SAME directory.
