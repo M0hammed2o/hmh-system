@@ -1728,7 +1728,7 @@ function PipelinePanelModal({ mrId, suppliers, onClose, onUpdated }: {
                 {step.step === 5 && (step.pos ?? []).length === 0 && step.status === "WAITING" && (
                   <p className="text-xs text-muted-foreground">Waiting for quote approval in the previous step.</p>
                 )}
-                {step.step === 5 && step.status === "CURRENT" && (step.pos ?? []).length === 0 && (
+                {step.step === 5 && step.status === "CURRENT" && (
                   <WriteGuard>
                     <div className="space-y-2">
                       <p className="text-xs text-muted-foreground">All approved quotes will be grouped by supplier — one PO and one email per supplier.</p>

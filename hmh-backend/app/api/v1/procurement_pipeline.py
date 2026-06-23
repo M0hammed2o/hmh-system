@@ -73,6 +73,7 @@ def _quote_dict(q) -> dict:
         "approved_at":      q.approved_at.isoformat() if q.approved_at else None,
         "is_selected":      q.is_selected,
         "created_at":       q.created_at.isoformat() if q.created_at else None,
+        "purchase_order_id": str(q.purchase_order_id) if q.purchase_order_id else None,
     }
 
 
@@ -152,8 +153,9 @@ def get_pipeline(mr_id: uuid.UUID, db: DbSession):
         .all()
     )
     quotes = [_quote_dict(q) for q in quotes_raw]
-    pending_quotes  = [q for q in quotes if q["status"] == "PENDING"]
-    approved_quotes = [q for q in quotes if q["status"] == "APPROVED"]
+    pending_quotes       = [q for q in quotes if q["status"] == "PENDING"]
+    approved_quotes      = [q for q in quotes if q["status"] == "APPROVED"]
+    quotes_without_po    = [q for q in approved_quotes if not q["purchase_order_id"]]
 
     # All POs linked to this MR — multi-supplier MRs produce one PO per supplier.
     from app.models.invoice import Invoice
@@ -268,9 +270,11 @@ def get_pipeline(mr_id: uuid.UUID, db: DbSession):
               approved_count=len(approved_quotes)),
 
         _step(5, "PURCHASE_ORDER", "Purchase Order",
-              _s(has_any_po, is_converted or bool(approved_quotes) and not has_any_po),
+              _s(has_any_po and not quotes_without_po,
+                 bool(approved_quotes) or is_converted),
               po=po_dict,
-              pos=po_dicts),
+              pos=po_dicts,
+              quotes_without_po=len(quotes_without_po)),
 
         _step(6, "INVOICE", "Invoice Received",
               _s(has_any_invoice, has_any_po and not has_any_invoice),
