@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Plus, Truck, CheckCircle2, AlertCircle, Package, Trash2, RefreshCw, ExternalLink, FileText, PenLine, Link as LinkIcon, Download } from "lucide-react";
+import { Plus, Truck, CheckCircle2, AlertCircle, Package, Trash2, RefreshCw, ExternalLink, FileText, PenLine, Link as LinkIcon, Download, Paperclip } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
