@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
+import client from "@/api/client";
 import {
   ArrowLeft, Building2, Edit2, CheckCircle2, XCircle,
   FileText, Download, Trash2, Upload, ChevronDown, ChevronRight,
@@ -177,6 +178,65 @@ function DocQuickViewModal({
   );
 }
 
+// ── Full-screen document viewer (PDF / image / any file via iframe) ────────────
+
+function DocViewerModal({
+  url,
+  title,
+  filename,
+  isBlob,
+  onClose,
+}: {
+  url: string;
+  title: string;
+  filename: string;
+  isBlob: boolean;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    return () => { if (isBlob) URL.revokeObjectURL(url); };
+  }, [url, isBlob]);
+
+  return (
+    <div className="fixed inset-0 z-50 flex flex-col bg-background">
+      {/* Header bar */}
+      <div className="flex items-center justify-between px-4 py-3 border-b border-border bg-card shrink-0">
+        <div className="flex items-center gap-2 min-w-0">
+          <FileText className="w-4 h-4 shrink-0 text-muted-foreground" />
+          <span className="text-sm font-semibold truncate">{title}</span>
+          {filename && filename !== title && (
+            <span className="hidden sm:inline text-xs text-muted-foreground truncate">({filename})</span>
+          )}
+        </div>
+        <div className="flex items-center gap-2 shrink-0 ml-4">
+          <a
+            href={url}
+            download={filename}
+            className="text-xs px-3 py-1.5 border border-border rounded-lg hover:bg-muted transition-colors flex items-center gap-1.5"
+          >
+            <Download className="w-3.5 h-3.5" />
+            Download
+          </a>
+          <button
+            onClick={onClose}
+            className="text-xs px-3 py-1.5 border border-border rounded-lg hover:bg-muted transition-colors"
+          >
+            ✕ Close
+          </button>
+        </div>
+      </div>
+      {/* Viewer — PDF renders natively; images render; other types prompt download */}
+      <div className="flex-1 min-h-0 bg-muted/10">
+        <iframe
+          src={url}
+          title={title}
+          className="w-full h-full border-none"
+        />
+      </div>
+    </div>
+  );
+}
+
 function SupplierDocRow({
   doc,
   onDeleteAttachment,
@@ -261,6 +321,8 @@ function SupplierDocCentre({ supplierId }: { supplierId: string }) {
   const [uploadError, setUploadError] = useState("");
   const [preview, setPreview] = useState<SupplierDocument | null>(null);
   const [quickView, setQuickView] = useState<SupplierDocument | null>(null);
+  const [viewerDoc, setViewerDoc] = useState<{ url: string; title: string; filename: string; isBlob: boolean } | null>(null);
+  const [viewerLoading, setViewerLoading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const loadDocs = () => {
@@ -287,8 +349,8 @@ function SupplierDocCentre({ supplierId }: { supplierId: string }) {
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    if (file.size > 5 * 1024 * 1024) {
-      setUploadError("File exceeds 5 MB limit.");
+    if (file.size > 20 * 1024 * 1024) {
+      setUploadError("File exceeds 20 MB limit.");
       e.target.value = "";
       return;
     }
@@ -315,30 +377,59 @@ function SupplierDocCentre({ supplierId }: { supplierId: string }) {
     }
   };
 
+  // Used by DocQuickViewModal "View from Email" button
   const handleDownloadGmail = async (attId: string) => {
+    setViewerLoading(true);
     try {
       const { blob, filename } = await gmailApi.getAttachmentBlob(attId, true);
       const url = URL.createObjectURL(blob);
-      window.open(url, "_blank", "noopener,noreferrer");
-      setTimeout(() => URL.revokeObjectURL(url), 30_000);
+      setQuickView(null);
+      setViewerDoc({ url, title: filename || attId, filename: filename || attId, isBlob: true });
     } catch {
       // ignore — file may be missing from disk
+    } finally {
+      setViewerLoading(false);
     }
   };
 
-  const handleView = (doc: SupplierDocument) => {
+  const handleView = async (doc: SupplierDocument) => {
+    // Gmail attachments — fetch blob with auth then show inline
     if (doc.gmail_attachment_id) {
-      handleDownloadGmail(doc.gmail_attachment_id);
+      setViewerLoading(true);
+      try {
+        const { blob, filename } = await gmailApi.getAttachmentBlob(doc.gmail_attachment_id, true);
+        const url = URL.createObjectURL(blob);
+        setViewerDoc({ url, title: doc.title, filename: filename || doc.file_name || doc.title, isBlob: true });
+      } catch { /* ignore */ }
+      finally { setViewerLoading(false); }
       return;
     }
+
     if (doc.file_url) {
+      // Images — use existing lightbox
       if (doc.is_image) {
         setPreview(doc);
-      } else {
+        return;
+      }
+      // Supabase public URL — use directly in iframe
+      if (doc.file_url.startsWith("http")) {
+        setViewerDoc({ url: doc.file_url, title: doc.title, filename: doc.file_name || doc.title, isBlob: false });
+        return;
+      }
+      // Local backend file — fetch as blob with auth headers
+      setViewerLoading(true);
+      try {
+        const res = await client.get(`/attachments/${doc.doc_id}/download`, { responseType: "blob" });
+        const url = URL.createObjectURL(res.data as Blob);
+        setViewerDoc({ url, title: doc.title, filename: doc.file_name || doc.title, isBlob: true });
+      } catch {
         window.open(doc.file_url, "_blank", "noopener,noreferrer");
+      } finally {
+        setViewerLoading(false);
       }
       return;
     }
+
     // System record (PO, invoice, delivery, quotation) — show quick-view modal
     setQuickView(doc);
   };
@@ -446,6 +537,26 @@ function SupplierDocCentre({ supplierId }: { supplierId: string }) {
           doc={quickView}
           onClose={() => setQuickView(null)}
           onDownloadGmail={handleDownloadGmail}
+        />
+      )}
+
+      {/* Loading overlay while fetching file blob */}
+      {viewerLoading && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/60 backdrop-blur-sm">
+          <div className="bg-card border border-border rounded-xl px-6 py-4 text-sm text-muted-foreground shadow-lg">
+            Opening document…
+          </div>
+        </div>
+      )}
+
+      {/* Full-screen document viewer */}
+      {viewerDoc && (
+        <DocViewerModal
+          url={viewerDoc.url}
+          title={viewerDoc.title}
+          filename={viewerDoc.filename}
+          isBlob={viewerDoc.isBlob}
+          onClose={() => setViewerDoc(null)}
         />
       )}
     </div>

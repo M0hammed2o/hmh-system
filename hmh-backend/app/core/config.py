@@ -47,7 +47,7 @@ class Settings(BaseSettings):
 
     # File storage — local path (set to a Render Persistent Disk mount for permanence)
     UPLOAD_DIR: str = "./uploads"
-    MAX_UPLOAD_SIZE_MB: int = 5
+    MAX_UPLOAD_SIZE_MB: int = 20
 
     # Supabase Storage (optional — set these env vars to enable persistent cloud storage)
     # If set, uploaded files are stored in Supabase Storage instead of the local disk.

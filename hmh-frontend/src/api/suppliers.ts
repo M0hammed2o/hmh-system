@@ -171,6 +171,7 @@ export interface SupplierDocument {
   caption?: string | null;
   gmail_attachment_id?: string | null;
   detail_path?: string | null;
+  mime_type?: string | null;
 }
 
 export const suppliersApi = {

@@ -516,6 +516,7 @@ def supplier_documents(supplier_id: uuid.UUID, db: DbSession):
             "uploaded_by_name": read.uploaded_by_name,
             "is_image":         read.is_image,
             "caption":          att.caption,
+            "mime_type":        att.mime_type,
         })
 
     docs.sort(key=lambda d: (d["date"] or "0000-00-00"), reverse=True)
