@@ -88,6 +88,16 @@ export interface GlobalWarehouseMovement extends WarehouseMovement {
   project_name: string;
 }
 
+export interface ToolSiteLocation {
+  item_id:      string;
+  item_name:    string;
+  site_id:      string;
+  site_name:    string;
+  project_code: string;
+  project_name: string;
+  on_hand:      number;
+}
+
 export const warehouseApi = {
   /** Current on-hand stock in the site warehouse (lot_id IS NULL). */
   getStock: async (siteId: string): Promise<WarehouseStockItem[]> => {
@@ -296,6 +306,12 @@ export const warehouseApi = {
   /** TOOL items in the global main warehouse (project_id IS NULL, item_type = TOOL). */
   getGlobalTools: async (): Promise<GlobalWarehouseStockItem[]> => {
     const res = await client.get<{ data: GlobalWarehouseStockItem[] }>("/warehouse/main/tools");
+    return res.data.data ?? [];
+  },
+
+  /** How many of each TOOL is currently at each site warehouse. */
+  getToolLocations: async (): Promise<ToolSiteLocation[]> => {
+    const res = await client.get<{ data: ToolSiteLocation[] }>("/warehouse/main/tools/locations");
     return res.data.data ?? [];
   },
 

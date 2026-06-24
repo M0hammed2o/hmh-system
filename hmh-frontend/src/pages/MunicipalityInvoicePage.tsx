@@ -516,7 +516,7 @@ function InvoiceFormModal({
         <div className="flex gap-2 px-5 py-4 border-t border-border shrink-0">
           <Button variant="outline" onClick={onClose} disabled={loading} className="flex-1">Cancel</Button>
           <Button disabled={loading} className="flex-1" onClick={e => {
-            const form_el = (e.target as HTMLButtonElement).closest("div")?.previousElementSibling?.querySelector("form");
+            const form_el = (e.target as HTMLButtonElement).closest("div")?.previousElementSibling as HTMLFormElement | null;
             form_el?.requestSubmit();
           }}>
             {loading ? "Saving…" : editInvoice ? "Save Changes" : "Create Invoice"}

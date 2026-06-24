@@ -1448,6 +1448,44 @@ def get_global_main_warehouse_tools(db: DbSession, current_user: CurrentUser):
     )
 
 
+@global_warehouse_router.get("/main/tools/locations", response_model=ApiSuccess[list[dict]], dependencies=[ALL_ROLES])
+def get_tool_site_locations(db: DbSession, current_user: CurrentUser):
+    """Return how many of each TOOL item is currently at each site warehouse."""
+    rows = db.execute(text("""
+        SELECT
+            sl.item_id,
+            i.name                                  AS item_name,
+            s.id                                    AS site_id,
+            s.name                                  AS site_name,
+            COALESCE(p.code, 'GLOBAL')              AS project_code,
+            COALESCE(p.name, 'Global')              AS project_name,
+            SUM(sl.quantity_in) - SUM(sl.quantity_out) AS on_hand
+        FROM stock_ledger sl
+        JOIN items i ON i.id = sl.item_id
+        JOIN sites s ON s.id = sl.site_id
+        LEFT JOIN projects p ON p.id = sl.project_id
+        WHERE sl.site_id IS NOT NULL
+          AND sl.lot_id  IS NULL
+          AND i.item_type = 'TOOL'
+        GROUP BY sl.item_id, i.name, s.id, s.name, p.code, p.name
+        HAVING SUM(sl.quantity_in) - SUM(sl.quantity_out) > 0
+        ORDER BY i.name, s.name
+    """)).mappings().all()
+
+    return ApiSuccess(
+        data=[{
+            "item_id":      str(r["item_id"]),
+            "item_name":    r["item_name"],
+            "site_id":      str(r["site_id"]),
+            "site_name":    r["site_name"],
+            "project_code": r["project_code"],
+            "project_name": r["project_name"],
+            "on_hand":      float(r["on_hand"]),
+        } for r in rows],
+        message=f"{len(rows)} tool-site location(s).",
+    )
+
+
 # ── Main Warehouse: receive stock from supplier ───────────────────────────────
 
 class ReceiveStockBody(BaseModel):

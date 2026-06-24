@@ -17,7 +17,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
   ArrowRight, RefreshCw, History,
   AlertTriangle, X, ChevronDown, ChevronUp, Warehouse,
-  PackagePlus, SlidersHorizontal, Wrench, Plus,
+  PackagePlus, SlidersHorizontal, Wrench, Plus, Edit2, Trash2, MapPin,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -27,6 +27,7 @@ import {
   type GlobalWarehouseStockItem,
   type GlobalWarehouseMovement,
   type GlobalWarehouseSite,
+  type ToolSiteLocation,
 } from "@/api/warehouse";
 import { cn } from "@/lib/utils";
 import { formatDate } from "@/lib/format";
@@ -530,6 +531,72 @@ function AddToolModal({ onClose, onDone }: { onClose: () => void; onDone: () => 
   );
 }
 
+// ── Edit Tool Modal ───────────────────────────────────────────────────────────
+
+function EditToolModal({
+  tool,
+  onClose,
+  onDone,
+}: {
+  tool: GlobalWarehouseStockItem;
+  onClose: () => void;
+  onDone:  () => void;
+}) {
+  const [name,    setName]    = useState(tool.item_name);
+  const [unit,    setUnit]    = useState(tool.unit ?? "");
+  const [saving,  setSaving]  = useState(false);
+  const [error,   setError]   = useState("");
+
+  const submit = async () => {
+    if (!name.trim()) { setError("Tool name cannot be blank."); return; }
+    setSaving(true); setError("");
+    try {
+      await client.patch(`/items/${tool.item_id}`, {
+        name: name.trim(),
+        default_unit: unit.trim() || null,
+      });
+      onDone();
+      onClose();
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      setError(detail ?? "Failed to update tool.");
+    } finally { setSaving(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
+      <div className="bg-card border border-border rounded-2xl w-full max-w-sm p-6 space-y-4" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between">
+          <h3 className="font-semibold text-base">Edit Tool</h3>
+          <button onClick={onClose}><X className="w-4 h-4 text-muted-foreground" /></button>
+        </div>
+        <div className="space-y-3">
+          <div>
+            <label className="text-xs text-muted-foreground block mb-1">Tool name *</label>
+            <input
+              type="text" value={name} onChange={e => setName(e.target.value)} autoFocus
+              className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm"
+            />
+          </div>
+          <div>
+            <label className="text-xs text-muted-foreground block mb-1">Unit (optional)</label>
+            <input
+              type="text" value={unit} onChange={e => setUnit(e.target.value)}
+              placeholder="e.g. pcs"
+              className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm"
+            />
+          </div>
+        </div>
+        {error && <p className="text-xs text-destructive bg-destructive/10 rounded-lg px-3 py-2">{error}</p>}
+        <div className="flex gap-2">
+          <Button onClick={submit} disabled={saving} className="flex-1">{saving ? "Saving…" : "Save Changes"}</Button>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── History row ───────────────────────────────────────────────────────────────
 
 function HistoryRow({ m }: { m: GlobalWarehouseMovement }) {
@@ -564,16 +631,21 @@ function HistoryRow({ m }: { m: GlobalWarehouseMovement }) {
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function MainWarehousePage() {
-  const [stock,       setStock]       = useState<GlobalWarehouseStockItem[]>([]);
-  const [tools,       setTools]       = useState<GlobalWarehouseStockItem[]>([]);
-  const [history,     setHistory]     = useState<GlobalWarehouseMovement[]>([]);
-  const [loading,     setLoading]     = useState(false);
-  const [histLoading, setHistLoading] = useState(false);
-  const [showHistory, setShowHistory] = useState(false);
-  const [showTools,   setShowTools]   = useState(false);
-  const [error,       setError]       = useState("");
+  const [stock,         setStock]         = useState<GlobalWarehouseStockItem[]>([]);
+  const [tools,         setTools]         = useState<GlobalWarehouseStockItem[]>([]);
+  const [toolLocations, setToolLocations] = useState<ToolSiteLocation[]>([]);
+  const [history,       setHistory]       = useState<GlobalWarehouseMovement[]>([]);
+  const [loading,       setLoading]       = useState(false);
+  const [histLoading,   setHistLoading]   = useState(false);
+  const [locsLoading,   setLocsLoading]   = useState(false);
+  const [showHistory,   setShowHistory]   = useState(false);
+  const [showTools,     setShowTools]     = useState(false);
+  const [error,         setError]         = useState("");
 
   const [transferItem,  setTransferItem]  = useState<GlobalWarehouseStockItem | null>(null);
+  const [editTool,      setEditTool]      = useState<GlobalWarehouseStockItem | null>(null);
+  const [deletingTool,  setDeletingTool]  = useState<GlobalWarehouseStockItem | null>(null);
+  const [deleteError,   setDeleteError]   = useState("");
   const [showReceive,   setShowReceive]   = useState(false);
   const [showAdjust,    setShowAdjust]    = useState(false);
   const [showAddTool,   setShowAddTool]   = useState(false);
@@ -608,6 +680,51 @@ export default function MainWarehousePage() {
       if (history.length === 0) loadHistory();
     } else {
       setShowHistory(false);
+    }
+  };
+
+  const loadToolLocations = useCallback(async () => {
+    setLocsLoading(true);
+    try {
+      setToolLocations(await warehouseApi.getToolLocations());
+    } catch { /* silent */ }
+    finally { setLocsLoading(false); }
+  }, []);
+
+  const toggleTools = () => {
+    setShowTools(p => {
+      if (!p && toolLocations.length === 0) loadToolLocations();
+      return !p;
+    });
+  };
+
+  const handleDeleteTool = async (tool: GlobalWarehouseStockItem) => {
+    setDeleteError("");
+    const atSites = toolLocations.filter(l => l.item_id === tool.item_id);
+    const totalAtSites = atSites.reduce((s, l) => s + l.on_hand, 0);
+    if (totalAtSites > 0) {
+      setDeleteError(
+        `Cannot delete — ${fmt(totalAtSites)} ${tool.unit ?? "unit(s)"} of "${tool.item_name}" are still at sites. Return them to the main warehouse first.`
+      );
+      return;
+    }
+    if (!window.confirm(`Remove all "${tool.item_name}" from the warehouse? This cannot be undone.`)) return;
+    try {
+      if (tool.on_hand > 0) {
+        await warehouseApi.adjustStock({
+          item_id:         tool.item_id,
+          adjustment_type: "CORRECTION_SUB",
+          quantity:        tool.on_hand,
+          notes:           "Tool removed from warehouse",
+        });
+      }
+      await client.patch(`/items/${tool.item_id}`, { is_active: false });
+      setDeletingTool(null);
+      await loadStock();
+      await loadToolLocations();
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      setDeleteError(detail ?? "Delete failed.");
     }
   };
 
@@ -733,7 +850,7 @@ export default function MainWarehousePage() {
         <div className="flex items-center justify-between px-4 py-3">
           <button
             className="flex items-center gap-2 flex-1 text-left hover:opacity-80 transition-opacity"
-            onClick={() => setShowTools(p => !p)}
+            onClick={toggleTools}
           >
             <Wrench className="w-4 h-4 text-primary" />
             <span className="font-semibold text-sm">Tools in Main Warehouse</span>
@@ -753,7 +870,7 @@ export default function MainWarehousePage() {
               Add Tool
             </button>
             {loading && <RefreshCw className="w-3.5 h-3.5 animate-spin text-muted-foreground" />}
-            <button onClick={() => setShowTools(p => !p)}>
+            <button onClick={toggleTools}>
               {showTools
                 ? <ChevronUp className="w-4 h-4 text-muted-foreground" />
                 : <ChevronDown className="w-4 h-4 text-muted-foreground" />}
@@ -773,29 +890,73 @@ export default function MainWarehousePage() {
               </p>
             ) : (
               <div className="divide-y divide-border">
-                {tools.map(tool => (
-                  <div
-                    key={tool.item_id}
-                    className="flex items-center gap-4 px-4 py-3 hover:bg-muted/30 transition-colors"
-                  >
-                    <Wrench className="w-4 h-4 text-muted-foreground shrink-0" />
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium truncate">{tool.item_name}</p>
-                      <p className="text-xs text-muted-foreground">
-                        On hand: <strong>{fmt(tool.on_hand)} {tool.unit ?? ""}</strong>
-                        {tool.last_movement ? ` · Last: ${formatDate(tool.last_movement)}` : ""}
-                      </p>
-                    </div>
-                    <Button
-                      size="sm" variant="outline"
-                      className="h-8 text-xs gap-1.5 shrink-0"
-                      onClick={() => setTransferItem(tool)}
-                    >
-                      <ArrowRight className="w-3 h-3" />
-                      Send to Site
-                    </Button>
+                {deleteError && (
+                  <div className="mx-4 my-2 text-xs text-destructive bg-destructive/10 border border-destructive/20 rounded-lg px-3 py-2 flex items-center gap-2">
+                    <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                    {deleteError}
+                    <button onClick={() => setDeleteError("")} className="ml-auto"><X className="w-3 h-3" /></button>
                   </div>
-                ))}
+                )}
+                {tools.map(tool => {
+                  const siteLocations = toolLocations.filter(l => l.item_id === tool.item_id);
+                  return (
+                  <div key={tool.item_id} className="px-4 py-3 hover:bg-muted/30 transition-colors">
+                    <div className="flex items-center gap-3">
+                      <Wrench className="w-4 h-4 text-muted-foreground shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium truncate">{tool.item_name}</p>
+                        <p className="text-xs text-muted-foreground">
+                          In warehouse: <strong>{fmt(tool.on_hand)} {tool.unit ?? ""}</strong>
+                          {tool.last_movement ? ` · Last: ${formatDate(tool.last_movement)}` : ""}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <Button
+                          size="sm" variant="outline"
+                          className="h-8 text-xs gap-1.5"
+                          onClick={() => setTransferItem(tool)}
+                        >
+                          <ArrowRight className="w-3 h-3" />
+                          Send to Site
+                        </Button>
+                        <button
+                          onClick={() => { setEditTool(tool); setDeleteError(""); }}
+                          className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+                          title="Edit tool"
+                        >
+                          <Edit2 className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          onClick={() => handleDeleteTool(tool)}
+                          className="p-1.5 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
+                          title="Remove tool from warehouse"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                    {/* Site distribution */}
+                    {locsLoading ? (
+                      <p className="text-xs text-muted-foreground mt-1.5 pl-7">Loading site locations…</p>
+                    ) : siteLocations.length > 0 ? (
+                      <div className="mt-2 pl-7 flex flex-wrap gap-1.5">
+                        {siteLocations.map(loc => (
+                          <span
+                            key={loc.site_id}
+                            className="inline-flex items-center gap-1 text-xs bg-amber-50 text-amber-700 border border-amber-200 rounded-full px-2 py-0.5"
+                          >
+                            <MapPin className="w-2.5 h-2.5" />
+                            {loc.site_name}
+                            <span className="font-semibold">{fmt(loc.on_hand)}</span>
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-xs text-muted-foreground mt-1 pl-7">All in main warehouse</p>
+                    )}
+                  </div>
+                  );
+                })}
               </div>
             )}
           </div>
@@ -870,7 +1031,15 @@ export default function MainWarehousePage() {
       {showAddTool && (
         <AddToolModal
           onClose={() => setShowAddTool(false)}
-          onDone={loadStock}
+          onDone={() => { loadStock(); loadToolLocations(); }}
+        />
+      )}
+
+      {editTool && (
+        <EditToolModal
+          tool={editTool}
+          onClose={() => setEditTool(null)}
+          onDone={() => { loadStock(); setEditTool(null); }}
         />
       )}
     </div>

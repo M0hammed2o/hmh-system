@@ -3,7 +3,7 @@ import { useParams, useNavigate } from "react-router-dom";
 import {
   ArrowLeft, Building2, Edit2, CheckCircle2, XCircle,
   FileText, Download, Trash2, Upload, ChevronDown, ChevronRight,
-  Plus, ClipboardList, Package, Truck, Receipt, CreditCard, ExternalLink,
+  Plus, ClipboardList, Package, Truck, Receipt, CreditCard, ExternalLink, Eye,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -123,24 +123,35 @@ function SupplierDocRow({
             className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
             title="View / Download from email"
           >
-            <Download className="w-3.5 h-3.5" />
+            <Eye className="w-3.5 h-3.5" />
           </button>
         ) : doc.file_url ? (
-          <a
-            href={doc.file_url}
-            target="_blank"
-            rel="noopener noreferrer"
-            onClick={doc.is_image ? (e) => { e.preventDefault(); onPreview(doc); } : undefined}
-            className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
-            title="Open / Download"
-          >
-            <Download className="w-3.5 h-3.5" />
-          </a>
+          doc.is_image ? (
+            <button
+              onClick={() => onPreview(doc)}
+              className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+              title="View image"
+            >
+              <Eye className="w-3.5 h-3.5" />
+            </button>
+          ) : (
+            <a
+              href={doc.file_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+              title="View document"
+            >
+              <Eye className="w-3.5 h-3.5" />
+            </a>
+          )
         ) : doc.detail_path ? (
           <a
             href={doc.detail_path}
+            target="_blank"
+            rel="noopener noreferrer"
             className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
-            title="View record"
+            title="Open record in new tab"
           >
             <ExternalLink className="w-3.5 h-3.5" />
           </a>
