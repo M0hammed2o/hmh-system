@@ -946,7 +946,7 @@ export default function MainWarehousePage() {
                             className="inline-flex items-center gap-1 text-xs bg-amber-50 text-amber-700 border border-amber-200 rounded-full px-2 py-0.5"
                           >
                             <MapPin className="w-2.5 h-2.5" />
-                            {loc.site_name}
+                            {loc.project_name}
                             <span className="font-semibold">{fmt(loc.on_hand)}</span>
                           </span>
                         ))}
