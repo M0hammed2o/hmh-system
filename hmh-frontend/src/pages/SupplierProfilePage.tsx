@@ -61,16 +61,130 @@ const STATUS_COLOURS: Record<string, string> = {
   PAID:               "text-green-700 bg-green-100",
 };
 
-function SupplierDocRow({
+// ── Quick-view modal for system records (PO / Invoice / Delivery / Quotation) ──
+
+function DocQuickViewModal({
   doc,
-  onDeleteAttachment,
-  onPreview,
+  onClose,
   onDownloadGmail,
 }: {
   doc: SupplierDocument;
-  onDeleteAttachment: (id: string) => void;
-  onPreview: (doc: SupplierDocument) => void;
+  onClose: () => void;
   onDownloadGmail?: (attId: string) => void;
+}) {
+  const typeLabel = DOC_TYPE_LABELS[doc.doc_type] ?? doc.doc_type;
+  const statusColour = doc.status ? (STATUS_COLOURS[doc.status] ?? "text-muted-foreground bg-muted") : "";
+  const dateStr = doc.date
+    ? new Date(doc.date).toLocaleDateString("en-ZA", { day: "numeric", month: "short", year: "numeric" })
+    : "—";
+  const fmtAmt = (n: number) => `R ${n.toLocaleString("en-ZA", { minimumFractionDigits: 2 })}`;
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-foreground/40 p-4"
+      onClick={onClose}
+    >
+      <div
+        className="bg-card border border-border rounded-2xl w-full max-w-sm shadow-xl"
+        onClick={e => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-start justify-between px-5 pt-5 pb-3">
+          <div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <Badge variant="outline" className="text-xs">{typeLabel}</Badge>
+              {doc.status && (
+                <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${statusColour}`}>
+                  {doc.status.replace(/_/g, " ")}
+                </span>
+              )}
+            </div>
+            <h3 className="text-base font-semibold mt-1">{doc.title}</h3>
+            {doc.ref_number && doc.ref_number !== doc.title && (
+              <p className="text-xs text-muted-foreground font-mono mt-0.5">{doc.ref_number}</p>
+            )}
+          </div>
+          <button onClick={onClose} className="shrink-0 ml-2 mt-0.5">
+            <Download className="w-0 h-0 hidden" />
+            <span className="text-muted-foreground hover:text-foreground">✕</span>
+          </button>
+        </div>
+
+        {/* Body */}
+        <div className="px-5 pb-2 space-y-2">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <p className="text-xs text-muted-foreground">Date</p>
+              <p className="text-sm font-medium">{dateStr}</p>
+            </div>
+            {doc.amount != null && (
+              <div>
+                <p className="text-xs text-muted-foreground">Amount</p>
+                <p className="text-sm font-semibold">{fmtAmt(doc.amount)}</p>
+              </div>
+            )}
+          </div>
+          {doc.caption && (
+            <p className="text-xs text-muted-foreground bg-muted/50 rounded-lg px-3 py-2">{doc.caption}</p>
+          )}
+          {doc.uploaded_by_name && (
+            <p className="text-xs text-muted-foreground">Uploaded by {doc.uploaded_by_name}</p>
+          )}
+        </div>
+
+        {/* Actions */}
+        <div className="px-5 pb-5 pt-3 border-t border-border mt-2 flex flex-wrap gap-2">
+          {doc.gmail_attachment_id && (
+            <button
+              onClick={() => { onDownloadGmail?.(doc.gmail_attachment_id!); onClose(); }}
+              className="flex items-center gap-1.5 text-xs px-3 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors"
+            >
+              <Eye className="w-3.5 h-3.5" />
+              View from Email
+            </button>
+          )}
+          {doc.file_url && (
+            <a
+              href={doc.file_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1.5 text-xs px-3 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors"
+            >
+              <Eye className="w-3.5 h-3.5" />
+              View File
+            </a>
+          )}
+          {doc.detail_path && (
+            <a
+              href={doc.detail_path}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1.5 text-xs px-3 py-2 border border-border rounded-lg hover:bg-muted transition-colors"
+            >
+              <ExternalLink className="w-3.5 h-3.5" />
+              Open full record
+            </a>
+          )}
+          <button
+            onClick={onClose}
+            className="flex items-center gap-1.5 text-xs px-3 py-2 border border-border rounded-lg hover:bg-muted transition-colors ml-auto"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SupplierDocRow({
+  doc,
+  onDeleteAttachment,
+  onView,
+}: {
+  doc: SupplierDocument;
+  onDeleteAttachment: (id: string) => void;
+  onView: (doc: SupplierDocument) => void;
 }) {
   const typeLabel = DOC_TYPE_LABELS[doc.doc_type] ?? doc.doc_type;
   const statusColour = doc.status ? (STATUS_COLOURS[doc.status] ?? "text-muted-foreground bg-muted") : "";
@@ -80,7 +194,10 @@ function SupplierDocRow({
   const fmt = (n: number) => `R ${n.toLocaleString("en-ZA", { minimumFractionDigits: 2 })}`;
 
   return (
-    <div className="flex items-center gap-3 px-4 py-3 hover:bg-muted/30 transition-colors group">
+    <div
+      className="flex items-center gap-3 px-4 py-3 hover:bg-muted/30 transition-colors cursor-pointer group"
+      onClick={() => onView(doc)}
+    >
       <div className="shrink-0 w-9 h-9 rounded-lg bg-muted flex items-center justify-center overflow-hidden">
         {doc.is_attachment && doc.is_image && doc.file_url ? (
           <img src={doc.file_url} alt="" className="w-9 h-9 object-cover" />
@@ -116,50 +233,15 @@ function SupplierDocRow({
         </div>
       </div>
 
-      <div className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
-        {doc.gmail_attachment_id ? (
-          <button
-            onClick={() => onDownloadGmail?.(doc.gmail_attachment_id!)}
-            className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
-            title="View / Download from email"
-          >
-            <Eye className="w-3.5 h-3.5" />
-          </button>
-        ) : doc.file_url ? (
-          doc.is_image ? (
-            <button
-              onClick={() => onPreview(doc)}
-              className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
-              title="View image"
-            >
-              <Eye className="w-3.5 h-3.5" />
-            </button>
-          ) : (
-            <a
-              href={doc.file_url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
-              title="View document"
-            >
-              <Eye className="w-3.5 h-3.5" />
-            </a>
-          )
-        ) : doc.detail_path ? (
-          <a
-            href={doc.detail_path}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
-            title="Open record in new tab"
-          >
-            <ExternalLink className="w-3.5 h-3.5" />
-          </a>
-        ) : null}
+      <div className="flex items-center gap-1 shrink-0">
+        <span className="text-xs text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity">
+          View
+        </span>
+        <Eye className="w-3.5 h-3.5 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
         {doc.is_attachment && !doc.gmail_attachment_id && (
           <button
-            onClick={() => onDeleteAttachment(doc.doc_id)}
-            className="p-1.5 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
+            onClick={e => { e.stopPropagation(); onDeleteAttachment(doc.doc_id); }}
+            className="p-1.5 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors opacity-0 group-hover:opacity-100"
             title="Delete"
           >
             <Trash2 className="w-3.5 h-3.5" />
@@ -178,6 +260,7 @@ function SupplierDocCentre({ supplierId }: { supplierId: string }) {
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState("");
   const [preview, setPreview] = useState<SupplierDocument | null>(null);
+  const [quickView, setQuickView] = useState<SupplierDocument | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const loadDocs = () => {
@@ -241,6 +324,23 @@ function SupplierDocCentre({ supplierId }: { supplierId: string }) {
     } catch {
       // ignore — file may be missing from disk
     }
+  };
+
+  const handleView = (doc: SupplierDocument) => {
+    if (doc.gmail_attachment_id) {
+      handleDownloadGmail(doc.gmail_attachment_id);
+      return;
+    }
+    if (doc.file_url) {
+      if (doc.is_image) {
+        setPreview(doc);
+      } else {
+        window.open(doc.file_url, "_blank", "noopener,noreferrer");
+      }
+      return;
+    }
+    // System record (PO, invoice, delivery, quotation) — show quick-view modal
+    setQuickView(doc);
   };
 
   const countFor = (type: SupplierDocType) =>
@@ -312,8 +412,7 @@ function SupplierDocCentre({ supplierId }: { supplierId: string }) {
               key={doc.doc_id}
               doc={doc}
               onDeleteAttachment={handleDeleteAttachment}
-              onPreview={setPreview}
-              onDownloadGmail={handleDownloadGmail}
+              onView={handleView}
             />
           ))}
         </div>
@@ -339,6 +438,15 @@ function SupplierDocCentre({ supplierId }: { supplierId: string }) {
             </a>
           </div>
         </Modal>
+      )}
+
+      {/* Quick-view modal for system records */}
+      {quickView && (
+        <DocQuickViewModal
+          doc={quickView}
+          onClose={() => setQuickView(null)}
+          onDownloadGmail={handleDownloadGmail}
+        />
       )}
     </div>
   );
