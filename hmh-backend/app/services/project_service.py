@@ -21,6 +21,7 @@ _UNRESTRICTED_ROLES = {
     UserRole.OWNER,
     UserRole.OFFICE_ADMIN,
     UserRole.OFFICE_USER,
+    UserRole.PROCUREMENT_LEAD,
     UserRole.READ_ONLY,
 }
 

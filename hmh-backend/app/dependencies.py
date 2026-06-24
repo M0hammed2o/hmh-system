@@ -158,6 +158,15 @@ PROCUREMENT_LEAD_ONLY = require_roles(UserRole.OWNER, UserRole.PROCUREMENT_LEAD)
 
 # ── Project isolation helper ──────────────────────────────────────────────────
 
+_PROJECT_ACCESS_BYPASS = {
+    UserRole.OWNER,
+    UserRole.OFFICE_ADMIN,
+    UserRole.OFFICE_USER,
+    UserRole.PROCUREMENT_LEAD,
+    UserRole.READ_ONLY,
+}
+
+
 def check_project_access(
     db: Session,
     user: User,
@@ -166,8 +175,10 @@ def check_project_access(
     """
     Raise HTTP 403 if the user does not have access to the given project.
 
-    OWNERs bypass this check — they have system-wide access.
-    All other roles must have an explicit UserProjectAccess record.
+    Office-level roles (OWNER, OFFICE_ADMIN, OFFICE_USER, PROCUREMENT_LEAD, READ_ONLY)
+    have company-wide access and bypass this check.
+    Site-level roles (SITE_MANAGER, SITE_STAFF, SITE_MANAGER_VIEW) must have an
+    explicit UserProjectAccess record.
 
     Call this after fetching a resource by ID to enforce project isolation.
     Example::
@@ -175,7 +186,7 @@ def check_project_access(
         po = _get_po_or_404(db, po_id)
         check_project_access(db, current_user, po.project_id)
     """
-    if user.role == UserRole.OWNER:
+    if user.role in _PROJECT_ACCESS_BYPASS:
         return
 
     from app.models.access import UserProjectAccess
