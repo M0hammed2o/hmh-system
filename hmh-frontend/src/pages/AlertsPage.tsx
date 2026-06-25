@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useState, useCallback, useMemo } from "react";
-import { Link } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import {
   Bell, AlertTriangle, AlertCircle, CheckCircle2,
   MessageSquare, RefreshCw, FileText, X, MapPin, Building2,
@@ -70,18 +70,18 @@ function alertDestination(alert: Alert): string {
     case "SIGNATURE_MISSING":
     case "DELIVERY_MISMATCH":
     case "DELIVERY_NOTE_MISSING":
-      return "/deliveries";
+      return alert.reference_id ? `/deliveries?delivery=${alert.reference_id}` : "/deliveries";
     case "INVOICE_MISMATCH":
     case "INVOICE_UNMATCHED":
     case "INVOICE_MISSING_DELIVERY_NOTE":
     case "INVOICE_CAPTURED":
     case "DUPLICATE_INVOICE":
-      return "/reconciliation";
+      return alert.reference_id ? `/payments?invoice=${alert.reference_id}` : "/reconciliation";
     case "OVERDUE_PAYMENT":
     case "PAYMENT_DUE":
     case "PAYMENT_COMPLETED":
     case "PARTIAL_PAYMENT_RECORDED":
-      return "/payments";
+      return alert.reference_id ? `/payments?invoice=${alert.reference_id}` : "/payments";
     case "MATERIAL_OVERUSE":
     case "BOQ_VARIANCE_OVERUSE":
     case "BOQ_ALLOCATION_EXCEEDED":
@@ -104,15 +104,25 @@ function alertDestination(alert: Alert): string {
 
 // ── Alert card ────────────────────────────────────────────────────────────────
 
-function AlertCard({ alert }: { alert: Alert }) {
+function AlertCard({ alert, onAcknowledged }: { alert: Alert; onAcknowledged: (id: string) => void }) {
   const dest = alertDestination(alert);
+  const navigate = useNavigate();
   const typeLabel = alert.alert_type.replace(/_/g, " ");
 
+  const handleClick = () => {
+    if (alert.status === "OPEN") {
+      alertsApi.acknowledge(alert.id).catch(() => {});
+      onAcknowledged(alert.id);
+    }
+    navigate(dest);
+  };
+
   return (
-    <Link
-      to={dest}
+    <div
+      onClick={handleClick}
+      role="button"
       className={cn(
-        "block border rounded-xl p-4 space-y-1.5 transition-all hover:shadow-md hover:brightness-[0.97]",
+        "block border rounded-xl p-4 space-y-1.5 transition-all hover:shadow-md hover:brightness-[0.97] cursor-pointer",
         SEV_STYLE[alert.severity as AlertSeverity] ?? "border-border bg-card",
       )}
     >
@@ -152,7 +162,7 @@ function AlertCard({ alert }: { alert: Alert }) {
           {alert.status}
         </Badge>
       </div>
-    </Link>
+    </div>
   );
 }
 
@@ -411,7 +421,15 @@ export default function AlertsPage() {
                 </div>
               ) : (
                 filteredAlerts.map((a) => (
-                  <AlertCard key={a.id} alert={a} />
+                  <AlertCard
+                    key={a.id}
+                    alert={a}
+                    onAcknowledged={(id) =>
+                      setAlerts((prev) =>
+                        prev.map((x) => x.id === id ? { ...x, status: "ACKNOWLEDGED" } : x)
+                      )
+                    }
+                  />
                 ))
               )}
             </div>

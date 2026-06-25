@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { Plus, Truck, CheckCircle2, AlertCircle, Package, Trash2, RefreshCw, ExternalLink, FileText, PenLine, Link as LinkIcon, Download, Paperclip } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -332,6 +333,7 @@ function RecordDeliveryModal({
 
 // ─── Main Component ─────────────────────────────────────────────────────────────
 export default function DeliveriesPage() {
+  const [searchParams] = useSearchParams();
   const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState<string>("");
   const [deliveries, setDeliveries] = useState<Delivery[]>([]);
@@ -357,6 +359,12 @@ export default function DeliveriesPage() {
       .catch(() => {})
       .finally(() => setLoadingProjects(false));
   }, []);
+
+  useEffect(() => {
+    const deliveryId = searchParams.get("delivery");
+    if (!deliveryId) return;
+    deliveriesApi.get(deliveryId).then(setSelectedDelivery).catch(() => {});
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!selectedProjectId) return;

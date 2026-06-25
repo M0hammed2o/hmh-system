@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { WriteGuard } from "@/components/shared/WriteGuard";
 import { Plus, CreditCard, CheckCircle2, Clock, FileText, AlertTriangle, Hammer, Camera, ChevronDown, ChevronUp, Sparkles, Upload, ChevronRight } from "lucide-react";
 import { AttachmentStrip } from "@/components/shared/AttachmentStrip";
@@ -575,6 +576,7 @@ function CapturePaymentModal({
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function PaymentsPage() {
+  const [searchParams] = useSearchParams();
   const [tab, setTab] = useState("payments");
   const [projects, setProjects] = useState<Project[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
@@ -617,6 +619,12 @@ export default function PaymentsPage() {
     catch { /* silent */ }
     finally { setReconcLoading(false); }
   };
+
+  useEffect(() => {
+    const invoiceId = searchParams.get("invoice");
+    if (!invoiceId) return;
+    showReconciliation(invoiceId);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleApprovePayment = async (paymentId: string) => {
     try {
