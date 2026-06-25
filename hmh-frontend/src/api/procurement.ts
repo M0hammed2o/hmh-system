@@ -15,6 +15,16 @@ export interface MRApprovalVote {
   notes: string | null;
 }
 
+export interface QuoteVote {
+  id: string;
+  quote_id: string;
+  voted_by: string | null;
+  voted_by_name: string | null;
+  voted_at: string;
+  is_override: boolean;
+  notes: string | null;
+}
+
 export interface ProcurementActivityEntry {
   type:          "status" | "document";
   timestamp:     string;
@@ -416,6 +426,19 @@ export const procurementApi = {
       `/procurement/mrs/${mrId}/quotes/${quoteId}/approve`,
       { notes: notes ?? null },
     );
+    return res.data.data;
+  },
+
+  voteQuote: async (mrId: string, quoteId: string, notes?: string): Promise<{ quote_id: string; vote_count: number; status: string }> => {
+    const res = await client.post<{ data: { quote_id: string; vote_count: number; status: string } }>(
+      `/procurement/mrs/${mrId}/quotes/${quoteId}/vote`,
+      { notes: notes ?? null },
+    );
+    return res.data.data;
+  },
+
+  listQuoteVotes: async (mrId: string): Promise<QuoteVote[]> => {
+    const res = await client.get<{ data: QuoteVote[] }>(`/procurement/mrs/${mrId}/quote-votes`);
     return res.data.data;
   },
 

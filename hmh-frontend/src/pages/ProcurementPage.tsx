@@ -22,7 +22,7 @@ import {
   procurementApi,
   type MaterialRequest, type MRCreate, type MRItemCreate, type BOQSearchResult,
   type MRQuote, type PurchaseOrder, type MRPriority, type DeliveryDestination,
-  type MRPipeline, type MRApprovalVote,
+  type MRPipeline, type MRApprovalVote, type QuoteVote,
 } from "@/api/procurement";
 import { purchaseOrdersApi, type POLinkedDocs } from "@/api/purchaseOrders";
 import { warehouseApi, type WarehouseStockItem } from "@/api/warehouse";
@@ -1332,6 +1332,7 @@ function PipelinePanelModal({ mrId, suppliers, onClose, onUpdated }: {
   const [showRejectMR, setShowRejectMR] = useState(false);
   const [rejectMRReason, setRejectMRReason] = useState("");
   const [pipelineApprovals, setPipelineApprovals] = useState<MRApprovalVote[]>([]);
+  const [quoteVotes, setQuoteVotes] = useState<Record<string, QuoteVote[]>>({});
   const [rejectQuoteId, setRejectQuoteId] = useState<string | null>(null);
   const [rejectReason, setRejectReason] = useState("");
   const [showAddQuote, setShowAddQuote] = useState(false);
@@ -1342,12 +1343,19 @@ function PipelinePanelModal({ mrId, suppliers, onClose, onUpdated }: {
 
   const load = useCallback(async () => {
     try {
-      const [pl, ap] = await Promise.all([
+      const [pl, ap, qv] = await Promise.all([
         procurementApi.getPipeline(mrId),
         procurementApi.listMRApprovals(mrId).catch(() => [] as MRApprovalVote[]),
+        procurementApi.listQuoteVotes(mrId).catch(() => [] as QuoteVote[]),
       ]);
       setPipeline(pl);
       setPipelineApprovals(ap);
+      // Group quote votes by quote_id for O(1) lookup in Step 4
+      const grouped: Record<string, QuoteVote[]> = {};
+      for (const v of qv) {
+        (grouped[v.quote_id] ??= []).push(v);
+      }
+      setQuoteVotes(grouped);
     } catch { /* ignore 404 */ }
     finally { setFetching(false); }
   }, [mrId]);
@@ -1378,6 +1386,7 @@ function PipelinePanelModal({ mrId, suppliers, onClose, onUpdated }: {
   const pendingQuotes = (step4?.quotes ?? []).filter(q => q.status === "PENDING");
   const mrStatus = pipeline.mr_status;
   const canApproveMR = ["SUBMITTED", "PENDING_APPROVAL", "STAFF_APPROVED"].includes(mrStatus);
+  const canApproveQuote = ["APPROVED", "CONVERTED_TO_PO"].includes(mrStatus);
   const pipelineStaffVotes = pipelineApprovals.filter((a) => !a.is_override);
   const pipelineHasVoted = pipelineApprovals.some((a) => a.approved_by === pipelineUser?.id && !a.is_override);
   const pipelineCanVote = canApproveMR && !pipelineIsProcurementLead && !pipelineHasVoted;
@@ -1747,8 +1756,14 @@ function PipelinePanelModal({ mrId, suppliers, onClose, onUpdated }: {
                               )}
 
                               {/* Actions for PENDING quotes */}
-                              {q.status === "PENDING" && (
-                                rejectQuoteId === q.id ? (
+                              {q.status === "PENDING" && (() => {
+                                const votes = quoteVotes[q.id] ?? [];
+                                const staffVoteCount = votes.filter(v => !v.is_override).length;
+                                const hasVotedOnThis = votes.some(v => v.voted_by === pipelineUser?.id && !v.is_override);
+                                const canVoteOnThis = canApproveQuote && !pipelineIsProcurementLead && !hasVotedOnThis;
+                                const canOverrideThis = pipelineIsProcurementLead && canApproveQuote;
+                                const isVoteOverride = canOverrideThis && staffVoteCount < 3;
+                                return rejectQuoteId === q.id ? (
                                   <div className="space-y-2 pt-1">
                                     <Input value={rejectReason} onChange={e => setRejectReason(e.target.value)}
                                       placeholder="Reason for rejection *" className="h-7 text-xs" autoFocus />
@@ -1767,21 +1782,55 @@ function PipelinePanelModal({ mrId, suppliers, onClose, onUpdated }: {
                                   </div>
                                 ) : (
                                   <WriteGuard>
-                                    <div className="flex gap-2 pt-1">
-                                      <Button size="sm" className="h-7 text-xs flex-1 bg-green-600 hover:bg-green-700"
-                                        disabled={!!actionLoading}
-                                        onClick={() => act(() => procurementApi.approveQuote(mrId, q.id), `approve_${q.id}`)}>
-                                        {actionLoading === `approve_${q.id}` ? "Approving…" : "Approve Quote"}
-                                      </Button>
-                                      <Button size="sm" variant="outline" className="h-7 text-xs border-destructive/40 text-destructive hover:bg-destructive/10"
-                                        disabled={!!actionLoading}
-                                        onClick={() => setRejectQuoteId(q.id)}>
-                                        Reject
-                                      </Button>
+                                    <div className="space-y-2 pt-1">
+                                      {/* Vote progress bar */}
+                                      <div className="flex items-center gap-2">
+                                        <div className="flex-1 bg-muted rounded-full h-1.5">
+                                          <div className="bg-primary h-1.5 rounded-full transition-all" style={{ width: `${Math.min((staffVoteCount / 3) * 100, 100)}%` }} />
+                                        </div>
+                                        <span className="text-[10px] text-muted-foreground shrink-0">{staffVoteCount}/3 votes</span>
+                                      </div>
+                                      {/* Voter chips */}
+                                      {votes.length > 0 && (
+                                        <div className="flex flex-wrap gap-1">
+                                          {votes.map(v => (
+                                            <span key={v.id} className="text-[10px] bg-green-500/10 text-green-700 dark:text-green-300 rounded px-1.5 py-0.5 border border-green-500/20">
+                                              {v.voted_by_name || "Unknown"}{v.is_override ? " (override)" : " ✓"}
+                                            </span>
+                                          ))}
+                                        </div>
+                                      )}
+                                      {/* Action buttons */}
+                                      <div className="flex gap-2">
+                                        {canVoteOnThis && (
+                                          <Button size="sm" className="h-7 text-xs flex-1"
+                                            disabled={!!actionLoading}
+                                            onClick={() => act(() => procurementApi.voteQuote(mrId, q.id), `vote_${q.id}`)}>
+                                            {actionLoading === `vote_${q.id}` ? "Voting…" : "Vote to Approve"}
+                                          </Button>
+                                        )}
+                                        {!canVoteOnThis && !pipelineIsProcurementLead && hasVotedOnThis && (
+                                          <span className="flex items-center gap-1 text-[10px] text-green-600 py-1">
+                                            <CheckCircle2 className="w-3 h-3" /> Your vote recorded
+                                          </span>
+                                        )}
+                                        {canOverrideThis && (
+                                          <Button size="sm" className="h-7 text-xs flex-1 bg-green-600 hover:bg-green-700"
+                                            disabled={!!actionLoading}
+                                            onClick={() => act(() => procurementApi.approveQuote(mrId, q.id), `approve_${q.id}`)}>
+                                            {actionLoading === `approve_${q.id}` ? "Approving…" : isVoteOverride ? "Override & Approve" : "Final Approval"}
+                                          </Button>
+                                        )}
+                                        <Button size="sm" variant="outline" className="h-7 text-xs border-destructive/40 text-destructive hover:bg-destructive/10"
+                                          disabled={!!actionLoading}
+                                          onClick={() => setRejectQuoteId(q.id)}>
+                                          Reject
+                                        </Button>
+                                      </div>
                                     </div>
                                   </WriteGuard>
-                                )
-                              )}
+                                );
+                              })()}
                             </div>
                           );
                         })}

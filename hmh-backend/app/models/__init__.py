@@ -16,6 +16,7 @@ from app.models.item import ItemCategory, Item, ItemAlias
 from app.models.boq import BOQHeader, BOQSection, BOQItem
 from app.models.material_request import MaterialRequest, MaterialRequestItem, MRApproval
 from app.models.mr_quote import MRQuote
+from app.models.mr_quote_vote import MRQuoteVote
 from app.models.purchase_order import PurchaseOrder, PurchaseOrderItem, PoEmailLog
 from app.models.delivery import Delivery, DeliveryItem
 from app.models.stock import StockLedger, UsageLog
@@ -61,6 +62,7 @@ __all__ = [
     "MaterialRequestItem",
     "MRApproval",
     "MRQuote",
+    "MRQuoteVote",
     "PurchaseOrder",
     "PurchaseOrderItem",
     "PoEmailLog",

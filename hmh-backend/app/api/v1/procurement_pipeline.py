@@ -34,7 +34,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from app.dependencies import CurrentUser, DbSession, OFFICE_AND_ABOVE
+from app.dependencies import CurrentUser, DbSession, OFFICE_AND_ABOVE, PROCUREMENT_LEAD_ONLY
 from app.schemas.common import ApiSuccess
 
 router = APIRouter(prefix="/procurement", tags=["procurement-pipeline"])
@@ -44,6 +44,10 @@ logger = logging.getLogger(__name__)
 # ── Schemas ───────────────────────────────────────────────────────────────────
 
 class QuoteApproveBody(BaseModel):
+    notes: Optional[str] = None
+
+
+class QuoteVoteBody(BaseModel):
     notes: Optional[str] = None
 
 
@@ -338,7 +342,7 @@ def get_pipeline(mr_id: uuid.UUID, db: DbSession):
 @router.post(
     "/mrs/{mr_id}/quotes/{quote_id}/approve",
     response_model=ApiSuccess[dict],
-    dependencies=[OFFICE_AND_ABOVE],
+    dependencies=[PROCUREMENT_LEAD_ONLY],
 )
 def approve_quote(
     mr_id: uuid.UUID,
@@ -348,14 +352,14 @@ def approve_quote(
     current_user: CurrentUser,
 ):
     """
-    Mark a supplier quote as APPROVED.
+    PROCUREMENT_LEAD / OWNER override — approve a quote regardless of vote count.
 
-    Does NOT create a PO or send an email. Once all desired quotes are
-    approved, call POST /finalize-pos to batch them into one PO per supplier
-    and send one email per supplier.
+    Records an override entry in mr_quote_votes (is_override=True).
+    For staff voting use POST /quotes/{quote_id}/vote instead.
     """
     from app.models.material_request import MaterialRequest
     from app.models.mr_quote import MRQuote
+    from app.models.mr_quote_vote import MRQuoteVote
 
     mr = db.get(MaterialRequest, mr_id)
     if not mr:
@@ -376,11 +380,147 @@ def approve_quote(
     quote.is_selected = True
     quote.approved_at = now
 
+    # Record override vote (avoid duplicate if called twice)
+    existing = db.query(MRQuoteVote).filter(
+        MRQuoteVote.quote_id == quote_id,
+        MRQuoteVote.voted_by == current_user.id,
+    ).first()
+    if not existing:
+        db.add(MRQuoteVote(
+            quote_id=quote_id,
+            voted_by=current_user.id,
+            voted_at=now,
+            is_override=True,
+            notes=body.notes,
+        ))
+
     db.commit()
 
     return ApiSuccess(
         data={"quote_id": str(quote.id), "status": "APPROVED"},
-        message="Quote approved. Click 'Send PO to Suppliers' when ready to create POs.",
+        message="Quote approved (override). Click 'Send PO to Suppliers' when ready to create POs.",
+    )
+
+
+# ── GET quote votes for all quotes on an MR ───────────────────────────────────
+
+@router.get(
+    "/mrs/{mr_id}/quote-votes",
+    response_model=ApiSuccess[list[dict]],
+    dependencies=[OFFICE_AND_ABOVE],
+)
+def list_quote_votes(mr_id: uuid.UUID, db: DbSession):
+    """Return all quote votes for every quote on this MR, enriched with voter name."""
+    from app.models.mr_quote import MRQuote
+    from app.models.mr_quote_vote import MRQuoteVote
+    from app.models.user import User
+
+    quote_ids = [q.id for q in db.query(MRQuote.id).filter(MRQuote.material_request_id == mr_id).all()]
+    if not quote_ids:
+        return ApiSuccess(data=[])
+
+    votes = (
+        db.query(MRQuoteVote)
+        .filter(MRQuoteVote.quote_id.in_(quote_ids))
+        .order_by(MRQuoteVote.voted_at.asc())
+        .all()
+    )
+    voter_ids = {v.voted_by for v in votes if v.voted_by}
+    name_map: dict = {}
+    if voter_ids:
+        users = db.query(User.id, User.full_name).filter(User.id.in_(voter_ids)).all()
+        name_map = {str(u.id): u.full_name for u in users}
+
+    return ApiSuccess(data=[{
+        "id":            str(v.id),
+        "quote_id":      str(v.quote_id),
+        "voted_by":      str(v.voted_by) if v.voted_by else None,
+        "voted_by_name": name_map.get(str(v.voted_by)) if v.voted_by else None,
+        "voted_at":      v.voted_at.isoformat(),
+        "is_override":   v.is_override,
+        "notes":         v.notes,
+    } for v in votes])
+
+
+# ── POST staff vote on a quote ────────────────────────────────────────────────
+
+QUOTE_VOTES_REQUIRED = 3
+
+
+@router.post(
+    "/mrs/{mr_id}/quotes/{quote_id}/vote",
+    response_model=ApiSuccess[dict],
+    dependencies=[OFFICE_AND_ABOVE],
+)
+def vote_quote(
+    mr_id: uuid.UUID,
+    quote_id: uuid.UUID,
+    body: QuoteVoteBody,
+    db: DbSession,
+    current_user: CurrentUser,
+):
+    """Cast a staff approval vote on a quote.
+
+    Any OFFICE_AND_ABOVE user (except PROCUREMENT_LEAD) may vote.
+    Three votes auto-approve the quote. PROCUREMENT_LEAD must use /approve.
+    """
+    from app.models.enums import UserRole
+    if current_user.role == UserRole.PROCUREMENT_LEAD:
+        raise HTTPException(status_code=403, detail="PROCUREMENT_LEAD must use /approve instead.")
+
+    from app.models.material_request import MaterialRequest
+    from app.models.mr_quote import MRQuote
+    from app.models.mr_quote_vote import MRQuoteVote
+
+    mr = db.get(MaterialRequest, mr_id)
+    if not mr:
+        raise HTTPException(404, "Material request not found.")
+
+    mr_status = mr.status.value if hasattr(mr.status, "value") else str(mr.status)
+    if mr_status not in ("APPROVED", "CONVERTED_TO_PO"):
+        raise HTTPException(422, f"MR must be APPROVED before a quote can be voted on. Current status: {mr_status}")
+
+    quote = db.get(MRQuote, quote_id)
+    if not quote or quote.material_request_id != mr_id:
+        raise HTTPException(404, "Quote not found for this MR.")
+    if quote.status != "PENDING":
+        raise HTTPException(409, f"Quote is already {quote.status}.")
+
+    existing = db.query(MRQuoteVote).filter(
+        MRQuoteVote.quote_id == quote_id,
+        MRQuoteVote.voted_by == current_user.id,
+    ).first()
+    if existing:
+        raise HTTPException(409, "You have already voted on this quote.")
+
+    now = datetime.now(timezone.utc)
+    db.add(MRQuoteVote(
+        quote_id=quote_id,
+        voted_by=current_user.id,
+        voted_at=now,
+        is_override=False,
+        notes=body.notes,
+    ))
+    db.flush()
+
+    staff_votes = db.query(MRQuoteVote).filter(
+        MRQuoteVote.quote_id == quote_id,
+        MRQuoteVote.is_override.is_(False),
+    ).count()
+
+    if staff_votes >= QUOTE_VOTES_REQUIRED:
+        quote.status      = "APPROVED"
+        quote.is_selected = True
+        quote.approved_at = now
+
+    db.commit()
+
+    return ApiSuccess(
+        data={"quote_id": str(quote_id), "vote_count": staff_votes, "status": quote.status},
+        message=(
+            f"Vote recorded ({staff_votes}/3)."
+            + (" Quote approved!" if quote.status == "APPROVED" else "")
+        ),
     )
 
 
