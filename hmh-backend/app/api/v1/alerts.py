@@ -35,8 +35,104 @@ def list_alerts(
     alert_type: Optional[str] = Query(None),
     limit: int = Query(100, le=500),
 ):
+    from app.models.project import Project
+    from app.models.site import Site
+
     alerts = alert_service.list_alerts(db, project_id, status, limit, alert_type)
-    return ApiSuccess(data=[AlertRead.model_validate(a) for a in alerts])
+
+    # Batch-enrich with project/site names (avoids N+1 queries)
+    pids = {a.project_id for a in alerts if a.project_id}
+    sids = {a.site_id for a in alerts if a.site_id}
+    pmap = {p.id: p.name for p in db.query(Project).filter(Project.id.in_(pids)).all()} if pids else {}
+    smap = {s.id: s.name for s in db.query(Site).filter(Site.id.in_(sids)).all()} if sids else {}
+
+    result = []
+    for a in alerts:
+        read = AlertRead.model_validate(a)
+        read.project_name = pmap.get(a.project_id)
+        read.site_name = smap.get(a.site_id)
+        result.append(read)
+
+    return ApiSuccess(data=result)
+
+
+@router.get("/{alert_id}/context", response_model=ApiSuccess[dict], dependencies=[ALL_ROLES])
+def get_alert_context(alert_id: uuid.UUID, db: DbSession):
+    """Returns the alert plus enriched context fetched from the referenced record."""
+    from fastapi import HTTPException
+    from app.models.alert import SystemAlert
+    from app.models.project import Project
+    from app.models.site import Site
+
+    alert = db.get(SystemAlert, alert_id)
+    if not alert:
+        raise HTTPException(status_code=404, detail="Alert not found.")
+
+    base = AlertRead.model_validate(alert).model_dump()
+
+    # Enrich with project/site names
+    if alert.project_id:
+        p = db.get(Project, alert.project_id)
+        base["project_name"] = p.name if p else None
+    if alert.site_id:
+        s = db.get(Site, alert.site_id)
+        base["site_name"] = s.name if s else None
+
+    # Fetch referenced record details
+    context: dict = {}
+    try:
+        if alert.reference_type == "material_request" and alert.reference_id:
+            from app.models.material_request import MaterialRequest, MaterialRequestItem
+            mr = db.get(MaterialRequest, alert.reference_id)
+            if mr:
+                items = (
+                    db.query(MaterialRequestItem)
+                    .filter(MaterialRequestItem.material_request_id == mr.id)
+                    .all()
+                )
+                context = {
+                    "request_number": mr.request_number,
+                    "status": mr.status.value if mr.status else None,
+                    "items": [
+                        {
+                            "name": item.description or str(item.id)[:8],
+                            "quantity": float(item.requested_quantity or 0),
+                            "unit": item.unit or "",
+                        }
+                        for item in items
+                    ],
+                }
+
+        elif alert.reference_type == "invoice" and alert.reference_id:
+            from app.models.invoice import Invoice
+            from app.models.supplier import Supplier
+            inv = db.get(Invoice, alert.reference_id)
+            if inv:
+                sup = db.get(Supplier, inv.supplier_id) if inv.supplier_id else None
+                context = {
+                    "invoice_number": inv.invoice_number,
+                    "amount": float(inv.total_amount or 0),
+                    "due_date": inv.due_date.isoformat() if inv.due_date else None,
+                    "status": inv.status.value if inv.status else None,
+                    "supplier_name": sup.name if sup else None,
+                }
+
+        elif alert.reference_type == "delivery" and alert.reference_id:
+            from app.models.delivery import Delivery
+            d = db.get(Delivery, alert.reference_id)
+            if d:
+                context = {
+                    "delivery_number": d.delivery_number or str(d.id)[:8],
+                    "status": d.delivery_status.value if d.delivery_status else None,
+                    "delivery_date": d.delivery_date.isoformat() if d.delivery_date else None,
+                    "has_signature": d.signature_image_url is not None,
+                    "has_po": d.purchase_order_id is not None,
+                }
+    except Exception:
+        pass  # context is best-effort — never crash the alert endpoint
+
+    base["context"] = context
+    return ApiSuccess(data=base)
 
 
 @router.patch("/{alert_id}", response_model=ApiSuccess[AlertRead], dependencies=[ALL_ROLES])

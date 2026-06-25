@@ -2,14 +2,14 @@ import { lazy, Suspense, useEffect, useState, useCallback, useMemo } from "react
 import { Link } from "react-router-dom";
 import {
   Bell, AlertTriangle, AlertCircle, CheckCircle2,
-  MessageSquare, RefreshCw, FileText, X, ExternalLink,
+  MessageSquare, RefreshCw, FileText, X, ExternalLink, MapPin, Building2,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   alertsApi,
-  type Alert, type AlertSeverity, type AlertStats, type QueueStats,
+  type Alert, type AlertSeverity, type AlertStats, type QueueStats, type AlertRecordContext,
 } from "@/api/alerts";
 import { cn } from "@/lib/utils";
 
@@ -58,7 +58,7 @@ function StatBox({ label, value, warn, icon: Icon }: { label: string; value: num
   );
 }
 
-// ── Alert deep-link helper ────────────────────────────────────────────────────
+// ── Alert navigation helpers ──────────────────────────────────────────────────
 
 function alertDestination(alert: Alert): string {
   switch (alert.alert_type) {
@@ -102,40 +102,293 @@ function alertDestination(alert: Alert): string {
   }
 }
 
+function destLabel(alert: Alert): string {
+  switch (alert.alert_type) {
+    case "REQUEST_PENDING_TOO_LONG":  return "Procurement";
+    case "DELIVERY_WITHOUT_PO":
+    case "DELIVERY_DISCREPANCY":
+    case "DELIVERY_SIGNATURE_MISSING":
+    case "SIGNATURE_MISSING":
+    case "DELIVERY_MISMATCH":
+    case "DELIVERY_NOTE_MISSING":     return "Deliveries";
+    case "INVOICE_MISMATCH":
+    case "INVOICE_UNMATCHED":
+    case "INVOICE_MISSING_DELIVERY_NOTE":
+    case "INVOICE_CAPTURED":
+    case "DUPLICATE_INVOICE":         return "Reconciliation";
+    case "OVERDUE_PAYMENT":
+    case "PAYMENT_DUE":
+    case "PAYMENT_COMPLETED":
+    case "PARTIAL_PAYMENT_RECORDED":  return "Payments";
+    case "MATERIAL_OVERUSE":
+    case "BOQ_VARIANCE_OVERUSE":
+    case "BOQ_ALLOCATION_EXCEEDED":
+    case "NEGATIVE_STOCK":
+    case "LOW_STOCK":
+    case "MISSING_REMAINING_STOCK_PHOTO":
+    case "WAREHOUSE_TRANSFER_COMPLETED": return "Warehouse";
+    case "MILESTONE_COMPLETED_ALERT":
+    case "LOT_DELAYED":
+    case "STAGE_DELAYED":
+    case "SITE_DELAY":                return "Milestones";
+    case "OCR_EXTRACTION_FAILED":     return "Gmail Inbox";
+    default:                          return "View";
+  }
+}
+
+// ── Alert detail modal ────────────────────────────────────────────────────────
+
+function AlertDetailModal({ alert, onClose }: { alert: Alert; onClose: () => void }) {
+  const [ctx, setCtx] = useState<AlertRecordContext | null>(null);
+  const [loading, setLoading] = useState(true);
+  const dest  = alertDestination(alert);
+  const label = destLabel(alert);
+
+  useEffect(() => {
+    alertsApi.getContext(alert.id)
+      .then(setCtx)
+      .catch(() => setCtx({}))
+      .finally(() => setLoading(false));
+  }, [alert.id]);
+
+  const fmtDate = (iso: string) =>
+    new Date(iso).toLocaleDateString("en-ZA", { day: "numeric", month: "short", year: "numeric" });
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-foreground/40"
+      onClick={onClose}
+    >
+      <div
+        className="bg-card border border-border rounded-2xl w-full max-w-lg shadow-xl max-h-[90vh] flex flex-col"
+        onClick={e => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-start justify-between px-5 pt-5 pb-3 shrink-0">
+          <div className="flex-1 min-w-0">
+            <div className="flex flex-wrap items-center gap-2 mb-1.5">
+              <Badge variant={SEV_BADGE[alert.severity as AlertSeverity] ?? "outline"} className="text-xs">
+                {alert.severity}
+              </Badge>
+              <span className="text-xs text-muted-foreground font-mono">
+                {alert.alert_type.replace(/_/g, " ")}
+              </span>
+              <span className="text-xs text-muted-foreground ml-auto shrink-0">{timeAgo(alert.created_at)}</span>
+            </div>
+            <h3 className="text-base font-semibold leading-snug">{alert.title}</h3>
+          </div>
+          <button
+            onClick={onClose}
+            className="shrink-0 ml-3 mt-0.5 text-muted-foreground hover:text-foreground text-lg leading-none"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        {/* Scrollable body */}
+        <div className="overflow-y-auto flex-1 px-5 pb-3 space-y-4">
+          {/* Project / Site chips */}
+          {(alert.project_name || alert.site_name) && (
+            <div className="flex gap-2 flex-wrap">
+              {alert.project_name && (
+                <span className="inline-flex items-center gap-1 text-xs px-2.5 py-1 bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300 rounded-full border border-blue-200 dark:border-blue-800">
+                  <Building2 className="w-3 h-3" />
+                  {alert.project_name}
+                </span>
+              )}
+              {alert.site_name && (
+                <span className="inline-flex items-center gap-1 text-xs px-2.5 py-1 bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-300 rounded-full border border-emerald-200 dark:border-emerald-800">
+                  <MapPin className="w-3 h-3" />
+                  {alert.site_name}
+                </span>
+              )}
+            </div>
+          )}
+
+          {/* Alert message */}
+          <p className="text-sm text-muted-foreground">{alert.message}</p>
+
+          {/* Referenced record context */}
+          {loading ? (
+            <Skeleton className="h-28 rounded-xl" />
+          ) : ctx && Object.keys(ctx).length > 0 ? (
+            <div className="bg-muted/40 rounded-xl p-4 space-y-3 border border-border/50">
+              {/* MR items */}
+              {ctx.items && ctx.items.length > 0 && (
+                <div>
+                  <p className="text-xs font-semibold text-foreground mb-2">
+                    Materials Requested — {ctx.items.length} item{ctx.items.length !== 1 ? "s" : ""}
+                    {ctx.request_number && (
+                      <span className="ml-2 font-mono font-normal text-muted-foreground">({ctx.request_number})</span>
+                    )}
+                  </p>
+                  <div className="space-y-1 max-h-52 overflow-y-auto pr-1">
+                    {ctx.items.map((item, i) => (
+                      <div key={i} className="flex items-center justify-between text-xs bg-background rounded-lg px-3 py-2 border border-border/40">
+                        <span className="font-medium truncate">{item.name}</span>
+                        <span className="text-muted-foreground ml-3 shrink-0 font-mono">
+                          {item.quantity} {item.unit}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                  {ctx.status && (
+                    <p className="text-xs text-muted-foreground mt-2">
+                      Status: <span className="font-medium text-foreground">{ctx.status.replace(/_/g, " ")}</span>
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {/* Invoice / payment details */}
+              {ctx.invoice_number && (
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <p className="text-xs text-muted-foreground">Invoice</p>
+                    <p className="text-sm font-semibold">{ctx.invoice_number}</p>
+                  </div>
+                  {ctx.amount !== undefined && (
+                    <div>
+                      <p className="text-xs text-muted-foreground">Amount</p>
+                      <p className="text-sm font-semibold">
+                        R {ctx.amount.toLocaleString("en-ZA", { minimumFractionDigits: 2 })}
+                      </p>
+                    </div>
+                  )}
+                  {ctx.due_date && (
+                    <div>
+                      <p className="text-xs text-muted-foreground">Due Date</p>
+                      <p className="text-sm font-medium">{fmtDate(ctx.due_date)}</p>
+                    </div>
+                  )}
+                  {ctx.supplier_name && (
+                    <div>
+                      <p className="text-xs text-muted-foreground">Supplier</p>
+                      <p className="text-sm font-medium">{ctx.supplier_name}</p>
+                    </div>
+                  )}
+                  {ctx.status && (
+                    <div>
+                      <p className="text-xs text-muted-foreground">Status</p>
+                      <p className="text-sm font-medium">{ctx.status.replace(/_/g, " ")}</p>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Delivery details */}
+              {ctx.delivery_number && (
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <p className="text-xs text-muted-foreground">Delivery</p>
+                    <p className="text-sm font-semibold">{ctx.delivery_number}</p>
+                  </div>
+                  {ctx.delivery_date && (
+                    <div>
+                      <p className="text-xs text-muted-foreground">Date</p>
+                      <p className="text-sm font-medium">{fmtDate(ctx.delivery_date)}</p>
+                    </div>
+                  )}
+                  <div>
+                    <p className="text-xs text-muted-foreground">Signature</p>
+                    <p className="text-sm font-medium">{ctx.has_signature ? "✓ Signed" : "✗ Missing"}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted-foreground">PO Linked</p>
+                    <p className="text-sm font-medium">{ctx.has_po ? "✓ Yes" : "✗ No"}</p>
+                  </div>
+                  {ctx.status && (
+                    <div>
+                      <p className="text-xs text-muted-foreground">Status</p>
+                      <p className="text-sm font-medium">{ctx.status.replace(/_/g, " ")}</p>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          ) : null}
+        </div>
+
+        {/* Footer */}
+        <div className="px-5 pb-5 pt-3 border-t border-border shrink-0 flex items-center justify-between gap-2">
+          <Link
+            to={dest}
+            onClick={onClose}
+            className="flex items-center gap-1.5 text-xs px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors"
+          >
+            <ExternalLink className="w-3.5 h-3.5" />
+            Go to {label}
+          </Link>
+          <button
+            onClick={onClose}
+            className="flex items-center gap-1.5 text-xs px-4 py-2 border border-border rounded-lg hover:bg-muted transition-colors"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Alert card ────────────────────────────────────────────────────────────────
 
 function AlertCard({ alert }: { alert: Alert }) {
-  const [expanded, setExpanded] = useState(false);
-  const dest = alertDestination(alert);
+  const [showDetail, setShowDetail] = useState(false);
   const typeLabel = alert.alert_type.replace(/_/g, " ");
 
   return (
-    <div className={cn("border rounded-xl p-4 space-y-2 transition-all", SEV_STYLE[alert.severity as AlertSeverity] || "border-border bg-card")}>
-      <div className="flex items-start gap-3">
-        <div className="flex-1 min-w-0">
-          <div className="flex flex-wrap items-center gap-2 mb-1">
-            <Badge variant={SEV_BADGE[alert.severity as AlertSeverity] || "outline"} className="text-xs">
-              {alert.severity}
-            </Badge>
-            <span className="text-xs text-muted-foreground font-mono">{typeLabel}</span>
-            <span className="text-xs text-muted-foreground ml-auto shrink-0">{timeAgo(alert.created_at)}</span>
+    <>
+      <div
+        className={cn(
+          "border rounded-xl p-4 space-y-1.5 transition-all cursor-pointer hover:shadow-md hover:brightness-[0.97]",
+          SEV_STYLE[alert.severity as AlertSeverity] ?? "border-border bg-card",
+        )}
+        onClick={() => setShowDetail(true)}
+      >
+        <div className="flex items-start gap-3">
+          <div className="flex-1 min-w-0">
+            <div className="flex flex-wrap items-center gap-2 mb-1">
+              <Badge variant={SEV_BADGE[alert.severity as AlertSeverity] ?? "outline"} className="text-xs">
+                {alert.severity}
+              </Badge>
+              <span className="text-xs text-muted-foreground font-mono">{typeLabel}</span>
+              <span className="text-xs text-muted-foreground ml-auto shrink-0">{timeAgo(alert.created_at)}</span>
+            </div>
+            <p className="font-semibold text-sm leading-snug">{alert.title}</p>
+
+            {/* Project / site chips */}
+            {(alert.project_name || alert.site_name) && (
+              <div className="flex gap-1.5 mt-1 flex-wrap">
+                {alert.project_name && (
+                  <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300 rounded border border-blue-200/60 dark:border-blue-800/60">
+                    <Building2 className="w-2.5 h-2.5" />{alert.project_name}
+                  </span>
+                )}
+                {alert.site_name && (
+                  <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-300 rounded border border-emerald-200/60 dark:border-emerald-800/60">
+                    <MapPin className="w-2.5 h-2.5" />{alert.site_name}
+                  </span>
+                )}
+              </div>
+            )}
+
+            <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{alert.message}</p>
           </div>
-          <p className="font-semibold text-sm leading-snug">{alert.title}</p>
-          <p className={cn("text-xs text-muted-foreground mt-0.5", !expanded && "line-clamp-2")}>{alert.message}</p>
-          {alert.message.length > 100 && (
-            <button onClick={() => setExpanded(!expanded)} className="text-xs text-primary mt-0.5">
-              {expanded ? "Show less" : "Show more"}
-            </button>
-          )}
+          <Badge
+            variant={alert.status === "OPEN" ? "destructive" : alert.status === "ACKNOWLEDGED" ? "secondary" : "outline"}
+            className="text-xs shrink-0"
+          >
+            {alert.status}
+          </Badge>
         </div>
-        <Badge variant={alert.status === "OPEN" ? "destructive" : alert.status === "ACKNOWLEDGED" ? "secondary" : "outline"} className="text-xs shrink-0">
-          {alert.status}
-        </Badge>
+        <p className="text-xs text-primary/70">Click to view details →</p>
       </div>
-      <Link to={dest} className="inline-flex items-center gap-1 text-xs text-primary hover:underline pt-1">
-        <ExternalLink className="w-3 h-3" />View details
-      </Link>
-    </div>
+
+      {showDetail && (
+        <AlertDetailModal alert={alert} onClose={() => setShowDetail(false)} />
+      )}
+    </>
   );
 }
 

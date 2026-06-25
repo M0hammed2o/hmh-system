@@ -33,6 +33,9 @@ class AlertRead(BaseModel):
     created_at: datetime
     resolved_at: Optional[datetime] = None
     resolved_by: Optional[uuid.UUID] = None
+    # Enriched at API layer — not ORM columns
+    project_name: Optional[str] = None
+    site_name: Optional[str] = None
 
 
 class AlertUpdate(BaseModel):

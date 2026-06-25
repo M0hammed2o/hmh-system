@@ -27,6 +27,26 @@ export interface Alert {
   created_at: string;
   resolved_at: string | null;
   resolved_by: string | null;
+  // Enriched at API layer
+  project_name?: string | null;
+  site_name?: string | null;
+}
+
+export interface AlertRecordContext {
+  // Material request fields
+  request_number?: string;
+  status?: string;
+  items?: Array<{ name: string; quantity: number; unit: string }>;
+  // Invoice / payment fields
+  invoice_number?: string;
+  amount?: number;
+  due_date?: string | null;
+  supplier_name?: string | null;
+  // Delivery fields
+  delivery_number?: string;
+  has_signature?: boolean;
+  has_po?: boolean;
+  delivery_date?: string | null;
 }
 
 export interface AlertStats {
@@ -142,6 +162,11 @@ export const alertsApi = {
   resolve: async (alertId: string): Promise<Alert> => {
     const res = await client.post<{ data: Alert }>(`/alerts/${alertId}/resolve`);
     return res.data.data;
+  },
+
+  getContext: async (alertId: string): Promise<AlertRecordContext> => {
+    const res = await client.get<{ data: { context: AlertRecordContext } }>(`/alerts/${alertId}/context`);
+    return res.data.data.context ?? {};
   },
 
   generateDailySummary: async (): Promise<{ summary_text: string; queued: number; send_counts: Record<string, number> }> => {
