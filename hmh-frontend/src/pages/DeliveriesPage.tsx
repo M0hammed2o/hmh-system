@@ -10,6 +10,7 @@ import { StatCard } from "@/components/shared/StatCard";
 import { projectsApi, type Project } from "@/api/projects";
 import { sitesApi, type Site } from "@/api/sites";
 import { deliveriesApi, type Delivery, type DeliveryItemCreate } from "@/api/deliveries";
+import { attachmentsApi } from "@/api/attachments";
 import { suppliersApi, type Supplier } from "@/api/suppliers";
 import { purchaseOrdersApi, type PurchaseOrder } from "@/api/purchaseOrders";
 import { AttachmentGallery, type GalleryCategory } from "@/components/shared/AttachmentGallery";
@@ -75,6 +76,7 @@ function RecordDeliveryModal({
     delivery_date: string;
     comments: string;
     items: DraftItem[];
+    deliveryNoteFile?: File | null;
   }) => Promise<void>;
 }) {
   const [projectId, setProjectId] = useState(projects[0]?.id ?? "");
@@ -88,6 +90,7 @@ function RecordDeliveryModal({
   const [deliveryDate, setDeliveryDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [comments, setComments] = useState("");
   const [items, setItems] = useState<DraftItem[]>([emptyItem()]);
+  const [deliveryNoteFile, setDeliveryNoteFile] = useState<File | null>(null);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -132,9 +135,11 @@ function RecordDeliveryModal({
         delivery_date: deliveryDate,
         comments,
         items: validItems,
+        deliveryNoteFile,
       });
       setDeliveryNumber(""); setSupplierDN(""); setComments(""); setPoId("");
       setItems([emptyItem()]);
+      setDeliveryNoteFile(null);
       onClose();
     } finally {
       setSaving(false);
@@ -230,6 +235,32 @@ function RecordDeliveryModal({
               onChange={(e) => setComments(e.target.value)}
               className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm"
             />
+          </div>
+          <div className="col-span-2">
+            <label className="text-xs text-muted-foreground block mb-1">
+              Delivery Note Document (optional)
+            </label>
+            <div className="flex items-center gap-2">
+              <label className="flex items-center gap-2 cursor-pointer flex-1 h-9 rounded-md border border-dashed border-input bg-background px-3 text-sm text-muted-foreground hover:border-primary/50 hover:text-foreground transition-colors">
+                <FileText className="w-4 h-4 shrink-0" />
+                <span className="truncate">{deliveryNoteFile ? deliveryNoteFile.name : "Choose file…"}</span>
+                <input
+                  type="file"
+                  accept="image/*,.pdf"
+                  className="hidden"
+                  onChange={(e) => setDeliveryNoteFile(e.target.files?.[0] ?? null)}
+                />
+              </label>
+              {deliveryNoteFile && (
+                <button
+                  type="button"
+                  onClick={() => setDeliveryNoteFile(null)}
+                  className="text-xs text-muted-foreground hover:text-destructive shrink-0"
+                >
+                  Remove
+                </button>
+              )}
+            </div>
           </div>
         </div>
 
@@ -428,6 +459,7 @@ export default function DeliveriesPage() {
       delivery_date: string;
       comments: string;
       items: { description: string; quantity_received: string; quantity_expected: string; unit: string }[];
+      deliveryNoteFile?: File | null;
     }
   ) => {
     const deliveryItems: DeliveryItemCreate[] = data.items
@@ -449,6 +481,11 @@ export default function DeliveriesPage() {
       comments: data.comments || null,
       items: deliveryItems,
     });
+
+    if (data.deliveryNoteFile) {
+      await attachmentsApi.upload(data.deliveryNoteFile, "DELIVERY", created.id, "DELIVERY_NOTE").catch(() => {});
+    }
+
     if (projectId === selectedProjectId) {
       setDeliveries((prev) => [created, ...prev]);
     }
