@@ -63,7 +63,7 @@ function StatBox({ label, value, warn, icon: Icon }: { label: string; value: num
 function alertDestination(alert: Alert): string {
   switch (alert.alert_type) {
     case "REQUEST_PENDING_TOO_LONG":
-      return "/procurement";
+      return alert.reference_id ? `/procurement?mr=${alert.reference_id}` : "/procurement";
     case "DELIVERY_WITHOUT_PO":
     case "DELIVERY_DISCREPANCY":
     case "DELIVERY_SIGNATURE_MISSING":

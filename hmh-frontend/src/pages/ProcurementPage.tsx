@@ -2,6 +2,7 @@
  * Procurement Page — MR → Approve → PO → Email workflow.
  */
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
+import { useSearchParams } from "react-router-dom";
 import { WriteGuard } from "@/components/shared/WriteGuard";
 import {
   Plus, Check, X, ChevronRight, AlertTriangle, Mail,
@@ -2486,6 +2487,13 @@ export default function ProcurementPage() {
   const [showCaptureExternal, setShowCaptureExternal] = useState(false);
   const [selectedPipelineMRId, setSelectedPipelineMRId] = useState<string | null>(null);
   const [selectedPO, setSelectedPO] = useState<PurchaseOrder | null>(null);
+
+  // Auto-open a specific MR when navigated from an alert (?mr=<id>)
+  const [searchParams] = useSearchParams();
+  useEffect(() => {
+    const mrId = searchParams.get("mr");
+    if (mrId) setSelectedPipelineMRId(mrId);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const [mrFilter] = useState("ALL");
   const [showHistory, setShowHistory] = useState(false);
 
