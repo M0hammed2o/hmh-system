@@ -12,6 +12,7 @@
 
 import { useEffect, useCallback, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { useAuthContext } from "@/context/AuthContext";
 import {
   FileSpreadsheet, TrendingUp, Building2, Package, Users,
   Wrench, ChevronRight, RefreshCw, AlertTriangle, CheckCircle2,
@@ -156,9 +157,10 @@ function ErrorBox({ message }: { message: string }) {
   );
 }
 
-function TypeCards({ material, labour, plant, service }: {
-  material: number; labour: number; plant: number; service: number;
+function TypeCards({ material, labour, plant, service, canSeeTotals }: {
+  material: number; labour: number; plant: number; service: number; canSeeTotals: boolean;
 }) {
+  if (!canSeeTotals) return null;
   return (
     <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
       <div className="bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 rounded-xl p-3">
@@ -194,7 +196,7 @@ function VariancePill({ pct, amount }: { pct: number; amount: number }) {
 
 // ── Site BOQ table ────────────────────────────────────────────────────────────
 
-function SiteBOQTable({ summary }: { summary: SiteBOQSummary }) {
+function SiteBOQTable({ summary, canSeeTotals }: { summary: SiteBOQSummary; canSeeTotals: boolean }) {
   const grandTotal = summary.sections.reduce((s, sec) => s + sec.section_total, 0);
   if (summary.sections.length === 0) {
     return (
@@ -223,7 +225,7 @@ function SiteBOQTable({ summary }: { summary: SiteBOQSummary }) {
         <div key={sec.section_id} className="bg-card border border-border rounded-xl overflow-hidden">
           <div className="px-4 py-3 bg-muted/50 border-b border-border flex items-center justify-between">
             <p className="text-sm font-semibold">{sec.section_name}</p>
-            <p className="text-sm font-semibold text-primary">{fmt(sec.section_total)}</p>
+            {canSeeTotals && <p className="text-sm font-semibold text-primary">{fmt(sec.section_total)}</p>}
           </div>
           <table className="w-full text-sm">
             <thead>
@@ -268,22 +270,26 @@ function SiteBOQTable({ summary }: { summary: SiteBOQSummary }) {
                 );
               })}
             </tbody>
-            <tfoot>
-              <tr className="bg-muted/30 border-t border-border">
-                <td colSpan={4} className="px-4 py-2 text-xs font-semibold text-muted-foreground text-right">Section Total</td>
-                <td className="px-4 py-2 text-right font-semibold tabular-nums">{fmt(sec.section_total)}</td>
-                <td colSpan={4} />
-              </tr>
-            </tfoot>
+            {canSeeTotals && (
+              <tfoot>
+                <tr className="bg-muted/30 border-t border-border">
+                  <td colSpan={4} className="px-4 py-2 text-xs font-semibold text-muted-foreground text-right">Section Total</td>
+                  <td className="px-4 py-2 text-right font-semibold tabular-nums">{fmt(sec.section_total)}</td>
+                  <td colSpan={4} />
+                </tr>
+              </tfoot>
+            )}
           </table>
         </div>
       ))}
-      <div className="flex justify-end">
-        <div className="bg-card border border-border rounded-xl px-5 py-3 flex items-center gap-6">
-          <span className="text-sm font-medium text-muted-foreground">Site Unit Total</span>
-          <span className="text-lg font-bold text-primary">{fmt(grandTotal)}</span>
+      {canSeeTotals && (
+        <div className="flex justify-end">
+          <div className="bg-card border border-border rounded-xl px-5 py-3 flex items-center gap-6">
+            <span className="text-sm font-medium text-muted-foreground">Site Unit Total</span>
+            <span className="text-lg font-bold text-primary">{fmt(grandTotal)}</span>
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }
@@ -294,6 +300,8 @@ type ViewMode = "master" | "site" | "lot" | "templates";
 
 export default function BOQPage() {
   const navigate = useNavigate();
+  const { role } = useAuthContext();
+  const canSeeTotals = role === "OWNER" || role === "PROCUREMENT_LEAD";
 
   const [selectedProjectId, setSelectedProjectId] = useState("");
   const [viewMode, setViewMode]                   = useState<ViewMode>("master");
@@ -426,12 +434,12 @@ export default function BOQPage() {
         description="Project → Site → Lot hierarchy."
         actions={
           <div className="flex gap-2 print:hidden">
-            {viewMode === "master" && masterSummary && (
+            {canSeeTotals && viewMode === "master" && masterSummary && (
               <Button size="sm" variant="outline" onClick={() => exportMasterCSV(masterSummary, projectName)}>
                 <Download className="w-3.5 h-3.5 mr-1" />CSV
               </Button>
             )}
-            {viewMode === "site" && siteSummary && (
+            {canSeeTotals && viewMode === "site" && siteSummary && (
               <Button size="sm" variant="outline" onClick={() => exportSiteCSV(siteSummary, siteLots)}>
                 <Download className="w-3.5 h-3.5 mr-1" />CSV
               </Button>
@@ -516,7 +524,7 @@ export default function BOQPage() {
       {!loadingMain && viewMode === "master" && masterSummary && (
         <div className="space-y-5">
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <StatCard title="Total Planned Value" value={fmt(masterSummary.total_planned)} icon={FileSpreadsheet} color="bg-primary/10 text-primary" />
+            {canSeeTotals && <StatCard title="Total Planned Value" value={fmt(masterSummary.total_planned)} icon={FileSpreadsheet} color="bg-primary/10 text-primary" />}
             <StatCard title="Sites" value={masterSummary.site_count} icon={Building2} color="bg-warning/10 text-warning" />
             <StatCard title="Total Lots / Units" value={masterSummary.total_lot_count} icon={Users} color="bg-success/10 text-success" />
           </div>
@@ -526,6 +534,7 @@ export default function BOQPage() {
             labour={masterSummary.labour_total}
             plant={masterSummary.plant_total}
             service={masterSummary.service_total}
+            canSeeTotals={canSeeTotals}
           />
 
           <div>
@@ -542,8 +551,8 @@ export default function BOQPage() {
               <div className="divide-y divide-border border border-border rounded-xl overflow-hidden">
                 <div className="grid grid-cols-[1fr_auto_auto_auto_auto_auto] gap-3 px-4 py-2.5 bg-muted/40 text-xs font-semibold text-muted-foreground uppercase">
                   <span>Group</span><span className="text-center">Lots</span>
-                  <span className="text-right">Unit Total</span><span className="text-right">Total</span>
-                  <span className="text-right">Variance</span><span />
+                  {canSeeTotals ? <><span className="text-right">Unit Total</span><span className="text-right">Total</span><span className="text-right">Variance</span></> : <><span /><span /><span /></>}
+                  <span />
                 </div>
                 {masterSummary.sites.map((site: { site_id: string | null; site_name: string; lot_count: number; has_boq: boolean; unit_total: number; site_total: number; variance_pct: number | null; variance_amount: number | null; is_freestanding?: boolean }) => (
                   <div key={site.site_id ?? "__freestanding__"} className="grid grid-cols-[1fr_auto_auto_auto_auto_auto] gap-3 px-4 py-3 bg-card items-center hover:bg-muted/20">
@@ -557,9 +566,9 @@ export default function BOQPage() {
                       {!site.has_boq && <p className="text-xs text-amber-600 mt-0.5">No BOQ yet</p>}
                     </div>
                     <span className="text-sm text-center tabular-nums font-medium">{site.lot_count}</span>
-                    <span className="text-sm text-right tabular-nums">{site.has_boq ? fmt(site.unit_total) : "—"}</span>
-                    <span className="text-sm text-right tabular-nums font-semibold text-primary">{site.has_boq ? fmt(site.site_total) : "—"}</span>
-                    <div className="text-right"><VariancePill pct={site.variance_pct} amount={site.variance_amount} /></div>
+                    <span className="text-sm text-right tabular-nums">{canSeeTotals && site.has_boq ? fmt(site.unit_total) : "—"}</span>
+                    <span className="text-sm text-right tabular-nums font-semibold text-primary">{canSeeTotals && site.has_boq ? fmt(site.site_total) : "—"}</span>
+                    <div className="text-right">{canSeeTotals && <VariancePill pct={site.variance_pct} amount={site.variance_amount} />}</div>
                     {site.is_freestanding || !site.site_id ? (
                       <Button size="sm" variant="outline" onClick={() => {
                         setFreestandingMode(true);
@@ -582,7 +591,7 @@ export default function BOQPage() {
                 <div className="grid grid-cols-[1fr_auto_auto_auto_auto_auto] gap-3 px-4 py-3 bg-muted/30 items-center">
                   <span className="text-sm font-semibold">Total</span>
                   <span className="text-sm text-center font-semibold">{masterSummary.total_lot_count}</span>
-                  <span /><span className="text-sm text-right font-bold text-primary tabular-nums">{fmt(masterSummary.total_planned)}</span>
+                  <span /><span className="text-sm text-right font-bold text-primary tabular-nums">{canSeeTotals ? fmt(masterSummary.total_planned) : "—"}</span>
                   <span /><span />
                 </div>
               </div>
@@ -603,11 +612,11 @@ export default function BOQPage() {
                   <p className="text-xs text-muted-foreground">Site BOQ</p>
                   <h2 className="text-lg font-bold">{siteSummary.site_name}</h2>
                   <p className="text-sm text-muted-foreground mt-0.5">
-                    {siteSummary.lot_count} lots · {siteSummary.item_count} items ·
-                    Unit: <span className="font-semibold text-foreground">{fmt(siteSummary.unit_total)}</span> ·
-                    Site: <span className="font-semibold text-foreground">{fmt(siteSummary.site_total)}</span>
-                    {siteSummary.variance_pct !== 0 && (
-                      <> · <VariancePill pct={siteSummary.variance_pct} amount={siteSummary.variance_amount} /></>
+                    {siteSummary.lot_count} lots · {siteSummary.item_count} items
+                    {canSeeTotals && (
+                      <> · Unit: <span className="font-semibold text-foreground">{fmt(siteSummary.unit_total)}</span>
+                      · Site: <span className="font-semibold text-foreground">{fmt(siteSummary.site_total)}</span>
+                      {siteSummary.variance_pct !== 0 && <> · <VariancePill pct={siteSummary.variance_pct} amount={siteSummary.variance_amount} /></>}</>
                     )}
                   </p>
                 </div>
@@ -623,9 +632,9 @@ export default function BOQPage() {
                 </div>
               </div>
 
-              <TypeCards material={siteSummary.material_total} labour={siteSummary.labour_total} plant={siteSummary.plant_total} service={siteSummary.service_total} />
+              <TypeCards material={siteSummary.material_total} labour={siteSummary.labour_total} plant={siteSummary.plant_total} service={siteSummary.service_total} canSeeTotals={canSeeTotals} />
 
-              <SiteBOQTable summary={siteSummary} />
+              <SiteBOQTable summary={siteSummary} canSeeTotals={canSeeTotals} />
 
               <div>
                 <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">Lots / Units</h2>
@@ -634,22 +643,24 @@ export default function BOQPage() {
                 ) : (
                   <div className="border border-border rounded-xl overflow-hidden">
                     <div className="grid grid-cols-[1fr_auto_auto_auto_auto_auto_auto] gap-2 px-4 py-2.5 bg-muted/40 text-xs font-semibold text-muted-foreground uppercase">
-                      <span>Lot</span><span className="text-right">Total</span><span className="text-right">Material</span>
-                      <span className="text-right">Labour</span><span className="text-center">Custom</span>
-                      <span className="text-right">Variance</span><span />
+                      <span>Lot</span>
+                      {canSeeTotals ? <><span className="text-right">Total</span><span className="text-right">Material</span><span className="text-right">Labour</span></> : <><span /><span /><span /></>}
+                      <span className="text-center">Custom</span>
+                      {canSeeTotals ? <span className="text-right">Variance</span> : <span />}
+                      <span />
                     </div>
                     {siteLots.map((lot) => (
                       <div key={lot.lot_id} className="grid grid-cols-[1fr_auto_auto_auto_auto_auto_auto] gap-2 px-4 py-2.5 bg-card border-t border-border items-center hover:bg-muted/20">
                         <span className="text-sm font-medium">{lot.lot_number}</span>
-                        <span className="text-sm text-right tabular-nums font-medium">{lot.has_lot_boq ? fmt(lot.lot_total) : "—"}</span>
-                        <span className="text-sm text-right tabular-nums text-muted-foreground">{fmt(lot.material_total)}</span>
-                        <span className="text-sm text-right tabular-nums text-muted-foreground">{fmt(lot.labour_total)}</span>
+                        <span className="text-sm text-right tabular-nums font-medium">{canSeeTotals && lot.has_lot_boq ? fmt(lot.lot_total) : "—"}</span>
+                        <span className="text-sm text-right tabular-nums text-muted-foreground">{canSeeTotals ? fmt(lot.material_total) : "—"}</span>
+                        <span className="text-sm text-right tabular-nums text-muted-foreground">{canSeeTotals ? fmt(lot.labour_total) : "—"}</span>
                         <div className="flex justify-center">
                           {lot.has_custom_boq
                             ? <Badge variant="outline" className="text-xs text-amber-600 border-amber-300">Custom</Badge>
                             : lot.has_lot_boq ? <CheckCircle2 className="w-4 h-4 text-success" /> : <span className="text-xs text-muted-foreground">—</span>}
                         </div>
-                        <div className="text-right"><VariancePill pct={lot.variance_pct} amount={lot.variance_amount} /></div>
+                        <div className="text-right">{canSeeTotals && <VariancePill pct={lot.variance_pct} amount={lot.variance_amount} />}</div>
                         <Button size="sm" variant="outline" className="h-7 text-xs"
                           onClick={() => goToLot(lot)}>
                           Edit
@@ -682,11 +693,13 @@ export default function BOQPage() {
                       <span className="font-semibold text-sm">{lot.lot_number}</span>
                       {lot.has_custom_boq && <Badge variant="outline" className="text-xs text-amber-600 border-amber-300">Custom</Badge>}
                     </div>
-                    <p className="text-sm text-primary font-medium">{lot.has_lot_boq ? fmt(lot.lot_total) : "No BOQ yet"}</p>
-                    <div className="flex gap-3 mt-1.5 text-xs text-muted-foreground">
-                      <span>Mat: {fmt(lot.material_total)}</span>
-                      <span>Lab: {fmt(lot.labour_total)}</span>
-                    </div>
+                    <p className="text-sm text-primary font-medium">{lot.has_lot_boq ? (canSeeTotals ? fmt(lot.lot_total) : "BOQ set") : "No BOQ yet"}</p>
+                    {canSeeTotals && (
+                      <div className="flex gap-3 mt-1.5 text-xs text-muted-foreground">
+                        <span>Mat: {fmt(lot.material_total)}</span>
+                        <span>Lab: {fmt(lot.labour_total)}</span>
+                      </div>
+                    )}
                   </button>
                 ))}
               </div>
@@ -706,8 +719,8 @@ export default function BOQPage() {
                     <h2 className="text-lg font-bold">Lot {lotMeta?.lot_number ?? selectedLotId.slice(0, 8)}</h2>
                     {lotRow && (
                       <p className="text-sm text-muted-foreground mt-0.5">
-                        {lotRow.item_count} items · {fmt(lotRow.lot_total)}
-                        {lotRow.variance_pct !== 0 && <> · <VariancePill pct={lotRow.variance_pct} amount={lotRow.variance_amount} /></>}
+                        {lotRow.item_count} items
+                        {canSeeTotals && <> · {fmt(lotRow.lot_total)}{lotRow.variance_pct !== 0 && <> · <VariancePill pct={lotRow.variance_pct} amount={lotRow.variance_amount} /></>}</>}
                       </p>
                     )}
                   </div>
@@ -722,7 +735,7 @@ export default function BOQPage() {
                   </div>
                 </div>
 
-                {lotRow && <TypeCards material={lotRow.material_total} labour={lotRow.labour_total} plant={lotRow.plant_total} service={lotRow.service_total} />}
+                {lotRow && <TypeCards material={lotRow.material_total} labour={lotRow.labour_total} plant={lotRow.plant_total} service={lotRow.service_total} canSeeTotals={canSeeTotals} />}
 
                 {lotRow && !lotRow.has_lot_boq && (
                   <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-sm text-amber-800 flex items-start gap-2">
@@ -737,7 +750,7 @@ export default function BOQPage() {
                   <div className="bg-card border border-border rounded-xl px-5 py-4 flex items-center gap-4">
                     <FileSpreadsheet className="w-5 h-5 text-primary shrink-0" />
                     <div className="flex-1">
-                      <p className="font-medium text-sm">{lotRow.item_count} BOQ items · {fmt(lotRow.lot_total)}</p>
+                      <p className="font-medium text-sm">{lotRow.item_count} BOQ items{canSeeTotals && <> · {fmt(lotRow.lot_total)}</>}</p>
                       <p className="text-xs text-muted-foreground mt-0.5">Click <strong>Edit in Builder</strong> to edit all line items.</p>
                     </div>
                     <Button size="sm" variant="outline" onClick={() => navigate(`/boq/${selectedProjectId}/${headerId}/build`)}>
