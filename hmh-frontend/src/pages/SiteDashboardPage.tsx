@@ -222,7 +222,8 @@ export default function SiteDashboardPage() {
   const [jobCards,          setJobCards]          = useState<JobCard[]>([]);
   const [stagePhotos,       setStagePhotos]       = useState<MilestonePhoto[]>([]);
   const [pwMaterialSummary, setPwMaterialSummary] = useState<MaterialSummaryItem[]>([]);
-  const [pwMainStock,       setPwMainStock]       = useState<import("@/api/warehouse").WarehouseStockItem[]>([]);
+  const [pwMainStock,       setPwMainStock]       = useState<import("@/api/warehouse").GlobalWarehouseStockItem[]>([]);
+  const [pwToolLocations,   setPwToolLocations]   = useState<import("@/api/warehouse").ToolSiteLocation[]>([]);
   const [offlineDrafts, setOfflineDrafts] = useState<OfflineDraft[]>(getDrafts);
   const [discardConfirm, setDiscardConfirm] = useState(false);
   const [syncingDrafts, setSyncingDrafts] = useState(false);
@@ -236,8 +237,10 @@ export default function SiteDashboardPage() {
     setProjectId(id); localStorage.setItem(SK_PROJECT, id);
     setSiteId(""); localStorage.removeItem(SK_SITE);
     setLotId("");  localStorage.removeItem(SK_LOT);
+    setSites([]); setLots([]);
     setMrs([]); setDeliveries([]); setAlerts([]);
     setBalances([]); setLedger([]); setStages([]); setJobCards([]);
+    setPwToolLocations([]);
   };
   const selectSite = (id: string) => {
     setSiteId(id); localStorage.setItem(SK_SITE, id);
@@ -297,10 +300,10 @@ export default function SiteDashboardPage() {
   const loadData = useCallback(() => {
     if (!projectId) return;
 
-    // Main Warehouse sentinel: only fetch global stock, skip all project APIs
+    // Main Warehouse sentinel: only fetch global stock + tool locations, skip all project APIs
     if (projectId === MAIN_WAREHOUSE_SENTINEL) {
-      warehouseApi.getGlobalStock()
-        .then(setPwMainStock).catch(() => setPwMainStock([]));
+      warehouseApi.getGlobalStock().then(setPwMainStock).catch(() => setPwMainStock([]));
+      warehouseApi.getToolLocations().then(setPwToolLocations).catch(() => setPwToolLocations([]));
       return;
     }
 
@@ -371,13 +374,9 @@ export default function SiteDashboardPage() {
       setPwMaterialSummary([]);
     }
 
-    // Global Main Warehouse view-only
-    if (projectId === MAIN_WAREHOUSE_SENTINEL) {
-      warehouseApi.getGlobalStock()
-        .then(setPwMainStock).catch(() => setPwMainStock([]));
-    } else {
-      setPwMainStock([]);
-    }
+    // not the sentinel — clear main stock / tool locations
+    setPwMainStock([]);
+    setPwToolLocations([]);
   }, [projectId, siteId, lotId, sites]);
 
   useEffect(() => { loadData(); }, [loadData]);
@@ -568,7 +567,7 @@ export default function SiteDashboardPage() {
         )}
 
         {/* ── Offline draft queue banner ── */}
-        {offlineDrafts.length > 0 && (
+        {offlineDrafts.length > 0 && projectId !== MAIN_WAREHOUSE_SENTINEL && (
           <div className="bg-amber-50 border border-amber-200 rounded-xl px-3 py-2.5 space-y-2">
             <div className="flex items-center gap-3">
               <Upload className="w-4 h-4 text-amber-600 shrink-0" />
@@ -623,7 +622,7 @@ export default function SiteDashboardPage() {
         {projectId && (
           <>
             {/* ── Today summary ── */}
-            <Section title="Today">
+            {projectId !== MAIN_WAREHOUSE_SENTINEL && <Section title="Today">
               <div className="grid grid-cols-2 gap-2">
                 <StatCard label="Open Requests"      value={openMRs}      accent={openMRs > 0} />
                 <StatCard label="Partial Deliveries" value={partialDels}   accent={partialDels > 0} />
@@ -635,12 +634,12 @@ export default function SiteDashboardPage() {
                   sub={criticalOpen.length > 0 ? `${criticalOpen.length} critical/high` : ""}
                 />
               </div>
-            </Section>
+            </Section>}
 
             {/* Lot BOQ KPI cards are now rendered inside BOQAllocationTable */}
 
             {/* ── Critical/high alert banner ── */}
-            {criticalOpen.length > 0 && (
+            {projectId !== MAIN_WAREHOUSE_SENTINEL && criticalOpen.length > 0 && (
               <Section title="Urgent Alerts">
                 <div className="space-y-2">
                   {criticalOpen.slice(0, 3).map(a => (
@@ -660,7 +659,7 @@ export default function SiteDashboardPage() {
             )}
 
             {/* ── Quick actions ── */}
-            <Section title="Quick Actions">
+            {projectId !== MAIN_WAREHOUSE_SENTINEL && <Section title="Quick Actions">
               <div className="grid grid-cols-3 gap-2">
                 {/* Request / Receive only in Project Warehouse */}
                 {!isViewOnly && isWarehouse && <ActionBtn icon={PackagePlus} label="Request Materials" onClick={() => setModal("request")} />}
@@ -699,7 +698,7 @@ export default function SiteDashboardPage() {
                   View-only mode — write actions are disabled.
                 </p>
               )}
-            </Section>
+            </Section>}
 
             {/* ── Project Warehouse: BOQ Allocation (materials then tools) ── */}
             {isWarehouse && siteId && projectId && (
@@ -740,27 +739,53 @@ export default function SiteDashboardPage() {
 
             {/* ── Main Warehouse view-only ── */}
             {projectId === MAIN_WAREHOUSE_SENTINEL && (
-              <Section title="Main Warehouse — Stock On Hand">
-                {pwMainStock.length === 0 ? (
-                  <p className="text-sm text-muted-foreground text-center py-6">No stock in the Main Warehouse.</p>
-                ) : (
-                  <div className="divide-y divide-border border border-border rounded-xl overflow-hidden">
-                    <div className="grid grid-cols-3 gap-2 px-3 py-2 bg-muted/50 text-xs font-medium text-muted-foreground">
-                      <span className="col-span-2">Item</span>
-                      <span className="text-right">On Hand</span>
-                    </div>
-                    {pwMainStock.map(row => (
-                      <div key={row.item_id} className="grid grid-cols-3 gap-2 px-3 py-2.5 bg-card items-center">
-                        <div className="col-span-2 min-w-0">
-                          <p className="text-sm font-medium truncate">{row.item_name}</p>
-                          <p className="text-xs text-muted-foreground">{row.unit ?? "—"}</p>
-                        </div>
-                        <p className="text-sm text-right font-mono font-semibold">{row.on_hand}</p>
+              <>
+                <Section title="Main Warehouse — Stock On Hand">
+                  {pwMainStock.length === 0 ? (
+                    <p className="text-sm text-muted-foreground text-center py-6">No stock in the Main Warehouse.</p>
+                  ) : (
+                    <div className="divide-y divide-border border border-border rounded-xl overflow-hidden">
+                      <div className="grid grid-cols-3 gap-2 px-3 py-2 bg-muted/50 text-xs font-medium text-muted-foreground">
+                        <span className="col-span-2">Item</span>
+                        <span className="text-right">On Hand</span>
                       </div>
-                    ))}
-                  </div>
-                )}
-              </Section>
+                      {pwMainStock.map((row, i) => (
+                        <div key={`${row.item_id}-${row.project_id ?? "global"}-${i}`} className="grid grid-cols-3 gap-2 px-3 py-2.5 bg-card items-center">
+                          <div className="col-span-2 min-w-0">
+                            <p className="text-sm font-medium truncate">{row.item_name}</p>
+                            <p className="text-xs text-muted-foreground">{row.unit ?? "—"}</p>
+                          </div>
+                          <p className="text-sm text-right font-mono font-semibold">{row.on_hand}</p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </Section>
+
+                <Section title="Tools — Current Locations">
+                  {pwToolLocations.length === 0 ? (
+                    <p className="text-sm text-muted-foreground text-center py-6">No tools currently deployed to sites.</p>
+                  ) : (
+                    <div className="divide-y divide-border border border-border rounded-xl overflow-hidden">
+                      <div className="grid grid-cols-[1fr_1fr_auto] gap-2 px-3 py-2 bg-muted/50 text-xs font-medium text-muted-foreground">
+                        <span className="flex items-center gap-1.5"><Wrench className="w-3.5 h-3.5" />Tool</span>
+                        <span>Site</span>
+                        <span className="text-right">Qty</span>
+                      </div>
+                      {pwToolLocations.map((t, i) => (
+                        <div key={`${t.item_id}-${t.site_id}-${i}`} className="grid grid-cols-[1fr_1fr_auto] gap-2 px-3 py-2.5 bg-card items-center">
+                          <p className="text-sm font-medium truncate">{t.item_name}</p>
+                          <div className="min-w-0">
+                            <p className="text-sm truncate">{t.site_name}</p>
+                            <p className="text-xs text-muted-foreground truncate">{t.project_name}</p>
+                          </div>
+                          <p className="text-sm font-mono font-semibold text-right">{t.on_hand}</p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </Section>
+              </>
             )}
 
             {/* ── BOQ Allocation / Usage / Remaining (site lots only) ── */}
