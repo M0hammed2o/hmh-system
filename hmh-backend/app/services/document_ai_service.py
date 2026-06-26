@@ -343,6 +343,19 @@ _DELIVERY_ITEM_RE = re.compile(
     re.MULTILINE,
 )
 
+# Phrases that look like column headers, not delivery items — skip them.
+_DELIVERY_ITEM_BLOCKLIST: frozenset = frozenset({
+    "item code", "item no", "item number", "item description", "item",
+    "qty delivered", "quantity delivered", "qty", "quantity",
+    "description", "unit", "units",
+    "part number", "part no", "product", "product code", "product description",
+    "material", "material code", "material description",
+    "reference", "ref no", "ref number",
+    "order no", "order number",
+    "delivery note", "delivery no", "delivery number",
+    "packing list", "required by", "deliver by", "date", "no",
+})
+
 # ── Fuel slip patterns ────────────────────────────────────────────────────────
 _STATION_RE = re.compile(
     r"(?:station(?:\s+name)?|forecourt)\s*[:\-]?\s*([A-Za-z][A-Za-z0-9&.,\s\-]{2,50})",
@@ -787,6 +800,8 @@ def _parse_delivery_items(text: str) -> list[dict]:
         unit = (m.group(3) or "").strip() or None  # group 3 is optional
         qty = _parse_amount(qty_s)
         if qty is None:
+            continue
+        if desc.strip().lower() in _DELIVERY_ITEM_BLOCKLIST:
             continue
         items.append({
             "description": desc.strip(),

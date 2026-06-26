@@ -676,15 +676,6 @@ export default function SiteDashboardPage() {
                     }}
                   />
                 )}
-                {!isWarehouse && projectId && projectId !== MAIN_WAREHOUSE_SENTINEL && (
-                  <ActionBtn
-                    icon={FileSpreadsheet}
-                    label="Invoices"
-                    onClick={() => {
-                      window.location.href = `/municipality-invoices?projectId=${projectId}`;
-                    }}
-                  />
-                )}
                 {/* Warehouse actions */}
                 {!isViewOnly && isWarehouse && (
                   <ActionBtn icon={PackagePlus} label="Add to Warehouse" onClick={() => setModal("add_warehouse")} />
@@ -1738,10 +1729,10 @@ function UnifiedReceiveModal({ projectId, siteId, lotId, suppliers, materialSumm
       if (unlinked.length === 0) return prev; // nothing to do — skip re-render
       return prev.map(item => {
         if (item.boq_item_id) return item;
-        const norm = item.description.toLowerCase().trim();
+        const norm = item.description.toLowerCase().replace(/\s+/g, ' ').trim();
         if (!norm) return item;
         const match = effectiveMaterialSummary.find(m => {
-          const mNorm = m.description.toLowerCase().trim();
+          const mNorm = m.description.toLowerCase().replace(/\s+/g, ' ').trim();
           return mNorm === norm || mNorm.includes(norm) || norm.includes(mNorm);
         });
         if (!match) return item;

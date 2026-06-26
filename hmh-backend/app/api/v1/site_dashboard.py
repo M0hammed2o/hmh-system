@@ -6,6 +6,7 @@ GET  /site-dashboard/{site_id}/lots/{lot_id}/activity
 """
 
 import os
+import re as _re
 import uuid
 
 from fastapi import APIRouter, File, Form, UploadFile
@@ -78,28 +79,35 @@ def lot_material_summary(site_id: uuid.UUID, lot_id: uuid.UUID, db: DbSession, c
             )
             fallback = bool(boq_items)
 
-    # ── 3. De-duplicate by (raw_description, item_type, unit) ────────────────
+    # ── 3. De-duplicate by (normalized_description, unit) ───────────────────
     # Duplicates arise when a template is applied to lots AND generate_lot_boqs
     # is also called, inserting two copies of each item for the same lot.
-    # Keep only the first occurrence (highest planned_quantity wins on tie).
-    seen_keys: set = set()
+    # Whitespace is normalised so "Ceiling / Doors" == "Ceiling/Doors".
+    # Discarded aliases are tracked so stock recorded against their boq_item_id
+    # is still counted in the canonical item's totals.
+    seen_keys: dict = {}        # normalized_key → canonical BOQItem
+    boq_id_aliases: dict = {}   # discarded_boq_item_id → canonical_boq_item_id
     unique_boq_items = []
     for bi in sorted(boq_items, key=lambda x: float(x.planned_quantity or 0), reverse=True):
         key = (
-            (bi.raw_description or "").lower().strip(),
+            _re.sub(r"\s+", " ", (bi.raw_description or "").lower().strip()),
             bi.unit or "",
         )
         if key not in seen_keys:
-            seen_keys.add(key)
+            seen_keys[key] = bi
             unique_boq_items.append(bi)
+        elif bi.id:
+            boq_id_aliases[bi.id] = seen_keys[key].id
     boq_items = unique_boq_items
 
     # ── 4. Batch-load all StockLedger aggregates in 4 queries (replaces N+1) ────
     from app.models.item import Item
     from app.models.supplier import Supplier as _Sup
 
-    item_ids     = [bi.item_id for bi in boq_items if bi.item_id]
-    boq_item_ids = [bi.id      for bi in boq_items if not bi.item_id]
+    item_ids          = [bi.item_id for bi in boq_items if bi.item_id]
+    boq_item_ids      = [bi.id      for bi in boq_items if not bi.item_id]
+    # Include alias IDs so stock recorded against discarded duplicates is captured
+    all_boq_query_ids = list(set(boq_item_ids + list(boq_id_aliases.keys())))
 
     # delivered qty keyed by item_id (catalog path)
     delivered_by_item: dict = {}
@@ -129,12 +137,12 @@ def lot_material_summary(site_id: uuid.UUID, lot_id: uuid.UUID, db: DbSession, c
 
     # delivered qty keyed by boq_item_id (template / non-catalog path)
     delivered_by_boq: dict = {}
-    if boq_item_ids:
+    if all_boq_query_ids:
         rows = (
             db.query(StockLedger.boq_item_id, func.coalesce(func.sum(StockLedger.quantity_in), 0))
             .filter(
                 StockLedger.lot_id        == lot_id,
-                StockLedger.boq_item_id.in_(boq_item_ids),
+                StockLedger.boq_item_id.in_(all_boq_query_ids),
                 StockLedger.movement_type == MovementType.DELIVERY_RECEIVED,
             )
             .group_by(StockLedger.boq_item_id)
@@ -144,14 +152,21 @@ def lot_material_summary(site_id: uuid.UUID, lot_id: uuid.UUID, db: DbSession, c
 
     # used qty keyed by boq_item_id (template / non-catalog path)
     used_by_boq: dict = {}
-    if boq_item_ids:
+    if all_boq_query_ids:
         rows = (
             db.query(StockLedger.boq_item_id, func.coalesce(func.sum(StockLedger.quantity_out), 0))
-            .filter(StockLedger.lot_id == lot_id, StockLedger.boq_item_id.in_(boq_item_ids))
+            .filter(StockLedger.lot_id == lot_id, StockLedger.boq_item_id.in_(all_boq_query_ids))
             .group_by(StockLedger.boq_item_id)
             .all()
         )
         used_by_boq = {r[0]: float(r[1]) for r in rows}
+
+    # Fold alias results into their canonical item
+    for alias_id, canonical_id in boq_id_aliases.items():
+        if alias_id in delivered_by_boq:
+            delivered_by_boq[canonical_id] = delivered_by_boq.get(canonical_id, 0.0) + delivered_by_boq.pop(alias_id)
+        if alias_id in used_by_boq:
+            used_by_boq[canonical_id] = used_by_boq.get(canonical_id, 0.0) + used_by_boq.pop(alias_id)
 
     # Batch-load catalog items and suppliers (replaces db.get() inside the loop)
     supplier_ids = [bi.supplier_id for bi in boq_items if bi.supplier_id]

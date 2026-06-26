@@ -12,12 +12,12 @@
  *  - CSV / Print export
  */
 
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import {
   Search, Download, Printer, ChevronUp, ChevronDown,
   X, FileSpreadsheet, Package, AlertTriangle, CheckCircle2,
   TrendingDown, ChevronLeft, ChevronRight, ArrowUpDown,
-  BarChart3, Truck, Minus, Eye,
+  BarChart3, Truck, Minus, Eye, Layers,
 } from "lucide-react";
 import { type MaterialSummaryItem, type MaterialStatus } from "@/api/siteDashboard";
 import { Button } from "@/components/ui/button";
@@ -50,6 +50,23 @@ const STATUS_CONFIG: Record<MaterialStatus, { label: string; badge: string; row:
 };
 
 const PAGE_SIZE = 15;
+
+// ── Grouping ──────────────────────────────────────────────────────────────────
+
+function getGroupKey(desc: string): string {
+  // Use first word (normalized) as the group key
+  return desc.trim().toLowerCase().split(/[\s,\/\-]+/)[0] || desc.toLowerCase();
+}
+
+function getGroupLabel(key: string): string {
+  return key.charAt(0).toUpperCase() + key.slice(1);
+}
+
+interface ItemGroup {
+  key:   string;
+  label: string;
+  items: MaterialSummaryItem[];
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -265,12 +282,14 @@ export function BOQAllocationTable({
   items, loading = false, fromSiteTemplate = false, hideActions = false,
   onRecordUsage, onReceiveDelivery, onGenerateLotBoq,
 }: Props) {
-  const [search,       setSearch]       = useState("");
-  const [statusFilter, setStatusFilter] = useState<MaterialStatus | "ALL">("ALL");
-  const [sortBy,       setSortBy]       = useState<SortKey>("status");
-  const [sortDir,      setSortDir]      = useState<SortDir>("asc");
-  const [page,         setPage]         = useState(1);
-  const [drawer,       setDrawer]       = useState<MaterialSummaryItem | null>(null);
+  const [search,         setSearch]         = useState("");
+  const [statusFilter,   setStatusFilter]   = useState<MaterialStatus | "ALL">("ALL");
+  const [sortBy,         setSortBy]         = useState<SortKey>("status");
+  const [sortDir,        setSortDir]        = useState<SortDir>("asc");
+  const [page,           setPage]           = useState(1);
+  const [drawer,         setDrawer]         = useState<MaterialSummaryItem | null>(null);
+  const [groupMode,      setGroupMode]      = useState(false);
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
 
   // ── Filtered + sorted data ──
   const processed = useMemo(() => {
@@ -305,6 +324,20 @@ export function BOQAllocationTable({
 
     return list;
   }, [items, search, statusFilter, sortBy, sortDir]);
+
+  // ── Grouped data (when groupMode is active) ──
+  const groupedData = useMemo<ItemGroup[] | null>(() => {
+    if (!groupMode) return null;
+    const groups = new Map<string, ItemGroup>();
+    for (const item of processed) {
+      const key = getGroupKey(item.description);
+      if (!groups.has(key)) {
+        groups.set(key, { key, label: getGroupLabel(key), items: [] });
+      }
+      groups.get(key)!.items.push(item);
+    }
+    return Array.from(groups.values()).sort((a, b) => a.label.localeCompare(b.label));
+  }, [processed, groupMode]);
 
   const totalPages = Math.max(1, Math.ceil(processed.length / PAGE_SIZE));
   const safePage   = Math.min(page, totalPages);
@@ -405,6 +438,16 @@ export function BOQAllocationTable({
             <option value="OVER_BOQ">Over BOQ</option>
             <option value="STOCK_ISSUE">Stock Issue</option>
           </select>
+          {/* Group toggle */}
+          <Button
+            size="sm"
+            variant={groupMode ? "default" : "outline"}
+            className="h-8 text-xs gap-1.5"
+            onClick={() => { setGroupMode(g => !g); setExpandedGroups(new Set()); }}
+            title="Group materials by category"
+          >
+            <Layers className="w-3.5 h-3.5" />Group
+          </Button>
           {/* Export */}
           <Button size="sm" variant="outline" className="h-8 text-xs gap-1.5" onClick={handleExportCSV}>
             <Download className="w-3.5 h-3.5" />CSV
@@ -441,56 +484,146 @@ export function BOQAllocationTable({
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
-              {pageItems.map(item => {
-                const cfg = STATUS_CONFIG[item.status];
-                return (
-                  <tr
-                    key={item.boq_item_id}
-                    className={cn(
-                      "group transition-colors hover:bg-muted/40 cursor-pointer",
-                      cfg.row,
-                    )}
-                    onClick={() => setDrawer(item)}
-                  >
-                    <td className="px-3 py-3">
-                      <p className="font-semibold text-sm leading-tight">{item.description}</p>
-                      {item.item_id == null && (
-                        <p className="text-[10px] text-muted-foreground mt-0.5">No catalog link</p>
+              {groupedData ? (
+                // ── Grouped view ──
+                groupedData.map(group => {
+                  const isExpanded = expandedGroups.has(group.key);
+                  const gAlloc     = group.items.reduce((s, i) => s + i.boq_allocated_qty, 0);
+                  const gDelivered = group.items.reduce((s, i) => s + i.delivered_qty,     0);
+                  const gUsed      = group.items.reduce((s, i) => s + i.used_qty,          0);
+                  const gRemaining = group.items.reduce((s, i) => s + i.remaining_qty,     0);
+                  const worstStatus = group.items.reduce<MaterialStatus>(
+                    (w, i) => STATUS_PRIORITY[i.status] < STATUS_PRIORITY[w] ? i.status : w,
+                    "OK",
+                  );
+                  const gPct     = gAlloc > 0 ? Math.min((gUsed / gAlloc) * 100, 100) : 0;
+                  return (
+                    <Fragment key={`grp-${group.key}`}>
+                      {/* Group header row */}
+                      <tr
+                        className="bg-muted/60 border-b border-border cursor-pointer hover:bg-muted/80 transition-colors select-none"
+                        onClick={() => setExpandedGroups(prev => {
+                          const next = new Set(prev);
+                          if (next.has(group.key)) next.delete(group.key); else next.add(group.key);
+                          return next;
+                        })}
+                      >
+                        <td className="px-3 py-2.5 font-bold text-sm">
+                          <div className="flex items-center gap-2">
+                            <ChevronDown className={cn("w-4 h-4 shrink-0 transition-transform text-muted-foreground", !isExpanded && "-rotate-90")} />
+                            <span>{group.label}</span>
+                            <span className="text-xs font-normal text-muted-foreground">({group.items.length})</span>
+                          </div>
+                        </td>
+                        <td className="px-3 py-2.5 text-right text-muted-foreground text-xs">—</td>
+                        <td className="px-3 py-2.5 text-right tabular-nums font-semibold">{fmt(gAlloc)}</td>
+                        <td className="px-3 py-2.5 text-right tabular-nums text-blue-600 font-semibold">{fmt(gDelivered)}</td>
+                        <td className="px-3 py-2.5 text-right tabular-nums text-orange-600 font-semibold">{fmt(gUsed)}</td>
+                        <td className="px-3 py-2.5 text-right tabular-nums font-bold">
+                          <span className={gRemaining <= 0 ? "text-red-600" : "text-green-600"}>{fmt(gRemaining)}</span>
+                        </td>
+                        <td className="px-3 py-2.5">
+                          <div className="h-1.5 bg-muted rounded-full overflow-hidden min-w-[80px]">
+                            <div className={cn("h-full rounded-full", progressColor(gPct))} style={{ width: `${gPct}%` }} />
+                          </div>
+                        </td>
+                        <td className="px-3 py-2.5 text-center"><StatusBadge status={worstStatus} /></td>
+                        {!hideActions && <td />}
+                      </tr>
+                      {/* Expanded child rows */}
+                      {isExpanded && group.items.map(item => {
+                        const cfg = STATUS_CONFIG[item.status];
+                        return (
+                          <tr
+                            key={`gi-${item.boq_item_id}`}
+                            className={cn("group transition-colors hover:bg-muted/40 cursor-pointer", cfg.row)}
+                            onClick={() => setDrawer(item)}
+                          >
+                            <td className="pl-10 pr-3 py-2.5">
+                              <p className="font-medium text-sm leading-tight">{item.description}</p>
+                              {item.item_id == null && (
+                                <p className="text-[10px] text-muted-foreground mt-0.5">No catalog link</p>
+                              )}
+                            </td>
+                            <td className="px-3 py-2.5 text-right text-muted-foreground text-xs">{item.unit ?? "—"}</td>
+                            <td className="px-3 py-2.5 text-right tabular-nums font-medium">{fmt(item.boq_allocated_qty)}</td>
+                            <td className="px-3 py-2.5 text-right tabular-nums text-blue-600 font-medium">{fmt(item.delivered_qty)}</td>
+                            <td className="px-3 py-2.5 text-right tabular-nums text-orange-600 font-medium">{fmt(item.used_qty)}</td>
+                            <td className="px-3 py-2.5 text-right tabular-nums font-bold">
+                              <span className={item.remaining_qty <= 0 ? "text-red-600" : item.status === "LOW" ? "text-amber-600" : "text-green-600"}>
+                                {fmt(item.remaining_qty)}
+                              </span>
+                            </td>
+                            <td className="px-3 py-2.5"><ProgressBar item={item} /></td>
+                            <td className="px-3 py-2.5 text-center"><StatusBadge status={item.status} /></td>
+                            {!hideActions && (
+                              <td className="px-3 py-2.5">
+                                <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity" onClick={e => e.stopPropagation()}>
+                                  <button onClick={() => setDrawer(item)} className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground hover:text-foreground" title="View details"><Eye className="w-3.5 h-3.5" /></button>
+                                  <button onClick={() => onRecordUsage(item)} className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground hover:text-foreground" title="Record usage"><Minus className="w-3.5 h-3.5" /></button>
+                                  <button onClick={() => onReceiveDelivery(item)} className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground hover:text-foreground" title="Receive delivery"><Truck className="w-3.5 h-3.5" /></button>
+                                </div>
+                              </td>
+                            )}
+                          </tr>
+                        );
+                      })}
+                    </Fragment>
+                  );
+                })
+              ) : (
+                // ── Flat view (default) ──
+                pageItems.map(item => {
+                  const cfg = STATUS_CONFIG[item.status];
+                  return (
+                    <tr
+                      key={item.boq_item_id}
+                      className={cn(
+                        "group transition-colors hover:bg-muted/40 cursor-pointer",
+                        cfg.row,
                       )}
-                    </td>
-                    <td className="px-3 py-3 text-right text-muted-foreground text-xs">{item.unit ?? "—"}</td>
-                    <td className="px-3 py-3 text-right tabular-nums font-medium">{fmt(item.boq_allocated_qty)}</td>
-                    <td className="px-3 py-3 text-right tabular-nums text-blue-600 font-medium">{fmt(item.delivered_qty)}</td>
-                    <td className="px-3 py-3 text-right tabular-nums text-orange-600 font-medium">{fmt(item.used_qty)}</td>
-                    <td className="px-3 py-3 text-right tabular-nums font-bold">
-                      <span className={
-                        item.remaining_qty <= 0  ? "text-red-600"
-                        : item.status === "LOW"  ? "text-amber-600"
-                        : "text-green-600"
-                      }>
-                        {fmt(item.remaining_qty)}
-                      </span>
-                    </td>
-                    <td className="px-3 py-3"><ProgressBar item={item} /></td>
-                    <td className="px-3 py-3 text-center"><StatusBadge status={item.status} /></td>
-                    {!hideActions && (
+                      onClick={() => setDrawer(item)}
+                    >
                       <td className="px-3 py-3">
-                        <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity" onClick={e => e.stopPropagation()}>
-                          <button onClick={() => setDrawer(item)} className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground hover:text-foreground" title="View details">
-                            <Eye className="w-3.5 h-3.5" />
-                          </button>
-                          <button onClick={() => onRecordUsage(item)} className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground hover:text-foreground" title="Record usage">
-                            <Minus className="w-3.5 h-3.5" />
-                          </button>
-                          <button onClick={() => onReceiveDelivery(item)} className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground hover:text-foreground" title="Receive delivery">
-                            <Truck className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
+                        <p className="font-semibold text-sm leading-tight">{item.description}</p>
+                        {item.item_id == null && (
+                          <p className="text-[10px] text-muted-foreground mt-0.5">No catalog link</p>
+                        )}
                       </td>
-                    )}
-                  </tr>
-                );
-              })}
+                      <td className="px-3 py-3 text-right text-muted-foreground text-xs">{item.unit ?? "—"}</td>
+                      <td className="px-3 py-3 text-right tabular-nums font-medium">{fmt(item.boq_allocated_qty)}</td>
+                      <td className="px-3 py-3 text-right tabular-nums text-blue-600 font-medium">{fmt(item.delivered_qty)}</td>
+                      <td className="px-3 py-3 text-right tabular-nums text-orange-600 font-medium">{fmt(item.used_qty)}</td>
+                      <td className="px-3 py-3 text-right tabular-nums font-bold">
+                        <span className={
+                          item.remaining_qty <= 0  ? "text-red-600"
+                          : item.status === "LOW"  ? "text-amber-600"
+                          : "text-green-600"
+                        }>
+                          {fmt(item.remaining_qty)}
+                        </span>
+                      </td>
+                      <td className="px-3 py-3"><ProgressBar item={item} /></td>
+                      <td className="px-3 py-3 text-center"><StatusBadge status={item.status} /></td>
+                      {!hideActions && (
+                        <td className="px-3 py-3">
+                          <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity" onClick={e => e.stopPropagation()}>
+                            <button onClick={() => setDrawer(item)} className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground hover:text-foreground" title="View details">
+                              <Eye className="w-3.5 h-3.5" />
+                            </button>
+                            <button onClick={() => onRecordUsage(item)} className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground hover:text-foreground" title="Record usage">
+                              <Minus className="w-3.5 h-3.5" />
+                            </button>
+                            <button onClick={() => onReceiveDelivery(item)} className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground hover:text-foreground" title="Receive delivery">
+                              <Truck className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </td>
+                      )}
+                    </tr>
+                  );
+                })
+              )}
             </tbody>
             {/* Summary footer */}
             <tfoot>
@@ -514,7 +647,7 @@ export function BOQAllocationTable({
 
       {/* ── Card layout (mobile) ── */}
       <div className="sm:hidden space-y-2">
-        {pageItems.map(item => {
+        {(groupMode ? processed : pageItems).map(item => {
           const cfg = STATUS_CONFIG[item.status];
           return (
             <div
@@ -544,8 +677,8 @@ export function BOQAllocationTable({
         })}
       </div>
 
-      {/* ── Pagination ── */}
-      {totalPages > 1 && (
+      {/* ── Pagination (hidden in group mode) ── */}
+      {!groupMode && totalPages > 1 && (
         <div className="flex items-center justify-between">
           <p className="text-xs text-muted-foreground">
             {(safePage - 1) * PAGE_SIZE + 1}–{Math.min(safePage * PAGE_SIZE, processed.length)} of {processed.length}
