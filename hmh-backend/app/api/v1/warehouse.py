@@ -1327,6 +1327,7 @@ def get_global_main_warehouse_stock(db: DbSession, current_user: CurrentUser):
             p.code                              AS project_code,
             sl.item_id,
             i.name                              AS item_name,
+            i.item_type                         AS item_type,
             i.default_unit                      AS unit,
             SUM(sl.quantity_in)                 AS total_in,
             SUM(sl.quantity_out)                AS total_out,
@@ -1337,7 +1338,7 @@ def get_global_main_warehouse_stock(db: DbSession, current_user: CurrentUser):
         LEFT JOIN projects p ON p.id = sl.project_id
         WHERE sl.site_id IS NULL
           AND sl.lot_id  IS NULL
-        GROUP BY sl.project_id, p.name, p.code, sl.item_id, i.name, i.default_unit
+        GROUP BY sl.project_id, p.name, p.code, sl.item_id, i.name, i.item_type, i.default_unit
         HAVING SUM(sl.quantity_in) - SUM(sl.quantity_out) > 0
         ORDER BY COALESCE(p.name, ''), i.name
     """)).mappings().all()
@@ -1349,6 +1350,7 @@ def get_global_main_warehouse_stock(db: DbSession, current_user: CurrentUser):
             "project_code":  r["project_code"] or "GLOBAL",
             "item_id":       str(r["item_id"]),
             "item_name":     r["item_name"],
+            "item_type":     r["item_type"],
             "unit":          r["unit"],
             "on_hand":       float(r["on_hand"]),
             "total_in":      float(r["total_in"]),
@@ -1438,6 +1440,7 @@ def get_global_main_warehouse_tools(db: DbSession, current_user: CurrentUser):
             "project_code":  "GLOBAL",
             "item_id":       str(r["item_id"]),
             "item_name":     r["item_name"],
+            "item_type":     "TOOL",
             "unit":          r["unit"],
             "on_hand":       float(r["on_hand"]),
             "total_in":      float(r["total_in"]),
@@ -1765,7 +1768,7 @@ def add_main_warehouse_tool(
 def list_all_sites_for_global_transfer(db: DbSession, current_user: CurrentUser):
     """Return all active sites across all projects for the global transfer modal."""
     rows = db.execute(text("""
-        SELECT s.id, s.name, s.project_id, p.name AS project_name, p.code AS project_code
+        SELECT s.id, s.name, s.site_type, s.project_id, p.name AS project_name, p.code AS project_code
         FROM sites s
         JOIN projects p ON p.id = s.project_id
         WHERE s.is_active = TRUE
@@ -1774,6 +1777,7 @@ def list_all_sites_for_global_transfer(db: DbSession, current_user: CurrentUser)
     return ApiSuccess(data=[{
         "id":           str(r["id"]),
         "name":         r["name"],
+        "site_type":    r["site_type"],
         "project_id":   str(r["project_id"]),
         "project_name": r["project_name"],
         "project_code": r["project_code"],

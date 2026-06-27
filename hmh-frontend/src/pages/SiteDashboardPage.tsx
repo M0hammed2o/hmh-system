@@ -6,7 +6,7 @@ import {
   Clock, Circle, ChevronRight, Box, Bell, Camera, Image, X,
   Plus, Trash2, ClipboardList, Flag, Ban, Lock, CalendarClock,
   ShieldOff, Briefcase, RotateCcw, Search, FileSpreadsheet,
-  Home, Warehouse, ArrowRightLeft, Wrench,
+  Home, Warehouse, ArrowRightLeft, Wrench, ArrowLeft,
 } from "lucide-react";
 import { siteCaptureApi, type ExtractedItem } from "@/api/siteCapture";
 import { siteDashboardApi, type MaterialSummaryItem, type ActivityItem } from "@/api/siteDashboard";
@@ -26,7 +26,7 @@ import { stagesApi, type ProjectStageStatus, type StageMaster, type MilestonePho
 import { alertsApi, type Alert } from "@/api/alerts";
 import { stockApi, type StockBalance, type StockLedgerEntry } from "@/api/stock";
 import { suppliersApi, type Supplier } from "@/api/suppliers";
-import { warehouseApi } from "@/api/warehouse";
+import { warehouseApi, type WarehouseStockItem } from "@/api/warehouse";
 import { jobCardsApi, type JobCard } from "@/api/jobCards";
 import { getDrafts, removeDraft, type OfflineDraft } from "@/utils/offlineDrafts";
 import { procurementApi, type BOQSearchResult } from "@/api/procurement";
@@ -224,6 +224,9 @@ export default function SiteDashboardPage() {
   const [pwMaterialSummary, setPwMaterialSummary] = useState<MaterialSummaryItem[]>([]);
   const [pwMainStock,       setPwMainStock]       = useState<import("@/api/warehouse").GlobalWarehouseStockItem[]>([]);
   const [pwToolLocations,   setPwToolLocations]   = useState<import("@/api/warehouse").ToolSiteLocation[]>([]);
+  const [pwSiteTools,       setPwSiteTools]       = useState<WarehouseStockItem[]>([]);
+  const [returnToolTarget,  setReturnToolTarget]  = useState<WarehouseStockItem | null>(null);
+  const [returnToolBusy,    setReturnToolBusy]    = useState(false);
   const [deleteStockTarget, setDeleteStockTarget] = useState<import("@/api/warehouse").GlobalWarehouseStockItem | null>(null);
   const [deleteStockNotes,  setDeleteStockNotes]  = useState("");
   const [deleteStockBusy,   setDeleteStockBusy]   = useState(false);
@@ -243,7 +246,7 @@ export default function SiteDashboardPage() {
     setSites([]); setLots([]);
     setMrs([]); setDeliveries([]); setAlerts([]);
     setBalances([]); setLedger([]); setStages([]); setJobCards([]);
-    setPwToolLocations([]);
+    setPwToolLocations([]); setPwSiteTools([]);
   };
   const selectSite = (id: string) => {
     setSiteId(id); localStorage.setItem(SK_SITE, id);
@@ -368,13 +371,16 @@ export default function SiteDashboardPage() {
         .then(jcs => setJobCards(jcs.slice(0, 20))).catch(() => setJobCards([]));
     }
 
-    // Project Warehouse material summary (only when a warehouse site is selected)
+    // Project Warehouse material summary + physical tools (only when a warehouse site is selected)
     const _isWarehouse = !!siteId && !!sites.find(s => s.id === siteId && s.site_type === "warehouse");
     if (_isWarehouse) {
       warehouseApi.getWarehouseMaterialSummary(projectId)
         .then(setPwMaterialSummary).catch(() => setPwMaterialSummary([]));
+      warehouseApi.getSiteTools(siteId)
+        .then(setPwSiteTools).catch(() => setPwSiteTools([]));
     } else {
       setPwMaterialSummary([]);
+      setPwSiteTools([]);
     }
 
     // not the sentinel — clear main stock / tool locations
@@ -706,7 +712,7 @@ export default function SiteDashboardPage() {
                 />
                 {/* Tools section at the bottom */}
                 {pwMaterialSummary.filter(i => i.description.toLowerCase().startsWith("tool:")).length > 0 && (
-                  <Section title="Tools">
+                  <Section title="Tools (BOQ)">
                     <div className="divide-y divide-border border border-border rounded-xl overflow-hidden">
                       <div className="grid grid-cols-4 gap-2 px-3 py-2 bg-muted/50 text-xs font-medium text-muted-foreground">
                         <span className="col-span-2 flex items-center gap-1.5"><Wrench className="w-3.5 h-3.5" />Tool</span>
@@ -723,6 +729,37 @@ export default function SiteDashboardPage() {
                           <p className={cn("text-sm text-right font-mono font-semibold",
                             row.remaining_qty <= 0 ? "text-red-600" : row.status === "LOW" ? "text-amber-600" : "text-green-600"
                           )}>{row.remaining_qty}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </Section>
+                )}
+
+                {/* Physical tools currently in the project warehouse */}
+                {pwSiteTools.length > 0 && (
+                  <Section title="Tools in Warehouse">
+                    <div className="divide-y divide-border border border-border rounded-xl overflow-hidden">
+                      <div className="grid grid-cols-[1fr_auto_auto_auto] gap-2 px-3 py-2 bg-muted/50 text-xs font-medium text-muted-foreground">
+                        <span className="flex items-center gap-1.5"><Wrench className="w-3.5 h-3.5" />Tool</span>
+                        <span className="text-right">On Hand</span>
+                        <span className="text-right">Unit</span>
+                        <span />
+                      </div>
+                      {pwSiteTools.map(tool => (
+                        <div key={tool.item_id} className="grid grid-cols-[1fr_auto_auto_auto] gap-2 px-3 py-2.5 bg-card items-center">
+                          <div className="min-w-0">
+                            <p className="text-sm font-medium truncate">{tool.item_name}</p>
+                          </div>
+                          <p className="text-sm font-semibold tabular-nums text-right">{tool.on_hand}</p>
+                          <p className="text-xs text-muted-foreground text-right">{tool.unit ?? "—"}</p>
+                          <button
+                            onClick={() => setReturnToolTarget(tool)}
+                            className="flex items-center gap-1 text-xs px-2 py-1 rounded-lg border border-border bg-card hover:bg-muted text-muted-foreground hover:text-foreground transition-colors shrink-0"
+                            title="Return to Main Warehouse"
+                          >
+                            <ArrowLeft className="w-3 h-3" />
+                            Return
+                          </button>
                         </div>
                       ))}
                     </div>
@@ -1125,6 +1162,63 @@ export default function SiteDashboardPage() {
                 }}
               >
                 {deleteStockBusy ? "Removing…" : "Remove Stock"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Return tool to Main Warehouse */}
+      {returnToolTarget && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          onClick={() => !returnToolBusy && setReturnToolTarget(null)}
+        >
+          <div
+            className="bg-card border border-border rounded-2xl w-full max-w-sm p-6 space-y-4"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between">
+              <h3 className="font-semibold text-base">Return to Main Warehouse</h3>
+              <button onClick={() => setReturnToolTarget(null)} disabled={returnToolBusy}>
+                <X className="w-4 h-4 text-muted-foreground" />
+              </button>
+            </div>
+
+            <div className="bg-primary/5 border border-primary/20 rounded-xl px-4 py-3 space-y-0.5">
+              <p className="font-medium text-sm">{returnToolTarget.item_name}</p>
+              <p className="text-xs text-muted-foreground">
+                In warehouse: <strong>{returnToolTarget.on_hand} {returnToolTarget.unit ?? "units"}</strong>
+              </p>
+            </div>
+
+            <p className="text-xs text-muted-foreground">
+              Return all <strong>{returnToolTarget.on_hand} {returnToolTarget.unit ?? "units"}</strong> of this tool back to the Global Main Warehouse.
+            </p>
+
+            <div className="flex gap-2">
+              <Button
+                className="flex-1"
+                disabled={returnToolBusy}
+                onClick={async () => {
+                  if (!siteId) return;
+                  setReturnToolBusy(true);
+                  try {
+                    await warehouseApi.returnToolsToMain(siteId, returnToolTarget.item_id, returnToolTarget.on_hand);
+                    setReturnToolTarget(null);
+                    warehouseApi.getSiteTools(siteId).then(setPwSiteTools).catch(() => {});
+                  } catch (err: unknown) {
+                    const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+                    alert(detail ?? "Return failed.");
+                  } finally {
+                    setReturnToolBusy(false);
+                  }
+                }}
+              >
+                {returnToolBusy ? "Returning…" : "Return to Main Warehouse"}
+              </Button>
+              <Button variant="outline" onClick={() => setReturnToolTarget(null)} disabled={returnToolBusy}>
+                Cancel
               </Button>
             </div>
           </div>

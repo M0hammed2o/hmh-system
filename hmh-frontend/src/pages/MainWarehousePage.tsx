@@ -275,6 +275,7 @@ function TransferModal({
   onDone:  () => void;
 }) {
   const isGlobal = item.project_id === null;
+  const isTool   = item.item_type === "TOOL";
 
   // For global stock: list of all sites across all projects
   const [allSites,     setAllSites]     = useState<GlobalWarehouseSite[]>([]);
@@ -294,7 +295,9 @@ function TransferModal({
       warehouseApi.listAllSites()
         .then(s => {
           setAllSites(s);
-          if (s.length > 0) setSiteId(s[0].id);
+          // Tools go to project warehouses only; materials can go anywhere
+          const eligible = isTool ? s.filter(x => x.site_type === "warehouse") : s;
+          if (eligible.length > 0) setSiteId(eligible[0].id);
         })
         .catch(() => setAllSites([]))
         .finally(() => setSitesLoading(false));
@@ -309,10 +312,13 @@ function TransferModal({
           .finally(() => setSitesLoading(false))
       );
     }
-  }, [isGlobal, item.project_id]);
+  }, [isGlobal, isTool, item.project_id]);
 
-  const sites = isGlobal ? allSites : projectSites;
-  const selectedSite = sites.find(s => s.id === siteId);
+  // For tool transfers, restrict to project warehouse sites only
+  const visibleSites = isGlobal
+    ? (isTool ? allSites.filter(s => s.site_type === "warehouse") : allSites)
+    : projectSites;
+  const selectedSite = visibleSites.find(s => s.id === siteId);
 
   const submit = async () => {
     const qty = parseFloat(quantity);
@@ -341,7 +347,9 @@ function TransferModal({
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
       <div className="bg-card border border-border rounded-2xl w-full max-w-sm p-6 space-y-4" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between">
-          <h3 className="font-semibold text-base">Transfer to Site</h3>
+          <h3 className="font-semibold text-base">
+            {isTool ? "Send Tool to Project Warehouse" : "Transfer to Site"}
+          </h3>
           <button onClick={onClose}><X className="w-4 h-4 text-muted-foreground" /></button>
         </div>
 
@@ -358,16 +366,25 @@ function TransferModal({
           </p>
         </div>
 
+        {isTool && (
+          <div className="bg-amber-50 border border-amber-200 rounded-xl px-3 py-2 text-xs text-amber-800">
+            Tools can only be sent to a <span className="font-medium">Project Warehouse</span>. They can be returned to the Main Warehouse from there.
+          </div>
+        )}
+
         <div className="space-y-3">
           <div>
             <label className="text-xs text-muted-foreground block mb-1">
-              Destination site{isGlobal ? " (any project)" : ""}
+              {isTool
+                ? "Destination Project Warehouse"
+                : isGlobal ? "Destination site (any project)" : "Destination site"
+              }
             </label>
             {sitesLoading ? (
               <div className="h-10 rounded-md border border-input bg-muted animate-pulse" />
-            ) : sites.length === 0 ? (
+            ) : visibleSites.length === 0 ? (
               <p className="text-xs text-muted-foreground bg-muted/40 rounded-md px-3 py-2.5">
-                {isGlobal ? "No active sites found." : `No sites in ${item.project_name}.`}
+                {isTool ? "No project warehouses found." : isGlobal ? "No active sites found." : `No sites in ${item.project_name}.`}
               </p>
             ) : (
               <select
@@ -376,7 +393,7 @@ function TransferModal({
                 className="w-full h-10 rounded-md border border-input bg-background px-3 text-sm"
               >
                 {isGlobal
-                  ? allSites.map(s => (
+                  ? visibleSites.map(s => (
                       <option key={s.id} value={s.id}>
                         {s.project_code} — {s.name}
                       </option>
@@ -427,10 +444,10 @@ function TransferModal({
         <div className="flex gap-2 pt-1">
           <Button
             onClick={submit}
-            disabled={loading || sitesLoading || sites.length === 0}
+            disabled={loading || sitesLoading || visibleSites.length === 0}
             className="flex-1"
           >
-            {loading ? "Transferring…" : "Transfer to Site"}
+            {loading ? "Transferring…" : isTool ? "Send to Project Warehouse" : "Transfer to Site"}
           </Button>
           <Button variant="outline" onClick={onClose}>Cancel</Button>
         </div>
@@ -917,7 +934,7 @@ export default function MainWarehousePage() {
                           onClick={() => setTransferItem(tool)}
                         >
                           <ArrowRight className="w-3 h-3" />
-                          Send to Site
+                          Send to Project
                         </Button>
                         <button
                           onClick={() => { setEditTool(tool); setDeleteError(""); }}

@@ -68,6 +68,7 @@ export interface GlobalWarehouseStockItem {
   project_code:  string;
   item_id:       string;
   item_name:     string;
+  item_type:     string;         // 'MATERIAL' | 'TOOL' etc.
   unit:          string | null;
   on_hand:       number;
   total_in:      number;
@@ -78,6 +79,7 @@ export interface GlobalWarehouseStockItem {
 export interface GlobalWarehouseSite {
   id:           string;
   name:         string;
+  site_type:    string;   // 'warehouse' | 'construction_site' etc.
   project_id:   string;
   project_name: string;
   project_code: string;
