@@ -224,6 +224,9 @@ export default function SiteDashboardPage() {
   const [pwMaterialSummary, setPwMaterialSummary] = useState<MaterialSummaryItem[]>([]);
   const [pwMainStock,       setPwMainStock]       = useState<import("@/api/warehouse").GlobalWarehouseStockItem[]>([]);
   const [pwToolLocations,   setPwToolLocations]   = useState<import("@/api/warehouse").ToolSiteLocation[]>([]);
+  const [deleteStockTarget, setDeleteStockTarget] = useState<import("@/api/warehouse").GlobalWarehouseStockItem | null>(null);
+  const [deleteStockNotes,  setDeleteStockNotes]  = useState("");
+  const [deleteStockBusy,   setDeleteStockBusy]   = useState(false);
   const [offlineDrafts, setOfflineDrafts] = useState<OfflineDraft[]>(getDrafts);
   const [discardConfirm, setDiscardConfirm] = useState(false);
   const [syncingDrafts, setSyncingDrafts] = useState(false);
@@ -736,17 +739,25 @@ export default function SiteDashboardPage() {
                     <p className="text-sm text-muted-foreground text-center py-6">No stock in the Main Warehouse.</p>
                   ) : (
                     <div className="divide-y divide-border border border-border rounded-xl overflow-hidden">
-                      <div className="grid grid-cols-3 gap-2 px-3 py-2 bg-muted/50 text-xs font-medium text-muted-foreground">
-                        <span className="col-span-2">Item</span>
+                      <div className="grid grid-cols-[1fr_auto_auto] gap-2 px-3 py-2 bg-muted/50 text-xs font-medium text-muted-foreground">
+                        <span>Item</span>
                         <span className="text-right">On Hand</span>
+                        <span />
                       </div>
                       {pwMainStock.map((row, i) => (
-                        <div key={`${row.item_id}-${row.project_id ?? "global"}-${i}`} className="grid grid-cols-3 gap-2 px-3 py-2.5 bg-card items-center">
-                          <div className="col-span-2 min-w-0">
+                        <div key={`${row.item_id}-${row.project_id ?? "global"}-${i}`} className="grid grid-cols-[1fr_auto_auto] gap-2 px-3 py-2.5 bg-card items-center">
+                          <div className="min-w-0">
                             <p className="text-sm font-medium truncate">{row.item_name}</p>
-                            <p className="text-xs text-muted-foreground">{row.unit ?? "—"}</p>
+                            <p className="text-xs text-muted-foreground">{row.project_name ?? "Global"} {row.unit ? `· ${row.unit}` : ""}</p>
                           </div>
-                          <p className="text-sm text-right font-mono font-semibold">{row.on_hand}</p>
+                          <p className="text-sm text-right font-mono font-semibold tabular-nums">{row.on_hand}</p>
+                          <button
+                            onClick={() => { setDeleteStockTarget(row); setDeleteStockNotes(""); }}
+                            className="p-1.5 rounded-lg text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
+                            title="Remove stock"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
                         </div>
                       ))}
                     </div>
@@ -1048,6 +1059,78 @@ export default function SiteDashboardPage() {
           onDone={() => { setModal(null); loadData(); }}
         />
       )}
+      {/* ── Delete Stock confirmation dialog ── */}
+      {deleteStockTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={() => !deleteStockBusy && setDeleteStockTarget(null)}>
+          <div className="absolute inset-0 bg-black/50" />
+          <div className="relative bg-card border border-border rounded-2xl shadow-2xl w-full max-w-sm p-6 space-y-4" onClick={e => e.stopPropagation()}>
+            <div className="flex items-start gap-3">
+              <div className="p-2 rounded-xl bg-destructive/10 shrink-0">
+                <Trash2 className="w-5 h-5 text-destructive" />
+              </div>
+              <div>
+                <h3 className="font-bold text-base">Remove Stock</h3>
+                <p className="text-sm text-muted-foreground mt-0.5">
+                  Write off <span className="font-semibold text-foreground">{deleteStockTarget.on_hand} {deleteStockTarget.unit ?? ""}</span> of <span className="font-semibold text-foreground">{deleteStockTarget.item_name}</span>?
+                </p>
+                {deleteStockTarget.project_id && (
+                  <p className="text-xs text-muted-foreground mt-0.5">Project: {deleteStockTarget.project_name}</p>
+                )}
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-muted-foreground">Reason (optional)</label>
+              <Input
+                placeholder="e.g. damaged, data entry error…"
+                value={deleteStockNotes}
+                onChange={e => setDeleteStockNotes(e.target.value)}
+                disabled={deleteStockBusy}
+              />
+            </div>
+            <div className="flex gap-2 pt-1">
+              <Button variant="outline" className="flex-1" onClick={() => setDeleteStockTarget(null)} disabled={deleteStockBusy}>
+                Cancel
+              </Button>
+              <Button
+                variant="destructive"
+                className="flex-1"
+                disabled={deleteStockBusy}
+                onClick={async () => {
+                  if (!deleteStockTarget) return;
+                  setDeleteStockBusy(true);
+                  try {
+                    const notes = deleteStockNotes.trim() || "Stock removed via main warehouse";
+                    if (deleteStockTarget.project_id) {
+                      await warehouseApi.adjustProjectStock(deleteStockTarget.project_id, {
+                        item_id: deleteStockTarget.item_id,
+                        adjustment_type: "CORRECTION_SUB",
+                        quantity: deleteStockTarget.on_hand,
+                        notes,
+                      });
+                    } else {
+                      await warehouseApi.adjustStock({
+                        item_id: deleteStockTarget.item_id,
+                        adjustment_type: "CORRECTION_SUB",
+                        quantity: deleteStockTarget.on_hand,
+                        notes,
+                      });
+                    }
+                    setDeleteStockTarget(null);
+                    warehouseApi.getGlobalStock().then(setPwMainStock).catch(() => {});
+                  } catch (err: unknown) {
+                    alert((err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ?? "Failed to remove stock.");
+                  } finally {
+                    setDeleteStockBusy(false);
+                  }
+                }}
+              >
+                {deleteStockBusy ? "Removing…" : "Remove Stock"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Upload Delivery Note removed — use Receive Delivery for the unified flow */}
       {/* Sign Delivery removed — signing now happens inline in Receive Delivery modal */}
     </div>
