@@ -1,16 +1,16 @@
 /**
- * Main Warehouse — company-wide central stock view.
+ * Main Warehouse — global stock received directly (no project).
  *
- * Shows ALL project warehouses in one aggregated table (no project filter).
+ * Only shows stock where project_id IS NULL (received into the central
+ * main warehouse, not into a specific project).
  * Stock flow:
- *   Supplier Delivery → Project Warehouse → Site Warehouse → Lot/Unit
+ *   Supplier Delivery → Main Warehouse (global) → Site Warehouse → Lot/Unit
  *
  * Actions (admin/office only):
- *   • View on-hand stock per item per project
- *   • Transfer stock to a site within the owning project
+ *   • View on-hand stock per item
+ *   • Transfer stock to any site across any project
+ *   • Delete (write-off) stock entries
  *   • Browse global movement history
- *
- * Deliveries are received per-project on the Deliveries page.
  */
 
 import { useCallback, useEffect, useState } from "react";
@@ -642,13 +642,16 @@ export default function MainWarehousePage() {
   const [showTools,     setShowTools]     = useState(false);
   const [error,         setError]         = useState("");
 
-  const [transferItem,  setTransferItem]  = useState<GlobalWarehouseStockItem | null>(null);
-  const [editTool,      setEditTool]      = useState<GlobalWarehouseStockItem | null>(null);
-  const [deletingTool,  setDeletingTool]  = useState<GlobalWarehouseStockItem | null>(null);
-  const [deleteError,   setDeleteError]   = useState("");
-  const [showReceive,   setShowReceive]   = useState(false);
-  const [showAdjust,    setShowAdjust]    = useState(false);
-  const [showAddTool,   setShowAddTool]   = useState(false);
+  const [transferItem,     setTransferItem]     = useState<GlobalWarehouseStockItem | null>(null);
+  const [editTool,         setEditTool]         = useState<GlobalWarehouseStockItem | null>(null);
+  const [deletingTool,     setDeletingTool]     = useState<GlobalWarehouseStockItem | null>(null);
+  const [deleteError,      setDeleteError]      = useState("");
+  const [showReceive,      setShowReceive]      = useState(false);
+  const [showAdjust,       setShowAdjust]       = useState(false);
+  const [showAddTool,      setShowAddTool]      = useState(false);
+  const [deleteStockItem,  setDeleteStockItem]  = useState<GlobalWarehouseStockItem | null>(null);
+  const [deleteStockNotes, setDeleteStockNotes] = useState("");
+  const [deleteStockBusy,  setDeleteStockBusy]  = useState(false);
 
   const loadStock = useCallback(async () => {
     setLoading(true); setError("");
@@ -728,11 +731,13 @@ export default function MainWarehousePage() {
     }
   };
 
+  // Only show stock received into the global main warehouse (no project)
+  const globalStock = stock.filter(i => i.project_id === null);
+
   // Derived KPIs
-  const totalSkus    = stock.length;
-  const totalOnHand  = stock.reduce((s, i) => s + i.on_hand, 0);
-  const globalCount  = stock.filter(i => i.project_id === null).length;
-  const projectCount = new Set(stock.filter(i => i.project_id !== null).map(i => i.project_id)).size;
+  const totalSkus   = globalStock.length;
+  const totalOnHand = globalStock.reduce((s, i) => s + i.on_hand, 0);
+  const lowStockCount = globalStock.filter(i => i.on_hand <= 5).length;
 
   return (
     <div className="space-y-5 animate-fade-in">
@@ -772,21 +777,21 @@ export default function MainWarehousePage() {
             <p className="text-2xl font-bold mt-0.5">{fmt(totalOnHand)}</p>
           </div>
           <div className="bg-card border border-border rounded-xl p-4">
-            <p className="text-xs text-muted-foreground">Projects</p>
-            <p className="text-2xl font-bold mt-0.5">{projectCount}</p>
-            {globalCount > 0 && (
-              <p className="text-xs text-primary mt-0.5">{globalCount} global SKU{globalCount !== 1 ? "s" : ""}</p>
+            <p className="text-xs text-muted-foreground">Low stock</p>
+            <p className="text-2xl font-bold mt-0.5">{lowStockCount}</p>
+            {lowStockCount > 0 && (
+              <p className="text-xs text-amber-600 mt-0.5">{lowStockCount} SKU{lowStockCount !== 1 ? "s" : ""} ≤ 5 units</p>
             )}
           </div>
         </div>
       )}
 
-      {/* Stock table */}
+      {/* Stock table — global main warehouse only */}
       {loading ? (
         <div className="space-y-2">
           {[1, 2, 3, 4].map(i => <Skeleton key={i} className="h-14 rounded-xl" />)}
         </div>
-      ) : stock.length === 0 ? (
+      ) : globalStock.length === 0 ? (
         <div className="bg-card border border-border rounded-xl p-12 text-center space-y-2">
           <Warehouse className="w-10 h-10 text-muted-foreground mx-auto" />
           <p className="text-sm font-medium">Main warehouse is empty</p>
@@ -796,41 +801,29 @@ export default function MainWarehousePage() {
         </div>
       ) : (
         <div className="bg-card border border-border rounded-xl overflow-hidden">
-          <div className="grid grid-cols-[1fr_160px_110px_100px_130px_auto] gap-0 border-b border-border bg-muted/40 px-4 py-2.5">
+          <div className="grid grid-cols-[1fr_110px_100px_130px_auto] gap-0 border-b border-border bg-muted/40 px-4 py-2.5">
             <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Item</span>
-            <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Project</span>
             <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide text-right">On Hand</span>
             <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide text-right">Unit</span>
             <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide hidden sm:block">Last Movement</span>
-            <span className="w-32" />
+            <span className="w-36" />
           </div>
 
-          {stock.map((item, i) => (
+          {globalStock.map((item, i) => (
             <div
-              key={`${item.project_id}-${item.item_id}`}
+              key={item.item_id}
               className={cn(
-                "grid grid-cols-[1fr_160px_110px_100px_130px_auto] gap-0 items-center px-4 py-3 transition-colors hover:bg-muted/30",
-                i < stock.length - 1 && "border-b border-border",
+                "grid grid-cols-[1fr_110px_100px_130px_auto] gap-0 items-center px-4 py-3 transition-colors hover:bg-muted/30",
+                i < globalStock.length - 1 && "border-b border-border",
               )}
             >
               <p className="text-sm font-medium truncate pr-3">{item.item_name}</p>
-              <p className="text-xs text-muted-foreground truncate">
-                {item.project_id === null ? (
-                  <span className="text-primary font-medium">Global</span>
-                ) : (
-                  <>
-                    <span className="font-mono">{item.project_code}</span>
-                    {" "}
-                    <span className="hidden sm:inline">{item.project_name}</span>
-                  </>
-                )}
-              </p>
               <p className="text-sm font-semibold text-right tabular-nums">{fmt(item.on_hand)}</p>
               <p className="text-xs text-muted-foreground text-right">{item.unit ?? "—"}</p>
               <p className="text-xs text-muted-foreground hidden sm:block">
                 {item.last_movement ? formatDate(item.last_movement) : "—"}
               </p>
-              <div className="flex justify-end">
+              <div className="flex items-center justify-end gap-1.5">
                 <Button
                   size="sm" variant="outline"
                   className="h-8 text-xs gap-1.5 shrink-0"
@@ -839,6 +832,13 @@ export default function MainWarehousePage() {
                   <ArrowRight className="w-3 h-3" />
                   <span className="hidden sm:inline">Transfer to</span> Site
                 </Button>
+                <button
+                  onClick={() => { setDeleteStockItem(item); setDeleteStockNotes(""); }}
+                  className="p-1.5 rounded-lg text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
+                  title="Remove from warehouse"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
               </div>
             </div>
           ))}
@@ -1041,6 +1041,90 @@ export default function MainWarehousePage() {
           onClose={() => setEditTool(null)}
           onDone={() => { loadStock(); setEditTool(null); }}
         />
+      )}
+
+      {/* Delete stock confirmation */}
+      {deleteStockItem && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          onClick={() => !deleteStockBusy && setDeleteStockItem(null)}
+        >
+          <div
+            className="bg-card border border-border rounded-2xl w-full max-w-sm p-6 space-y-4"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between">
+              <h3 className="font-semibold text-base">Remove from Warehouse</h3>
+              <button
+                onClick={() => setDeleteStockItem(null)}
+                disabled={deleteStockBusy}
+              >
+                <X className="w-4 h-4 text-muted-foreground" />
+              </button>
+            </div>
+
+            <div className="bg-destructive/5 border border-destructive/20 rounded-xl px-4 py-3 space-y-0.5">
+              <p className="font-medium text-sm">{deleteStockItem.item_name}</p>
+              <p className="text-xs text-muted-foreground">
+                On hand: <strong>{fmt(deleteStockItem.on_hand)} {deleteStockItem.unit ?? "units"}</strong>
+                {" · "}
+                <span className="text-primary font-medium">Global Stock</span>
+              </p>
+            </div>
+
+            <p className="text-xs text-muted-foreground">
+              This will write off the full on-hand quantity via a stock correction. This cannot be undone.
+            </p>
+
+            <div>
+              <label className="text-xs text-muted-foreground block mb-1">Reason / Notes (optional)</label>
+              <input
+                type="text"
+                value={deleteStockNotes}
+                onChange={e => setDeleteStockNotes(e.target.value)}
+                placeholder="e.g. Item discontinued, data cleanup"
+                className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm"
+                disabled={deleteStockBusy}
+              />
+            </div>
+
+            <div className="flex gap-2">
+              <Button
+                variant="destructive"
+                className="flex-1"
+                disabled={deleteStockBusy}
+                onClick={async () => {
+                  setDeleteStockBusy(true);
+                  try {
+                    await warehouseApi.adjustStock({
+                      item_id:         deleteStockItem.item_id,
+                      adjustment_type: "CORRECTION_SUB",
+                      quantity:        deleteStockItem.on_hand,
+                      notes:           deleteStockNotes || "Removed from main warehouse",
+                    });
+                    setDeleteStockItem(null);
+                    const updated = await warehouseApi.getGlobalStock();
+                    setStock(updated);
+                  } catch (err: unknown) {
+                    const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+                    alert(detail ?? "Failed to remove stock.");
+                  } finally {
+                    setDeleteStockBusy(false);
+                  }
+                }}
+              >
+                {deleteStockBusy ? "Removing…" : "Remove Stock"}
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => setDeleteStockItem(null)}
+                disabled={deleteStockBusy}
+              >
+                Cancel
+              </Button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
