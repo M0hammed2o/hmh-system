@@ -645,6 +645,166 @@ function HistoryRow({ m }: { m: GlobalWarehouseMovement }) {
   );
 }
 
+// ── Tools Panel ───────────────────────────────────────────────────────────────
+
+function ToolsPanel({
+  tools, toolLocations, loading, locsLoading, showTools, toggleTools,
+  deleteError, setDeleteError, setShowAddTool, setTransferItem, setEditTool, handleDeleteTool,
+}: {
+  tools:           GlobalWarehouseStockItem[];
+  toolLocations:   ToolSiteLocation[];
+  loading:         boolean;
+  locsLoading:     boolean;
+  showTools:       boolean;
+  toggleTools:     () => void;
+  deleteError:     string;
+  setDeleteError:  (v: string) => void;
+  setShowAddTool:  (v: boolean) => void;
+  setTransferItem: (v: GlobalWarehouseStockItem) => void;
+  setEditTool:     (v: GlobalWarehouseStockItem) => void;
+  handleDeleteTool:(v: GlobalWarehouseStockItem) => void;
+}) {
+  // Merge: tools on-hand in main warehouse + tools fully deployed (on_hand = 0 globally)
+  const knownIds = new Set(tools.map(t => t.item_id));
+  const deployedOnly: GlobalWarehouseStockItem[] = toolLocations
+    .reduce((acc: GlobalWarehouseStockItem[], loc) => {
+      if (!knownIds.has(loc.item_id) && !acc.find(t => t.item_id === loc.item_id)) {
+        acc.push({
+          project_id: null, project_name: "Global", project_code: "GLOBAL",
+          item_id: loc.item_id, item_name: loc.item_name, item_type: "TOOL",
+          unit: null, on_hand: 0, total_in: 0, total_out: 0, last_movement: null,
+        });
+      }
+      return acc;
+    }, []);
+  const allTools = [...tools, ...deployedOnly];
+
+  return (
+    <div className="bg-card border border-border rounded-xl overflow-hidden">
+      <div className="flex items-center justify-between px-4 py-3">
+        <button
+          className="flex items-center gap-2 flex-1 text-left hover:opacity-80 transition-opacity"
+          onClick={toggleTools}
+        >
+          <Wrench className="w-4 h-4 text-primary" />
+          <span className="font-semibold text-sm">Tools in Main Warehouse</span>
+          {allTools.length > 0 && (
+            <span className="text-xs bg-primary/10 text-primary rounded-full px-2 py-0.5">
+              {allTools.length}
+            </span>
+          )}
+        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowAddTool(true)}
+            className="flex items-center gap-1 text-xs text-primary hover:text-primary/80 transition-colors px-2 py-1 rounded-lg hover:bg-primary/10 border border-primary/20"
+            title="Add tools to warehouse"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            Add Tool
+          </button>
+          {loading && <RefreshCw className="w-3.5 h-3.5 animate-spin text-muted-foreground" />}
+          <button onClick={toggleTools}>
+            {showTools
+              ? <ChevronUp className="w-4 h-4 text-muted-foreground" />
+              : <ChevronDown className="w-4 h-4 text-muted-foreground" />}
+          </button>
+        </div>
+      </div>
+
+      {showTools && (
+        <div className="border-t border-border">
+          {loading ? (
+            <div className="px-4 py-3 space-y-2">
+              {[1, 2, 3].map(i => <Skeleton key={i} className="h-12 rounded-lg" />)}
+            </div>
+          ) : allTools.length === 0 ? (
+            <p className="text-xs text-muted-foreground text-center px-4 py-6">
+              No tools in main warehouse. Receive stock with a TOOL-type item to see it here.
+            </p>
+          ) : (
+            <div className="divide-y divide-border">
+              {deleteError && (
+                <div className="mx-4 my-2 text-xs text-destructive bg-destructive/10 border border-destructive/20 rounded-lg px-3 py-2 flex items-center gap-2">
+                  <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                  {deleteError}
+                  <button onClick={() => setDeleteError("")} className="ml-auto"><X className="w-3 h-3" /></button>
+                </div>
+              )}
+              {allTools.map(tool => {
+                const siteLocations = toolLocations.filter(l => l.item_id === tool.item_id);
+                const fullyDeployed = tool.on_hand === 0;
+                return (
+                  <div key={tool.item_id} className="px-4 py-3 hover:bg-muted/30 transition-colors">
+                    <div className="flex items-center gap-3">
+                      <Wrench className="w-4 h-4 text-muted-foreground shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium truncate">{tool.item_name}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {fullyDeployed
+                            ? <span className="text-amber-600 font-medium">Fully deployed to project warehouses</span>
+                            : <>In warehouse: <strong>{fmt(tool.on_hand)} {tool.unit ?? ""}</strong>
+                               {tool.last_movement ? ` · Last: ${formatDate(tool.last_movement)}` : ""}</>
+                          }
+                        </p>
+                      </div>
+                      {!fullyDeployed && (
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <Button
+                            size="sm" variant="outline"
+                            className="h-8 text-xs gap-1.5"
+                            onClick={() => setTransferItem(tool)}
+                          >
+                            <ArrowRight className="w-3 h-3" />
+                            Send to Project
+                          </Button>
+                          <button
+                            onClick={() => { setEditTool(tool); }}
+                            className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+                            title="Edit tool"
+                          >
+                            <Edit2 className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            onClick={() => handleDeleteTool(tool)}
+                            className="p-1.5 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
+                            title="Remove tool from warehouse"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                    {/* Site distribution */}
+                    {locsLoading ? (
+                      <p className="text-xs text-muted-foreground mt-1.5 pl-7">Loading site locations…</p>
+                    ) : siteLocations.length > 0 ? (
+                      <div className="mt-2 pl-7 flex flex-wrap gap-1.5">
+                        {siteLocations.map(loc => (
+                          <span
+                            key={loc.site_id}
+                            className="inline-flex items-center gap-1 text-xs bg-amber-50 text-amber-700 border border-amber-200 rounded-full px-2 py-0.5"
+                          >
+                            <MapPin className="w-2.5 h-2.5" />
+                            {loc.project_name}
+                            <span className="font-semibold">{fmt(loc.on_hand)}</span>
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-xs text-muted-foreground mt-1 pl-7">All in main warehouse</p>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function MainWarehousePage() {
@@ -863,122 +1023,20 @@ export default function MainWarehousePage() {
       )}
 
       {/* Tools panel */}
-      <div className="bg-card border border-border rounded-xl overflow-hidden">
-        <div className="flex items-center justify-between px-4 py-3">
-          <button
-            className="flex items-center gap-2 flex-1 text-left hover:opacity-80 transition-opacity"
-            onClick={toggleTools}
-          >
-            <Wrench className="w-4 h-4 text-primary" />
-            <span className="font-semibold text-sm">Tools in Main Warehouse</span>
-            {tools.length > 0 && (
-              <span className="text-xs bg-primary/10 text-primary rounded-full px-2 py-0.5">
-                {tools.length}
-              </span>
-            )}
-          </button>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setShowAddTool(true)}
-              className="flex items-center gap-1 text-xs text-primary hover:text-primary/80 transition-colors px-2 py-1 rounded-lg hover:bg-primary/10 border border-primary/20"
-              title="Add tools to warehouse"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              Add Tool
-            </button>
-            {loading && <RefreshCw className="w-3.5 h-3.5 animate-spin text-muted-foreground" />}
-            <button onClick={toggleTools}>
-              {showTools
-                ? <ChevronUp className="w-4 h-4 text-muted-foreground" />
-                : <ChevronDown className="w-4 h-4 text-muted-foreground" />}
-            </button>
-          </div>
-        </div>
-
-        {showTools && (
-          <div className="border-t border-border">
-            {loading ? (
-              <div className="px-4 py-3 space-y-2">
-                {[1, 2, 3].map(i => <Skeleton key={i} className="h-12 rounded-lg" />)}
-              </div>
-            ) : tools.length === 0 ? (
-              <p className="text-xs text-muted-foreground text-center px-4 py-6">
-                No tools in main warehouse. Receive stock with a TOOL-type item to see it here.
-              </p>
-            ) : (
-              <div className="divide-y divide-border">
-                {deleteError && (
-                  <div className="mx-4 my-2 text-xs text-destructive bg-destructive/10 border border-destructive/20 rounded-lg px-3 py-2 flex items-center gap-2">
-                    <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
-                    {deleteError}
-                    <button onClick={() => setDeleteError("")} className="ml-auto"><X className="w-3 h-3" /></button>
-                  </div>
-                )}
-                {tools.map(tool => {
-                  const siteLocations = toolLocations.filter(l => l.item_id === tool.item_id);
-                  return (
-                  <div key={tool.item_id} className="px-4 py-3 hover:bg-muted/30 transition-colors">
-                    <div className="flex items-center gap-3">
-                      <Wrench className="w-4 h-4 text-muted-foreground shrink-0" />
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium truncate">{tool.item_name}</p>
-                        <p className="text-xs text-muted-foreground">
-                          In warehouse: <strong>{fmt(tool.on_hand)} {tool.unit ?? ""}</strong>
-                          {tool.last_movement ? ` · Last: ${formatDate(tool.last_movement)}` : ""}
-                        </p>
-                      </div>
-                      <div className="flex items-center gap-1.5 shrink-0">
-                        <Button
-                          size="sm" variant="outline"
-                          className="h-8 text-xs gap-1.5"
-                          onClick={() => setTransferItem(tool)}
-                        >
-                          <ArrowRight className="w-3 h-3" />
-                          Send to Project
-                        </Button>
-                        <button
-                          onClick={() => { setEditTool(tool); setDeleteError(""); }}
-                          className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
-                          title="Edit tool"
-                        >
-                          <Edit2 className="w-3.5 h-3.5" />
-                        </button>
-                        <button
-                          onClick={() => handleDeleteTool(tool)}
-                          className="p-1.5 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
-                          title="Remove tool from warehouse"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    </div>
-                    {/* Site distribution */}
-                    {locsLoading ? (
-                      <p className="text-xs text-muted-foreground mt-1.5 pl-7">Loading site locations…</p>
-                    ) : siteLocations.length > 0 ? (
-                      <div className="mt-2 pl-7 flex flex-wrap gap-1.5">
-                        {siteLocations.map(loc => (
-                          <span
-                            key={loc.site_id}
-                            className="inline-flex items-center gap-1 text-xs bg-amber-50 text-amber-700 border border-amber-200 rounded-full px-2 py-0.5"
-                          >
-                            <MapPin className="w-2.5 h-2.5" />
-                            {loc.project_name}
-                            <span className="font-semibold">{fmt(loc.on_hand)}</span>
-                          </span>
-                        ))}
-                      </div>
-                    ) : (
-                      <p className="text-xs text-muted-foreground mt-1 pl-7">All in main warehouse</p>
-                    )}
-                  </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        )}
-      </div>
+      <ToolsPanel
+        tools={tools}
+        toolLocations={toolLocations}
+        loading={loading}
+        locsLoading={locsLoading}
+        showTools={showTools}
+        toggleTools={toggleTools}
+        deleteError={deleteError}
+        setDeleteError={setDeleteError}
+        setShowAddTool={setShowAddTool}
+        setTransferItem={setTransferItem}
+        setEditTool={setEditTool}
+        handleDeleteTool={handleDeleteTool}
+      />
 
       {/* Movement history */}
       <div className="bg-card border border-border rounded-xl overflow-hidden">
