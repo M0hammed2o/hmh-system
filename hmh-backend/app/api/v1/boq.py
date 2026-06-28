@@ -95,7 +95,8 @@ def search_boq_items(
             BOQItem.item_type == ItemType.MATERIAL,
             q_clause,
         )
-        .order_by(BOQItem.raw_description)
+        # lot items (lot_id NOT NULL) sort before template items (NULL) so dedup picks the real allocation
+        .order_by(BOQItem.raw_description, BOQItem.lot_id.nulls_last())
         .limit(100)
         .all()
     )
@@ -115,6 +116,7 @@ def search_boq_items(
             _bi.project_id == project_id,
             _bi.is_active.is_(True),
             _bi.item_type == ItemType.MATERIAL,
+            _bi.lot_id.isnot(None),  # exclude template/site-level BOQ items; count only per-lot allocations
         )
         .group_by(
             _func.lower(_func.trim(_bi.raw_description)),
