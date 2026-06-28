@@ -1,4 +1,4 @@
-"""Vehicle and VehicleCost models."""
+"""Vehicle, VehicleCost, and RepairJob models."""
 
 import uuid
 from datetime import date, datetime
@@ -72,9 +72,52 @@ class Vehicle(TimestampMixin, Base):
     costs: Mapped[list["VehicleCost"]] = relationship(
         "VehicleCost", back_populates="vehicle", cascade="all, delete-orphan"
     )
+    repair_jobs: Mapped[list["RepairJob"]] = relationship(
+        "RepairJob", back_populates="vehicle", cascade="all, delete-orphan"
+    )
 
     def __repr__(self) -> str:
         return f"<Vehicle {self.registration} — {self.name}>"
+
+
+class RepairJob(TimestampMixin, Base):
+    __tablename__ = "repair_jobs"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    vehicle_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("vehicles.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="OPEN")
+    workshop_name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    date_opened: Mapped[date] = mapped_column(Date, nullable=False)
+    date_closed: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    odometer_at_repair: Mapped[Optional[float]] = mapped_column(Numeric(10, 1), nullable=True)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_by: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    vehicle: Mapped["Vehicle"] = relationship("Vehicle", back_populates="repair_jobs")
+    costs: Mapped[list["VehicleCost"]] = relationship(
+        "VehicleCost", back_populates="repair_job", cascade="all, delete-orphan"
+    )
+    material_requests: Mapped[list] = relationship(
+        "MaterialRequest",
+        back_populates="repair_job",
+        foreign_keys="MaterialRequest.repair_job_id",
+    )
+
+    def __repr__(self) -> str:
+        return f"<RepairJob {self.title!r} vehicle={self.vehicle_id} status={self.status}>"
 
 
 class VehicleCost(Base):
@@ -87,6 +130,12 @@ class VehicleCost(Base):
         UUID(as_uuid=True),
         ForeignKey("vehicles.id", ondelete="CASCADE"),
         nullable=False,
+        index=True,
+    )
+    repair_job_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("repair_jobs.id", ondelete="SET NULL"),
+        nullable=True,
         index=True,
     )
     cost_type: Mapped[VehicleCostType] = mapped_column(
@@ -122,6 +171,7 @@ class VehicleCost(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
     vehicle: Mapped["Vehicle"] = relationship("Vehicle", back_populates="costs")
+    repair_job: Mapped[Optional["RepairJob"]] = relationship("RepairJob", back_populates="costs")
 
     def __repr__(self) -> str:
         return f"<VehicleCost {self.cost_type} R{self.amount} vehicle={self.vehicle_id}>"

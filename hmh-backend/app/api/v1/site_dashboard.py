@@ -107,6 +107,7 @@ def lot_material_summary(site_id: uuid.UUID, lot_id: uuid.UUID, db: DbSession, c
     boq_items = unique_boq_items
 
     # ── 4. Batch-load all StockLedger aggregates in 4 queries (replaces N+1) ────
+    from app.models.boq import BOQSection
     from app.models.item import Item
     from app.models.supplier import Supplier as _Sup
 
@@ -115,7 +116,16 @@ def lot_material_summary(site_id: uuid.UUID, lot_id: uuid.UUID, db: DbSession, c
     # Include alias IDs so stock recorded against discarded duplicates is captured
     all_boq_query_ids = list(set(boq_item_ids + list(boq_id_to_canonical.keys())))
 
-    # delivered qty keyed by item_id (catalog path)
+    # Batch-load sections for section_name grouping
+    section_ids = list(set(bi.boq_section_id for bi in boq_items))
+    sections_map: dict = {}
+    if section_ids:
+        secs = db.query(BOQSection).filter(BOQSection.id.in_(section_ids)).all()
+        sections_map = {s.id: s for s in secs}
+
+    # delivered qty keyed by item_id — counts DELIVERY_RECEIVED at lot level
+    # (direct delivery to lot) AND TRANSFER_IN at lot level (warehouse dispatch to lot).
+    # This ensures both workflows are captured: old direct-to-lot and new warehouse flow.
     delivered_by_item: dict = {}
     if item_ids:
         rows = (
@@ -123,7 +133,10 @@ def lot_material_summary(site_id: uuid.UUID, lot_id: uuid.UUID, db: DbSession, c
             .filter(
                 StockLedger.lot_id        == lot_id,
                 StockLedger.item_id.in_(item_ids),
-                StockLedger.movement_type == MovementType.DELIVERY_RECEIVED,
+                StockLedger.movement_type.in_([
+                    MovementType.DELIVERY_RECEIVED,
+                    MovementType.TRANSFER_IN,
+                ]),
             )
             .group_by(StockLedger.item_id)
             .all()
@@ -149,7 +162,10 @@ def lot_material_summary(site_id: uuid.UUID, lot_id: uuid.UUID, db: DbSession, c
             .filter(
                 StockLedger.lot_id        == lot_id,
                 StockLedger.boq_item_id.in_(all_boq_query_ids),
-                StockLedger.movement_type == MovementType.DELIVERY_RECEIVED,
+                StockLedger.movement_type.in_([
+                    MovementType.DELIVERY_RECEIVED,
+                    MovementType.TRANSFER_IN,
+                ]),
             )
             .group_by(StockLedger.boq_item_id)
             .all()
@@ -235,6 +251,7 @@ def lot_material_summary(site_id: uuid.UUID, lot_id: uuid.UUID, db: DbSession, c
         if sup:
             supplier_name = sup.name
 
+        section    = sections_map.get(bi.boq_section_id)
         result.append({
             "boq_item_id":        str(bi.id),
             "item_id":            str(bi.item_id) if bi.item_id else None,
@@ -249,6 +266,13 @@ def lot_material_summary(site_id: uuid.UUID, lot_id: uuid.UUID, db: DbSession, c
             "from_site_template": fallback,
             "supplier_id":        supplier_id,
             "supplier_name":      supplier_name,
+            # BOQ section / milestone grouping
+            "section_name":       section.section_name if section else None,
+            "section_order":      section.sequence_order if section else 0,
+            # BOQ price columns
+            "planned_rate":       float(bi.planned_rate) if bi.planned_rate is not None else None,
+            "planned_total":      float(bi.planned_total) if bi.planned_total is not None else None,
+            "item_type":          bi.item_type.value if bi.item_type else "MATERIAL",
         })
 
     return ApiSuccess(data=result)

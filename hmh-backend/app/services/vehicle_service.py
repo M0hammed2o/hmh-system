@@ -158,6 +158,7 @@ def log_cost(
         recorded_by=actor_id,
         notes=data.notes,
         created_at=now,
+        repair_job_id=getattr(data, "repair_job_id", None),
     )
     db.add(cost)
 

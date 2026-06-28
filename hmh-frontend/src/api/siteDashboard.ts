@@ -16,6 +16,13 @@ export interface MaterialSummaryItem {
   from_site_template: boolean;         // true when derived from site-level BOQ, not lot-specific
   supplier_id:        string | null;   // preferred supplier from the BOQ item
   supplier_name:      string | null;   // supplier display name
+  // BOQ section / milestone grouping
+  section_name:       string | null;
+  section_order:      number;
+  // BOQ price columns
+  planned_rate:       number | null;
+  planned_total:      number | null;
+  item_type:          string;          // MATERIAL | LABOUR | PLANT | SERVICE
 }
 
 export type ActivityType = "delivery" | "usage" | "alert" | "stage";

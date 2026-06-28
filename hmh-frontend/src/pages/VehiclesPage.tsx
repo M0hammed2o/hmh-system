@@ -1,8 +1,19 @@
 import { useEffect, useState } from "react";
-import { Plus, Car, Wrench, Fuel, Trash2, Droplet, AlertTriangle, Pencil } from "lucide-react";
+import { Plus, Car, Wrench, Fuel, Trash2, Droplet, AlertTriangle, Pencil, ClipboardList } from "lucide-react";
 import { fuelApi, fuelPhotoUrl, type FuelLog, FUEL_TYPE_LABELS } from "@/api/fuel";
 import { formatCurrency } from "@/lib/format";
-import { vehiclesApi, type Vehicle, type VehicleCost, type VehicleCreate, type VehicleCostCreate, type VehicleType, type VehicleCostType, type FuelType } from "@/api/vehicles";
+import {
+  vehiclesApi,
+  type Vehicle,
+  type VehicleCost,
+  type VehicleCreate,
+  type VehicleCostCreate,
+  type VehicleType,
+  type VehicleCostType,
+  type FuelType,
+  type RepairJob,
+  type RepairJobCreate,
+} from "@/api/vehicles";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -316,17 +327,196 @@ function LogCostModal({ vehicle, onClose, onLogged }: { vehicle: Vehicle; onClos
   );
 }
 
+function NewRepairJobModal({
+  vehicle,
+  onClose,
+  onCreated,
+}: {
+  vehicle: Vehicle;
+  onClose: () => void;
+  onCreated: (job: RepairJob) => void;
+}) {
+  const today = new Date().toISOString().split("T")[0];
+  const [form, setForm] = useState<RepairJobCreate>({ title: "", date_opened: today });
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!form.title.trim()) { setError("Title is required."); return; }
+    setLoading(true);
+    setError("");
+    try {
+      const job = await vehiclesApi.createRepair(vehicle.id, form);
+      onCreated(job);
+      onClose();
+    } catch (err: unknown) {
+      setError((err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Failed to create repair job.");
+    } finally { setLoading(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-foreground/40">
+      <div className="bg-card border border-border rounded-xl w-full max-w-md p-6 animate-fade-in">
+        <h2 className="text-base font-semibold mb-1">New Repair Job</h2>
+        <p className="text-sm text-muted-foreground mb-5">{vehicle.name} ({vehicle.registration})</p>
+        <form onSubmit={submit} className="space-y-3">
+          <div className="space-y-2">
+            <Label>Title *</Label>
+            <Input
+              value={form.title}
+              onChange={(e) => setForm({ ...form, title: e.target.value })}
+              placeholder="e.g. Engine oil leak repair"
+              required
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>Workshop / Supplier</Label>
+            <Input
+              value={form.workshop_name || ""}
+              onChange={(e) => setForm({ ...form, workshop_name: e.target.value || undefined })}
+              placeholder="e.g. ABC Auto Repairs"
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-2">
+              <Label>Date Opened</Label>
+              <Input
+                type="date"
+                value={form.date_opened}
+                onChange={(e) => setForm({ ...form, date_opened: e.target.value })}
+                required
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Odometer (km)</Label>
+              <Input
+                type="number"
+                min="0"
+                value={form.odometer_at_repair ?? ""}
+                onChange={(e) => setForm({ ...form, odometer_at_repair: e.target.value ? parseFloat(e.target.value) : undefined })}
+                placeholder="45000"
+              />
+            </div>
+          </div>
+          <div className="space-y-2">
+            <Label>Description</Label>
+            <Input
+              value={form.description || ""}
+              onChange={(e) => setForm({ ...form, description: e.target.value || undefined })}
+              placeholder="Brief description of the issue"
+            />
+          </div>
+          {error && <p className="text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-lg px-3 py-2">{error}</p>}
+          <div className="flex gap-2 pt-1">
+            <Button type="submit" disabled={loading} className="flex-1">{loading ? "Creating…" : "Create Job"}</Button>
+            <Button type="button" variant="outline" onClick={onClose} className="flex-1">Cancel</Button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function LogRepairCostModal({
+  job,
+  onClose,
+  onLogged,
+}: {
+  job: RepairJob;
+  onClose: () => void;
+  onLogged: () => void;
+}) {
+  const today = new Date().toISOString().split("T")[0];
+  const [form, setForm] = useState<VehicleCostCreate>({ cost_type: "REPAIR", amount: 0, cost_date: today });
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    setError("");
+    try {
+      await vehiclesApi.logRepairCost(job.id, form);
+      onLogged();
+      onClose();
+    } catch (err: unknown) {
+      setError((err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Failed to log cost.");
+    } finally { setLoading(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-foreground/40">
+      <div className="bg-card border border-border rounded-xl w-full max-w-md p-6 animate-fade-in">
+        <h2 className="text-base font-semibold mb-1">Log Repair Cost</h2>
+        <p className="text-sm text-muted-foreground mb-5">{job.title}</p>
+        <form onSubmit={submit} className="space-y-3">
+          <div className="space-y-2">
+            <Label>Cost Type</Label>
+            <select
+              value={form.cost_type}
+              onChange={(e) => setForm({ ...form, cost_type: e.target.value as VehicleCostType })}
+              className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+            >
+              <option value="REPAIR">Repair (Labour)</option>
+              <option value="SERVICE">Service</option>
+              <option value="TYRE">Tyre</option>
+              <option value="OTHER">Other</option>
+            </select>
+          </div>
+          <div className="space-y-2">
+            <Label>Amount (R)</Label>
+            <Input
+              type="number"
+              min="0"
+              step="0.01"
+              value={form.amount}
+              onChange={(e) => setForm({ ...form, amount: parseFloat(e.target.value) || 0 })}
+              required
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>Description</Label>
+            <Input
+              value={form.description || ""}
+              onChange={(e) => setForm({ ...form, description: e.target.value })}
+              placeholder="e.g. Labour charge, parts, etc."
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>Date</Label>
+            <Input
+              type="date"
+              value={form.cost_date}
+              onChange={(e) => setForm({ ...form, cost_date: e.target.value })}
+              required
+            />
+          </div>
+          {error && <p className="text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-lg px-3 py-2">{error}</p>}
+          <div className="flex gap-2 pt-1">
+            <Button type="submit" disabled={loading} className="flex-1">{loading ? "Logging…" : "Log Cost"}</Button>
+            <Button type="button" variant="outline" onClick={onClose} className="flex-1">Cancel</Button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 export default function VehiclesPage() {
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [costs, setCosts] = useState<Record<string, VehicleCost[]>>({});
+  const [repairs, setRepairs] = useState<Record<string, RepairJob[]>>({});
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
   const [logCostFor, setLogCostFor] = useState<Vehicle | null>(null);
   const [editVehicle, setEditVehicle] = useState<Vehicle | null>(null);
-  const [expanded,      setExpanded]      = useState<string | null>(null);
-  const [error,         setError]         = useState("");
-  const [fuelLogs,      setFuelLogs]      = useState<Record<string, FuelLog[]>>({});
-  const [activeTab,     setActiveTab]     = useState<Record<string, "costs" | "fuel" | "details">>({});
+  const [newRepairFor, setNewRepairFor] = useState<Vehicle | null>(null);
+  const [logRepairCostFor, setLogRepairCostFor] = useState<{ vehicle: Vehicle; job: RepairJob } | null>(null);
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const [error, setError] = useState("");
+  const [fuelLogs, setFuelLogs] = useState<Record<string, FuelLog[]>>({});
+  const [activeTab, setActiveTab] = useState<Record<string, "costs" | "fuel" | "details" | "repairs">>({});
 
   const loadVehicles = () => {
     setLoading(true);
@@ -341,12 +531,15 @@ export default function VehiclesPage() {
     setCosts((prev) => ({ ...prev, [vehicleId]: data }));
   };
 
+  const loadRepairs = async (vehicleId: string) => {
+    const data = await vehiclesApi.listRepairs(vehicleId);
+    setRepairs((prev) => ({ ...prev, [vehicleId]: data }));
+  };
+
   const loadFuelLogs = async (vehicleId: string) => {
-    // Find a project from the vehicle's assigned_project_id or load all
     const vehicle = vehicles.find(v => v.id === vehicleId);
     const projId  = vehicle?.assigned_project_id;
     if (!projId) {
-      // Try to get logs across all projects by fetching project list first
       try {
         const { projectsApi: api } = await import("@/api/projects");
         const projects = await api.list(1, 100).then(r => r.items);
@@ -372,6 +565,7 @@ export default function VehiclesPage() {
     setExpanded(id);
     loadCosts(id);
     loadFuelLogs(id);
+    loadRepairs(id);
     if (!activeTab[id]) setActiveTab(prev => ({ ...prev, [id]: "details" }));
   };
 
@@ -464,7 +658,7 @@ export default function VehiclesPage() {
                 <div className="border-t border-border bg-muted/20">
                   {/* Tab switcher */}
                   <div className="flex border-b border-border/50">
-                    {(["details", "costs", "fuel"] as const).map(tab => (
+                    {(["details", "costs", "fuel", "repairs"] as const).map(tab => (
                       <button
                         key={tab}
                         onClick={() => setActiveTab(prev => ({ ...prev, [v.id]: tab }))}
@@ -473,8 +667,14 @@ export default function VehiclesPage() {
                             ? "border-b-2 border-primary text-primary"
                             : "text-muted-foreground hover:text-foreground"}`}
                       >
-                        {tab === "details" ? <Car className="w-3 h-3" /> : tab === "costs" ? <Wrench className="w-3 h-3" /> : <Droplet className="w-3 h-3" />}
-                        {tab === "details" ? "Details" : tab === "costs" ? `Costs (${costs[v.id]?.length ?? 0})` : `Fuel (${fuelLogs[v.id]?.length ?? 0})`}
+                        {tab === "details"  ? <Car className="w-3 h-3" />
+                         : tab === "costs"  ? <Wrench className="w-3 h-3" />
+                         : tab === "fuel"   ? <Droplet className="w-3 h-3" />
+                         : <ClipboardList className="w-3 h-3" />}
+                        {tab === "details"  ? "Details"
+                         : tab === "costs"  ? `Costs (${costs[v.id]?.length ?? 0})`
+                         : tab === "fuel"   ? `Fuel (${fuelLogs[v.id]?.length ?? 0})`
+                         : `Repairs (${repairs[v.id]?.length ?? 0})`}
                       </button>
                     ))}
                   </div>
@@ -599,6 +799,116 @@ export default function VehiclesPage() {
                       )}
                     </div>
                   )}
+
+                  {/* Repairs tab */}
+                  {(activeTab[v.id] ?? "details") === "repairs" && (
+                    <div className="px-4 py-3 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs text-muted-foreground">
+                          {repairs[v.id]?.length ?? 0} repair job(s)
+                        </span>
+                        <Button size="sm" variant="outline" onClick={() => setNewRepairFor(v)}>
+                          <Plus className="w-3.5 h-3.5" />
+                          New Repair Job
+                        </Button>
+                      </div>
+                      {!repairs[v.id] ? (
+                        <p className="text-xs text-muted-foreground">Loading…</p>
+                      ) : repairs[v.id].length === 0 ? (
+                        <p className="text-xs text-muted-foreground">No repair jobs logged yet. Click "New Repair Job" to get started.</p>
+                      ) : (
+                        <div className="space-y-3">
+                          {repairs[v.id].map(job => (
+                            <div key={job.id} className="border border-border/60 rounded-lg p-3 space-y-2">
+                              <div className="flex items-start justify-between gap-2">
+                                <div className="min-w-0">
+                                  <p className="text-sm font-medium">{job.title}</p>
+                                  {job.description && <p className="text-xs text-muted-foreground">{job.description}</p>}
+                                </div>
+                                <Badge
+                                  variant="secondary"
+                                  className={cn(
+                                    "text-xs shrink-0",
+                                    job.status === "OPEN"
+                                      ? "bg-amber-500/10 text-amber-600"
+                                      : "bg-green-500/10 text-green-600"
+                                  )}
+                                >
+                                  {job.status}
+                                </Badge>
+                              </div>
+                              <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-xs text-muted-foreground">
+                                <span>Opened: <strong className="text-foreground">{formatDate(job.date_opened)}</strong></span>
+                                {job.workshop_name && (
+                                  <span>Workshop: <strong className="text-foreground">{job.workshop_name}</strong></span>
+                                )}
+                                {job.odometer_at_repair != null && (
+                                  <span>Odometer: <strong className="text-foreground">{job.odometer_at_repair.toLocaleString()} km</strong></span>
+                                )}
+                                {job.date_closed && (
+                                  <span>Closed: <strong className="text-foreground">{formatDate(job.date_closed)}</strong></span>
+                                )}
+                              </div>
+                              {job.labour_costs.length > 0 && (
+                                <div className="bg-muted/30 rounded p-2 space-y-1">
+                                  {job.labour_costs.map(c => (
+                                    <div key={c.id} className="flex items-center justify-between text-xs">
+                                      <span className="text-muted-foreground">
+                                        {costTypeLabels[c.cost_type]}{c.description ? ` — ${c.description}` : ""}
+                                        <span className="ml-2 text-muted-foreground/60">{c.cost_date}</span>
+                                      </span>
+                                      <span className="font-medium">R{c.amount.toLocaleString()}</span>
+                                    </div>
+                                  ))}
+                                  <div className="border-t border-border/50 pt-1 flex justify-between text-xs font-semibold">
+                                    <span>Total</span>
+                                    <span>R{job.total_labour_cost.toLocaleString()}</span>
+                                  </div>
+                                </div>
+                              )}
+                              {job.mr_count > 0 && (
+                                <p className="text-xs text-muted-foreground">
+                                  {job.mr_count} material request{job.mr_count !== 1 ? "s" : ""} linked
+                                </p>
+                              )}
+                              <div className="flex gap-2 pt-0.5">
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="text-xs h-7 px-2.5"
+                                  onClick={() => setLogRepairCostFor({ vehicle: v, job })}
+                                >
+                                  <Plus className="w-3 h-3 mr-1" /> Add Cost
+                                </Button>
+                                {job.status === "OPEN" && (
+                                  <button
+                                    onClick={async () => {
+                                      if (!window.confirm("Close this repair job?")) return;
+                                      try {
+                                        const updated = await vehiclesApi.updateRepair(job.id, {
+                                          status: "CLOSED",
+                                          date_closed: new Date().toISOString().split("T")[0],
+                                        });
+                                        setRepairs(prev => ({
+                                          ...prev,
+                                          [v.id]: (prev[v.id] ?? []).map(j => j.id === job.id ? updated : j),
+                                        }));
+                                      } catch {
+                                        alert("Failed to close repair job.");
+                                      }
+                                    }}
+                                    className="text-xs px-2.5 h-7 rounded-md border border-border hover:bg-green-500/10 hover:text-green-600 hover:border-green-500/30 transition-colors"
+                                  >
+                                    ✓ Close Job
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -632,6 +942,27 @@ export default function VehiclesPage() {
             loadCosts(logCostFor.id);
             if (expanded !== logCostFor.id) setExpanded(logCostFor.id);
           }}
+        />
+      )}
+
+      {newRepairFor && (
+        <NewRepairJobModal
+          vehicle={newRepairFor}
+          onClose={() => setNewRepairFor(null)}
+          onCreated={(job) => {
+            setRepairs(prev => ({
+              ...prev,
+              [newRepairFor.id]: [job, ...(prev[newRepairFor.id] ?? [])],
+            }));
+          }}
+        />
+      )}
+
+      {logRepairCostFor && (
+        <LogRepairCostModal
+          job={logRepairCostFor.job}
+          onClose={() => setLogRepairCostFor(null)}
+          onLogged={() => loadRepairs(logRepairCostFor.vehicle.id)}
         />
       )}
     </div>

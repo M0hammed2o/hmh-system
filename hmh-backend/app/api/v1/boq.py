@@ -100,6 +100,33 @@ def search_boq_items(
         .all()
     )
 
+    # Pre-compute total_planned_quantity for each (description, unit) key across all lots
+    from sqlalchemy import func as _func, case as _case, String as _String
+    from sqlalchemy.orm import aliased as _alias
+
+    _bi = _alias(BOQItem)
+    total_qty_rows = (
+        db.query(
+            _func.lower(_func.trim(_bi.raw_description)).label("desc_key"),
+            _func.coalesce(_func.lower(_func.trim(_func.cast(_bi.unit, _String))), "").label("unit_key"),
+            _func.sum(_bi.planned_quantity).label("total_qty"),
+        )
+        .filter(
+            _bi.project_id == project_id,
+            _bi.is_active.is_(True),
+            _bi.item_type == ItemType.MATERIAL,
+        )
+        .group_by(
+            _func.lower(_func.trim(_bi.raw_description)),
+            _func.coalesce(_func.lower(_func.trim(_func.cast(_bi.unit, _String))), ""),
+        )
+        .all()
+    )
+    total_qty_map: dict[tuple, float] = {
+        (r.desc_key, r.unit_key): float(r.total_qty or 0)
+        for r in total_qty_rows
+    }
+
     seen: set[tuple] = set()
     results: list[dict] = []
     for item in rows:
@@ -114,16 +141,19 @@ def search_boq_items(
             if sup:
                 supplier_name = sup.name
 
+        total_planned = total_qty_map.get(key)
+
         results.append({
-            "id":                   str(item.id),
-            "description":          item.raw_description,
-            "unit":                 item.unit,
-            "planned_quantity":     float(item.planned_quantity) if item.planned_quantity is not None else None,
-            "preferred_supplier_id": str(item.supplier_id) if item.supplier_id else None,
-            "supplier_name":        supplier_name,
-            "lot_id":               str(item.lot_id) if item.lot_id else None,
-            "site_id":              str(item.site_id) if item.site_id else None,
-            "item_id":              str(item.item_id) if item.item_id else None,
+            "id":                     str(item.id),
+            "description":            item.raw_description,
+            "unit":                   item.unit,
+            "planned_quantity":       float(item.planned_quantity) if item.planned_quantity is not None else None,
+            "total_planned_quantity": round(total_planned, 3) if total_planned is not None else None,
+            "preferred_supplier_id":  str(item.supplier_id) if item.supplier_id else None,
+            "supplier_name":          supplier_name,
+            "lot_id":                 str(item.lot_id) if item.lot_id else None,
+            "site_id":                str(item.site_id) if item.site_id else None,
+            "item_id":                str(item.item_id) if item.item_id else None,
         })
 
         if len(results) >= 20:

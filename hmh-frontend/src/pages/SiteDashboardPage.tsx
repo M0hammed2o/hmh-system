@@ -1233,15 +1233,16 @@ export default function SiteDashboardPage() {
 
 // ── Request Material (BOQ-driven) ─────────────────────────────────────────────
 interface CartItem {
-  key:            string;
-  mode:           "boq" | "custom";
-  boq_item_id:    string | null;
-  description:    string;
-  qty:            string;
-  unit:           string;
-  supplier_id?:   string;
-  supplier_name?: string;
-  planned_qty?:   number;
+  key:               string;
+  mode:              "boq" | "custom";
+  boq_item_id:       string | null;
+  description:       string;
+  qty:               string;
+  unit:              string;
+  supplier_id?:      string;
+  supplier_name?:    string;
+  planned_qty?:      number;
+  total_planned_qty?: number;
 }
 
 function RequestMaterialModal({ projectId, siteId, lotId, onClose, onDone }: {
@@ -1277,15 +1278,16 @@ function RequestMaterialModal({ projectId, siteId, lotId, onClose, onDone }: {
 
   const addBOQItem = (item: BOQSearchResult) => {
     setCart(prev => [...prev, {
-      key:           item.id,
-      mode:          "boq",
-      boq_item_id:   item.id,
-      description:   item.description,
-      qty:           "",
-      unit:          item.unit ?? "",
-      supplier_id:   item.preferred_supplier_id ?? undefined,
-      supplier_name: item.supplier_name ?? undefined,
-      planned_qty:   item.planned_quantity ?? undefined,
+      key:               item.id,
+      mode:              "boq",
+      boq_item_id:       item.id,
+      description:       item.description,
+      qty:               "",
+      unit:              item.unit ?? "",
+      supplier_id:       item.preferred_supplier_id ?? undefined,
+      supplier_name:     item.supplier_name ?? undefined,
+      planned_qty:       item.planned_quantity ?? undefined,
+      total_planned_qty: item.total_planned_quantity ?? undefined,
     }]);
     setSearch("");
     setResults([]);
@@ -1392,9 +1394,17 @@ function RequestMaterialModal({ projectId, siteId, lotId, onClose, onDone }: {
                         <span className="text-xs text-muted-foreground ml-2">· {r.supplier_name}</span>
                       )}
                     </div>
-                    <span className="text-xs text-muted-foreground ml-2 shrink-0">
-                      {r.planned_quantity != null ? `${r.planned_quantity} ` : ""}{r.unit ?? ""}
-                    </span>
+                    <div className="text-xs text-muted-foreground ml-2 shrink-0 text-right">
+                      {r.total_planned_quantity != null
+                        ? <span className="font-medium text-foreground">{r.total_planned_quantity} {r.unit ?? ""}</span>
+                        : r.planned_quantity != null
+                          ? <span>{r.planned_quantity} {r.unit ?? ""}</span>
+                          : null
+                      }
+                      {r.total_planned_quantity != null && (
+                        <div className="text-[10px] text-muted-foreground">total all lots</div>
+                      )}
+                    </div>
                   </button>
                 ))}
               </div>
@@ -1446,9 +1456,14 @@ function RequestMaterialModal({ projectId, siteId, lotId, onClose, onDone }: {
                       ) : (
                         <span className="text-xs text-muted-foreground">{item.unit}</span>
                       )}
-                      {item.mode === "boq" && item.planned_qty != null && (
+                      {item.mode === "boq" && item.total_planned_qty != null && (
                         <span className="text-[10px] text-green-700 bg-green-50 border border-green-200 rounded px-1.5 py-0.5">
-                          BOQ: {item.planned_qty}
+                          All lots: {item.total_planned_qty} {item.unit}
+                        </span>
+                      )}
+                      {item.mode === "boq" && item.total_planned_qty == null && item.planned_qty != null && (
+                        <span className="text-[10px] text-green-700 bg-green-50 border border-green-200 rounded px-1.5 py-0.5">
+                          BOQ: {item.planned_qty} {item.unit}
                         </span>
                       )}
                       {item.mode === "boq" && item.supplier_name && (

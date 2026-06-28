@@ -65,6 +65,7 @@ export interface VehicleCost {
   recorded_by: string | null;
   notes: string | null;
   created_at: string;
+  repair_job_id: string | null;
 }
 
 export interface VehicleCostCreate {
@@ -75,6 +76,55 @@ export interface VehicleCostCreate {
   site_id?: string;
   lot_id?: string;
   cost_date: string;
+  notes?: string;
+}
+
+export interface RepairJobCost {
+  id: string;
+  cost_type: VehicleCostType;
+  amount: number;
+  description: string | null;
+  cost_date: string;
+  notes: string | null;
+}
+
+export interface RepairJobMR {
+  id: string;
+  mr_number: string | null;
+  status: string;
+  requested_date: string | null;
+}
+
+export interface RepairJob {
+  id: string;
+  vehicle_id: string;
+  title: string;
+  description: string | null;
+  status: string;
+  workshop_name: string | null;
+  date_opened: string;
+  date_closed: string | null;
+  odometer_at_repair: number | null;
+  notes: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+  total_labour_cost: number;
+  total_parts_cost: number;
+  labour_cost_count: number;
+  mr_count: number;
+  labour_costs: RepairJobCost[];
+  material_requests: RepairJobMR[];
+}
+
+export interface RepairJobCreate {
+  title: string;
+  description?: string;
+  status?: string;
+  workshop_name?: string;
+  date_opened: string;
+  date_closed?: string;
+  odometer_at_repair?: number;
   notes?: string;
 }
 
@@ -112,5 +162,28 @@ export const vehiclesApi = {
 
   delete: async (vehicleId: string): Promise<void> => {
     await client.delete(`/vehicles/${vehicleId}`);
+  },
+
+  listRepairs: async (vehicleId: string): Promise<RepairJob[]> => {
+    const res = await client.get<{ data: RepairJob[] }>(`/vehicles/${vehicleId}/repairs`);
+    return res.data.data;
+  },
+
+  createRepair: async (vehicleId: string, body: RepairJobCreate): Promise<RepairJob> => {
+    const res = await client.post<{ data: RepairJob }>(`/vehicles/${vehicleId}/repairs`, body);
+    return res.data.data;
+  },
+
+  updateRepair: async (
+    repairJobId: string,
+    body: Partial<RepairJobCreate> & { status?: string; date_closed?: string },
+  ): Promise<RepairJob> => {
+    const res = await client.patch<{ data: RepairJob }>(`/vehicles/repairs/${repairJobId}`, body);
+    return res.data.data;
+  },
+
+  logRepairCost: async (repairJobId: string, body: VehicleCostCreate): Promise<VehicleCost> => {
+    const res = await client.post<{ data: VehicleCost }>(`/vehicles/repairs/${repairJobId}/costs`, body);
+    return res.data.data;
   },
 };

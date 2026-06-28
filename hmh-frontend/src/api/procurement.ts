@@ -101,6 +101,7 @@ export interface BOQSearchResult {
   description: string;
   unit: string | null;
   planned_quantity: number | null;
+  total_planned_quantity: number | null;  // sum across ALL lots in the project
   preferred_supplier_id: string | null;
   supplier_name: string | null;
   lot_id: string | null;

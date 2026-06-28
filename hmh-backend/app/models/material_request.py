@@ -1,8 +1,10 @@
 """Material Request models."""
 
+from __future__ import annotations
+
 import uuid
 from datetime import date, datetime
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from sqlalchemy import Boolean, Date, DateTime, Enum, ForeignKey, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
@@ -11,6 +13,9 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.base import Base
 from app.models.base import TimestampMixin
 from app.models.enums import DeliveryDestination, MRPriority, RecordStatus
+
+if TYPE_CHECKING:
+    from app.models.vehicle import RepairJob
 
 
 class MaterialRequest(TimestampMixin, Base):
@@ -97,8 +102,21 @@ class MaterialRequest(TimestampMixin, Base):
     converted_to_po_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     issuing_company: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
 
+    # Repair job link
+    repair_job_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("repair_jobs.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
     items: Mapped[list["MaterialRequestItem"]] = relationship(
         "MaterialRequestItem", back_populates="request", cascade="all, delete-orphan"
+    )
+    repair_job: Mapped[Optional["RepairJob"]] = relationship(
+        "RepairJob",
+        back_populates="material_requests",
+        foreign_keys=[repair_job_id],
     )
 
     def __repr__(self) -> str:
