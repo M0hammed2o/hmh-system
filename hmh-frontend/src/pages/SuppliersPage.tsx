@@ -272,7 +272,8 @@ export default function SuppliersPage() {
           {filtered.length === 0 ? (
             <div className="p-12 text-center text-sm text-muted-foreground">No suppliers found.</div>
           ) : (
-            <table className="w-full text-sm">
+            <div className="overflow-x-auto">
+            <table className="w-full text-sm min-w-[900px]">
               <thead>
                 <tr className="border-b border-border bg-muted/50">
                   <th className="text-left px-4 py-3 font-medium text-muted-foreground">Code</th>
@@ -307,7 +308,7 @@ export default function SuppliersPage() {
                           {s.is_active ? "Active" : "Inactive"}
                         </Badge>
                       </td>
-                      <td className="px-4 py-3">
+                      <td className="px-4 py-3 whitespace-nowrap">
                         <div className="flex items-center gap-2">
                           <button
                             onClick={() => toggleDocs(s.id)}
@@ -388,6 +389,7 @@ export default function SuppliersPage() {
                 ))}
               </tbody>
             </table>
+            </div>
           )}
         </div>
       )}
