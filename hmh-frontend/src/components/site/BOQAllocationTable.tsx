@@ -1,15 +1,15 @@
 /**
  * BOQAllocationTable — BOQ tracking dashboard grouped by section (milestone).
  *
- * Columns: Description | Supplier | Qty | Unit | Rate | Total | Received | Used | Remaining | Type
- * Sections are collapsed/expanded like the main BOQ page.
+ * Columns: Description | Unit | Qty | Received | Used | Remaining
+ * Sections are collapsible milestone headers.
  */
 
 import { useMemo, useState } from "react";
 import {
   Search, Download, Printer, ChevronDown, ChevronRight,
-  X, FileSpreadsheet, AlertTriangle, CheckCircle2,
-  TrendingDown, Eye, Minus, Truck, BarChart3, Package,
+  X, FileSpreadsheet, AlertTriangle,
+  TrendingDown, Eye, Minus, Truck, BarChart3,
 } from "lucide-react";
 import { type MaterialSummaryItem, type MaterialStatus } from "@/api/siteDashboard";
 import { Button } from "@/components/ui/button";
@@ -224,7 +224,6 @@ function SectionGroup({
   const totalReceived = section.items.reduce((s, i) => s + i.delivered_qty,     0);
   const totalUsed     = section.items.reduce((s, i) => s + i.used_qty,          0);
   const totalRemaining= section.items.reduce((s, i) => s + i.remaining_qty,     0);
-  const totalValue    = section.items.reduce((s, i) => s + (i.planned_total ?? 0), 0);
   const worstStatus   = section.items.reduce<MaterialStatus>(
     (w, i) => STATUS_PRIORITY[i.status] < STATUS_PRIORITY[w] ? i.status : w, "OK"
   );
@@ -248,8 +247,6 @@ function SectionGroup({
           </div>
         </td>
         <td className="px-3 py-2.5 text-right tabular-nums font-semibold text-sm">{fmtQty(totalQty)}</td>
-        <td className="px-3 py-2.5 text-muted-foreground text-xs text-right">—</td>
-        <td className="px-3 py-2.5 text-right tabular-nums font-semibold text-sm">{fmtMoney(totalValue)}</td>
         <td className="px-3 py-2.5 text-right tabular-nums text-blue-600 font-semibold text-sm">{totalReceived > 0 ? fmtQty(totalReceived) : "—"}</td>
         <td className="px-3 py-2.5 text-right tabular-nums text-orange-600 font-semibold text-sm">{totalUsed > 0 ? fmtQty(totalUsed) : "—"}</td>
         <td className="px-3 py-2.5 text-right">
@@ -280,8 +277,6 @@ function SectionGroup({
             </td>
             <td className="px-3 py-2.5 text-xs text-muted-foreground text-right whitespace-nowrap">{item.unit ?? "—"}</td>
             <td className="px-3 py-2.5 text-right tabular-nums text-sm">{fmtQty(item.boq_allocated_qty)}</td>
-            <td className="px-3 py-2.5 text-right tabular-nums text-sm text-muted-foreground">{fmtMoney(item.planned_rate)}</td>
-            <td className="px-3 py-2.5 text-right tabular-nums text-sm">{fmtMoney(item.planned_total)}</td>
             <td className="px-3 py-2.5 text-right tabular-nums text-sm text-blue-600">
               {item.delivered_qty > 0 ? fmtQty(item.delivered_qty) : "—"}
             </td>
@@ -296,11 +291,6 @@ function SectionGroup({
                 : "text-muted-foreground"
               )}>
                 {item.remaining_qty > 0 ? fmtQty(item.remaining_qty) : "—"}
-              </span>
-            </td>
-            <td className="px-3 py-2.5 text-center">
-              <span className={cn("text-[10px] font-semibold px-1.5 py-0.5 rounded", TYPE_BADGE[item.item_type] ?? "bg-muted text-muted-foreground")}>
-                {item.item_type ?? "MATERIAL"}
               </span>
             </td>
             {!hideActions && (
@@ -367,28 +357,24 @@ export function BOQAllocationTable({
   };
 
   const kpi = useMemo(() => ({
-    total:    items.length,
-    overBOQ:  items.filter(i => i.status === "OVER_BOQ").length,
-    low:      items.filter(i => i.status === "LOW").length,
+    total:      items.length,
+    overBOQ:    items.filter(i => i.status === "OVER_BOQ").length,
+    low:        items.filter(i => i.status === "LOW").length,
     stockIssue: items.filter(i => i.status === "STOCK_ISSUE").length,
-    totalValue: items.reduce((s, i) => s + (i.planned_total ?? 0), 0),
   }), [items]);
 
   const handleExportCSV = () => {
     downloadCSV("boq-allocation.csv", [
-      ["Section", "Description", "Supplier", "Qty", "Unit", "Rate(R)", "Total(R)", "Received", "Used", "Remaining", "Type", "Status"],
+      ["Section", "Description", "Supplier", "Qty", "Unit", "Received", "Used", "Remaining", "Status"],
       ...items.map(i => [
         i.section_name ?? "",
         i.description,
         i.supplier_name ?? "",
         String(i.boq_allocated_qty),
         i.unit ?? "",
-        String(i.planned_rate ?? ""),
-        String(i.planned_total ?? ""),
         String(i.delivered_qty),
         String(i.used_qty),
         String(i.remaining_qty),
-        i.item_type ?? "MATERIAL",
         i.status,
       ]),
     ]);
@@ -469,11 +455,10 @@ export function BOQAllocationTable({
       </div>
 
       {/* ── KPI cards ── */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <KpiCard label="BOQ Items"     value={kpi.total}     icon={FileSpreadsheet} accent="bg-blue-600 text-white border-blue-700" />
-        <KpiCard label="Total Value"   value={fmtMoney(kpi.totalValue)} icon={Package} accent="bg-slate-700 text-white border-slate-800" />
-        <KpiCard label="Over BOQ"      value={kpi.overBOQ}   icon={AlertTriangle}   accent={kpi.overBOQ > 0 ? "bg-red-600 text-white border-red-700" : "bg-muted text-muted-foreground border-border"} />
-        <KpiCard label="Low / Issues"  value={kpi.low + kpi.stockIssue} icon={TrendingDown} accent={(kpi.low + kpi.stockIssue) > 0 ? "bg-amber-500 text-white border-amber-600" : "bg-muted text-muted-foreground border-border"} />
+      <div className="grid grid-cols-3 gap-3">
+        <KpiCard label="BOQ Items"    value={kpi.total}    icon={FileSpreadsheet} accent="bg-blue-600 text-white border-blue-700" />
+        <KpiCard label="Over BOQ"     value={kpi.overBOQ}  icon={AlertTriangle}   accent={kpi.overBOQ > 0 ? "bg-red-600 text-white border-red-700" : "bg-muted text-muted-foreground border-border"} />
+        <KpiCard label="Low / Issues" value={kpi.low + kpi.stockIssue} icon={TrendingDown} accent={(kpi.low + kpi.stockIssue) > 0 ? "bg-amber-500 text-white border-amber-600" : "bg-muted text-muted-foreground border-border"} />
       </div>
 
       {/* ── Table (desktop) ── */}
@@ -485,12 +470,9 @@ export function BOQAllocationTable({
                 <th className="px-3 py-3 text-xs font-semibold text-muted-foreground text-left">Description</th>
                 <th className="px-3 py-3 text-xs font-semibold text-muted-foreground text-right">Unit</th>
                 <th className="px-3 py-3 text-xs font-semibold text-muted-foreground text-right">Qty</th>
-                <th className="px-3 py-3 text-xs font-semibold text-muted-foreground text-right">Rate (R)</th>
-                <th className="px-3 py-3 text-xs font-semibold text-muted-foreground text-right">Total</th>
                 <th className="px-3 py-3 text-xs font-semibold text-blue-600/80 text-right">Received</th>
                 <th className="px-3 py-3 text-xs font-semibold text-orange-600/80 text-right">Used</th>
                 <th className="px-3 py-3 text-xs font-semibold text-muted-foreground text-right">Remaining</th>
-                <th className="px-3 py-3 text-xs font-semibold text-muted-foreground text-center">Type</th>
                 {!hideActions && <th className="px-3 py-3 text-xs font-semibold text-muted-foreground text-right">Actions</th>}
               </tr>
             </thead>
@@ -524,8 +506,6 @@ export function BOQAllocationTable({
                       </td>
                       <td className="px-3 py-3 text-right text-xs text-muted-foreground">{item.unit ?? "—"}</td>
                       <td className="px-3 py-3 text-right tabular-nums">{fmtQty(item.boq_allocated_qty)}</td>
-                      <td className="px-3 py-3 text-right tabular-nums text-muted-foreground">{fmtMoney(item.planned_rate)}</td>
-                      <td className="px-3 py-3 text-right tabular-nums">{fmtMoney(item.planned_total)}</td>
                       <td className="px-3 py-3 text-right tabular-nums text-blue-600">{item.delivered_qty > 0 ? fmtQty(item.delivered_qty) : "—"}</td>
                       <td className="px-3 py-3 text-right tabular-nums text-orange-600">{item.used_qty > 0 ? fmtQty(item.used_qty) : "—"}</td>
                       <td className="px-3 py-3 text-right tabular-nums">
@@ -535,11 +515,6 @@ export function BOQAllocationTable({
                           : "text-muted-foreground"
                         )}>
                           {item.remaining_qty > 0 ? fmtQty(item.remaining_qty) : "—"}
-                        </span>
-                      </td>
-                      <td className="px-3 py-3 text-center">
-                        <span className={cn("text-[10px] font-semibold px-1.5 py-0.5 rounded", TYPE_BADGE[item.item_type] ?? "bg-muted text-muted-foreground")}>
-                          {item.item_type ?? "MATERIAL"}
                         </span>
                       </td>
                       {!hideActions && (
@@ -564,8 +539,6 @@ export function BOQAllocationTable({
                   {search ? ` (filtered from ${items.length})` : ""}
                 </td>
                 <td className="px-3 py-3 text-right tabular-nums">{fmtQty(items.reduce((s, i) => s + i.boq_allocated_qty, 0))}</td>
-                <td />
-                <td className="px-3 py-3 text-right tabular-nums">{fmtMoney(kpi.totalValue)}</td>
                 <td className="px-3 py-3 text-right tabular-nums text-blue-600">
                   {items.reduce((s, i) => s + i.delivered_qty, 0) > 0 ? fmtQty(items.reduce((s, i) => s + i.delivered_qty, 0)) : "—"}
                 </td>
@@ -575,7 +548,7 @@ export function BOQAllocationTable({
                 <td className="px-3 py-3 text-right tabular-nums text-green-600">
                   {items.reduce((s, i) => s + i.remaining_qty, 0) > 0 ? fmtQty(items.reduce((s, i) => s + i.remaining_qty, 0)) : "—"}
                 </td>
-                <td colSpan={hideActions ? 1 : 2} />
+                {!hideActions && <td />}
               </tr>
             </tfoot>
           </table>
@@ -613,17 +586,12 @@ export function BOQAllocationTable({
                         </div>
                         <StatusBadge status={item.status} />
                       </div>
-                      <div className="grid grid-cols-3 gap-2 text-xs">
+                      <div className="grid grid-cols-4 gap-2 text-xs">
                         <div><p className="text-muted-foreground">Qty</p><p className="font-bold">{fmtQty(item.boq_allocated_qty)} {item.unit ?? ""}</p></div>
                         <div><p className="text-muted-foreground">Received</p><p className="font-bold text-blue-600">{item.delivered_qty > 0 ? fmtQty(item.delivered_qty) : "—"}</p></div>
                         <div><p className="text-muted-foreground">Used</p><p className="font-bold text-orange-600">{item.used_qty > 0 ? fmtQty(item.used_qty) : "—"}</p></div>
+                        <div><p className="text-muted-foreground">Remaining</p><p className="font-bold">{item.remaining_qty > 0 ? fmtQty(item.remaining_qty) : "—"}</p></div>
                       </div>
-                      {(item.planned_rate ?? 0) > 0 && (
-                        <div className="flex gap-4 text-xs text-muted-foreground">
-                          <span>Rate: <strong className="text-foreground">{fmtMoney(item.planned_rate)}</strong></span>
-                          <span>Total: <strong className="text-foreground">{fmtMoney(item.planned_total)}</strong></span>
-                        </div>
-                      )}
                     </div>
                   );
                 })}
