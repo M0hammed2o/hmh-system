@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Plus, Building2, CheckCircle2, XCircle, Trash2, ChevronDown, ChevronUp, Paperclip } from "lucide-react";
+import { Plus, Building2, CheckCircle2, XCircle, Trash2, ChevronDown, ChevronUp, Paperclip, ShieldAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -333,20 +333,38 @@ export default function SuppliersPage() {
                           {s.is_active && (
                             <button
                               onClick={async () => {
-                                if (!window.confirm(`Delete supplier "${s.name}"?\n\nThis will deactivate the supplier. All historical records are preserved.`)) return;
+                                if (!window.confirm(`Deactivate supplier "${s.name}"?\n\nAll historical records are preserved. You can reactivate later.`)) return;
                                 try {
                                   await suppliersApi.delete(s.id);
                                   setSuppliers(prev => prev.filter(x => x.id !== s.id));
                                 } catch (err: unknown) {
-                                  alert((err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ?? "Cannot delete supplier.");
+                                  alert((err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ?? "Cannot deactivate supplier.");
                                 }
                               }}
-                              className="p-1 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive"
-                              title="Delete supplier"
+                              className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground"
+                              title="Deactivate supplier"
                             >
                               <Trash2 className="w-3.5 h-3.5" />
                             </button>
                           )}
+                          <button
+                            onClick={async () => {
+                              const confirmed = window.confirm(
+                                `PERMANENTLY DELETE "${s.name}"?\n\nThis cannot be undone. The supplier will be removed from the database entirely.\n\nClick OK only if this is a test/duplicate entry with no linked records.`
+                              );
+                              if (!confirmed) return;
+                              try {
+                                await suppliersApi.permanentDelete(s.id);
+                                setSuppliers(prev => prev.filter(x => x.id !== s.id));
+                              } catch (err: unknown) {
+                                alert((err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ?? "Cannot permanently delete supplier.");
+                              }
+                            }}
+                            className="p-1 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive"
+                            title="Permanently delete supplier"
+                          >
+                            <ShieldAlert className="w-3.5 h-3.5" />
+                          </button>
                         </div>
                       </td>
                     </tr>

@@ -206,6 +206,10 @@ export const suppliersApi = {
     await client.delete(`/suppliers/${id}`);
   },
 
+  permanentDelete: async (id: string): Promise<void> => {
+    await client.delete(`/suppliers/${id}/permanent`);
+  },
+
   procurementHistory: async (id: string): Promise<SupplierProcurementHistory> => {
     const res = await client.get<{ data: SupplierProcurementHistory }>(`/suppliers/${id}/procurement-history`);
     return res.data.data;

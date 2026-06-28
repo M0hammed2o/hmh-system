@@ -538,3 +538,65 @@ def delete_supplier(supplier_id: uuid.UUID, db: DbSession):
     db.commit()
     return ApiSuccess(data={"supplier_id": str(supplier_id), "name": s.name},
                       message=f"Supplier '{s.name}' deactivated.")
+
+
+@router.delete(
+    "/{supplier_id}/permanent",
+    response_model=ApiSuccess[dict],
+    dependencies=[OFFICE_AND_ABOVE],
+)
+def permanently_delete_supplier(supplier_id: uuid.UUID, db: DbSession):
+    """
+    Hard-delete a supplier row from the database.
+    Refused if any linked records exist (POs, invoices, deliveries, payments,
+    quotations, MR quotes, BOQ items, work-done entries).
+    """
+    from app.models.supplier import Supplier
+    from app.models.purchase_order import PurchaseOrder
+    from app.models.invoice import Invoice
+    from app.models.delivery import Delivery
+    from app.models.payment import Payment
+    from app.models.quotation import Quotation
+    from app.models.mr_quote import MRQuote
+    from app.models.boq import BOQItem
+    from app.models.work_done import WorkDone
+    from app.models.material_request import MaterialRequest, MRItem
+
+    s = db.get(Supplier, supplier_id)
+    if not s:
+        raise HTTPException(404, "Supplier not found.")
+
+    blocking: list[str] = []
+
+    if db.query(PurchaseOrder.id).filter(PurchaseOrder.supplier_id == supplier_id).first():
+        blocking.append("purchase orders")
+    if db.query(Invoice.id).filter(Invoice.supplier_id == supplier_id).first():
+        blocking.append("invoices")
+    if db.query(Delivery.id).filter(Delivery.supplier_id == supplier_id).first():
+        blocking.append("deliveries")
+    if db.query(Payment.id).filter(Payment.supplier_id == supplier_id).first():
+        blocking.append("payments")
+    if db.query(Quotation.id).filter(Quotation.supplier_id == supplier_id).first():
+        blocking.append("quotations")
+    if db.query(MRQuote.id).filter(MRQuote.supplier_id == supplier_id).first():
+        blocking.append("MR quotes")
+    if db.query(BOQItem.id).filter(BOQItem.supplier_id == supplier_id).first():
+        blocking.append("BOQ items")
+    if db.query(WorkDone.id).filter(WorkDone.supplier_id == supplier_id).first():
+        blocking.append("work-done entries")
+    if db.query(MaterialRequest.id).filter(MaterialRequest.preferred_supplier_id == supplier_id).first():
+        blocking.append("material requests")
+
+    if blocking:
+        raise HTTPException(
+            409,
+            f"Cannot permanently delete '{s.name}' — linked records exist: "
+            + ", ".join(blocking)
+            + ". Deactivate the supplier instead.",
+        )
+
+    name = s.name
+    db.delete(s)
+    db.commit()
+    return ApiSuccess(data={"supplier_id": str(supplier_id), "name": name},
+                      message=f"Supplier '{name}' permanently deleted.")
