@@ -536,10 +536,17 @@ def finalize_pos(mr_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
     Create one PO per supplier from all newly approved quotes and send one
     email per supplier. Quotes already linked to a PO are skipped so this
     endpoint is safe to call multiple times.
+
+    If a supplier already has an APPROVED PO from this MR (i.e. the user
+    approved more quotes after the first batch was sent), the new items are
+    merged into that existing PO instead of creating a duplicate.
     """
     from collections import defaultdict
+    from decimal import Decimal, ROUND_HALF_UP
     from app.models.material_request import MaterialRequest
     from app.models.mr_quote import MRQuote
+    from app.models.purchase_order import PurchaseOrder, PurchaseOrderItem
+    from app.models.enums import RecordStatus, VatMode
     from app.models.supplier import Supplier
     from app.services import mr_service
     from app.services.email_service import send_po_email
@@ -573,33 +580,84 @@ def finalize_pos(mr_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
         by_supplier[q.supplier_id].append(q)
 
     created_pos = []
+    now = datetime.now(timezone.utc)
+
     for supplier_id, quotes in by_supplier.items():
-        po_items = [
-            {
-                "description": q.description,
-                "quantity":    float(q.quoted_quantity),
-                "unit":        q.unit or "",
-                "rate":        float(q.unit_price),
-                "item_id":     str(q.item_id) if q.item_id else None,
-            }
-            for q in quotes
-        ]
-        try:
-            po = mr_service.convert_to_po(
-                db,
-                mr_id=mr_id,
-                supplier_id=supplier_id,
-                items_with_rates=po_items,
-                actor_id=current_user.id,
+        # Check if an APPROVED PO for this MR+supplier already exists.
+        # If so, add the new items to it rather than creating a duplicate PO.
+        existing_po = (
+            db.query(PurchaseOrder)
+            .filter(
+                PurchaseOrder.material_request_id == mr_id,
+                PurchaseOrder.supplier_id == supplier_id,
+                PurchaseOrder.status == RecordStatus.APPROVED,
             )
-        except Exception as exc:
-            raise HTTPException(422, str(exc)) from exc
+            .order_by(PurchaseOrder.po_date.desc())
+            .first()
+        )
 
-        # Link each quote to the created PO so re-runs skip them
-        for q in quotes:
-            q.purchase_order_id = po.id
+        if existing_po:
+            # Merge new items into the existing PO
+            added_subtotal = Decimal("0")
+            for idx, q in enumerate(quotes, 1):
+                qty  = Decimal(str(float(q.quoted_quantity)))
+                rate = Decimal(str(float(q.unit_price)))
+                line_total = (qty * rate).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+                added_subtotal += line_total
+                poi = PurchaseOrderItem(
+                    purchase_order_id=existing_po.id,
+                    item_id=q.item_id,
+                    lot_id=mr.lot_id,
+                    description=q.description or f"Item {idx}",
+                    quantity_ordered=float(qty),
+                    unit=q.unit or "",
+                    rate=float(rate),
+                    vat_mode=VatMode.EXCLUSIVE,
+                    vat_rate=15.0,
+                    line_total=float(line_total),
+                    quantity_received=0.0,
+                    created_at=now,
+                )
+                db.add(poi)
+                q.purchase_order_id = existing_po.id
 
-        # Send PO email (best-effort)
+            # Recalculate PO totals
+            new_subtotal = Decimal(str(existing_po.subtotal_amount or 0)) + added_subtotal
+            new_vat = (new_subtotal * Decimal("15") / Decimal("115")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            existing_po.subtotal_amount = float(new_subtotal)
+            existing_po.vat_amount      = float(new_vat)
+            existing_po.total_amount    = float(new_subtotal)
+
+            db.flush()
+            po = existing_po
+            merged = True
+        else:
+            po_items = [
+                {
+                    "description": q.description,
+                    "quantity":    float(q.quoted_quantity),
+                    "unit":        q.unit or "",
+                    "rate":        float(q.unit_price),
+                    "item_id":     str(q.item_id) if q.item_id else None,
+                }
+                for q in quotes
+            ]
+            try:
+                po = mr_service.convert_to_po(
+                    db,
+                    mr_id=mr_id,
+                    supplier_id=supplier_id,
+                    items_with_rates=po_items,
+                    actor_id=current_user.id,
+                )
+            except Exception as exc:
+                raise HTTPException(422, str(exc)) from exc
+
+            for q in quotes:
+                q.purchase_order_id = po.id
+            merged = False
+
+        # Send / re-send PO email (best-effort)
         email_result: dict = {"status": "NOT_SENT", "sent_to": None}
         try:
             log = send_po_email(db, po, sent_by_id=current_user.id, mr_id=mr_id)
@@ -617,14 +675,20 @@ def finalize_pos(mr_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
             "supplier_name": supplier.name if supplier else None,
             "total_amount":  float(po.total_amount or 0),
             "email":         email_result,
+            "merged":        merged,
         })
 
     db.commit()
 
     count = len(created_pos)
+    new_count    = sum(1 for p in created_pos if not p["merged"])
+    merged_count = sum(1 for p in created_pos if p["merged"])
+    parts = []
+    if new_count:    parts.append(f"Created {new_count} PO(s)")
+    if merged_count: parts.append(f"merged items into {merged_count} existing PO(s)")
     return ApiSuccess(
         data={"pos": created_pos, "count": count},
-        message=f"Created {count} PO(s) and emailed supplier(s).",
+        message="; ".join(parts) + ".",
     )
 
 
