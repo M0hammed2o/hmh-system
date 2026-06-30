@@ -11,8 +11,8 @@ from typing import Optional
 
 from fastapi import APIRouter, File, Form, Query, UploadFile
 
-from app.core.config import settings
 from app.core.resource_access import get_resource_or_404
+from app.core.storage import save_upload
 from app.core.upload_validation import PHOTO_MIMES, validate_upload
 from app.dependencies import ALL_ROLES, CurrentUser, DbSession, OFFICE_AND_ABOVE
 from app.models.fuel import FuelLog
@@ -22,18 +22,13 @@ from app.services import fuel_service
 
 
 def _save_fuel_photo(file: Optional[UploadFile], subfolder: str) -> Optional[str]:
-    """Save a fuel evidence photo and return the relative URL path."""
+    """Save a fuel evidence photo via storage backend (Supabase or local disk)."""
     if not file or not file.filename:
         return None
-    import asyncio, inspect
-    save_dir = os.path.join(settings.UPLOAD_DIR, "fuel_evidence", subfolder)
-    os.makedirs(save_dir, exist_ok=True)
-    ext  = os.path.splitext(file.filename)[1] or ".jpg"
+    ext = os.path.splitext(file.filename)[1] or ".jpg"
     fname = f"{uuid.uuid4().hex}{ext}"
     content = file.file.read()
-    with open(os.path.join(save_dir, fname), "wb") as fh:
-        fh.write(content)
-    return f"/uploads/fuel_evidence/{subfolder}/{fname}"
+    return save_upload(content, f"fuel_evidence/{subfolder}/{fname}")
 
 project_fuel_router = APIRouter(
     prefix="/projects/{project_id}/fuel",
