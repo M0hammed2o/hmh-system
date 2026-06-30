@@ -1919,20 +1919,35 @@ function UnifiedReceiveModal({ projectId, siteId, lotId, suppliers, materialSumm
     setItems(prev => {
       const unlinked = prev.filter(i => !i.boq_item_id);
       if (unlinked.length === 0) return prev; // nothing to do — skip re-render
+      // Normalize a description: lowercase, collapse spaces, convert decimal commas to dots.
+      // "Hoop Iron 0,6" → "hoop iron 0.6" so it matches BOQ entry "Hoop Iron 0.6".
+      const normalise = (s: string) =>
+        s.toLowerCase().replace(/(\d),(\d)/g, '$1.$2').replace(/\s+/g, ' ').trim();
       return prev.map(item => {
         if (item.boq_item_id) return item;
-        const norm = item.description.toLowerCase().replace(/\s+/g, ' ').trim();
+        const norm = normalise(item.description);
         if (!norm) return item;
-        const match = effectiveMaterialSummary.find(m => {
-          const mNorm = m.description.toLowerCase().replace(/\s+/g, ' ').trim();
-          return mNorm === norm || mNorm.includes(norm) || norm.includes(mNorm);
-        });
-        if (!match) return item;
+        // Scored matching: prefer exact match, then longest (most specific) partial match.
+        // This prevents a generic "Hoop Iron" BOQ entry from winning over
+        // the specific "Hoop Iron 0.6" entry when both are substring matches.
+        let bestMatch: typeof effectiveMaterialSummary[0] | undefined;
+        let bestScore = -1;
+        for (const m of effectiveMaterialSummary) {
+          const mNorm = normalise(m.description || '');
+          let score = -1;
+          if (mNorm === norm) {
+            score = 10000; // exact match — always wins
+          } else if (mNorm.includes(norm) || norm.includes(mNorm)) {
+            score = mNorm.length; // partial: longer BOQ description = more specific = preferred
+          }
+          if (score > bestScore) { bestScore = score; bestMatch = m; }
+        }
+        if (!bestMatch || bestScore < 0) return item;
         return {
           ...item,
-          boq_item_id: match.boq_item_id,
-          item_id:     match.item_id ?? "",
-          unit:        item.unit || match.unit || "",
+          boq_item_id: bestMatch.boq_item_id,
+          item_id:     bestMatch.item_id ?? "",
+          unit:        item.unit || bestMatch.unit || "",
         };
       });
     });

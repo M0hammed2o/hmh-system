@@ -343,11 +343,20 @@ _DELIVERY_ITEM_RE = re.compile(
     re.MULTILINE,
 )
 
+# Code-prefixed delivery item: optional leading numeric code (e.g. "0220 Dampcourse DPC 3 roll").
+# Used after _join_split_table_rows rejoins wrapped PDF table rows.
+# Unit is required (not optional) — handles SA alphanumeric units like "6m", "m2".
+# Non-greedy description anchors to the LAST valid qty unit at end of line.
+_DELIVERY_ITEM_CODE_RE = re.compile(
+    r"^[ \t]*(?:\d{1,6}\s+)?([A-Za-z][A-Za-z0-9 ,./\-]+?)\s+(\d+(?:[.,]\d+)?)\s+([A-Za-z0-9]{1,10})\s*$",
+    re.MULTILINE,
+)
+
 # Phrases that look like column headers, not delivery items — skip them.
 _DELIVERY_ITEM_BLOCKLIST: frozenset = frozenset({
     "item code", "item no", "item number", "item description", "item",
     "qty delivered", "quantity delivered", "qty", "quantity",
-    "description", "unit", "units",
+    "description", "unit", "units", "code",
     "part number", "part no", "product", "product code", "product description",
     "material", "material code", "material description",
     "reference", "ref no", "ref number",
@@ -793,11 +802,43 @@ def _extract_received_by(text: str) -> Optional[str]:
 
 
 def _parse_delivery_items(text: str) -> list[dict]:
-    """Parse 2-or-3-column delivery item rows (description, qty, [unit])."""
-    items = []
+    """Parse delivery item rows from a (potentially code-prefixed) table.
+
+    Applies _join_split_table_rows first to handle PDFs where wrapped cell text
+    splits a row's description and qty/unit across multiple extracted lines.
+
+    Priority:
+      1. _DELIVERY_ITEM_CODE_RE — handles "NNNN Description qty unit" format
+         (code-table style; unit is required; alphanumeric units like '6m' accepted)
+      2. _DELIVERY_ITEM_RE — fallback for no-unit / non-code delivery notes
+    """
+    text = _join_split_table_rows(text)
+    items: list[dict] = []
+
+    # 1. Code-aware pattern (handles code-prefixed joined rows and plain rows with unit)
+    for m in _DELIVERY_ITEM_CODE_RE.finditer(text):
+        desc, qty_s, unit = m.group(1), m.group(2), m.group(3)
+        qty = _parse_amount(qty_s)
+        if qty is None:
+            continue
+        if desc.strip().lower() in _DELIVERY_ITEM_BLOCKLIST:
+            continue
+        items.append({
+            "description": desc.strip(),
+            "unit":        unit.strip() or None,
+            "quantity":    qty,
+            "unit_price":  None,
+            "line_total":  None,
+            "confidence":  0.5,
+        })
+
+    if items:
+        return items
+
+    # 2. Fallback: original pattern (non-code lines, optional unit)
     for m in _DELIVERY_ITEM_RE.finditer(text):
         desc, qty_s = m.group(1), m.group(2)
-        unit = (m.group(3) or "").strip() or None  # group 3 is optional
+        unit = (m.group(3) or "").strip() or None
         qty = _parse_amount(qty_s)
         if qty is None:
             continue
@@ -880,10 +921,11 @@ def _join_split_table_rows(text: str) -> str:
     """
     import re as _re
 
-    # Data-only line: starts with qty (number), unit (alphanumeric), then rate+total.
+    # Data-only line: starts with qty (number), unit (alphanumeric), then optional rate+total.
     # Alphanumeric unit handles SA units like "6m", "m2", "m3", etc.
+    # rate+total are optional so this also matches delivery-note rows (qty unit only, no prices).
     _DATA_ONLY = _re.compile(
-        r'^\d+(?:[.,]\d+)?\s+[a-zA-Z0-9]{1,10}\s+[\d.,]+\s+[\d.,]+\s*$'
+        r'^\d+(?:[.,]\d+)?\s+[a-zA-Z0-9]{1,10}(?:\s+[\d.,]+\s+[\d.,]+)?\s*$'
     )
     # New item start: 3–6 digit code followed by a space then a letter.
     # Using 3+ digits avoids treating description fragments like "12 bars" as new items.
