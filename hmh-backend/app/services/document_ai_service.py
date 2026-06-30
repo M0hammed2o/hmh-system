@@ -865,6 +865,76 @@ def parse_quote_text(text: str) -> dict:
     }
 
 
+def _join_split_table_rows(text: str) -> str:
+    """
+    Pre-process PDF table text to rejoin rows where cell wrapping split an item's
+    description across multiple lines, with qty/unit/rate/total on a separate line.
+
+    PyMuPDF (fitz) can extract a wrapped PDF table cell as:
+        "0222 Hoop Iron "    ← code + partial description (no data)
+        "0,6"                ← description continuation
+        "60 roll 6.6 396.00" ← data: qty unit rate total
+
+    These three lines are joined into one so downstream regex patterns can match them.
+    Lines that are already complete (code + desc + data on one line) are left unchanged.
+    """
+    import re as _re
+
+    # Data-only line: starts with qty (number), unit (alphanumeric), then rate+total.
+    # Alphanumeric unit handles SA units like "6m", "m2", "m3", etc.
+    _DATA_ONLY = _re.compile(
+        r'^\d+(?:[.,]\d+)?\s+[a-zA-Z0-9]{1,10}\s+[\d.,]+\s+[\d.,]+\s*$'
+    )
+    # New item start: 3–6 digit code followed by a space then a letter.
+    # Using 3+ digits avoids treating description fragments like "12 bars" as new items.
+    _NEW_ITEM_CODE = _re.compile(r'^\d{3,6}\s+[A-Za-z]')
+
+    lines = text.splitlines()
+    out: list[str] = []
+    pending: list[str] = []  # description fragments accumulating for current item
+
+    for raw_line in lines:
+        line = raw_line.rstrip()
+        stripped = line.strip()
+
+        if not stripped:
+            if pending:
+                out.extend(pending)
+                pending = []
+            out.append(line)
+            continue
+
+        if _DATA_ONLY.match(stripped):
+            # Data line: merge with any pending description fragments
+            if pending:
+                joined = ' '.join(p.strip() for p in pending) + ' ' + stripped
+                out.append(joined)
+                pending = []
+            else:
+                out.append(line)
+        elif _NEW_ITEM_CODE.match(stripped):
+            # New item start: flush any previous partial item first
+            if pending:
+                out.extend(pending)
+                pending = []
+            # If the line already ends with two trailing numbers it's complete
+            if _re.search(r'[\d.,]+\s+[\d.,]+\s*$', stripped):
+                out.append(line)
+            else:
+                pending.append(line)
+        else:
+            # Description continuation or non-item line (header, total, footer, etc.)
+            if pending:
+                pending.append(line)
+            else:
+                out.append(line)
+
+    if pending:
+        out.extend(pending)
+
+    return '\n'.join(out)
+
+
 def _parse_quote_line_items(text: str) -> list[dict]:
     """
     Extract individual line items from a quotation document.
@@ -879,6 +949,9 @@ def _parse_quote_line_items(text: str) -> list[dict]:
     Returns [] when nothing parseable is found — callers must show a fallback.
     """
     import re as _re
+
+    # Rejoin wrapped PDF table rows before any regex matching
+    text = _join_split_table_rows(text)
 
     # 1. Shared invoice/delivery parser (includes 3-col SA fallback)
     items = _parse_line_items(text)
