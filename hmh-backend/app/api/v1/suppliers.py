@@ -365,16 +365,17 @@ def supplier_procurement_history(supplier_id: uuid.UUID, db: DbSession):
     dependencies=[ALL_ROLES],
 )
 def supplier_documents(supplier_id: uuid.UUID, db: DbSession):
-    """Unified document list: POs, Invoices, Deliveries, Quotations, and manual Attachments."""
+    """Unified document list: POs, Invoices, Deliveries, Quotations, MRs, and manual Attachments."""
     from app.models.supplier import Supplier
     from app.models.purchase_order import PurchaseOrder
     from app.models.invoice import Invoice
     from app.models.delivery import Delivery
     from app.models.quotation import Quotation
     from app.models.attachment import Attachment
-    from app.models.enums import AttachmentEntity
+    from app.models.enums import AttachmentEntity, AttachmentType
     from app.schemas.attachment import AttachmentRead
     from app.models.user import User
+    from sqlalchemy import or_
 
     s = db.get(Supplier, supplier_id)
     if not s:
@@ -389,19 +390,46 @@ def supplier_documents(supplier_id: uuid.UUID, db: DbSession):
     )
     po_ids = [po.id for po in pos]
 
+    # Build a map of PO id → latest saved PDF url (from auto-saved PO emails)
+    po_pdf_map: dict = {}
+    mr_ids_from_pos: list = []
+    if po_ids:
+        po_pdfs = (
+            db.query(Attachment)
+            .filter(
+                Attachment.entity_type == AttachmentEntity.PURCHASE_ORDER,
+                Attachment.entity_id.in_(po_ids),
+                Attachment.attachment_type == AttachmentType.PO_DOCUMENT,
+                Attachment.is_active == True,  # noqa: E712
+            )
+            .order_by(Attachment.uploaded_at.desc())
+            .all()
+        )
+        for att in po_pdfs:
+            key = str(att.entity_id)
+            if key not in po_pdf_map:
+                read = AttachmentRead.model_validate(att)
+                po_pdf_map[key] = read.download_url
+
+        # Collect MR ids linked to these POs (for MR PDF lookup below)
+        mr_ids_from_pos = [
+            po.material_request_id for po in pos
+            if getattr(po, "material_request_id", None)
+        ]
+
     for po in pos:
         docs.append({
-            "doc_id":       str(po.id),
-            "doc_type":     "PURCHASE_ORDER",
-            "ref_number":   po.po_number or str(po.id)[:8],
-            "title":        f"Purchase Order {po.po_number}",
-            "date":         po.po_date.date().isoformat() if po.po_date else None,
-            "amount":       float(po.total_amount or 0),
-            "status":       po.status.value,
-            "file_url":     None,
-            "file_name":    None,
-            "is_attachment": False,
-            "detail_path":  f"/procurement?po={po.id}",
+            "doc_id":        str(po.id),
+            "doc_type":      "PURCHASE_ORDER",
+            "ref_number":    po.po_number or str(po.id)[:8],
+            "title":         f"Purchase Order {po.po_number}",
+            "date":          po.po_date.date().isoformat() if po.po_date else None,
+            "amount":        float(po.total_amount or 0),
+            "status":        po.status.value,
+            "file_url":      po_pdf_map.get(str(po.id)),
+            "file_name":     f"PO-{po.po_number}.pdf" if po.po_number else None,
+            "is_attachment":  bool(po_pdf_map.get(str(po.id))),
+            "detail_path":   f"/procurement?po={po.id}",
         })
 
     if po_ids:
@@ -420,18 +448,19 @@ def supplier_documents(supplier_id: uuid.UUID, db: DbSession):
                 "detail_path":  f"/reconciliation",
             })
         for d in db.query(Delivery).filter(Delivery.purchase_order_id.in_(po_ids)).all():
+            img = d.delivery_note_image_url or None
             docs.append({
-                "doc_id":       str(d.id),
-                "doc_type":     "DELIVERY_NOTE",
-                "ref_number":   d.delivery_number or str(d.id)[:8],
-                "title":        f"Delivery {d.delivery_number or str(d.id)[:8]}",
-                "date":         d.delivery_date.date().isoformat() if d.delivery_date else None,
-                "amount":       None,
-                "status":       d.delivery_status.value if d.delivery_status else None,
-                "file_url":     d.delivery_note_image_url or None,
-                "file_name":    d.delivery_number or str(d.id)[:8],
-                "is_attachment": False,
-                "detail_path":  f"/deliveries",
+                "doc_id":        str(d.id),
+                "doc_type":      "DELIVERY_NOTE",
+                "ref_number":    d.delivery_number or str(d.id)[:8],
+                "title":         f"Delivery {d.delivery_number or str(d.id)[:8]}",
+                "date":          d.delivery_date.date().isoformat() if d.delivery_date else None,
+                "amount":        None,
+                "status":        d.delivery_status.value if d.delivery_status else None,
+                "file_url":      img,
+                "file_name":     d.delivery_number or str(d.id)[:8],
+                "is_attachment":  bool(img),
+                "detail_path":   f"/deliveries",
             })
 
     for q in db.query(Quotation).filter(Quotation.supplier_id == supplier_id).all():
@@ -449,22 +478,63 @@ def supplier_documents(supplier_id: uuid.UUID, db: DbSession):
             "detail_path":  f"/procurement",
         })
 
-    # ── Gmail email attachments matched to this supplier's POs ────────────────
+    # ── MR PDFs saved when MR emails were sent to this supplier ──────────────
+    if mr_ids_from_pos:
+        mr_pdfs = (
+            db.query(Attachment)
+            .filter(
+                Attachment.entity_type == AttachmentEntity.MATERIAL_REQUEST,
+                Attachment.entity_id.in_(mr_ids_from_pos),
+                Attachment.attachment_type == AttachmentType.PDF,
+                Attachment.is_active == True,  # noqa: E712
+            )
+            .order_by(Attachment.uploaded_at.desc())
+            .all()
+        )
+        for att in mr_pdfs:
+            read = AttachmentRead.model_validate(att)
+            docs.append({
+                "doc_id":        str(att.id),
+                "doc_type":      "MATERIAL_REQUEST",
+                "ref_number":    att.file_name,
+                "title":         att.file_name,
+                "date":          att.uploaded_at.date().isoformat() if att.uploaded_at else None,
+                "amount":        None,
+                "status":        "Generated PDF",
+                "file_url":      read.download_url,
+                "file_name":     att.file_name,
+                "is_attachment": True,
+                "attachment_type": "PDF",
+                "mime_type":     att.mime_type,
+            })
+
+    # ── Gmail email attachments: matched by PO number OR supplier email ───────
     from app.models.incoming_email import IncomingEmail, IncomingEmailAttachment as GmailAttachment
 
     po_numbers = [po.po_number for po in pos if po.po_number]
+    gmail_filter = []
     if po_numbers:
+        gmail_filter.append(IncomingEmail.matched_po_number.in_(po_numbers))
+    if s.email:
+        gmail_filter.append(IncomingEmail.from_email == s.email)
+
+    if gmail_filter:
         gmail_atts = (
             db.query(GmailAttachment)
             .join(IncomingEmail, GmailAttachment.incoming_email_id == IncomingEmail.id)
-            .filter(IncomingEmail.matched_po_number.in_(po_numbers))
+            .filter(or_(*gmail_filter))
+            .distinct()
             .all()
         )
         _gmail_type_map = {
             "INVOICE": "INVOICE", "DELIVERY_NOTE": "DELIVERY_NOTE",
             "QUOTE": "QUOTATION", "PURCHASE_ORDER": "PURCHASE_ORDER",
         }
+        seen_gmail_ids: set = set()
         for gatt in gmail_atts:
+            if gatt.id in seen_gmail_ids:
+                continue
+            seen_gmail_ids.add(gatt.id)
             doc_type = _gmail_type_map.get(gatt.detected_type, "ATTACHMENT")
             docs.append({
                 "doc_id":             str(gatt.id),

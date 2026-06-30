@@ -151,6 +151,7 @@ export type SupplierDocType =
   | "INVOICE"
   | "DELIVERY_NOTE"
   | "QUOTATION"
+  | "MATERIAL_REQUEST"
   | "ATTACHMENT";
 
 export interface SupplierDocument {

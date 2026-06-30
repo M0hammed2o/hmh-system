@@ -580,6 +580,51 @@ def build_po_email_body(po: PurchaseOrder) -> tuple[str, str]:
 
 # ── PO email sender ───────────────────────────────────────────────────────────
 
+def _persist_pdf_attachment(
+    db: Session,
+    pdf_bytes: bytes,
+    filename: str,
+    entity_type_str: str,
+    entity_id: uuid.UUID,
+    attachment_type_str: str,
+) -> None:
+    """
+    Save a generated PDF to Supabase/local storage and create an Attachment record.
+    Called after a successful PO or MR email send so the PDF is visible in the
+    supplier Document Centre.  Never raises — failures are logged and ignored.
+    """
+    try:
+        from app.core.storage import save_upload
+        from app.models.attachment import Attachment
+        from app.models.enums import AttachmentEntity, AttachmentType
+
+        entity_type     = AttachmentEntity(entity_type_str)
+        attachment_type = AttachmentType(attachment_type_str)
+
+        key         = f"{entity_type_str.lower()}s/{entity_id}/{uuid.uuid4().hex}_{filename}"
+        stored_path = save_upload(pdf_bytes, key)
+        now         = datetime.now(timezone.utc)
+
+        att = Attachment(
+            id=uuid.uuid4(),
+            entity_type=entity_type,
+            entity_id=entity_id,
+            file_name=filename,
+            stored_path=stored_path,
+            file_url=stored_path,
+            mime_type="application/pdf",
+            file_size_bytes=len(pdf_bytes),
+            attachment_type=attachment_type,
+            uploaded_at=now,
+            is_active=True,
+        )
+        db.add(att)
+        db.flush()
+        logger.info("pdf_persisted entity=%s/%s file=%s", entity_type_str, entity_id, filename)
+    except Exception as exc:
+        logger.warning("pdf_persist_failed file=%s entity=%s/%s: %s", filename, entity_type_str, entity_id, exc)
+
+
 def send_po_email(
     db: Session,
     po: PurchaseOrder,
@@ -613,6 +658,7 @@ def send_po_email(
         logger.info("email po_mock_sent po=%s to=%s reason=%s", po.po_number, to_email, reason)
         status = EmailStatus.sent
     else:
+        pdf_bytes = None
         try:
             pdf_bytes = _generate_po_pdf(po)
             attachments: list | None = [(f"PO-{po.po_number}.pdf", pdf_bytes, "application/pdf")]
@@ -628,6 +674,11 @@ def send_po_email(
         status = EmailStatus.sent if error_msg is None else EmailStatus.failed
         if error_msg:
             logger.error("PO email failed for %s: %s", po.po_number, error_msg)
+        elif pdf_bytes:
+            _persist_pdf_attachment(
+                db, pdf_bytes, f"PO-{po.po_number}.pdf",
+                "PURCHASE_ORDER", po.id, "PO_DOCUMENT",
+            )
 
     log = PoEmailLog(
         id=uuid.uuid4(),
@@ -909,6 +960,7 @@ def send_mr_approval_email(
             logger.info("email mr_mock_sent mr=%s to=%s reason=%s", mr.request_number, to_email, reason)
             status_str = "MOCK_SENT"
         else:
+            pdf_bytes = None
             try:
                 pdf_bytes = _generate_mr_pdf(db, mr, supplier_override=supplier, items_override=items)
                 mr_attachments: list | None = [(f"MR-{mr.request_number}.pdf", pdf_bytes, "application/pdf")]
@@ -928,6 +980,12 @@ def send_mr_approval_email(
                 logger.error("MR email failed for %s → %s: %s", mr.request_number, supplier.name, err)
             else:
                 status_str = "SENT"
+                if pdf_bytes:
+                    safe_name = supplier.name[:30].replace(" ", "_")
+                    _persist_pdf_attachment(
+                        db, pdf_bytes, f"MR-{mr.request_number}-{safe_name}.pdf",
+                        "MATERIAL_REQUEST", mr.id, "PDF",
+                    )
 
         log = MREmailLog(
             material_request_id=mr.id,

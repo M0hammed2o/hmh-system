@@ -35,20 +35,22 @@ import {
 // ─── Document Centre ──────────────────────────────────────────────────────────
 
 const DOC_FILTER_CHIPS: { value: SupplierDocType | "ALL"; label: string }[] = [
-  { value: "ALL",            label: "All" },
-  { value: "PURCHASE_ORDER", label: "Purchase Orders" },
-  { value: "INVOICE",        label: "Invoices" },
-  { value: "DELIVERY_NOTE",  label: "Delivery Notes" },
-  { value: "QUOTATION",      label: "Quotations" },
-  { value: "ATTACHMENT",     label: "Other Documents" },
+  { value: "ALL",              label: "All" },
+  { value: "PURCHASE_ORDER",   label: "Purchase Orders" },
+  { value: "MATERIAL_REQUEST", label: "Material Requests" },
+  { value: "INVOICE",          label: "Invoices" },
+  { value: "DELIVERY_NOTE",    label: "Delivery Notes" },
+  { value: "QUOTATION",        label: "Quotations" },
+  { value: "ATTACHMENT",       label: "Other Documents" },
 ];
 
 const DOC_TYPE_LABELS: Record<SupplierDocType, string> = {
-  PURCHASE_ORDER: "Purchase Order",
-  INVOICE:        "Invoice",
-  DELIVERY_NOTE:  "Delivery Note",
-  QUOTATION:      "Quotation",
-  ATTACHMENT:     "Document",
+  PURCHASE_ORDER:   "Purchase Order",
+  MATERIAL_REQUEST: "Material Request",
+  INVOICE:          "Invoice",
+  DELIVERY_NOTE:    "Delivery Note",
+  QUOTATION:        "Quotation",
+  ATTACHMENT:       "Document",
 };
 
 const STATUS_COLOURS: Record<string, string> = {
