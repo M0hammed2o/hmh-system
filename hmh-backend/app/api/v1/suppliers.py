@@ -392,7 +392,6 @@ def supplier_documents(supplier_id: uuid.UUID, db: DbSession):
 
     # Build a map of PO id → latest saved PDF url (from auto-saved PO emails)
     po_pdf_map: dict = {}
-    mr_ids_from_pos: list = []
     if po_ids:
         po_pdfs = (
             db.query(Attachment)
@@ -411,11 +410,17 @@ def supplier_documents(supplier_id: uuid.UUID, db: DbSession):
                 read = AttachmentRead.model_validate(att)
                 po_pdf_map[key] = read.download_url
 
-        # Collect MR ids linked to these POs (for MR PDF lookup below)
-        mr_ids_from_pos = [
-            po.material_request_id for po in pos
-            if getattr(po, "material_request_id", None)
-        ]
+    # Find all MRs emailed to this supplier via MREmailLog (works before a PO exists)
+    from app.models.mr_email_log import MREmailLog
+    mr_email_logs = (
+        db.query(MREmailLog)
+        .filter(
+            MREmailLog.supplier_id == supplier_id,
+            MREmailLog.status.in_(["SENT", "MOCK_SENT"]),
+        )
+        .all()
+    )
+    mr_ids_for_supplier = list({log.material_request_id for log in mr_email_logs})
 
     for po in pos:
         docs.append({
@@ -478,13 +483,17 @@ def supplier_documents(supplier_id: uuid.UUID, db: DbSession):
             "detail_path":  f"/procurement",
         })
 
-    # ── MR PDFs saved when MR emails were sent to this supplier ──────────────
-    if mr_ids_from_pos:
+    # ── Material Requests emailed to this supplier ────────────────────────────
+    if mr_ids_for_supplier:
+        from app.models.material_request import MaterialRequest
+
+        # MR records — show even when no PDF was saved (e.g. sent before this feature)
+        mr_pdf_map: dict = {}  # mr_id → download_url for saved PDFs
         mr_pdfs = (
             db.query(Attachment)
             .filter(
                 Attachment.entity_type == AttachmentEntity.MATERIAL_REQUEST,
-                Attachment.entity_id.in_(mr_ids_from_pos),
+                Attachment.entity_id.in_(mr_ids_for_supplier),
                 Attachment.attachment_type == AttachmentType.PDF,
                 Attachment.is_active == True,  # noqa: E712
             )
@@ -492,20 +501,31 @@ def supplier_documents(supplier_id: uuid.UUID, db: DbSession):
             .all()
         )
         for att in mr_pdfs:
-            read = AttachmentRead.model_validate(att)
+            key = str(att.entity_id)
+            if key not in mr_pdf_map:
+                read = AttachmentRead.model_validate(att)
+                mr_pdf_map[key] = (read.download_url, att.file_name)
+
+        mrs = (
+            db.query(MaterialRequest)
+            .filter(MaterialRequest.id.in_(mr_ids_for_supplier))
+            .order_by(MaterialRequest.created_at.desc())
+            .all()
+        )
+        for mr in mrs:
+            pdf_url, pdf_name = mr_pdf_map.get(str(mr.id), (None, None))
             docs.append({
-                "doc_id":        str(att.id),
+                "doc_id":        str(mr.id),
                 "doc_type":      "MATERIAL_REQUEST",
-                "ref_number":    att.file_name,
-                "title":         att.file_name,
-                "date":          att.uploaded_at.date().isoformat() if att.uploaded_at else None,
+                "ref_number":    mr.request_number,
+                "title":         f"Material Request {mr.request_number}",
+                "date":          mr.created_at.date().isoformat() if mr.created_at else None,
                 "amount":        None,
-                "status":        "Generated PDF",
-                "file_url":      read.download_url,
-                "file_name":     att.file_name,
-                "is_attachment": True,
-                "attachment_type": "PDF",
-                "mime_type":     att.mime_type,
+                "status":        mr.status.value if hasattr(mr.status, "value") else str(mr.status),
+                "file_url":      pdf_url,
+                "file_name":     pdf_name or f"MR-{mr.request_number}.pdf",
+                "is_attachment": bool(pdf_url),
+                "detail_path":   f"/procurement",
             })
 
     # ── Gmail email attachments: matched by PO number OR supplier email ───────
