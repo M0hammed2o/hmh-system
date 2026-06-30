@@ -8,6 +8,7 @@ Responsibilities:
  - Escalation: schedule follow-up attempts for unacknowledged CRITICAL/HIGH alerts
 """
 
+import asyncio
 import logging
 import re
 import uuid
@@ -31,6 +32,19 @@ from app.services import whatsapp_service
 logger = get_logger(__name__)
 
 _WINDOW_24H = timedelta(hours=24)
+
+# Set by the startup hook in main.py once the asyncio event loop is running.
+# enqueue_for_alert sets this to wake the drain loop without waiting for the timer.
+_drain_event: Optional[asyncio.Event] = None
+
+
+def _signal_drain() -> None:
+    """Wake the background drain loop immediately (no-op if loop isn't running yet)."""
+    if _drain_event is not None:
+        try:
+            _drain_event.set()
+        except Exception:
+            pass
 
 # Alert types that map to each recipient subscription
 _MATERIAL_TYPES = {
@@ -265,6 +279,8 @@ def enqueue_for_alert(
         queued.append(entry)
 
     db.flush()
+    if queued:
+        _signal_drain()
     return queued
 
 

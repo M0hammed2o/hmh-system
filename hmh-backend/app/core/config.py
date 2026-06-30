@@ -101,7 +101,7 @@ class Settings(BaseSettings):
 
     # WhatsApp cost optimization
     WHATSAPP_COST_OPTIMIZATION_ENABLED: bool = True
-    WHATSAPP_SUMMARY_INTERVAL_MINUTES: int = 60      # delay MEDIUM/LOW alerts by this many minutes
+    WHATSAPP_SUMMARY_INTERVAL_MINUTES: int = 0       # delay MEDIUM/LOW alerts by this many minutes (0 = immediate)
     WHATSAPP_QUIET_HOURS_ENABLED: bool = False
     WHATSAPP_QUIET_HOURS_START: str = "20:00"        # UTC; wrap-midnight supported (e.g. 20:00–07:00)
     WHATSAPP_QUIET_HOURS_END: str = "07:00"

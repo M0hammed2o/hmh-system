@@ -517,18 +517,20 @@ import asyncio as _asyncio
 
 async def _queue_drain_loop() -> None:
     """
-    Drain the notification queue every 5 minutes.
+    Drain the notification queue — woken immediately by new enqueues, or every 30s as fallback.
 
     Runs as a background asyncio task for the lifetime of the process.
-    Equivalent to a Render Cron Job calling POST /api/v1/alerts/queue/process,
-    but runs in-process so it works out of the box without external configuration.
+    WHATSAPP_SUMMARY_INTERVAL_MINUTES=0 (default) means all severities have next_at=now,
+    so messages send on the very next drain — typically within seconds of being enqueued.
 
     Set WHATSAPP_ENABLED=false to suppress all real sends; the loop still runs
     so queue rows are processed (marked MOCK_SENT / FAILED) and the system
     remains testable without real WhatsApp credentials.
     """
+    from app.services import notification_service as _ns
+
     # Short startup delay so DB connections are established before first drain.
-    await _asyncio.sleep(30)
+    await _asyncio.sleep(5)
     while True:
         try:
             from app.db.session import SessionLocal
@@ -546,15 +548,26 @@ async def _queue_drain_loop() -> None:
             finally:
                 _db.close()
         except Exception:
-            _log.exception("queue_drain background task error — will retry in 5 min")
-        await _asyncio.sleep(300)  # 5 minutes
+            _log.exception("queue_drain background task error — will retry in 30s")
+
+        # Clear the event (consume the wake signal), then wait up to 30s or until signalled.
+        if _ns._drain_event is not None:
+            _ns._drain_event.clear()
+            try:
+                await _asyncio.wait_for(_ns._drain_event.wait(), timeout=30)
+            except _asyncio.TimeoutError:
+                pass
+        else:
+            await _asyncio.sleep(30)
 
 
 @app.on_event("startup")
 async def _start_background_queue_drain() -> None:
     """Launch the background queue drain loop as a fire-and-forget asyncio task."""
+    from app.services import notification_service as _ns
+    _ns._drain_event = _asyncio.Event()
     _asyncio.create_task(_queue_drain_loop())
-    _log.info("startup queue_drain_task=started interval=300s")
+    _log.info("startup queue_drain_task=started interval=30s_or_immediate")
 
 
 # ── Auto-apply Alembic migrations on startup ──────────────────────────────────
