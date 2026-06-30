@@ -81,14 +81,19 @@ def lot_material_summary(site_id: uuid.UUID, lot_id: uuid.UUID, db: DbSession, c
 
     # ── 3. De-duplicate by (normalized_description, unit) ───────────────────
     # Duplicates arise when a template is applied to lots AND generate_lot_boqs
-    # is also called, inserting two copies of each item for the same lot.
+    # is also called, inserting two copies of each item for the same lot, OR
+    # when the same material is allocated across multiple BOQ sections/milestones.
     # Whitespace is normalised so "Ceiling / Doors" == "Ceiling/Doors".
+    # Unit is lowercased so "Rolls" == "rolls".
     # Sort: catalog-linked items (item_id set) win over non-catalog ones so the
     # item_id stock path is never lost.  Among equals, higher planned_qty wins.
     # Discarded aliases are tracked (boq_item_id → canonical BOQItem object) so
     # their stock is folded into the canonical using the right lookup dict.
+    # Alias planned quantities are summed into canonical so the row shows the
+    # TOTAL allocation across all sections (e.g. 26+13=39, not just 26).
     seen_keys: dict = {}              # normalized_key → canonical BOQItem
     boq_id_to_canonical: dict = {}   # discarded_boq_item_id → canonical BOQItem
+    canonical_extra_qty: dict = {}   # canonical BOQItem.id → extra qty from aliases
     unique_boq_items = []
     for bi in sorted(
         boq_items,
@@ -97,13 +102,19 @@ def lot_material_summary(site_id: uuid.UUID, lot_id: uuid.UUID, db: DbSession, c
     ):
         key = (
             _re.sub(r"\s+", " ", (bi.raw_description or "").lower().strip()),
-            bi.unit or "",
+            (bi.unit or "").lower(),  # normalise unit case: "Rolls" == "rolls"
         )
         if key not in seen_keys:
             seen_keys[key] = bi
             unique_boq_items.append(bi)
-        elif bi.id:
-            boq_id_to_canonical[bi.id] = seen_keys[key]
+        else:
+            canonical = seen_keys[key]
+            if bi.id:
+                boq_id_to_canonical[bi.id] = canonical
+            # Accumulate alias planned qty so canonical shows total allocation
+            canonical_extra_qty[canonical.id] = (
+                canonical_extra_qty.get(canonical.id, 0.0) + float(bi.planned_quantity or 0)
+            )
     boq_items = unique_boq_items
 
     # ── 4. Batch-load all StockLedger aggregates in 4 queries (replaces N+1) ────
@@ -216,7 +227,8 @@ def lot_material_summary(site_id: uuid.UUID, lot_id: uuid.UUID, db: DbSession, c
     # ── 5. Build summary rows (pure Python — zero additional DB queries) ────────
     result = []
     for bi in boq_items:
-        allocated = float(bi.planned_quantity or 0)
+        # Sum canonical qty + any alias planned qtys (same material in other sections)
+        allocated = float(bi.planned_quantity or 0) + canonical_extra_qty.get(bi.id, 0.0)
 
         if bi.item_id:
             delivered = delivered_by_item.get(bi.item_id, 0.0)
@@ -581,19 +593,43 @@ def project_lot_material_summary(project_id: uuid.UUID, lot_id: uuid.UUID, db: D
         fallback = bool(boq_items)
 
     # ── 3. De-duplicate by description+unit ──────────────────────────────────
-    seen_keys: set = set()
+    # Normalise unit case so "Rolls" == "rolls". Catalog-linked items win over
+    # non-catalog; higher planned_qty wins among equals.
+    # Alias planned quantities are summed so the canonical row shows the TOTAL
+    # allocation across all sections (e.g. 26+13=39, not just 26).
+    seen_keys_p: dict = {}
+    boq_id_to_canonical_p: dict = {}   # alias boq_item_id → canonical BOQItem
+    canonical_extra_qty_p: dict = {}   # canonical BOQItem.id → extra qty from aliases
     unique_items = []
-    for bi in sorted(boq_items, key=lambda x: float(x.planned_quantity or 0), reverse=True):
-        key = ((bi.raw_description or "").lower().strip(), bi.unit or "")
-        if key not in seen_keys:
-            seen_keys.add(key)
+    for bi in sorted(
+        boq_items,
+        key=lambda x: (1 if x.item_id else 0, float(x.planned_quantity or 0)),
+        reverse=True,
+    ):
+        key = (
+            _re.sub(r"\s+", " ", (bi.raw_description or "").lower().strip()),
+            (bi.unit or "").lower(),
+        )
+        if key not in seen_keys_p:
+            seen_keys_p[key] = bi
             unique_items.append(bi)
+        else:
+            canonical = seen_keys_p[key]
+            if bi.id:
+                boq_id_to_canonical_p[bi.id] = canonical
+            canonical_extra_qty_p[canonical.id] = (
+                canonical_extra_qty_p.get(canonical.id, 0.0) + float(bi.planned_quantity or 0)
+            )
     boq_items = unique_items
 
     # ── 4. Build summary rows ─────────────────────────────────────────────────
     result = []
     for bi in boq_items:
-        allocated = float(bi.planned_quantity or 0)
+        # Sum canonical qty + any alias planned qtys (same material in other sections)
+        allocated = float(bi.planned_quantity or 0) + canonical_extra_qty_p.get(bi.id, 0.0)
+
+        # Collect all boq_item_ids that map to this canonical (for non-catalog stock lookup)
+        alias_boq_ids = [alias_id for alias_id, c in boq_id_to_canonical_p.items() if c.id == bi.id]
 
         if bi.item_id:
             # Phase 3B: "delivered to lot" = TRANSFER_IN at lot level
@@ -617,13 +653,14 @@ def project_lot_material_summary(project_id: uuid.UUID, lot_id: uuid.UUID, db: D
                 .scalar() or 0
             )
         else:
-            # No catalog link — match by boq_item_id
+            # No catalog link — match by boq_item_id (canonical + all aliases)
+            all_boq_ids = [bi.id] + alias_boq_ids
             delivered = float(
                 db.query(func.coalesce(func.sum(StockLedger.quantity_in), 0))
                 .filter(
                     StockLedger.project_id    == project_id,
                     StockLedger.lot_id        == lot_id,
-                    StockLedger.boq_item_id   == bi.id,
+                    StockLedger.boq_item_id.in_(all_boq_ids),
                     StockLedger.movement_type == MovementType.TRANSFER_IN,
                 )
                 .scalar() or 0
@@ -633,7 +670,7 @@ def project_lot_material_summary(project_id: uuid.UUID, lot_id: uuid.UUID, db: D
                 .filter(
                     StockLedger.project_id  == project_id,
                     StockLedger.lot_id      == lot_id,
-                    StockLedger.boq_item_id == bi.id,
+                    StockLedger.boq_item_id.in_(all_boq_ids),
                 )
                 .scalar() or 0
             )
