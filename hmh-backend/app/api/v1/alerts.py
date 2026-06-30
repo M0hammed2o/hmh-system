@@ -155,6 +155,29 @@ def resolve_alert(alert_id: uuid.UUID, db: DbSession, current_user: CurrentUser)
     return ApiSuccess(data=AlertRead.model_validate(alert), message="Alert resolved.")
 
 
+@router.post("/resolve-all", response_model=ApiSuccess[dict], dependencies=[ALL_ROLES])
+def resolve_all_alerts(
+    db: DbSession,
+    current_user: CurrentUser,
+    project_id: Optional[uuid.UUID] = Query(None),
+):
+    """Resolve every OPEN alert in one go — they move to history (RESOLVED)."""
+    from app.models.alert import SystemAlert
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc)
+    q = db.query(SystemAlert).filter(SystemAlert.status == AlertStatus.OPEN)
+    if project_id:
+        q = q.filter(SystemAlert.project_id == project_id)
+    alerts = q.all()
+    for a in alerts:
+        a.status = AlertStatus.RESOLVED
+        a.resolved_at = now
+        a.resolved_by = current_user.id
+    db.commit()
+    return ApiSuccess(data={"resolved": len(alerts)}, message=f"{len(alerts)} alert(s) moved to history.")
+
+
 # ── Alert stats ───────────────────────────────────────────────────────────────
 
 @router.get("/stats", response_model=ApiSuccess[dict], dependencies=[ALL_ROLES])

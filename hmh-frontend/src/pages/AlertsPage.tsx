@@ -246,6 +246,7 @@ export default function AlertsPage() {
   const [generatingSummary, setGeneratingSummary] = useState(false);
   const [scanning, setScanning]             = useState(false);
   const [scanResult, setScanResult]         = useState<{ alerts_created: number } | null>(null);
+  const [clearingAll, setClearingAll]       = useState(false);
 
   const loadAll = useCallback(async (quiet = false) => {
     if (!quiet) setLoading(true);
@@ -280,6 +281,22 @@ export default function AlertsPage() {
       const d = (err as { response?: { data?: { message?: string; detail?: string } } })?.response?.data;
       alert(d?.message || d?.detail || "Scan failed — check your permissions.");
     } finally { setScanning(false); }
+  };
+
+  const handleClearAll = async () => {
+    const activeCount = alerts.filter(a => a.status === "OPEN").length;
+    if (activeCount === 0) return;
+    if (!window.confirm(`Move all ${activeCount} active alert${activeCount !== 1 ? "s" : ""} to history?`)) return;
+    setClearingAll(true);
+    try {
+      await alertsApi.resolveAll();
+      setAlerts(prev => prev.map(a => a.status === "OPEN" ? { ...a, status: "RESOLVED" } : a));
+      loadAll(true);
+    } catch {
+      alert("Failed to clear alerts. Please try again.");
+    } finally {
+      setClearingAll(false);
+    }
   };
 
   const handleDailySummary = async () => {
@@ -327,6 +344,18 @@ export default function AlertsPage() {
               <FileText className="w-4 h-4 mr-1" />
               {generatingSummary ? "Generating…" : "Daily Summary"}
             </Button>
+            {tab === "active" && alerts.some(a => a.status === "OPEN") && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleClearAll}
+                disabled={clearingAll}
+                className="border-destructive/50 text-destructive hover:bg-destructive/10"
+              >
+                {clearingAll ? <RefreshCw className="w-4 h-4 animate-spin mr-1.5" /> : null}
+                {clearingAll ? "Clearing…" : "Clear All Alerts"}
+              </Button>
+            )}
           </div>
         )}
       </div>

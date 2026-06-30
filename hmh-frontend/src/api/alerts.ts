@@ -164,6 +164,15 @@ export const alertsApi = {
     return res.data.data;
   },
 
+  resolveAll: async (projectId?: string): Promise<{ resolved: number }> => {
+    const res = await client.post<{ data: { resolved: number } }>(
+      "/alerts/resolve-all",
+      null,
+      projectId ? { params: { project_id: projectId } } : {},
+    );
+    return res.data.data;
+  },
+
   getContext: async (alertId: string): Promise<AlertRecordContext> => {
     const res = await client.get<{ data: { context: AlertRecordContext } }>(`/alerts/${alertId}/context`);
     return res.data.data.context ?? {};
