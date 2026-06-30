@@ -303,7 +303,7 @@ _TOTAL_PATTERNS: list[tuple[re.Pattern, str]] = [
 #      → Handles quotations and SA invoices that omit the line-total column.
 
 _LINE_RE = re.compile(
-    r"^(.{3,60}?)\s+(\d[\d,]*(?:\.\d+)?)\s+([a-zA-Z]{1,10})\s+R?\s*(" + _AMT + r")"
+    r"^(.{3,60}?)\s+(\d[\d,]*(?:\.\d+)?)\s+([a-zA-Z0-9]{1,10})\s+R?\s*(" + _AMT + r")"
     + _COL_SEP + r"R?\s*(" + _AMT + r")\s*$",
     re.MULTILINE,
 )
@@ -317,7 +317,7 @@ _LINE_RE_SIMPLE = re.compile(
 # are not accidentally matched.
 _LINE_RE_3COL = re.compile(
     r"^(.{3,70}?)" + _COL_SEP + r"(\d[\d,]*(?:\.\d+)?)(?:" + _COL_SEP
-    + r"[a-zA-Z]{1,10})?" + _COL_SEP + r"R?\s*(" + _AMT + r")\s*$",
+    + r"[a-zA-Z0-9]{1,10})?" + _COL_SEP + r"R?\s*(" + _AMT + r")\s*$",
     re.MULTILINE,
 )
 
@@ -886,8 +886,9 @@ def _parse_quote_line_items(text: str) -> list[dict]:
         return items
 
     # 2. Wide-separator quotation pattern (desc 2+ spaces qty [unit] [R|@] price)
+    # Unit allows alphanumeric so SA units like "6m", "m2", "m3" are consumed correctly.
     _QUOTE_WIDE = _re.compile(
-        r"^(.{3,60}?)\s{2,}(\d+(?:[.,]\d+)?)\s{1,}(?:[a-zA-Z]{1,6}\s{1,})?[R@]?\s*([\d][\d ,]*(?:[,.]\s*\d{1,2})?)\s*$",
+        r"^(.{3,60}?)\s{2,}(\d+(?:[.,]\d+)?)\s{1,}(?:[a-zA-Z0-9]{1,6}\s{1,})?[R@]?\s*([\d][\d ,]*(?:[,.]\s*\d{1,2})?)\s*$",
         _re.MULTILINE | _re.IGNORECASE,
     )
     wide: list[dict] = []
@@ -915,7 +916,7 @@ def _parse_quote_line_items(text: str) -> list[dict]:
     # No R/@ required — the double-number anchor provides the false-positive protection.
     _QUOTE_CODE_TABLE = _re.compile(
         r"^(?:\d{1,6}\s+)?([A-Za-z][A-Za-z0-9 ,./\-]{1,59}?)\s+"
-        r"(\d+(?:[.,]\d+)?)\s+(?:[a-zA-Z]{1,10}\s+)?"
+        r"(\d+(?:[.,]\d+)?)\s+(?:[a-zA-Z0-9]{1,10}\s+)?"
         r"([\d][\d ,]*(?:[,.]\d{1,2})?)\s+([\d][\d ,]*(?:[,.]\d{1,2})?)\s*$",
         _re.MULTILINE,
     )
@@ -948,7 +949,7 @@ def _parse_quote_line_items(text: str) -> list[dict]:
     # Supports both "R 7066.65" (SA currency) and "@ 7066.65" (quotation template style).
     # The price group is last → _AMT greedily captures "12 200" without split.
     _QUOTE_SA_LOOSE = _re.compile(
-        r"^([A-Za-z][A-Za-z0-9 ,.\-\/]{2,59}?)\s+(\d+(?:[.,]\d+)?)\s+(?:[a-zA-Z]{1,6}\s+)?[R@]\s*([\d][\d ,]*(?:[,.]\s*\d{1,2})?)\s*$",
+        r"^([A-Za-z][A-Za-z0-9 ,.\-\/]{2,59}?)\s+(\d+(?:[.,]\d+)?)\s+(?:[a-zA-Z0-9]{1,6}\s+)?[R@]\s*([\d][\d ,]*(?:[,.]\s*\d{1,2})?)\s*$",
         _re.MULTILINE,
     )
     loose: list[dict] = []

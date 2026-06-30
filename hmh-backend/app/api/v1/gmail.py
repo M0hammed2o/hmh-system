@@ -170,7 +170,12 @@ def process_email(email_id: uuid.UUID, db: DbSession):
                 att.detected_type = "QUOTE"
 
         # ── Match MR ─────────────────────────────────────────────────────────
-        mr_match = _match_mr_from_text(db, raw_text, fields, items)
+        # Include the email body so that supplier replies which quote the original
+        # MR approval email (containing "MR-XXXX-0001") can be matched even when
+        # the PDF itself has no MR reference.
+        body_text = email.body_snippet or ""
+        combined_text = raw_text + ("\n" + body_text if body_text else "")
+        mr_match = _match_mr_from_text(db, combined_text, fields, items)
         logger.debug("gmail_mr_match status=%s ref=%s", mr_match['status'], mr_match.get('mr_number'))
 
         # ── Store/update DocumentExtraction ───────────────────────────────────
@@ -389,20 +394,18 @@ def _auto_create_mr_quotes(db, mr_id_str: str, fields: dict, items: list, email,
         if not supplier_id:
             return  # cannot create quote without a supplier
 
-        # Idempotency: skip if we already have EMAIL quotes from THIS supplier for this MR.
-        # Keyed on (mr_id, supplier_id) so each supplier's reply is processed independently.
-        existing_email_supplier = (
+        # Idempotency: per-item check so re-processing an email adds any newly
+        # parseable items without duplicating ones that already exist.
+        existing_rows = (
             db.query(MRQuote)
             .filter(
                 MRQuote.material_request_id == mr_id,
                 MRQuote.supplier_id == supplier_id,
                 MRQuote.source == "EMAIL",
             )
-            .first()
+            .all()
         )
-        if existing_email_supplier:
-            logger.info("auto_quote skipped — EMAIL quotes already exist mr=%s supplier=%s", mr_id, supplier_id)
-            return
+        existing_descs = {(q.description or "").lower().strip() for q in existing_rows}
 
         # Build a BOQ price lookup: item_id → planned_rate
         boq_prices: dict = {}
@@ -425,6 +428,8 @@ def _auto_create_mr_quotes(db, mr_id_str: str, fields: dict, items: list, email,
                 unit       = li.get("unit") or ""
                 if not desc or unit_price <= 0:
                     continue
+                if desc.lower().strip() in existing_descs:
+                    continue  # already present from a previous processing run
 
                 # Try to find the BOQ price by matching description to MR items
                 boq_price = None
@@ -458,22 +463,23 @@ def _auto_create_mr_quotes(db, mr_id_str: str, fields: dict, items: list, email,
             mr_desc = "; ".join(
                 i.description or "item" for i in (mr.items or [])[:3]
             ) or "Quoted materials"
-            db.add(MRQuote(
-                material_request_id=mr_id,
-                supplier_id=supplier_id,
-                description=mr_desc[:500],
-                quoted_quantity=1,
-                unit=None,
-                unit_price=float(total),
-                total_price=float(total),
-                notes=f"Auto-extracted from email (line items not parsed): {email.subject or email.from_email}",
-                source="EMAIL",
-                status="PENDING",
-                boq_unit_price=None,
-                is_selected=False,
-                created_at=now,
-            ))
-            created = 1
+            if mr_desc.lower().strip() not in existing_descs:
+                db.add(MRQuote(
+                    material_request_id=mr_id,
+                    supplier_id=supplier_id,
+                    description=mr_desc[:500],
+                    quoted_quantity=1,
+                    unit=None,
+                    unit_price=float(total),
+                    total_price=float(total),
+                    notes=f"Auto-extracted from email (line items not parsed): {email.subject or email.from_email}",
+                    source="EMAIL",
+                    status="PENDING",
+                    boq_unit_price=None,
+                    is_selected=False,
+                    created_at=now,
+                ))
+                created = 1
 
         db.flush()
         logger.info("auto_quote created=%d mr=%s supplier=%s", created, mr_id, supplier_id)
