@@ -10,7 +10,7 @@
 import { useEffect, useState, useRef } from "react";
 import {
   Car, Wrench, Droplet, ClipboardList, Plus, ArrowRightLeft, CheckCircle2, FileText,
-  Upload, ChevronDown, ChevronUp, Gauge, Clock,
+  Upload, ChevronDown, ChevronUp, Gauge, Clock, Unlink, UserPlus,
 } from "lucide-react";
 import {
   vehiclesApi,
@@ -714,6 +714,264 @@ function RepairJobCard({
   );
 }
 
+// ── Add new vehicle (locked to this site) ────────────────────────────────────
+
+const vehicleTypeOptions: VehicleType[] = ["BAKKIE", "TRUCK", "TLB", "EXCAVATOR", "CRANE", "VAN", "OTHER"];
+const fuelTypeOptions: FuelType[] = ["DIESEL", "PETROL", "PARAFFIN", "OTHER"];
+
+function AddVehicleModal({
+  siteId, projectId, onClose, onCreated,
+}: {
+  siteId: string;
+  projectId: string | null;
+  onClose: () => void;
+  onCreated: (v: Vehicle) => void;
+}) {
+  const [form, setForm] = useState({
+    registration: "",
+    name: "",
+    vehicle_type: "BAKKIE" as VehicleType,
+    status: "ACTIVE" as const,
+    make: "",
+    model: "",
+    year: "",
+    fuel_type: "" as FuelType | "",
+    tank_capacity_l: "",
+    uses_hours: false,
+    current_odometer_km: "",
+    current_hours_reading: "",
+    notes: "",
+  });
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!form.registration.trim() || !form.name.trim()) {
+      setError("Registration and name are required.");
+      return;
+    }
+    setLoading(true);
+    setError("");
+    try {
+      const v = await vehiclesApi.create({
+        registration: form.registration.trim().toUpperCase(),
+        name: form.name.trim(),
+        vehicle_type: form.vehicle_type,
+        status: form.status,
+        make: form.make || undefined,
+        model: form.model || undefined,
+        year: form.year ? parseInt(form.year) : undefined,
+        fuel_type: (form.fuel_type as FuelType) || undefined,
+        tank_capacity_l: form.tank_capacity_l ? parseFloat(form.tank_capacity_l) : undefined,
+        uses_hours: form.uses_hours,
+        current_odometer_km: !form.uses_hours && form.current_odometer_km ? parseFloat(form.current_odometer_km) : undefined,
+        current_hours_reading: form.uses_hours && form.current_hours_reading ? parseFloat(form.current_hours_reading) : undefined,
+        notes: form.notes || undefined,
+        assigned_site_id: siteId,
+        assigned_project_id: projectId || undefined,
+      });
+      onCreated(v);
+      onClose();
+    } catch (err: unknown) {
+      setError((err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Failed to add vehicle.");
+    } finally { setLoading(false); }
+  };
+
+  const p = <T,>(k: string, v: T) => setForm(prev => ({ ...prev, [k]: v }));
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center p-4 bg-foreground/40 overflow-y-auto">
+      <div className="bg-card border border-border rounded-xl w-full max-w-lg p-6 animate-fade-in my-6">
+        <h2 className="text-base font-semibold mb-4">Add Vehicle to This Site</h2>
+        <form onSubmit={submit} className="space-y-3">
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-2">
+              <Label>Registration *</Label>
+              <Input value={form.registration} onChange={e => p("registration", e.target.value)} placeholder="CA 123-456" required />
+            </div>
+            <div className="space-y-2">
+              <Label>Display Name *</Label>
+              <Input value={form.name} onChange={e => p("name", e.target.value)} placeholder="e.g. Site Hilux" required />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-2">
+              <Label>Type</Label>
+              <select value={form.vehicle_type} onChange={e => p("vehicle_type", e.target.value)}
+                className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm">
+                {vehicleTypeOptions.map(t => <option key={t} value={t}>{vehicleTypeLabels[t]}</option>)}
+              </select>
+            </div>
+            <div className="space-y-2">
+              <Label>Status</Label>
+              <select value={form.status} onChange={e => p("status", e.target.value)}
+                className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm">
+                <option value="ACTIVE">Active</option>
+                <option value="MAINTENANCE">Maintenance</option>
+              </select>
+            </div>
+          </div>
+          <div className="grid grid-cols-3 gap-3">
+            <div className="space-y-2">
+              <Label>Make</Label>
+              <Input value={form.make} onChange={e => p("make", e.target.value)} placeholder="Toyota" />
+            </div>
+            <div className="space-y-2">
+              <Label>Model</Label>
+              <Input value={form.model} onChange={e => p("model", e.target.value)} placeholder="Hilux" />
+            </div>
+            <div className="space-y-2">
+              <Label>Year</Label>
+              <Input type="number" min="1990" max="2099" value={form.year} onChange={e => p("year", e.target.value)} placeholder="2022" />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-2">
+              <Label>Fuel Type</Label>
+              <select value={form.fuel_type} onChange={e => p("fuel_type", e.target.value)}
+                className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm">
+                <option value="">— None —</option>
+                {fuelTypeOptions.map(f => <option key={f} value={f}>{fuelTypeLabels[f]}</option>)}
+              </select>
+            </div>
+            <div className="space-y-2">
+              <Label>Tank Capacity (L)</Label>
+              <Input type="number" min="0" step="1" value={form.tank_capacity_l} onChange={e => p("tank_capacity_l", e.target.value)} placeholder="80" />
+            </div>
+          </div>
+
+          {/* Hours vs KM toggle */}
+          <div className="flex items-center gap-3 py-1">
+            <button
+              type="button"
+              onClick={() => p("uses_hours", !form.uses_hours)}
+              className={cn(
+                "relative inline-flex h-5 w-9 items-center rounded-full transition-colors",
+                form.uses_hours ? "bg-primary" : "bg-muted"
+              )}
+            >
+              <span className={cn("inline-block h-3.5 w-3.5 rounded-full bg-white shadow transition-transform",
+                form.uses_hours ? "translate-x-4" : "translate-x-0.5")} />
+            </button>
+            <Label className="cursor-pointer" onClick={() => p("uses_hours", !form.uses_hours)}>
+              {form.uses_hours ? "Tracks hours (machine)" : "Tracks kilometres (vehicle)"}
+            </Label>
+          </div>
+
+          {form.uses_hours ? (
+            <div className="space-y-2">
+              <Label>Current Hours Reading</Label>
+              <Input type="number" min="0" step="0.1" value={form.current_hours_reading} onChange={e => p("current_hours_reading", e.target.value)} placeholder="e.g. 1250.5" />
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <Label>Current Odometer (km)</Label>
+              <Input type="number" min="0" step="1" value={form.current_odometer_km} onChange={e => p("current_odometer_km", e.target.value)} placeholder="e.g. 45000" />
+            </div>
+          )}
+
+          <div className="space-y-2">
+            <Label>Notes</Label>
+            <Input value={form.notes} onChange={e => p("notes", e.target.value)} placeholder="Optional" />
+          </div>
+
+          {error && <p className="text-sm text-destructive bg-destructive/10 rounded-lg px-3 py-2">{error}</p>}
+          <div className="flex gap-2 pt-1">
+            <Button type="submit" disabled={loading} className="flex-1">{loading ? "Adding…" : "Add Vehicle"}</Button>
+            <Button type="button" variant="outline" onClick={onClose} className="flex-1">Cancel</Button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+// ── Assign existing vehicle to this site ──────────────────────────────────────
+
+function AssignExistingModal({
+  siteId, onClose, onAssigned,
+}: {
+  siteId: string;
+  onClose: () => void;
+  onAssigned: (v: Vehicle) => void;
+}) {
+  const [allVehicles, setAllVehicles] = useState<Vehicle[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [selected, setSelected] = useState<string>("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    vehiclesApi.list().then(vs => {
+      // Show vehicles not already assigned to this site (unassigned or on another site)
+      setAllVehicles(vs.filter(v => v.assigned_site_id !== siteId));
+    }).catch(() => setError("Failed to load vehicles.")).finally(() => setLoading(false));
+  }, [siteId]);
+
+  const assign = async () => {
+    if (!selected) { setError("Select a vehicle."); return; }
+    setSaving(true);
+    try {
+      const updated = await vehiclesApi.update(selected, { assigned_site_id: siteId });
+      onAssigned(updated);
+      onClose();
+    } catch (err: unknown) {
+      setError((err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Failed to assign vehicle.");
+    } finally { setSaving(false); }
+  };
+
+  const selectedVehicle = allVehicles.find(v => v.id === selected);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-foreground/40">
+      <div className="bg-card border border-border rounded-xl w-full max-w-md p-6 animate-fade-in">
+        <h2 className="text-base font-semibold mb-1">Assign Vehicle to This Site</h2>
+        <p className="text-xs text-muted-foreground mb-4">
+          Pick a vehicle from the fleet to lock it to this site. The office can transfer it later.
+        </p>
+        {loading ? (
+          <p className="text-sm text-muted-foreground">Loading fleet…</p>
+        ) : allVehicles.length === 0 ? (
+          <p className="text-sm text-muted-foreground">All vehicles are already assigned to this site.</p>
+        ) : (
+          <div className="space-y-3">
+            <div className="space-y-2">
+              <Label>Select Vehicle</Label>
+              <select
+                value={selected}
+                onChange={e => { setSelected(e.target.value); setError(""); }}
+                className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+              >
+                <option value="">— Choose from fleet —</option>
+                {allVehicles.map(v => (
+                  <option key={v.id} value={v.id}>
+                    {v.name} ({v.registration}) {v.assigned_site_id ? "— currently on other site" : "— unassigned"}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {selectedVehicle && selectedVehicle.assigned_site_id && selectedVehicle.assigned_site_id !== siteId && (
+              <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg px-3 py-2 text-xs text-amber-700">
+                This vehicle is currently assigned to another site. Assigning it here will move it to this site.
+              </div>
+            )}
+
+            {error && <p className="text-sm text-destructive">{error}</p>}
+            <div className="flex gap-2 pt-1">
+              <Button onClick={assign} disabled={saving || !selected} className="flex-1">
+                {saving ? "Assigning…" : "Assign to Site"}
+              </Button>
+              <Button variant="outline" onClick={onClose} className="flex-1">Cancel</Button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── Main component ────────────────────────────────────────────────────────────
 
 interface SiteVehiclesProps {
@@ -735,6 +993,8 @@ export function SiteVehicles({ siteId, projectId, sites, isViewOnly = false }: S
   const [newRepairFor, setNewRepairFor] = useState<Vehicle | null>(null);
   const [transferFor, setTransferFor] = useState<Vehicle | null>(null);
   const [logCostFor, setLogCostFor] = useState<Vehicle | null>(null);
+  const [showAddVehicle, setShowAddVehicle] = useState(false);
+  const [showAssignExisting, setShowAssignExisting] = useState(false);
 
   const loadVehicles = () => {
     setLoading(true);
@@ -785,10 +1045,20 @@ export function SiteVehicles({ siteId, projectId, sites, isViewOnly = false }: S
       />
 
       {/* Vehicle list header */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-2">
         <p className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
           Site Vehicles ({loading ? "…" : vehicles.length})
         </p>
+        {!isViewOnly && (
+          <div className="flex gap-2">
+            <Button size="sm" variant="outline" onClick={() => setShowAssignExisting(true)} className="gap-1.5 text-xs">
+              <UserPlus className="w-3.5 h-3.5" /> Assign Existing
+            </Button>
+            <Button size="sm" onClick={() => setShowAddVehicle(true)} className="gap-1.5 text-xs">
+              <Plus className="w-3.5 h-3.5" /> Add Vehicle
+            </Button>
+          </div>
+        )}
       </div>
 
       {error && (
@@ -803,7 +1073,16 @@ export function SiteVehicles({ siteId, projectId, sites, isViewOnly = false }: S
         <div className="bg-card border border-border rounded-xl p-8 text-center">
           <Car className="w-8 h-8 text-muted-foreground mx-auto mb-2" />
           <p className="text-sm text-muted-foreground">No vehicles assigned to this site.</p>
-          <p className="text-xs text-muted-foreground mt-1">Assign vehicles from the main Vehicles page.</p>
+          {!isViewOnly && (
+            <div className="flex justify-center gap-2 mt-3">
+              <Button size="sm" variant="outline" onClick={() => setShowAssignExisting(true)} className="gap-1.5 text-xs">
+                <UserPlus className="w-3.5 h-3.5" /> Assign Existing
+              </Button>
+              <Button size="sm" onClick={() => setShowAddVehicle(true)} className="gap-1.5 text-xs">
+                <Plus className="w-3.5 h-3.5" /> Add Vehicle
+              </Button>
+            </div>
+          )}
         </div>
       ) : (
         <div className="space-y-2">
@@ -840,14 +1119,32 @@ export function SiteVehicles({ siteId, projectId, sites, isViewOnly = false }: S
                   </div>
                 </div>
                 {!isViewOnly && (
-                  <Button
-                    size="sm" variant="outline"
-                    className="shrink-0 text-xs"
-                    onClick={e => { e.stopPropagation(); setTransferFor(v); }}
-                    title="Request site transfer"
-                  >
-                    <ArrowRightLeft className="w-3.5 h-3.5" />
-                  </Button>
+                  <div className="flex gap-1.5 shrink-0">
+                    <Button
+                      size="sm" variant="outline"
+                      className="text-xs"
+                      onClick={e => { e.stopPropagation(); setTransferFor(v); }}
+                      title="Request transfer to another site"
+                    >
+                      <ArrowRightLeft className="w-3.5 h-3.5" />
+                    </Button>
+                    <Button
+                      size="sm" variant="outline"
+                      className="text-xs text-muted-foreground hover:text-destructive hover:border-destructive/50"
+                      onClick={async e => {
+                        e.stopPropagation();
+                        if (!confirm(`Unassign "${v.name}" from this site?`)) return;
+                        try {
+                          const updated = await vehiclesApi.update(v.id, { assigned_site_id: null });
+                          setVehicles(prev => prev.filter(x => x.id !== updated.id));
+                          if (expanded === v.id) setExpanded(null);
+                        } catch { alert("Failed to unassign vehicle."); }
+                      }}
+                      title="Unassign from this site"
+                    >
+                      <Unlink className="w-3.5 h-3.5" />
+                    </Button>
+                  </div>
                 )}
               </div>
 
@@ -1068,6 +1365,35 @@ export function SiteVehicles({ siteId, projectId, sites, isViewOnly = false }: S
           onLogged={() => {
             loadCosts(logCostFor.id);
             setLogCostFor(null);
+          }}
+        />
+      )}
+
+      {/* Add new vehicle modal */}
+      {showAddVehicle && (
+        <AddVehicleModal
+          siteId={siteId}
+          projectId={projectId}
+          onClose={() => setShowAddVehicle(false)}
+          onCreated={v => {
+            setVehicles(prev => [...prev, v]);
+            setShowAddVehicle(false);
+          }}
+        />
+      )}
+
+      {/* Assign existing vehicle modal */}
+      {showAssignExisting && (
+        <AssignExistingModal
+          siteId={siteId}
+          onClose={() => setShowAssignExisting(false)}
+          onAssigned={v => {
+            setVehicles(prev => {
+              const existing = prev.find(x => x.id === v.id);
+              if (existing) return prev.map(x => x.id === v.id ? v : x);
+              return [...prev, v];
+            });
+            setShowAssignExisting(false);
           }}
         />
       )}

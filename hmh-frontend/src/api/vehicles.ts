@@ -37,8 +37,8 @@ export interface VehicleCreate {
   name: string;
   vehicle_type?: VehicleType;
   status?: VehicleStatus;
-  assigned_project_id?: string;
-  assigned_site_id?: string;
+  assigned_project_id?: string | null;
+  assigned_site_id?: string | null;
   vin_number?: string;
   make?: string;
   model?: string;

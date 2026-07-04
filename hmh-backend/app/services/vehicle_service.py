@@ -121,9 +121,9 @@ def update_vehicle(db: Session, vehicle_id: uuid.UUID, data: VehicleUpdate, acto
         vehicle.current_odometer_km = data.current_odometer_km
     if data.service_interval_km is not None:
         vehicle.service_interval_km = data.service_interval_km
-    if data.assigned_project_id is not None:
+    if "assigned_project_id" in data.model_fields_set:
         vehicle.assigned_project_id = data.assigned_project_id
-    if data.assigned_site_id is not None:
+    if "assigned_site_id" in data.model_fields_set:
         vehicle.assigned_site_id = data.assigned_site_id
     if data.last_service_date is not None:
         vehicle.last_service_date = data.last_service_date
