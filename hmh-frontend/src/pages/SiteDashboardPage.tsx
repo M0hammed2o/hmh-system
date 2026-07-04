@@ -664,12 +664,14 @@ export default function SiteDashboardPage() {
 
         {/* ── Vehicles view ── */}
         {viewMode === "vehicles" && siteId && projectId && projectId !== MAIN_WAREHOUSE_SENTINEL && (
-          <SiteVehicles
-            siteId={siteId}
-            projectId={projectId}
-            sites={sites}
-            isViewOnly={isViewOnly}
-          />
+          <ModalErrorBoundary>
+            <SiteVehicles
+              siteId={siteId}
+              projectId={projectId}
+              sites={sites}
+              isViewOnly={isViewOnly}
+            />
+          </ModalErrorBoundary>
         )}
 
         {projectId && viewMode === "default" && (

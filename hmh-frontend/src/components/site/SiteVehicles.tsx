@@ -10,7 +10,7 @@
 import { useEffect, useState, useRef } from "react";
 import {
   Car, Wrench, Droplet, ClipboardList, Plus, ArrowRightLeft, CheckCircle2, FileText,
-  Upload, ChevronDown, ChevronUp, Gauge, Clock, Unlink, UserPlus,
+  Upload, ChevronDown, ChevronUp, Gauge, Clock, Unlink, UserPlus, Fuel,
 } from "lucide-react";
 import {
   vehiclesApi,
