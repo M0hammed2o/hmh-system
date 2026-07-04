@@ -508,22 +508,27 @@ function AssignVehicleModal({ vehicle, onClose, onSaved }: { vehicle: Vehicle; o
   const [sites, setSites] = useState<Site[]>([]);
   const [projectId, setProjectId] = useState(vehicle.assigned_project_id ?? "");
   const [siteId, setSiteId] = useState(vehicle.assigned_site_id ?? "");
-  const [loading, setLoading] = useState(false);
+  const [projectsLoading, setProjectsLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
-    projectsApi.list(1, 200).then(r => setProjects(r.items)).catch(() => {});
+    setProjectsLoading(true);
+    projectsApi.list(1, 500)
+      .then(r => setProjects(r.items))
+      .catch(() => setError("Could not load projects. Please close and try again."))
+      .finally(() => setProjectsLoading(false));
   }, []);
 
   useEffect(() => {
     if (!projectId) { setSites([]); setSiteId(""); return; }
-    sitesApi.list(projectId).then(ss => {
-      setSites(ss.filter(s => s.site_type !== "warehouse"));
-    }).catch(() => setSites([]));
+    sitesApi.list(projectId)
+      .then(ss => setSites(ss.filter(s => s.site_type !== "warehouse")))
+      .catch(() => setSites([]));
   }, [projectId]);
 
   const save = async () => {
-    setLoading(true);
+    setSaving(true);
     setError("");
     try {
       const updated = await vehiclesApi.update(vehicle.id, {
@@ -534,7 +539,7 @@ function AssignVehicleModal({ vehicle, onClose, onSaved }: { vehicle: Vehicle; o
       onClose();
     } catch (err: unknown) {
       setError((err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Failed to save.");
-    } finally { setLoading(false); }
+    } finally { setSaving(false); }
   };
 
   return (
@@ -544,31 +549,34 @@ function AssignVehicleModal({ vehicle, onClose, onSaved }: { vehicle: Vehicle; o
         <p className="text-sm text-muted-foreground mb-5">{vehicle.name} ({vehicle.registration})</p>
         <div className="space-y-4">
           <div className="space-y-2">
-            <Label>Project</Label>
+            <Label>Project {projectsLoading && <span className="text-muted-foreground text-xs">(loading…)</span>}</Label>
             <select
               value={projectId}
               onChange={e => { setProjectId(e.target.value); setSiteId(""); }}
-              className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+              disabled={projectsLoading}
+              className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm disabled:opacity-50"
             >
               <option value="">— Unassigned —</option>
               {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
             </select>
           </div>
           <div className="space-y-2">
-            <Label>Site {!projectId && <span className="text-muted-foreground text-xs">(select a project first)</span>}</Label>
+            <Label>Site <span className="text-muted-foreground text-xs">(optional — leave blank for project pool)</span></Label>
             <select
               value={siteId}
               onChange={e => setSiteId(e.target.value)}
-              disabled={!projectId || sites.length === 0}
+              disabled={!projectId}
               className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm disabled:opacity-50"
             >
-              <option value="">— None (pool vehicle) —</option>
+              <option value="">— No specific site —</option>
               {sites.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
             </select>
           </div>
           {error && <p className="text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-lg px-3 py-2">{error}</p>}
           <div className="flex gap-2 pt-1">
-            <Button onClick={save} disabled={loading} className="flex-1">{loading ? "Saving…" : "Save Assignment"}</Button>
+            <Button onClick={save} disabled={saving || projectsLoading} className="flex-1">
+              {saving ? "Saving…" : "Save Assignment"}
+            </Button>
             <Button variant="outline" onClick={onClose} className="flex-1">Cancel</Button>
           </div>
         </div>
