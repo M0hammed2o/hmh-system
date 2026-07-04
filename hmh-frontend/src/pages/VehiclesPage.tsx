@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Plus, Car, Wrench, Fuel, Trash2, Droplet, AlertTriangle, Pencil, ClipboardList } from "lucide-react";
+import { Plus, Car, Wrench, Fuel, Trash2, Droplet, AlertTriangle, Pencil, ClipboardList, MapPin } from "lucide-react";
 import { fuelApi, fuelPhotoUrl, type FuelLog, FUEL_TYPE_LABELS } from "@/api/fuel";
 import { formatCurrency } from "@/lib/format";
 import {
@@ -503,6 +503,80 @@ function LogRepairCostModal({
   );
 }
 
+function AssignVehicleModal({ vehicle, onClose, onSaved }: { vehicle: Vehicle; onClose: () => void; onSaved: (v: Vehicle) => void }) {
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [sites, setSites] = useState<Site[]>([]);
+  const [projectId, setProjectId] = useState(vehicle.assigned_project_id ?? "");
+  const [siteId, setSiteId] = useState(vehicle.assigned_site_id ?? "");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    projectsApi.list(1, 200).then(r => setProjects(r.items)).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (!projectId) { setSites([]); setSiteId(""); return; }
+    sitesApi.list(projectId).then(ss => {
+      setSites(ss.filter(s => s.site_type !== "warehouse"));
+    }).catch(() => setSites([]));
+  }, [projectId]);
+
+  const save = async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const updated = await vehiclesApi.update(vehicle.id, {
+        assigned_project_id: projectId || null,
+        assigned_site_id: siteId || null,
+      });
+      onSaved(updated);
+      onClose();
+    } catch (err: unknown) {
+      setError((err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Failed to save.");
+    } finally { setLoading(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-foreground/40">
+      <div className="bg-card border border-border rounded-xl w-full max-w-md p-6 animate-fade-in">
+        <h2 className="text-base font-semibold mb-1">Assign to Project / Site</h2>
+        <p className="text-sm text-muted-foreground mb-5">{vehicle.name} ({vehicle.registration})</p>
+        <div className="space-y-4">
+          <div className="space-y-2">
+            <Label>Project</Label>
+            <select
+              value={projectId}
+              onChange={e => { setProjectId(e.target.value); setSiteId(""); }}
+              className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+            >
+              <option value="">— Unassigned —</option>
+              {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+          </div>
+          <div className="space-y-2">
+            <Label>Site {!projectId && <span className="text-muted-foreground text-xs">(select a project first)</span>}</Label>
+            <select
+              value={siteId}
+              onChange={e => setSiteId(e.target.value)}
+              disabled={!projectId || sites.length === 0}
+              className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm disabled:opacity-50"
+            >
+              <option value="">— None (pool vehicle) —</option>
+              {sites.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+          </div>
+          {error && <p className="text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-lg px-3 py-2">{error}</p>}
+          <div className="flex gap-2 pt-1">
+            <Button onClick={save} disabled={loading} className="flex-1">{loading ? "Saving…" : "Save Assignment"}</Button>
+            <Button variant="outline" onClick={onClose} className="flex-1">Cancel</Button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function VehiclesPage() {
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [costs, setCosts] = useState<Record<string, VehicleCost[]>>({});
@@ -511,6 +585,7 @@ export default function VehiclesPage() {
   const [showAdd, setShowAdd] = useState(false);
   const [logCostFor, setLogCostFor] = useState<Vehicle | null>(null);
   const [editVehicle, setEditVehicle] = useState<Vehicle | null>(null);
+  const [assignFor, setAssignFor] = useState<Vehicle | null>(null);
   const [newRepairFor, setNewRepairFor] = useState<Vehicle | null>(null);
   const [logRepairCostFor, setLogRepairCostFor] = useState<{ vehicle: Vehicle; job: RepairJob } | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -616,8 +691,25 @@ export default function VehiclesPage() {
                     <p className="font-semibold">{v.name}</p>
                     {v.status === "MAINTENANCE" && <Badge variant="secondary" className="text-xs">Maintenance</Badge>}
                   </div>
-                  <p className="text-xs text-muted-foreground">{v.registration} · {vehicleTypeLabels[v.vehicle_type]}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {v.registration} · {vehicleTypeLabels[v.vehicle_type]}
+                    {v.assigned_site_id
+                      ? <span className="ml-1 text-blue-600"> · Assigned to site</span>
+                      : v.assigned_project_id
+                      ? <span className="ml-1 text-indigo-500"> · Project pool</span>
+                      : <span className="ml-1 text-muted-foreground/60"> · Unassigned</span>}
+                  </p>
                 </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={(e) => { e.stopPropagation(); setAssignFor(v); }}
+                  className="shrink-0 text-xs gap-1"
+                  title="Assign to project / site"
+                >
+                  <MapPin className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">{v.assigned_site_id ? "Reassign" : v.assigned_project_id ? "Move" : "Assign"}</span>
+                </Button>
                 <Button
                   size="sm"
                   variant="outline"
@@ -722,6 +814,26 @@ export default function VehiclesPage() {
                         {!v.vin_number && !v.make && !v.model && !v.year && !v.fuel_type && !v.tank_capacity_l && !v.current_odometer_km && (
                           <p className="col-span-2 text-muted-foreground">No additional details recorded. Click the edit button to add vehicle specs.</p>
                         )}
+                        <div className="col-span-2 border-t border-border/40 pt-2 mt-1">
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <span className="text-muted-foreground">Assignment: </span>
+                              <span className="font-medium">
+                                {v.assigned_site_id
+                                  ? "Locked to site"
+                                  : v.assigned_project_id
+                                  ? "Project pool (no site)"
+                                  : "Unassigned (fleet pool)"}
+                              </span>
+                            </div>
+                            <button
+                              onClick={() => setAssignFor(v)}
+                              className="text-xs text-primary hover:underline flex items-center gap-1"
+                            >
+                              <MapPin className="w-3 h-3" /> Change
+                            </button>
+                          </div>
+                        </div>
                       </div>
                     </div>
                   )}
@@ -920,6 +1032,17 @@ export default function VehiclesPage() {
         <AddVehicleModal
           onClose={() => setShowAdd(false)}
           onCreated={loadVehicles}
+        />
+      )}
+
+      {assignFor && (
+        <AssignVehicleModal
+          vehicle={assignFor}
+          onClose={() => setAssignFor(null)}
+          onSaved={(updated) => {
+            setVehicles(prev => prev.map(x => x.id === updated.id ? updated : x));
+            setAssignFor(null);
+          }}
         />
       )}
 
