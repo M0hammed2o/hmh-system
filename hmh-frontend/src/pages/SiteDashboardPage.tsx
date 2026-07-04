@@ -6,7 +6,7 @@ import {
   Clock, Circle, ChevronRight, Box, Bell, Camera, Image, X,
   Plus, Trash2, ClipboardList, Flag, Ban, Lock, CalendarClock,
   ShieldOff, Briefcase, RotateCcw, Search, FileSpreadsheet,
-  Home, Warehouse, ArrowRightLeft, Wrench, ArrowLeft,
+  Home, Warehouse, ArrowRightLeft, Wrench, ArrowLeft, Car,
 } from "lucide-react";
 import { siteCaptureApi, type ExtractedItem } from "@/api/siteCapture";
 import { siteDashboardApi, type MaterialSummaryItem, type ActivityItem } from "@/api/siteDashboard";
@@ -30,6 +30,7 @@ import { warehouseApi, type WarehouseStockItem } from "@/api/warehouse";
 import { jobCardsApi, type JobCard } from "@/api/jobCards";
 import { getDrafts, removeDraft, type OfflineDraft } from "@/utils/offlineDrafts";
 import { procurementApi, type BOQSearchResult } from "@/api/procurement";
+import { SiteVehicles } from "@/components/site/SiteVehicles";
 import { cn } from "@/lib/utils";
 
 // ── Error boundary — prevents any modal crash from blanking the whole page ────
@@ -302,6 +303,9 @@ export default function SiteDashboardPage() {
   // ── Derived: is the selected site the Project Warehouse? ──
   const isWarehouse = !!siteId && !!sites.find(s => s.id === siteId && s.site_type === "warehouse");
 
+  // ── View mode: default (site/warehouse content) or vehicles ──
+  const [viewMode, setViewMode] = useState<"default" | "vehicles">("default");
+
   // ── Load live data ──
   const loadData = useCallback(() => {
     if (!projectId) return;
@@ -544,7 +548,7 @@ export default function SiteDashboardPage() {
           )}
 
           {/* Lot: hidden when Project Warehouse is selected */}
-          {siteId && !isWarehouse && (
+          {siteId && !isWarehouse && viewMode === "default" && (
             <Select value={lotId} onChange={selectLot}>
               <option value="">— All units —</option>
               {lots
@@ -560,6 +564,36 @@ export default function SiteDashboardPage() {
                   </option>
                 ))}
             </Select>
+          )}
+
+          {/* View mode tabs: Site/Warehouse | Vehicles */}
+          {siteId && projectId && projectId !== MAIN_WAREHOUSE_SENTINEL && (
+            <div className="flex gap-1 mt-1">
+              <button
+                onClick={() => setViewMode("default")}
+                className={cn(
+                  "flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg font-medium transition-colors",
+                  viewMode === "default"
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-muted/60 text-muted-foreground hover:bg-muted"
+                )}
+              >
+                {isWarehouse ? <Warehouse className="w-3 h-3" /> : <Home className="w-3 h-3" />}
+                {isWarehouse ? "Project Warehouse" : "Site"}
+              </button>
+              <button
+                onClick={() => setViewMode("vehicles")}
+                className={cn(
+                  "flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg font-medium transition-colors",
+                  viewMode === "vehicles"
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-muted/60 text-muted-foreground hover:bg-muted"
+                )}
+              >
+                <Car className="w-3 h-3" />
+                Vehicles
+              </button>
+            </div>
           )}
         </div>
 
@@ -628,7 +662,17 @@ export default function SiteDashboardPage() {
           </div>
         )}
 
-        {projectId && (
+        {/* ── Vehicles view ── */}
+        {viewMode === "vehicles" && siteId && projectId && projectId !== MAIN_WAREHOUSE_SENTINEL && (
+          <SiteVehicles
+            siteId={siteId}
+            projectId={projectId}
+            sites={sites}
+            isViewOnly={isViewOnly}
+          />
+        )}
+
+        {projectId && viewMode === "default" && (
           <>
             {/* ── Today summary ── */}
             {projectId !== MAIN_WAREHOUSE_SENTINEL && <Section title="Today">

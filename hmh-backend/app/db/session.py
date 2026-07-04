@@ -15,8 +15,10 @@ from app.core.config import settings
 engine = create_engine(
     settings.DATABASE_URL,
     pool_pre_ping=True,          # drop stale connections
-    pool_size=10,
-    max_overflow=20,
+    pool_size=3,                 # base persistent connections per worker
+    max_overflow=5,              # burst connections beyond pool_size
+    pool_timeout=30,             # seconds to wait before raising connection error
+    pool_recycle=1800,           # recycle connections every 30 min to avoid stale
     echo=settings.DEBUG,         # log SQL in dev mode
 )
 

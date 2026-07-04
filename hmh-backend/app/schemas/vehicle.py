@@ -23,6 +23,8 @@ class VehicleCreate(BaseModel):
     fuel_consumption_per_100km: Optional[float] = None
     current_odometer_km: Optional[float] = None
     service_interval_km: Optional[int] = None
+    uses_hours: bool = False
+    current_hours_reading: Optional[float] = None
     assigned_project_id: Optional[uuid.UUID] = None
     assigned_site_id: Optional[uuid.UUID] = None
     last_service_date: Optional[date] = None
@@ -44,6 +46,8 @@ class VehicleUpdate(BaseModel):
     fuel_consumption_per_100km: Optional[float] = None
     current_odometer_km: Optional[float] = None
     service_interval_km: Optional[int] = None
+    uses_hours: Optional[bool] = None
+    current_hours_reading: Optional[float] = None
     assigned_project_id: Optional[uuid.UUID] = None
     assigned_site_id: Optional[uuid.UUID] = None
     last_service_date: Optional[date] = None
@@ -68,6 +72,8 @@ class VehicleRead(BaseModel):
     fuel_consumption_per_100km: Optional[float] = None
     current_odometer_km: Optional[float] = None
     service_interval_km: Optional[int] = None
+    uses_hours: bool = False
+    current_hours_reading: Optional[float] = None
     assigned_project_id: Optional[uuid.UUID] = None
     assigned_site_id: Optional[uuid.UUID] = None
     last_service_date: Optional[date] = None

@@ -1,10 +1,10 @@
-"""Vehicle, VehicleCost, and RepairJob models."""
+"""Vehicle, VehicleCost, RepairJob, FuelDelivery, and VehicleTransferRequest models."""
 
 import uuid
 from datetime import date, datetime
 from typing import Optional
 
-from sqlalchemy import Date, DateTime, Enum, ForeignKey, Integer, Numeric, String, Text
+from sqlalchemy import Boolean, Date, DateTime, Enum, ForeignKey, Integer, Numeric, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -59,9 +59,13 @@ class Vehicle(TimestampMixin, Base):
     # Odometer / service
     current_odometer_km: Mapped[Optional[float]] = mapped_column(Numeric(10, 1), nullable=True)
     service_interval_km: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-
     last_service_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     next_service_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+
+    # Hours tracking (for machines that run on hours, not km)
+    uses_hours: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    current_hours_reading: Mapped[Optional[float]] = mapped_column(Numeric(10, 1), nullable=True)
+
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_by: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True),
@@ -74,6 +78,9 @@ class Vehicle(TimestampMixin, Base):
     )
     repair_jobs: Mapped[list["RepairJob"]] = relationship(
         "RepairJob", back_populates="vehicle", cascade="all, delete-orphan"
+    )
+    transfer_requests: Mapped[list["VehicleTransferRequest"]] = relationship(
+        "VehicleTransferRequest", back_populates="vehicle", cascade="all, delete-orphan"
     )
 
     def __repr__(self) -> str:
@@ -94,12 +101,32 @@ class RepairJob(TimestampMixin, Base):
     )
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    status: Mapped[str] = mapped_column(String(20), nullable=False, default="OPEN")
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default="OPEN")
     workshop_name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
     date_opened: Mapped[date] = mapped_column(Date, nullable=False)
     date_closed: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     odometer_at_repair: Mapped[Optional[float]] = mapped_column(Numeric(10, 1), nullable=True)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    # Quotation / approval workflow
+    quote_amount: Mapped[Optional[float]] = mapped_column(Numeric(14, 2), nullable=True)
+    quote_file_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    invoice_amount: Mapped[Optional[float]] = mapped_column(Numeric(14, 2), nullable=True)
+    invoice_file_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    approval_stage: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    approval_1_by: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    approval_1_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    approval_2_by: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    approval_2_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    approval_3_by: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    approval_3_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
     created_by: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="SET NULL"),
@@ -175,3 +202,84 @@ class VehicleCost(Base):
 
     def __repr__(self) -> str:
         return f"<VehicleCost {self.cost_type} R{self.amount} vehicle={self.vehicle_id}>"
+
+
+class FuelDelivery(TimestampMixin, Base):
+    """Bulk fuel delivery to a site — tracked as a countdown tank balance."""
+
+    __tablename__ = "fuel_deliveries"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    site_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("sites.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    project_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("projects.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    delivery_date: Mapped[date] = mapped_column(Date, nullable=False)
+    fuel_type: Mapped[str] = mapped_column(String(20), nullable=False, default="DIESEL")
+    litres_delivered: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False)
+    cost_per_litre: Mapped[Optional[float]] = mapped_column(Numeric(10, 4), nullable=True)
+    supplier_name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    invoice_number: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    recorded_by: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    def __repr__(self) -> str:
+        return f"<FuelDelivery {self.litres_delivered}L site={self.site_id}>"
+
+
+class VehicleTransferRequest(TimestampMixin, Base):
+    """Request to move a vehicle from one site to another — requires office approval."""
+
+    __tablename__ = "vehicle_transfer_requests"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    vehicle_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("vehicles.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    from_site_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("sites.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    to_site_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("sites.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="PENDING")
+    requested_by: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    approved_by: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    approved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    rejected_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    vehicle: Mapped["Vehicle"] = relationship("Vehicle", back_populates="transfer_requests")
+
+    def __repr__(self) -> str:
+        return f"<VehicleTransferRequest vehicle={self.vehicle_id} status={self.status}>"

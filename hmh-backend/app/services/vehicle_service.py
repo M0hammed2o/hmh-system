@@ -14,10 +14,19 @@ from app.schemas.vehicle import VehicleCostCreate, VehicleCreate, VehicleUpdate
 from app.services import audit_service
 
 
-def list_vehicles(db: Session, project_id: Optional[uuid.UUID] = None) -> list[Vehicle]:
+def list_vehicles(
+    db: Session,
+    project_id: Optional[uuid.UUID] = None,
+    site_id: Optional[uuid.UUID] = None,
+    include_all_sites: bool = False,
+) -> list[Vehicle]:
     q = db.query(Vehicle).filter(Vehicle.status != "RETIRED")
     if project_id:
         q = q.filter(Vehicle.assigned_project_id == project_id)
+    if site_id:
+        q = q.filter(Vehicle.assigned_site_id == site_id)
+    elif not project_id and not include_all_sites:
+        pass  # no filter — return all non-retired
     return q.order_by(Vehicle.name).all()
 
 
@@ -48,6 +57,8 @@ def create_vehicle(db: Session, data: VehicleCreate, actor_id: Optional[uuid.UUI
         fuel_consumption_per_100km=data.fuel_consumption_per_100km,
         current_odometer_km=data.current_odometer_km,
         service_interval_km=data.service_interval_km,
+        uses_hours=data.uses_hours,
+        current_hours_reading=data.current_hours_reading,
         assigned_project_id=data.assigned_project_id,
         assigned_site_id=data.assigned_site_id,
         last_service_date=data.last_service_date,
@@ -120,6 +131,10 @@ def update_vehicle(db: Session, vehicle_id: uuid.UUID, data: VehicleUpdate, acto
         vehicle.next_service_date = data.next_service_date
     if data.notes is not None:
         vehicle.notes = data.notes
+    if data.uses_hours is not None:
+        vehicle.uses_hours = data.uses_hours
+    if data.current_hours_reading is not None:
+        vehicle.current_hours_reading = data.current_hours_reading
 
     audit_service.write_event(
         db,
