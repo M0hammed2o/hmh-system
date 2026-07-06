@@ -505,9 +505,7 @@ function LogRepairCostModal({
 
 function AssignVehicleModal({ vehicle, onClose, onSaved }: { vehicle: Vehicle; onClose: () => void; onSaved: (v: Vehicle) => void }) {
   const [projects, setProjects] = useState<Project[]>([]);
-  const [sites, setSites] = useState<Site[]>([]);
   const [projectId, setProjectId] = useState(vehicle.assigned_project_id ?? "");
-  const [siteId, setSiteId] = useState(vehicle.assigned_site_id ?? "");
   const [projectsLoading, setProjectsLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -520,20 +518,19 @@ function AssignVehicleModal({ vehicle, onClose, onSaved }: { vehicle: Vehicle; o
       .finally(() => setProjectsLoading(false));
   }, []);
 
-  useEffect(() => {
-    if (!projectId) { setSites([]); setSiteId(""); return; }
-    sitesApi.list(projectId)
-      .then(ss => setSites(ss.filter(s => s.site_type !== "warehouse")))
-      .catch(() => setSites([]));
-  }, [projectId]);
-
   const save = async () => {
     setSaving(true);
     setError("");
     try {
+      let warehouseSiteId: string | null = null;
+      if (projectId) {
+        const sites = await sitesApi.list(projectId).catch(() => [] as Site[]);
+        const warehouse = sites.find(s => s.site_type === "warehouse");
+        warehouseSiteId = warehouse?.id ?? null;
+      }
       const updated = await vehiclesApi.update(vehicle.id, {
         assigned_project_id: projectId || null,
-        assigned_site_id: siteId || null,
+        assigned_site_id: warehouseSiteId,
       });
       onSaved(updated);
       onClose();
@@ -545,14 +542,14 @@ function AssignVehicleModal({ vehicle, onClose, onSaved }: { vehicle: Vehicle; o
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-foreground/40">
       <div className="bg-card border border-border rounded-xl w-full max-w-md p-6 animate-fade-in">
-        <h2 className="text-base font-semibold mb-1">Assign to Project / Site</h2>
+        <h2 className="text-base font-semibold mb-1">Assign to Project</h2>
         <p className="text-sm text-muted-foreground mb-5">{vehicle.name} ({vehicle.registration})</p>
         <div className="space-y-4">
           <div className="space-y-2">
             <Label>Project {projectsLoading && <span className="text-muted-foreground text-xs">(loading…)</span>}</Label>
             <select
               value={projectId}
-              onChange={e => { setProjectId(e.target.value); setSiteId(""); }}
+              onChange={e => setProjectId(e.target.value)}
               disabled={projectsLoading}
               className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm disabled:opacity-50"
             >
@@ -560,18 +557,7 @@ function AssignVehicleModal({ vehicle, onClose, onSaved }: { vehicle: Vehicle; o
               {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
             </select>
           </div>
-          <div className="space-y-2">
-            <Label>Site <span className="text-muted-foreground text-xs">(optional — leave blank for project pool)</span></Label>
-            <select
-              value={siteId}
-              onChange={e => setSiteId(e.target.value)}
-              disabled={!projectId}
-              className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm disabled:opacity-50"
-            >
-              <option value="">— No specific site —</option>
-              {sites.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-            </select>
-          </div>
+          <p className="text-xs text-muted-foreground">Vehicle will be placed in the project warehouse. Site staff can request transfers from there.</p>
           {error && <p className="text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-lg px-3 py-2">{error}</p>}
           <div className="flex gap-2 pt-1">
             <Button onClick={save} disabled={saving || projectsLoading} className="flex-1">
@@ -702,9 +688,9 @@ export default function VehiclesPage() {
                   <p className="text-xs text-muted-foreground">
                     {v.registration} · {vehicleTypeLabels[v.vehicle_type]}
                     {v.assigned_site_id
-                      ? <span className="ml-1 text-blue-600"> · Assigned to site</span>
+                      ? <span className="ml-1 text-blue-600"> · Project warehouse</span>
                       : v.assigned_project_id
-                      ? <span className="ml-1 text-indigo-500"> · Project pool</span>
+                      ? <span className="ml-1 text-amber-500"> · No warehouse assigned</span>
                       : <span className="ml-1 text-muted-foreground/60"> · Unassigned</span>}
                   </p>
                 </div>
@@ -828,9 +814,9 @@ export default function VehiclesPage() {
                               <span className="text-muted-foreground">Assignment: </span>
                               <span className="font-medium">
                                 {v.assigned_site_id
-                                  ? "Locked to site"
+                                  ? "Project warehouse"
                                   : v.assigned_project_id
-                                  ? "Project pool (no site)"
+                                  ? "Project (no warehouse found)"
                                   : "Unassigned (fleet pool)"}
                               </span>
                             </div>
