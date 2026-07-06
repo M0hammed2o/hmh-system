@@ -514,7 +514,7 @@ function AssignVehicleModal({ vehicle, onClose, onSaved }: { vehicle: Vehicle; o
 
   useEffect(() => {
     setProjectsLoading(true);
-    projectsApi.list(1, 500)
+    projectsApi.list(1, 100)
       .then(r => setProjects(r.items))
       .catch(() => setError("Could not load projects. Please close and try again."))
       .finally(() => setProjectsLoading(false));
