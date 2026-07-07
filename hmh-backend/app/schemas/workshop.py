@@ -1,0 +1,224 @@
+"""Pydantic v2 schemas for the Workshop module."""
+
+import uuid
+from datetime import date, datetime
+from typing import Optional
+
+from pydantic import BaseModel, ConfigDict, computed_field, field_validator
+
+from app.models.enums import MRPriority, RecordStatus
+
+
+# ── Stock ─────────────────────────────────────────────────────────────────────
+
+class WorkshopStockRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    quantity_on_hand: float = 0.0
+    last_updated: Optional[datetime] = None
+
+
+# ── Categories ────────────────────────────────────────────────────────────────
+
+class WorkshopCategoryRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    name: str
+    description: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class WorkshopCategoryCreate(BaseModel):
+    name: str
+    description: Optional[str] = None
+
+    @field_validator("name")
+    @classmethod
+    def name_not_empty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("Category name is required")
+        return v.strip()
+
+
+# ── Items ─────────────────────────────────────────────────────────────────────
+
+class WorkshopItemRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    category_id: uuid.UUID
+    name: str
+    part_number: Optional[str] = None
+    unit: str
+    description: Optional[str] = None
+    reorder_level: Optional[float] = None
+    is_active: bool
+    stock: Optional[WorkshopStockRead] = None
+    created_at: datetime
+    updated_at: datetime
+
+    @computed_field
+    @property
+    def quantity_on_hand(self) -> float:
+        return float(self.stock.quantity_on_hand) if self.stock else 0.0
+
+
+class WorkshopItemCreate(BaseModel):
+    category_id: uuid.UUID
+    name: str
+    part_number: Optional[str] = None
+    unit: str = "each"
+    description: Optional[str] = None
+    reorder_level: Optional[float] = None
+
+    @field_validator("name")
+    @classmethod
+    def name_not_empty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("Item name is required")
+        return v.strip()
+
+
+class WorkshopItemUpdate(BaseModel):
+    name: Optional[str] = None
+    part_number: Optional[str] = None
+    unit: Optional[str] = None
+    description: Optional[str] = None
+    reorder_level: Optional[float] = None
+    is_active: Optional[bool] = None
+
+
+# ── Supplier links ─────────────────────────────────────────────────────────────
+
+class WorkshopSupplierLinkRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    category_id: uuid.UUID
+    supplier_id: uuid.UUID
+    is_preferred: bool
+
+
+class WorkshopSupplierLinkCreate(BaseModel):
+    category_id: uuid.UUID
+    supplier_id: uuid.UUID
+    is_preferred: bool = False
+
+
+# ── MR lines ──────────────────────────────────────────────────────────────────
+
+class WorkshopItemBrief(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    name: str
+    unit: str
+    part_number: Optional[str] = None
+
+
+class WorkshopMRLineRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    workshop_mr_id: uuid.UUID
+    item_id: uuid.UUID
+    quantity_requested: float
+    quantity_approved: Optional[float] = None
+    preferred_supplier_id: Optional[uuid.UUID] = None
+    remarks: Optional[str] = None
+    item: Optional[WorkshopItemBrief] = None
+
+
+class WorkshopMRLineCreate(BaseModel):
+    item_id: uuid.UUID
+    quantity_requested: float
+    preferred_supplier_id: Optional[uuid.UUID] = None
+    remarks: Optional[str] = None
+
+    @field_validator("quantity_requested")
+    @classmethod
+    def qty_positive(cls, v: float) -> float:
+        if v <= 0:
+            raise ValueError("Quantity must be greater than zero")
+        return v
+
+
+# ── Workshop MRs ──────────────────────────────────────────────────────────────
+
+class WorkshopMRRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    mr_number: str
+    site_id: uuid.UUID
+    vehicle_id: uuid.UUID
+    reason: str
+    status: RecordStatus
+    priority: MRPriority
+    needed_by_date: Optional[date] = None
+    requested_by: uuid.UUID
+    approved_by: Optional[uuid.UUID] = None
+    approved_at: Optional[datetime] = None
+    rejection_reason: Optional[str] = None
+    notes: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+    lines: list[WorkshopMRLineRead] = []
+
+
+class WorkshopMRCreate(BaseModel):
+    site_id: uuid.UUID
+    vehicle_id: uuid.UUID
+    reason: str
+    priority: MRPriority = MRPriority.NORMAL
+    needed_by_date: Optional[date] = None
+    notes: Optional[str] = None
+    lines: list[WorkshopMRLineCreate] = []
+
+    @field_validator("reason")
+    @classmethod
+    def reason_not_empty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("Reason is required")
+        return v.strip()
+
+    @field_validator("lines")
+    @classmethod
+    def at_least_one_line(cls, v: list) -> list:
+        if not v:
+            raise ValueError("At least one line item is required")
+        return v
+
+
+# ── Issuances ─────────────────────────────────────────────────────────────────
+
+class WorkshopIssuanceRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    item_id: uuid.UUID
+    vehicle_id: uuid.UUID
+    workshop_mr_id: Optional[uuid.UUID] = None
+    quantity_issued: float
+    issued_by: uuid.UUID
+    issued_at: datetime
+    notes: Optional[str] = None
+    created_at: datetime
+    item: Optional[WorkshopItemBrief] = None
+
+
+class WorkshopIssuanceCreate(BaseModel):
+    item_id: uuid.UUID
+    vehicle_id: uuid.UUID
+    workshop_mr_id: Optional[uuid.UUID] = None
+    quantity_issued: float
+    notes: Optional[str] = None
+
+    @field_validator("quantity_issued")
+    @classmethod
+    def qty_positive(cls, v: float) -> float:
+        if v <= 0:
+            raise ValueError("Quantity must be greater than zero")
+        return v
