@@ -31,6 +31,7 @@ import { jobCardsApi, type JobCard } from "@/api/jobCards";
 import { getDrafts, removeDraft, type OfflineDraft } from "@/utils/offlineDrafts";
 import { procurementApi, type BOQSearchResult } from "@/api/procurement";
 import { SiteVehicles } from "@/components/site/SiteVehicles";
+import { SiteWorkshop } from "@/components/site/SiteWorkshop";
 import { cn } from "@/lib/utils";
 
 // ── Error boundary — prevents any modal crash from blanking the whole page ────
@@ -303,8 +304,8 @@ export default function SiteDashboardPage() {
   // ── Derived: is the selected site the Project Warehouse? ──
   const isWarehouse = !!siteId && !!sites.find(s => s.id === siteId && s.site_type === "warehouse");
 
-  // ── View mode: default (site/warehouse content) or vehicles ──
-  const [viewMode, setViewMode] = useState<"default" | "vehicles">("default");
+  // ── View mode: default (site/warehouse content), vehicles, or workshop ──
+  const [viewMode, setViewMode] = useState<"default" | "vehicles" | "workshop">("default");
 
   // ── Load live data ──
   const loadData = useCallback(() => {
@@ -593,6 +594,18 @@ export default function SiteDashboardPage() {
                 <Car className="w-3 h-3" />
                 Vehicles
               </button>
+              <button
+                onClick={() => setViewMode("workshop")}
+                className={cn(
+                  "flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg font-medium transition-colors",
+                  viewMode === "workshop"
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-muted/60 text-muted-foreground hover:bg-muted"
+                )}
+              >
+                <Wrench className="w-3 h-3" />
+                Workshop
+              </button>
             </div>
           )}
         </div>
@@ -671,6 +684,13 @@ export default function SiteDashboardPage() {
               sites={sites}
               isViewOnly={isViewOnly}
             />
+          </ModalErrorBoundary>
+        )}
+
+        {/* ── Workshop view ── */}
+        {viewMode === "workshop" && siteId && projectId && projectId !== MAIN_WAREHOUSE_SENTINEL && (
+          <ModalErrorBoundary>
+            <SiteWorkshop siteId={siteId} isViewOnly={isViewOnly} />
           </ModalErrorBoundary>
         )}
 
