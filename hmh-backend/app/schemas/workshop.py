@@ -30,6 +30,24 @@ class WorkshopCategoryRead(BaseModel):
     updated_at: datetime
 
 
+# ── Embedded resolved references ──────────────────────────────────────────────
+
+class _SiteBrief(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    name: str
+    site_type: str
+
+
+class _VehicleBrief(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    registration: str
+    name: str
+
+
 class WorkshopCategoryCreate(BaseModel):
     name: str
     description: Optional[str] = None
@@ -56,6 +74,7 @@ class WorkshopItemRead(BaseModel):
     reorder_level: Optional[float] = None
     is_active: bool
     stock: Optional[WorkshopStockRead] = None
+    category: Optional[WorkshopCategoryRead] = None
     created_at: datetime
     updated_at: datetime
 
@@ -63,6 +82,11 @@ class WorkshopItemRead(BaseModel):
     @property
     def quantity_on_hand(self) -> float:
         return float(self.stock.quantity_on_hand) if self.stock else 0.0
+
+    @computed_field
+    @property
+    def category_name(self) -> Optional[str]:
+        return self.category.name if self.category else None
 
 
 class WorkshopItemCreate(BaseModel):
@@ -92,6 +116,14 @@ class WorkshopItemUpdate(BaseModel):
 
 # ── Supplier links ─────────────────────────────────────────────────────────────
 
+class _SupplierBrief(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    name: str
+    email: Optional[str] = None
+
+
 class WorkshopSupplierLinkRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -99,6 +131,8 @@ class WorkshopSupplierLinkRead(BaseModel):
     category_id: uuid.UUID
     supplier_id: uuid.UUID
     is_preferred: bool
+    category: Optional[WorkshopCategoryRead] = None
+    supplier: Optional[_SupplierBrief] = None
 
 
 class WorkshopSupplierLinkCreate(BaseModel):
@@ -166,6 +200,8 @@ class WorkshopMRRead(BaseModel):
     created_at: datetime
     updated_at: datetime
     lines: list[WorkshopMRLineRead] = []
+    site: Optional[_SiteBrief] = None
+    vehicle: Optional[_VehicleBrief] = None
 
 
 class WorkshopMRCreate(BaseModel):

@@ -104,6 +104,7 @@ class WorkshopSupplierLink(Base):
     is_preferred: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
 
     category: Mapped["WorkshopCategory"] = relationship("WorkshopCategory", back_populates="supplier_links")
+    supplier: Mapped[Optional[object]] = relationship("Supplier", foreign_keys=[supplier_id], viewonly=True)
 
     def __repr__(self) -> str:
         return f"<WorkshopSupplierLink category={self.category_id} supplier={self.supplier_id}>"
@@ -158,6 +159,10 @@ class WorkshopMR(TimestampMixin, Base):
     lines: Mapped[list["WorkshopMRLine"]] = relationship(
         "WorkshopMRLine", back_populates="workshop_mr", cascade="all, delete-orphan"
     )
+
+    # Read-only resolved relationships (for API responses)
+    site:    Mapped[Optional[object]] = relationship("Site",    foreign_keys=[site_id],    viewonly=True)
+    vehicle: Mapped[Optional[object]] = relationship("Vehicle", foreign_keys=[vehicle_id], viewonly=True)
 
     def __repr__(self) -> str:
         return f"<WorkshopMR {self.mr_number} status={self.status}>"

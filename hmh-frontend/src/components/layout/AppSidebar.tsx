@@ -2,7 +2,7 @@ import { NavLink, useLocation } from "react-router-dom";
 import {
   LayoutDashboard, Users, FolderKanban, FileSpreadsheet,
   ShoppingCart, Truck, Package, CreditCard, Bell, Settings, LogOut, HardHat,
-  Droplet, Building2, Car, FileCheck2, Smartphone, Mail, Clock, Flag, Warehouse, BarChart2, ClipboardList, Receipt, GitMerge,
+  Droplet, Building2, Car, FileCheck2, Smartphone, Mail, Clock, Flag, Warehouse, BarChart2, ClipboardList, Receipt, GitMerge, Wrench,
 } from "lucide-react";
 import { HMHLogo } from "@/components/HMHLogo";
 import { TOKEN_KEY, REFRESH_TOKEN_KEY, ROLE_KEY } from "@/lib/constants";
@@ -61,8 +61,9 @@ const navGroups = [
   {
     label: "Fleet",
     items: [
-      { title: "Vehicles",        path: "/vehicles",       icon: Car },
+      { title: "Vehicles",        path: "/vehicles",       icon: Car    },
       { title: "Fuel",            path: "/fuel",           icon: Droplet },
+      { title: "Workshop",        path: "/workshop",       icon: Wrench  },
     ],
   },
   {

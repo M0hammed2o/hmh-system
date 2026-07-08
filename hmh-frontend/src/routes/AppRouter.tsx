@@ -35,6 +35,7 @@ const FuelPage                = lazy(() => import("@/pages/FuelPage"));
 const SuppliersPage           = lazy(() => import("@/pages/SuppliersPage"));
 const SupplierProfilePage     = lazy(() => import("@/pages/SupplierProfilePage"));
 const VehiclesPage            = lazy(() => import("@/pages/VehiclesPage"));
+const WorkshopPage            = lazy(() => import("@/pages/WorkshopPage"));
 const LotDetailPage           = lazy(() => import("@/pages/LotDetailPage"));
 const MilestonesPage          = lazy(() => import("@/pages/MilestonesPage"));
 const TimelinePage            = lazy(() => import("@/pages/TimelinePage"));
@@ -154,6 +155,7 @@ export function AppRouter() {
             <Route path="suppliers" element={<SuppliersPage />} />
             <Route path="suppliers/:supplierId" element={<SupplierProfilePage />} />
             <Route path="vehicles" element={<VehiclesPage />} />
+            <Route path="workshop" element={<WorkshopPage />} />
             <Route path="milestones" element={<MilestonesPage />} />
             <Route path="timeline" element={<TimelinePage />} />
             <Route path="audit" element={<AuditPage />} />

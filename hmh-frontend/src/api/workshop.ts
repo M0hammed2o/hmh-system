@@ -53,6 +53,47 @@ export interface WorkshopMR {
   created_at: string;
   updated_at: string;
   lines: WorkshopMRLineBrief[];
+  // Resolved names (embedded by backend)
+  site: { id: string; name: string; site_type: string } | null;
+  vehicle: { id: string; registration: string; name: string } | null;
+}
+
+export interface WorkshopSupplierLink {
+  id: string;
+  category_id: string;
+  supplier_id: string;
+  is_preferred: boolean;
+  category: { id: string; name: string; description: string | null } | null;
+  supplier: { id: string; name: string; email: string | null } | null;
+}
+
+export interface WorkshopCategoryCreate {
+  name: string;
+  description?: string | null;
+}
+
+export interface WorkshopItemCreate {
+  category_id: string;
+  name: string;
+  part_number?: string | null;
+  unit?: string;
+  description?: string | null;
+  reorder_level?: number | null;
+}
+
+export interface WorkshopItemUpdate {
+  name?: string;
+  part_number?: string | null;
+  unit?: string;
+  description?: string | null;
+  reorder_level?: number | null;
+  is_active?: boolean;
+}
+
+export interface WorkshopSupplierLinkCreate {
+  category_id: string;
+  supplier_id: string;
+  is_preferred?: boolean;
 }
 
 export interface WorkshopMRLineCreate {
@@ -123,5 +164,55 @@ export const workshopApi = {
       reason: reason ?? null,
     });
     return res.data.data;
+  },
+
+  // ── Categories ────────────────────────────────────────────────────────────
+
+  createCategory: async (body: WorkshopCategoryCreate): Promise<WorkshopCategory> => {
+    const res = await client.post<{ data: WorkshopCategory }>("/workshop/categories/", body);
+    return res.data.data;
+  },
+
+  updateCategory: async (categoryId: string, body: WorkshopCategoryCreate): Promise<WorkshopCategory> => {
+    const res = await client.patch<{ data: WorkshopCategory }>(`/workshop/categories/${categoryId}`, body);
+    return res.data.data;
+  },
+
+  // ── Items ─────────────────────────────────────────────────────────────────
+
+  createItem: async (body: WorkshopItemCreate): Promise<WorkshopItem> => {
+    const res = await client.post<{ data: WorkshopItem }>("/workshop/items/", body);
+    return res.data.data;
+  },
+
+  updateItem: async (itemId: string, body: WorkshopItemUpdate): Promise<WorkshopItem> => {
+    const res = await client.patch<{ data: WorkshopItem }>(`/workshop/items/${itemId}`, body);
+    return res.data.data;
+  },
+
+  adjustStock: async (itemId: string, quantityDelta: number): Promise<{ quantity_on_hand: number }> => {
+    const res = await client.post<{ data: { quantity_on_hand: number } }>(
+      `/workshop/items/${itemId}/adjust-stock`,
+      { quantity_delta: quantityDelta },
+    );
+    return res.data.data;
+  },
+
+  // ── Supplier links ────────────────────────────────────────────────────────
+
+  listSupplierLinks: async (categoryId?: string): Promise<WorkshopSupplierLink[]> => {
+    const params: Record<string, string> = {};
+    if (categoryId) params.category_id = categoryId;
+    const res = await client.get<{ data: WorkshopSupplierLink[] }>("/workshop/supplier-links/", { params });
+    return res.data.data;
+  },
+
+  createSupplierLink: async (body: WorkshopSupplierLinkCreate): Promise<WorkshopSupplierLink> => {
+    const res = await client.post<{ data: WorkshopSupplierLink }>("/workshop/supplier-links/", body);
+    return res.data.data;
+  },
+
+  deleteSupplierLink: async (linkId: string): Promise<void> => {
+    await client.delete(`/workshop/supplier-links/${linkId}`);
   },
 };
