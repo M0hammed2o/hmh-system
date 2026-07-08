@@ -48,6 +48,14 @@ class _VehicleBrief(BaseModel):
     name: str
 
 
+class _UserBrief(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    full_name: str
+    email: str
+
+
 class WorkshopCategoryCreate(BaseModel):
     name: str
     description: Optional[str] = None
@@ -179,6 +187,20 @@ class WorkshopMRLineCreate(BaseModel):
         return v
 
 
+# ── MR Approvals ─────────────────────────────────────────────────────────────
+
+class WorkshopMRApprovalRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    mr_id: uuid.UUID
+    approved_by: Optional[uuid.UUID] = None
+    approved_at: datetime
+    is_override: bool
+    notes: Optional[str] = None
+    voter: Optional[_UserBrief] = None
+
+
 # ── Workshop MRs ──────────────────────────────────────────────────────────────
 
 class WorkshopMRRead(BaseModel):
@@ -200,8 +222,14 @@ class WorkshopMRRead(BaseModel):
     created_at: datetime
     updated_at: datetime
     lines: list[WorkshopMRLineRead] = []
+    approvals: list[WorkshopMRApprovalRead] = []
     site: Optional[_SiteBrief] = None
     vehicle: Optional[_VehicleBrief] = None
+
+    @computed_field
+    @property
+    def vote_count(self) -> int:
+        return sum(1 for a in self.approvals if not a.is_override)
 
 
 class WorkshopMRCreate(BaseModel):

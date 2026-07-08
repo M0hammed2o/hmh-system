@@ -159,6 +159,12 @@ class WorkshopMR(TimestampMixin, Base):
     lines: Mapped[list["WorkshopMRLine"]] = relationship(
         "WorkshopMRLine", back_populates="workshop_mr", cascade="all, delete-orphan"
     )
+    approvals: Mapped[list["WorkshopMRApproval"]] = relationship(
+        "WorkshopMRApproval",
+        foreign_keys="[WorkshopMRApproval.mr_id]",
+        order_by="WorkshopMRApproval.approved_at",
+        viewonly=True,
+    )
 
     # Read-only resolved relationships (for API responses)
     site:    Mapped[Optional[object]] = relationship("Site",    foreign_keys=[site_id],    viewonly=True)
@@ -198,6 +204,39 @@ class WorkshopMRLine(Base):
 
     def __repr__(self) -> str:
         return f"<WorkshopMRLine item={self.item_id} qty={self.quantity_requested}>"
+
+
+class WorkshopMRApproval(Base):
+    """Individual approval vote on a Workshop MR.
+
+    Each office user may cast exactly one vote per MR.
+    After WORKSHOP_VOTES_REQUIRED non-override votes the MR is auto-approved.
+    """
+    __tablename__ = "workshop_mr_approvals"
+    __table_args__ = (
+        UniqueConstraint("mr_id", "approved_by", name="uq_workshop_mr_approvals_mr_approver"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    mr_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("workshop_mrs.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    approved_by: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    approved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    is_override: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    voter: Mapped[Optional[object]] = relationship("User", foreign_keys=[approved_by], viewonly=True)
+
+    def __repr__(self) -> str:
+        return f"<WorkshopMRApproval mr={self.mr_id} by={self.approved_by} override={self.is_override}>"
 
 
 class WorkshopIssuance(TimestampMixin, Base):

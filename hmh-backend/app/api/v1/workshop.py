@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from app.core.exceptions import ConflictError, NotFoundError
-from app.dependencies import ALL_ROLES, CurrentUser, DbSession, OFFICE_AND_ABOVE, WRITE_ROLES
+from app.dependencies import ALL_ROLES, CurrentUser, DbSession, OFFICE_AND_ABOVE, OFFICE_ADMIN_AND_ABOVE, WRITE_ROLES
 from app.models.enums import RecordStatus
 from app.schemas.common import ApiSuccess
 from app.schemas.workshop import (
@@ -18,6 +18,7 @@ from app.schemas.workshop import (
     WorkshopItemCreate,
     WorkshopItemRead,
     WorkshopItemUpdate,
+    WorkshopMRApprovalRead,
     WorkshopMRCreate,
     WorkshopMRRead,
     WorkshopSupplierLinkCreate,
@@ -223,15 +224,43 @@ def submit_mr(mr_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
         raise _error(e)
 
 
+class VoteBody(BaseModel):
+    notes: Optional[str] = None
+
+
 @router.post(
-    "/mrs/{mr_id}/approve",
+    "/mrs/{mr_id}/vote",
     response_model=ApiSuccess[WorkshopMRRead],
     dependencies=[OFFICE_AND_ABOVE],
 )
+def cast_vote(mr_id: uuid.UUID, body: VoteBody, db: DbSession, current_user: CurrentUser):
+    try:
+        mr = workshop_service.cast_mr_vote(db, mr_id, current_user.id, body.notes)
+        return ApiSuccess(data=WorkshopMRRead.model_validate(mr), message="Vote cast.")
+    except (NotFoundError, ConflictError) as e:
+        raise _error(e)
+
+
+@router.get(
+    "/mrs/{mr_id}/votes",
+    response_model=ApiSuccess[list[WorkshopMRApprovalRead]],
+    dependencies=[OFFICE_AND_ABOVE],
+)
+def list_votes(mr_id: uuid.UUID, db: DbSession):
+    votes = workshop_service.list_mr_votes(db, mr_id)
+    return ApiSuccess(data=[WorkshopMRApprovalRead.model_validate(v) for v in votes])
+
+
+@router.post(
+    "/mrs/{mr_id}/approve",
+    response_model=ApiSuccess[WorkshopMRRead],
+    dependencies=[OFFICE_ADMIN_AND_ABOVE],
+)
 def approve_mr(mr_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
+    """Admin override — approve directly without requiring 3 votes."""
     try:
         mr = workshop_service.approve_mr(db, mr_id, current_user.id)
-        return ApiSuccess(data=WorkshopMRRead.model_validate(mr), message="MR approved.")
+        return ApiSuccess(data=WorkshopMRRead.model_validate(mr), message="MR approved (admin override).")
     except (NotFoundError, ConflictError) as e:
         raise _error(e)
 

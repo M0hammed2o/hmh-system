@@ -522,6 +522,11 @@ export function SiteWorkshop({ siteId, isViewOnly = false }: Props) {
                       <span className={cn("text-xs px-1.5 py-0.5 rounded border font-medium", badge)}>
                         {label}
                       </span>
+                      {mr.status === "SUBMITTED" && (
+                        <span className="text-xs px-1.5 py-0.5 rounded border font-medium bg-amber-50 text-amber-700 border-amber-200">
+                          {mr.vote_count ?? 0}/3 votes
+                        </span>
+                      )}
                       {mr.priority !== "NORMAL" && (
                         <span className={cn("text-xs px-1.5 py-0.5 rounded font-medium", priCls)}>
                           {mr.priority}

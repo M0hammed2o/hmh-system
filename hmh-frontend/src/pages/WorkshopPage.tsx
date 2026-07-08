@@ -9,6 +9,7 @@
  */
 
 import { useEffect, useState, useCallback } from "react";
+import { useAuth } from "@/hooks/useAuth";
 import {
   Wrench, ClipboardList, Package, Building2, CheckCircle2, Ban,
   ChevronRight, Plus, RefreshCw, Trash2, X, Pencil, TrendingDown,
@@ -138,13 +139,52 @@ function RejectModal({ mr, onClose, onRejected }: {
   );
 }
 
+const VOTES_REQUIRED = 3;
+
+function VoteProgress({ mr, userId }: { mr: WorkshopMR; userId: string | undefined }) {
+  const nonOverride = mr.approvals.filter(a => !a.is_override);
+  const hasVoted = userId ? nonOverride.some(a => a.approved_by === userId) : false;
+  const pct = Math.min((nonOverride.length / VOTES_REQUIRED) * 100, 100);
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between text-xs">
+        <span className="text-muted-foreground font-medium">Approval votes</span>
+        <span className={cn("font-semibold", nonOverride.length >= VOTES_REQUIRED ? "text-green-600" : "text-amber-600")}>
+          {nonOverride.length} / {VOTES_REQUIRED}
+        </span>
+      </div>
+      <div className="h-2 bg-muted rounded-full overflow-hidden">
+        <div
+          className={cn("h-full rounded-full transition-all", nonOverride.length >= VOTES_REQUIRED ? "bg-green-500" : "bg-amber-400")}
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+      {nonOverride.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {nonOverride.map(a => (
+            <span key={a.id} className="text-xs px-2 py-0.5 bg-green-50 text-green-700 border border-green-200 rounded-full flex items-center gap-1">
+              <CheckCircle2 className="w-3 h-3" />
+              {a.voter?.full_name ?? "Office user"}
+            </span>
+          ))}
+        </div>
+      )}
+      {hasVoted && (
+        <p className="text-xs text-muted-foreground">You have already voted on this request.</p>
+      )}
+    </div>
+  );
+}
+
 function MRRequestsTab() {
+  const { user, role } = useAuth();
   const [mrs,       setMrs]       = useState<WorkshopMR[]>([]);
   const [loading,   setLoading]   = useState(true);
   const [error,     setError]     = useState("");
   const [filter,    setFilter]    = useState<WorkshopMRStatus | "ALL">("ALL");
   const [expanded,  setExpanded]  = useState<string | null>(null);
-  const [approving, setApproving] = useState<string | null>(null);
+  const [acting,    setActing]    = useState<string | null>(null);
   const [rejectTarget, setRejectTarget] = useState<WorkshopMR | null>(null);
 
   const load = useCallback(() => {
@@ -160,8 +200,22 @@ function MRRequestsTab() {
 
   const displayed = filter === "ALL" ? mrs : mrs.filter(m => m.status === filter);
 
-  const handleApprove = async (mr: WorkshopMR) => {
-    setApproving(mr.id);
+  const handleVote = async (mr: WorkshopMR) => {
+    setActing(mr.id);
+    try {
+      const updated = await workshopApi.castVote(mr.id);
+      setMrs(prev => prev.map(m => m.id === updated.id ? updated : m));
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      alert(detail ?? "Failed to cast vote.");
+    } finally {
+      setActing(null);
+    }
+  };
+
+  const handleAdminApprove = async (mr: WorkshopMR) => {
+    if (!window.confirm(`Override the 3-vote requirement and approve ${mr.mr_number} directly?`)) return;
+    setActing(mr.id);
     try {
       const updated = await workshopApi.approveMR(mr.id);
       setMrs(prev => prev.map(m => m.id === updated.id ? updated : m));
@@ -169,11 +223,12 @@ function MRRequestsTab() {
       const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
       alert(detail ?? "Failed to approve MR.");
     } finally {
-      setApproving(null);
+      setActing(null);
     }
   };
 
   const pending = mrs.filter(m => m.status === "SUBMITTED").length;
+  const isAdmin = role === "OWNER" || role === "OFFICE_ADMIN";
 
   return (
     <div className="space-y-4">
@@ -202,17 +257,13 @@ function MRRequestsTab() {
       {pending > 0 && (
         <div className="flex items-center gap-2 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-sm text-amber-800">
           <AlertTriangle className="w-4 h-4 shrink-0" />
-          <span><strong>{pending}</strong> workshop request{pending !== 1 ? "s" : ""} waiting for your approval.</span>
+          <span><strong>{pending}</strong> workshop request{pending !== 1 ? "s" : ""} awaiting approval ({VOTES_REQUIRED} votes required).</span>
         </div>
       )}
 
       <div className="flex items-center justify-between">
         <p className="text-sm text-muted-foreground">{displayed.length} request{displayed.length !== 1 ? "s" : ""}</p>
-        <button
-          onClick={load}
-          disabled={loading}
-          className="p-2 rounded-lg hover:bg-muted text-muted-foreground disabled:opacity-50"
-        >
+        <button onClick={load} disabled={loading} className="p-2 rounded-lg hover:bg-muted text-muted-foreground disabled:opacity-50">
           <RefreshCw className={cn("w-4 h-4", loading && "animate-spin")} />
         </button>
       </div>
@@ -229,13 +280,15 @@ function MRRequestsTab() {
         <div className="bg-card border border-border rounded-2xl overflow-hidden divide-y divide-border">
           {displayed.map(mr => {
             const isOpen = expanded === mr.id;
+            const nonOverrideVotes = mr.approvals.filter(a => !a.is_override);
+            const hasVoted = user ? nonOverrideVotes.some(a => a.approved_by === user.id) : false;
+
             return (
               <div key={mr.id}>
                 <button
                   className="w-full flex items-center gap-3 px-5 py-4 hover:bg-muted/30 text-left transition-colors"
                   onClick={() => setExpanded(isOpen ? null : mr.id)}
                 >
-                  {/* Status icon */}
                   <div className="shrink-0">
                     {mr.status === "APPROVED"  ? <CheckCircle2 className="w-5 h-5 text-green-500" /> :
                      mr.status === "SUBMITTED" ? <Clock        className="w-5 h-5 text-amber-500" /> :
@@ -249,6 +302,16 @@ function MRRequestsTab() {
                       <span className={cn("text-xs px-2 py-0.5 rounded-full border font-medium", MR_STATUS_BADGE[mr.status])}>
                         {MR_STATUS_LABEL[mr.status]}
                       </span>
+                      {mr.status === "SUBMITTED" && (
+                        <span className={cn(
+                          "text-xs px-2 py-0.5 rounded-full border font-medium",
+                          nonOverrideVotes.length >= VOTES_REQUIRED
+                            ? "bg-green-100 text-green-700 border-green-200"
+                            : "bg-amber-100 text-amber-700 border-amber-200"
+                        )}>
+                          {nonOverrideVotes.length}/{VOTES_REQUIRED} votes
+                        </span>
+                      )}
                       {mr.priority !== "NORMAL" && (
                         <span className={cn("text-xs px-2 py-0.5 rounded-full border font-medium", PRIORITY_BADGE[mr.priority])}>
                           {mr.priority}
@@ -269,7 +332,7 @@ function MRRequestsTab() {
 
                 {isOpen && (
                   <div className="px-5 pb-5 pt-3 bg-muted/20 border-t border-border/50 space-y-4">
-                    {/* Vehicle + site info */}
+                    {/* Vehicle + site */}
                     <div className="grid grid-cols-2 gap-3 text-sm">
                       <div>
                         <p className="text-xs text-muted-foreground mb-0.5">Vehicle</p>
@@ -288,25 +351,18 @@ function MRRequestsTab() {
                       <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Parts Requested</p>
                       <div className="border border-border rounded-xl overflow-hidden divide-y divide-border">
                         <div className="grid grid-cols-[1fr_auto] gap-2 px-3 py-2 bg-muted/50 text-xs font-medium text-muted-foreground">
-                          <span>Part</span>
-                          <span className="text-right">Qty</span>
+                          <span>Part</span><span className="text-right">Qty</span>
                         </div>
                         {mr.lines.map((line, i) => (
                           <div key={line.id ?? i} className="grid grid-cols-[1fr_auto] gap-2 px-3 py-2.5 bg-card items-start">
                             <div>
                               <p className="text-sm font-medium">{line.item?.name ?? "Unknown"}</p>
-                              {line.item?.part_number && (
-                                <p className="text-xs text-muted-foreground">#{line.item.part_number}</p>
-                              )}
-                              {line.remarks && (
-                                <p className="text-xs text-muted-foreground italic">{line.remarks}</p>
-                              )}
+                              {line.item?.part_number && <p className="text-xs text-muted-foreground">#{line.item.part_number}</p>}
+                              {line.remarks && <p className="text-xs text-muted-foreground italic">{line.remarks}</p>}
                             </div>
-                            <div className="text-right shrink-0">
-                              <p className="text-sm font-semibold tabular-nums">
-                                {line.quantity_requested} {line.item?.unit ?? ""}
-                              </p>
-                            </div>
+                            <p className="text-sm font-semibold tabular-nums text-right shrink-0">
+                              {line.quantity_requested} {line.item?.unit ?? ""}
+                            </p>
                           </div>
                         ))}
                       </div>
@@ -316,9 +372,7 @@ function MRRequestsTab() {
                     {(mr.notes || mr.needed_by_date) && (
                       <div className="text-sm space-y-1">
                         {mr.needed_by_date && (
-                          <p className="text-muted-foreground">
-                            Needed by: <span className="font-medium text-foreground">{shortDate(mr.needed_by_date)}</span>
-                          </p>
+                          <p className="text-muted-foreground">Needed by: <span className="font-medium text-foreground">{shortDate(mr.needed_by_date)}</span></p>
                         )}
                         {mr.notes && <p className="text-muted-foreground italic">{mr.notes}</p>}
                       </div>
@@ -332,26 +386,45 @@ function MRRequestsTab() {
                     )}
 
                     {/* Approval info */}
-                    {mr.approved_at && (
-                      <p className="text-sm text-green-700 bg-green-50 rounded-lg px-3 py-2">
-                        Approved {shortDate(mr.approved_at)}
+                    {mr.status === "APPROVED" && (
+                      <p className="text-sm text-green-700 bg-green-50 rounded-lg px-3 py-2 flex items-center gap-1.5">
+                        <CheckCircle2 className="w-4 h-4" />
+                        Approved {mr.approved_at ? shortDate(mr.approved_at) : ""}
                       </p>
+                    )}
+
+                    {/* Vote progress */}
+                    {mr.status === "SUBMITTED" && (
+                      <VoteProgress mr={mr} userId={user?.id} />
                     )}
 
                     {/* Actions */}
                     {mr.status === "SUBMITTED" && (
-                      <div className="flex gap-2 pt-1">
+                      <div className="flex flex-wrap gap-2 pt-1">
                         <Button
                           className="flex-1"
-                          disabled={approving === mr.id}
-                          onClick={() => handleApprove(mr)}
+                          disabled={acting === mr.id || hasVoted}
+                          onClick={() => handleVote(mr)}
+                          title={hasVoted ? "You have already voted" : ""}
                         >
-                          {approving === mr.id ? "Approving…" : "Approve"}
+                          <CheckCircle2 className="w-4 h-4 mr-1.5" />
+                          {acting === mr.id ? "Voting…" : hasVoted ? "Already Voted" : "Cast Vote"}
                         </Button>
+                        {isAdmin && (
+                          <Button
+                            variant="outline"
+                            className="text-primary border-primary hover:bg-primary/10"
+                            disabled={acting === mr.id}
+                            onClick={() => handleAdminApprove(mr)}
+                            title="Override — approve without 3 votes"
+                          >
+                            Override Approve
+                          </Button>
+                        )}
                         <Button
                           variant="outline"
                           className="flex-1 border-destructive text-destructive hover:bg-destructive/10"
-                          disabled={approving === mr.id}
+                          disabled={acting === mr.id}
                           onClick={() => setRejectTarget(mr)}
                         >
                           Reject

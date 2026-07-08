@@ -36,6 +36,16 @@ export interface WorkshopMRLineBrief {
   item: { id: string; name: string; unit: string; part_number: string | null } | null;
 }
 
+export interface WorkshopMRApproval {
+  id: string;
+  mr_id: string;
+  approved_by: string | null;
+  approved_at: string;
+  is_override: boolean;
+  notes: string | null;
+  voter: { id: string; full_name: string; email: string } | null;
+}
+
 export interface WorkshopMR {
   id: string;
   mr_number: string;
@@ -53,6 +63,8 @@ export interface WorkshopMR {
   created_at: string;
   updated_at: string;
   lines: WorkshopMRLineBrief[];
+  approvals: WorkshopMRApproval[];
+  vote_count: number;
   // Resolved names (embedded by backend)
   site: { id: string; name: string; site_type: string } | null;
   vehicle: { id: string; registration: string; name: string } | null;
@@ -184,6 +196,13 @@ export const workshopApi = {
   rejectMR: async (mrId: string, reason?: string): Promise<WorkshopMR> => {
     const res = await client.post<{ data: WorkshopMR }>(`/workshop/mrs/${mrId}/reject`, {
       reason: reason ?? null,
+    });
+    return res.data.data;
+  },
+
+  castVote: async (mrId: string, notes?: string): Promise<WorkshopMR> => {
+    const res = await client.post<{ data: WorkshopMR }>(`/workshop/mrs/${mrId}/vote`, {
+      notes: notes ?? null,
     });
     return res.data.data;
   },

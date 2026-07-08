@@ -14,10 +14,13 @@ from app.models.workshop import (
     WorkshopIssuance,
     WorkshopItem,
     WorkshopMR,
+    WorkshopMRApproval,
     WorkshopMRLine,
     WorkshopStock,
     WorkshopSupplierLink,
 )
+
+WORKSHOP_VOTES_REQUIRED = 3
 from app.schemas.workshop import (
     WorkshopCategoryCreate,
     WorkshopIssuanceCreate,
@@ -257,10 +260,80 @@ def submit_mr(db: Session, mr_id: uuid.UUID, actor_id: uuid.UUID) -> WorkshopMR:
     return mr
 
 
+def list_mr_votes(db: Session, mr_id: uuid.UUID) -> list[WorkshopMRApproval]:
+    return (
+        db.query(WorkshopMRApproval)
+        .filter(WorkshopMRApproval.mr_id == mr_id)
+        .order_by(WorkshopMRApproval.approved_at.asc())
+        .all()
+    )
+
+
+def cast_mr_vote(
+    db: Session,
+    mr_id: uuid.UUID,
+    voter_id: uuid.UUID,
+    notes: Optional[str] = None,
+) -> WorkshopMR:
+    """Cast one approval vote on a SUBMITTED WorkshopMR.
+
+    Each office user may vote only once. After WORKSHOP_VOTES_REQUIRED
+    non-override votes the MR automatically moves to APPROVED.
+    """
+    mr = get_mr(db, mr_id)
+    if mr.status != RecordStatus.SUBMITTED:
+        raise ConflictError(f"MR {mr.mr_number} must be SUBMITTED to vote on (currently '{mr.status.value}').")
+
+    existing = db.query(WorkshopMRApproval).filter(
+        WorkshopMRApproval.mr_id == mr_id,
+        WorkshopMRApproval.approved_by == voter_id,
+    ).first()
+    if existing:
+        raise ConflictError("You have already voted on this request.")
+
+    now = datetime.now(timezone.utc)
+    db.add(WorkshopMRApproval(
+        mr_id=mr_id,
+        approved_by=voter_id,
+        approved_at=now,
+        is_override=False,
+        notes=notes,
+    ))
+    db.flush()
+
+    vote_count = db.query(WorkshopMRApproval).filter(
+        WorkshopMRApproval.mr_id == mr_id,
+        WorkshopMRApproval.is_override.is_(False),
+    ).count()
+
+    if vote_count >= WORKSHOP_VOTES_REQUIRED:
+        mr.status = RecordStatus.APPROVED
+        mr.approved_by = voter_id
+        mr.approved_at = now
+
+    db.commit()
+    db.refresh(mr)
+    return mr
+
+
 def approve_mr(db: Session, mr_id: uuid.UUID, actor_id: uuid.UUID) -> WorkshopMR:
+    """Admin override — approves the MR directly regardless of vote count."""
     mr = get_mr(db, mr_id)
     if mr.status != RecordStatus.SUBMITTED:
         raise ConflictError(f"MR {mr.mr_number} must be SUBMITTED to approve (currently '{mr.status.value}').")
+
+    existing = db.query(WorkshopMRApproval).filter(
+        WorkshopMRApproval.mr_id == mr_id,
+        WorkshopMRApproval.approved_by == actor_id,
+    ).first()
+    if not existing:
+        db.add(WorkshopMRApproval(
+            mr_id=mr_id,
+            approved_by=actor_id,
+            approved_at=datetime.now(timezone.utc),
+            is_override=True,
+        ))
+
     mr.status = RecordStatus.APPROVED
     mr.approved_by = actor_id
     mr.approved_at = datetime.now(timezone.utc)
