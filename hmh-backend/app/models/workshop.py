@@ -232,7 +232,8 @@ class WorkshopIssuance(TimestampMixin, Base):
     issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
-    item: Mapped["WorkshopItem"] = relationship("WorkshopItem")
+    item:    Mapped["WorkshopItem"]   = relationship("WorkshopItem")
+    vehicle: Mapped[Optional[object]] = relationship("Vehicle", foreign_keys=[vehicle_id], viewonly=True)
 
     def __repr__(self) -> str:
         return f"<WorkshopIssuance item={self.item_id} vehicle={self.vehicle_id} qty={self.quantity_issued}>"

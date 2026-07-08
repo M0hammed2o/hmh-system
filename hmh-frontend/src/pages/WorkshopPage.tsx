@@ -2,8 +2,9 @@
  * WorkshopPage — Office management of vehicle spare parts.
  *
  * Tabs:
- *   Requests — approve / reject workshop MRs from site staff
+ *   Requests  — approve / reject workshop MRs from site staff
  *   Parts     — parts catalog (categories + items) with stock adjustment
+ *   Issuances — parts-to-vehicle issuance log + issue parts manually
  *   Suppliers — link suppliers to parts categories
  */
 
@@ -11,7 +12,7 @@ import { useEffect, useState, useCallback } from "react";
 import {
   Wrench, ClipboardList, Package, Building2, CheckCircle2, Ban,
   ChevronRight, Plus, RefreshCw, Trash2, X, Pencil, TrendingDown,
-  TrendingUp, AlertTriangle, Clock,
+  TrendingUp, AlertTriangle, Clock, Send, Car, History,
 } from "lucide-react";
 import {
   workshopApi,
@@ -20,11 +21,14 @@ import {
   type WorkshopItem,
   type WorkshopCategory,
   type WorkshopSupplierLink,
+  type WorkshopIssuance,
+  type WorkshopIssuanceCreate,
   type WorkshopItemCreate,
   type WorkshopItemUpdate,
   type WorkshopCategoryCreate,
 } from "@/api/workshop";
 import { suppliersApi, type Supplier } from "@/api/suppliers";
+import { vehiclesApi, type Vehicle } from "@/api/vehicles";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -973,14 +977,326 @@ function SuppliersTab() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// TAB 3 — Issuances
+// ─────────────────────────────────────────────────────────────────────────────
+
+function IssuePartsModal({ items, vehicles, mrs, onClose, onIssued }: {
+  items: WorkshopItem[];
+  vehicles: Vehicle[];
+  mrs: WorkshopMR[];
+  onClose: () => void;
+  onIssued: (r: WorkshopIssuance) => void;
+}) {
+  const [form, setForm] = useState<WorkshopIssuanceCreate>({
+    item_id: "",
+    vehicle_id: "",
+    workshop_mr_id: null,
+    quantity_issued: 1,
+    notes: "",
+  });
+  const [loading, setLoading] = useState(false);
+  const [error,   setError]   = useState("");
+
+  const patch = (p: Partial<WorkshopIssuanceCreate>) => setForm(f => ({ ...f, ...p }));
+
+  const selectedItem = items.find(i => i.id === form.item_id);
+  const overStock = selectedItem != null && form.quantity_issued > selectedItem.quantity_on_hand;
+
+  const submit = async () => {
+    if (!form.item_id)    { setError("Select a part."); return; }
+    if (!form.vehicle_id) { setError("Select a vehicle."); return; }
+    if (form.quantity_issued <= 0) { setError("Quantity must be greater than zero."); return; }
+    setLoading(true);
+    setError("");
+    try {
+      const result = await workshopApi.issueParts({
+        item_id: form.item_id,
+        vehicle_id: form.vehicle_id,
+        workshop_mr_id: form.workshop_mr_id || null,
+        quantity_issued: form.quantity_issued,
+        notes: form.notes || null,
+      });
+      onIssued(result);
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      setError(detail ?? "Failed to issue parts.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const approvedMrs = mrs.filter(m => m.status === "APPROVED");
+
+  return (
+    <Modal title="Issue Parts" onClose={onClose} wide>
+      <div className="space-y-4">
+        <div className="space-y-1.5">
+          <Label>Part *</Label>
+          <select
+            value={form.item_id}
+            onChange={e => patch({ item_id: e.target.value })}
+            className="w-full h-10 px-3 text-sm rounded-lg border border-border bg-card focus:outline-none focus:ring-1 focus:ring-primary"
+          >
+            <option value="">— Select part —</option>
+            {items.map(i => (
+              <option key={i.id} value={i.id}>
+                {i.name}{i.part_number ? ` (#${i.part_number})` : ""} — {i.quantity_on_hand} {i.unit} in stock
+              </option>
+            ))}
+          </select>
+          {selectedItem && (
+            <p className={cn("text-xs mt-1", selectedItem.quantity_on_hand === 0 ? "text-destructive" : "text-muted-foreground")}>
+              Current stock: <strong>{selectedItem.quantity_on_hand} {selectedItem.unit}</strong>
+            </p>
+          )}
+        </div>
+
+        <div className="space-y-1.5">
+          <Label>Vehicle *</Label>
+          <select
+            value={form.vehicle_id}
+            onChange={e => patch({ vehicle_id: e.target.value })}
+            className="w-full h-10 px-3 text-sm rounded-lg border border-border bg-card focus:outline-none focus:ring-1 focus:ring-primary"
+          >
+            <option value="">— Select vehicle —</option>
+            {vehicles.map(v => (
+              <option key={v.id} value={v.id}>{v.registration} — {v.name}</option>
+            ))}
+          </select>
+        </div>
+
+        <div className="space-y-1.5">
+          <Label>Quantity *</Label>
+          <Input
+            type="number" min="0.001" step="any"
+            value={form.quantity_issued}
+            onChange={e => patch({ quantity_issued: parseFloat(e.target.value) || 0 })}
+          />
+          {overStock && (
+            <p className="text-xs text-amber-600 flex items-center gap-1">
+              <AlertTriangle className="w-3 h-3" /> Exceeds current stock ({selectedItem?.quantity_on_hand ?? 0} {selectedItem?.unit})
+            </p>
+          )}
+        </div>
+
+        <div className="space-y-1.5">
+          <Label>Link to approved MR (optional)</Label>
+          <select
+            value={form.workshop_mr_id ?? ""}
+            onChange={e => patch({ workshop_mr_id: e.target.value || null })}
+            className="w-full h-10 px-3 text-sm rounded-lg border border-border bg-card focus:outline-none focus:ring-1 focus:ring-primary"
+          >
+            <option value="">— None —</option>
+            {approvedMrs.map(m => (
+              <option key={m.id} value={m.id}>
+                {m.mr_number} · {m.vehicle?.registration ?? "?"} · {m.reason.slice(0, 40)}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="space-y-1.5">
+          <Label>Notes (optional)</Label>
+          <textarea
+            rows={2}
+            value={form.notes ?? ""}
+            onChange={e => patch({ notes: e.target.value })}
+            placeholder="Any additional notes…"
+            className="w-full px-3 py-2 text-sm rounded-md border border-border bg-background resize-none focus:outline-none focus:ring-1 focus:ring-primary"
+          />
+        </div>
+
+        {error && <p className="text-xs text-destructive">{error}</p>}
+        <div className="flex gap-2">
+          <Button variant="outline" className="flex-1" onClick={onClose} disabled={loading}>Cancel</Button>
+          <Button className="flex-1" onClick={submit} disabled={loading}>
+            <Send className="w-4 h-4 mr-1.5" />{loading ? "Issuing…" : "Issue Parts"}
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function IssuancesTab() {
+  const [issuances, setIssuances] = useState<WorkshopIssuance[]>([]);
+  const [items,     setItems]     = useState<WorkshopItem[]>([]);
+  const [vehicles,  setVehicles]  = useState<Vehicle[]>([]);
+  const [mrs,       setMrs]       = useState<WorkshopMR[]>([]);
+  const [loading,   setLoading]   = useState(true);
+  const [error,     setError]     = useState("");
+
+  const [vehicleFilter, setVehicleFilter] = useState("");
+  const [itemFilter,    setItemFilter]    = useState("");
+  const [showIssue,     setShowIssue]     = useState(false);
+
+  const load = useCallback(() => {
+    setLoading(true);
+    setError("");
+    Promise.all([
+      workshopApi.listIssuances(),
+      workshopApi.listItems(),
+      vehiclesApi.list(),
+      workshopApi.listMRs(),
+    ]).then(([iss, its, vehs, ms]) => {
+      setIssuances(iss.sort((a, b) => new Date(b.issued_at).getTime() - new Date(a.issued_at).getTime()));
+      setItems(its);
+      setVehicles(vehs);
+      setMrs(ms);
+    }).catch(() => setError("Failed to load issuances."))
+      .finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const displayed = issuances.filter(i => {
+    if (vehicleFilter && i.vehicle_id !== vehicleFilter) return false;
+    if (itemFilter    && i.item_id    !== itemFilter)    return false;
+    return true;
+  });
+
+  const uniqueVehicles = new Set(issuances.map(i => i.vehicle_id)).size;
+  const uniqueItems    = new Set(issuances.map(i => i.item_id)).size;
+  const totalQty       = issuances.reduce((s, i) => s + i.quantity_issued, 0);
+
+  const linkedMrNumber = (mrId: string | null) => {
+    if (!mrId) return null;
+    return mrs.find(m => m.id === mrId)?.mr_number ?? mrId.slice(0, 8);
+  };
+
+  return (
+    <div className="space-y-4">
+      {/* Stats */}
+      <div className="grid grid-cols-3 gap-3">
+        <div className="bg-card border border-border rounded-xl p-3">
+          <p className="text-xs text-muted-foreground">Total Issuances</p>
+          <p className="text-2xl font-bold mt-0.5">{issuances.length}</p>
+        </div>
+        <div className="bg-card border border-border rounded-xl p-3">
+          <p className="text-xs text-muted-foreground">Vehicles Served</p>
+          <p className="text-2xl font-bold mt-0.5">{uniqueVehicles}</p>
+        </div>
+        <div className="bg-card border border-border rounded-xl p-3">
+          <p className="text-xs text-muted-foreground">Total Qty Issued</p>
+          <p className="text-2xl font-bold mt-0.5">{totalQty % 1 === 0 ? totalQty : totalQty.toFixed(2)}</p>
+          <p className="text-xs text-muted-foreground">{uniqueItems} part type{uniqueItems !== 1 ? "s" : ""}</p>
+        </div>
+      </div>
+
+      {/* Filters + action */}
+      <div className="flex flex-wrap gap-2 items-center justify-between">
+        <div className="flex gap-2">
+          <select
+            value={vehicleFilter}
+            onChange={e => setVehicleFilter(e.target.value)}
+            className="h-9 px-3 text-sm rounded-lg border border-border bg-card focus:outline-none"
+          >
+            <option value="">All vehicles</option>
+            {vehicles.map(v => <option key={v.id} value={v.id}>{v.registration} — {v.name}</option>)}
+          </select>
+          <select
+            value={itemFilter}
+            onChange={e => setItemFilter(e.target.value)}
+            className="h-9 px-3 text-sm rounded-lg border border-border bg-card focus:outline-none"
+          >
+            <option value="">All parts</option>
+            {items.map(i => <option key={i.id} value={i.id}>{i.name}</option>)}
+          </select>
+        </div>
+        <Button size="sm" onClick={() => setShowIssue(true)}>
+          <Send className="w-3.5 h-3.5 mr-1" /> Issue Parts
+        </Button>
+      </div>
+
+      {error && <p className="text-sm text-destructive">{error}</p>}
+
+      {loading ? (
+        <div className="py-12 text-center text-muted-foreground text-sm">Loading…</div>
+      ) : displayed.length === 0 ? (
+        <div className="py-12 text-center text-muted-foreground text-sm border border-border rounded-2xl">
+          {issuances.length === 0
+            ? "No parts have been issued yet. Use \"Issue Parts\" to record an issuance."
+            : "No issuances match the current filters."}
+        </div>
+      ) : (
+        <div className="bg-card border border-border rounded-2xl overflow-hidden">
+          <div className="grid grid-cols-[auto_1fr_1fr_auto_auto_auto] gap-3 px-5 py-3 bg-muted/50 text-xs font-medium text-muted-foreground border-b border-border">
+            <span>Date</span>
+            <span>Part</span>
+            <span>Vehicle</span>
+            <span className="text-right">Qty</span>
+            <span>MR</span>
+            <span>Notes</span>
+          </div>
+          <div className="divide-y divide-border">
+            {displayed.map(iss => {
+              const mrNum = linkedMrNumber(iss.workshop_mr_id);
+              return (
+                <div key={iss.id} className="grid grid-cols-[auto_1fr_1fr_auto_auto_auto] gap-3 px-5 py-3 items-center">
+                  <p className="text-xs text-muted-foreground whitespace-nowrap">{shortDate(iss.issued_at)}</p>
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium truncate">
+                      {iss.item?.name ?? items.find(i => i.id === iss.item_id)?.name ?? iss.item_id.slice(0, 8)}
+                    </p>
+                    {iss.item?.part_number && (
+                      <p className="text-xs text-muted-foreground">#{iss.item.part_number}</p>
+                    )}
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium truncate">
+                      {iss.vehicle?.registration ?? vehicles.find(v => v.id === iss.vehicle_id)?.registration ?? "—"}
+                    </p>
+                    <p className="text-xs text-muted-foreground truncate">
+                      {iss.vehicle?.name ?? vehicles.find(v => v.id === iss.vehicle_id)?.name ?? ""}
+                    </p>
+                  </div>
+                  <p className="text-sm font-semibold tabular-nums text-right">
+                    {iss.quantity_issued % 1 === 0 ? iss.quantity_issued : iss.quantity_issued.toFixed(2)}
+                    {" "}<span className="text-xs font-normal text-muted-foreground">{iss.item?.unit ?? ""}</span>
+                  </p>
+                  {mrNum ? (
+                    <span className="text-xs px-1.5 py-0.5 rounded bg-blue-50 text-blue-700 border border-blue-200 whitespace-nowrap">{mrNum}</span>
+                  ) : (
+                    <span className="text-xs text-muted-foreground">—</span>
+                  )}
+                  <p className="text-xs text-muted-foreground truncate max-w-[120px]" title={iss.notes ?? ""}>
+                    {iss.notes || "—"}
+                  </p>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {showIssue && (
+        <IssuePartsModal
+          items={items}
+          vehicles={vehicles}
+          mrs={mrs}
+          onClose={() => setShowIssue(false)}
+          onIssued={r => {
+            setIssuances(prev => [r, ...prev]);
+            setShowIssue(false);
+            // Refresh item stock levels
+            workshopApi.listItems().then(setItems);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Main page
 // ─────────────────────────────────────────────────────────────────────────────
 
-type Tab = "requests" | "parts" | "suppliers";
+type Tab = "requests" | "parts" | "issuances" | "suppliers";
 
 const TABS: { key: Tab; label: string; icon: React.ElementType }[] = [
   { key: "requests",  label: "Requests",  icon: ClipboardList },
   { key: "parts",     label: "Parts",     icon: Package      },
+  { key: "issuances", label: "Issuances", icon: History      },
   { key: "suppliers", label: "Suppliers", icon: Building2    },
 ];
 
@@ -1022,6 +1338,7 @@ export default function WorkshopPage() {
       {/* Tab content */}
       {tab === "requests"  && <MRRequestsTab />}
       {tab === "parts"     && <PartsTab />}
+      {tab === "issuances" && <IssuancesTab />}
       {tab === "suppliers" && <SuppliersTab />}
     </div>
   );

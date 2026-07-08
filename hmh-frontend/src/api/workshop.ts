@@ -58,6 +58,28 @@ export interface WorkshopMR {
   vehicle: { id: string; registration: string; name: string } | null;
 }
 
+export interface WorkshopIssuance {
+  id: string;
+  item_id: string;
+  vehicle_id: string;
+  workshop_mr_id: string | null;
+  quantity_issued: number;
+  issued_by: string;
+  issued_at: string;
+  notes: string | null;
+  created_at: string;
+  item: { id: string; name: string; unit: string; part_number: string | null } | null;
+  vehicle: { id: string; registration: string; name: string } | null;
+}
+
+export interface WorkshopIssuanceCreate {
+  item_id: string;
+  vehicle_id: string;
+  workshop_mr_id?: string | null;
+  quantity_issued: number;
+  notes?: string | null;
+}
+
 export interface WorkshopSupplierLink {
   id: string;
   category_id: string;
@@ -214,5 +236,20 @@ export const workshopApi = {
 
   deleteSupplierLink: async (linkId: string): Promise<void> => {
     await client.delete(`/workshop/supplier-links/${linkId}`);
+  },
+
+  // ── Issuances ─────────────────────────────────────────────────────────────
+
+  listIssuances: async (opts?: { vehicle_id?: string; item_id?: string }): Promise<WorkshopIssuance[]> => {
+    const params: Record<string, string> = {};
+    if (opts?.vehicle_id) params.vehicle_id = opts.vehicle_id;
+    if (opts?.item_id)    params.item_id    = opts.item_id;
+    const res = await client.get<{ data: WorkshopIssuance[] }>("/workshop/issuances/", { params });
+    return res.data.data;
+  },
+
+  issueParts: async (body: WorkshopIssuanceCreate): Promise<WorkshopIssuance> => {
+    const res = await client.post<{ data: WorkshopIssuance }>("/workshop/issuances/", body);
+    return res.data.data;
   },
 };

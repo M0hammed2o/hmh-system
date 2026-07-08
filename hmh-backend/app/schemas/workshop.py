@@ -242,7 +242,8 @@ class WorkshopIssuanceRead(BaseModel):
     issued_at: datetime
     notes: Optional[str] = None
     created_at: datetime
-    item: Optional[WorkshopItemBrief] = None
+    item:    Optional[WorkshopItemBrief] = None
+    vehicle: Optional[_VehicleBrief]    = None
 
 
 class WorkshopIssuanceCreate(BaseModel):
