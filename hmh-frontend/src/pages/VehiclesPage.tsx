@@ -588,12 +588,19 @@ export default function VehiclesPage() {
   const [fuelLogs, setFuelLogs] = useState<Record<string, FuelLog[]>>({});
   const [partsHistory, setPartsHistory] = useState<Record<string, WorkshopIssuance[]>>({});
   const [activeTab, setActiveTab] = useState<Record<string, "costs" | "fuel" | "details" | "repairs" | "parts">>({});
+  const [projectNames, setProjectNames] = useState<Record<string, string>>({});
 
   const loadVehicles = () => {
     setLoading(true);
-    vehiclesApi.list()
-      .then(setVehicles)
-      .catch(() => setError("Failed to load vehicles."))
+    Promise.all([
+      vehiclesApi.list(),
+      projectsApi.list(1, 100).then(r => r.items).catch(() => [] as Project[]),
+    ]).then(([vs, projects]) => {
+      setVehicles(vs);
+      const map: Record<string, string> = {};
+      projects.forEach(p => { map[p.id] = p.name; });
+      setProjectNames(map);
+    }).catch(() => setError("Failed to load vehicles."))
       .finally(() => setLoading(false));
   };
 
@@ -696,9 +703,9 @@ export default function VehiclesPage() {
                   <p className="text-xs text-muted-foreground">
                     {v.registration} · {vehicleTypeLabels[v.vehicle_type]}
                     {v.assigned_site_id
-                      ? <span className="ml-1 text-blue-600"> · Project warehouse</span>
+                      ? <span className="ml-1 text-blue-600"> · {projectNames[v.assigned_project_id ?? ""] ?? "Project"} Warehouse</span>
                       : v.assigned_project_id
-                      ? <span className="ml-1 text-amber-500"> · No warehouse assigned</span>
+                      ? <span className="ml-1 text-amber-500"> · {projectNames[v.assigned_project_id] ?? "Project"} (no warehouse)</span>
                       : <span className="ml-1 text-muted-foreground/60"> · Unassigned</span>}
                   </p>
                 </div>
@@ -824,9 +831,9 @@ export default function VehiclesPage() {
                               <span className="text-muted-foreground">Assignment: </span>
                               <span className="font-medium">
                                 {v.assigned_site_id
-                                  ? "Project warehouse"
+                                  ? `${projectNames[v.assigned_project_id ?? ""] ?? "Project"} Warehouse`
                                   : v.assigned_project_id
-                                  ? "Project (no warehouse found)"
+                                  ? `${projectNames[v.assigned_project_id] ?? "Project"} (no warehouse found)`
                                   : "Unassigned (fleet pool)"}
                               </span>
                             </div>
