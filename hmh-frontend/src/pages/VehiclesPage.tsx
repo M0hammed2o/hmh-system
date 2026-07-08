@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Plus, Car, Wrench, Fuel, Trash2, Droplet, AlertTriangle, Pencil, ClipboardList, MapPin } from "lucide-react";
+import { Plus, Car, Wrench, Fuel, Trash2, Droplet, AlertTriangle, Pencil, ClipboardList, MapPin, History } from "lucide-react";
 import { fuelApi, fuelPhotoUrl, type FuelLog, FUEL_TYPE_LABELS } from "@/api/fuel";
 import { formatCurrency } from "@/lib/format";
 import {
@@ -24,6 +24,7 @@ import { cn } from "@/lib/utils";
 import { projectsApi, type Project } from "@/api/projects";
 import { sitesApi } from "@/api/sites";
 import type { Site } from "@/api/sites";
+import { workshopApi, type WorkshopIssuance } from "@/api/workshop";
 
 const vehicleTypeLabels: Record<VehicleType, string> = {
   BAKKIE: "Bakkie", TRUCK: "Truck", TLB: "TLB", EXCAVATOR: "Excavator",
@@ -585,7 +586,8 @@ export default function VehiclesPage() {
   const [expanded, setExpanded] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [fuelLogs, setFuelLogs] = useState<Record<string, FuelLog[]>>({});
-  const [activeTab, setActiveTab] = useState<Record<string, "costs" | "fuel" | "details" | "repairs">>({});
+  const [partsHistory, setPartsHistory] = useState<Record<string, WorkshopIssuance[]>>({});
+  const [activeTab, setActiveTab] = useState<Record<string, "costs" | "fuel" | "details" | "repairs" | "parts">>({});
 
   const loadVehicles = () => {
     setLoading(true);
@@ -629,12 +631,18 @@ export default function VehiclesPage() {
     setFuelLogs(prev => ({ ...prev, [vehicleId]: logs }));
   };
 
+  const loadPartsHistory = async (vehicleId: string) => {
+    const data = await workshopApi.listIssuances({ vehicle_id: vehicleId }).catch(() => []);
+    setPartsHistory(prev => ({ ...prev, [vehicleId]: data.sort((a, b) => new Date(b.issued_at).getTime() - new Date(a.issued_at).getTime()) }));
+  };
+
   const toggleExpand = (id: string) => {
     if (expanded === id) { setExpanded(null); return; }
     setExpanded(id);
     loadCosts(id);
     loadFuelLogs(id);
     loadRepairs(id);
+    loadPartsHistory(id);
     if (!activeTab[id]) setActiveTab(prev => ({ ...prev, [id]: "details" }));
   };
 
@@ -743,12 +751,12 @@ export default function VehiclesPage() {
               {expanded === v.id && (
                 <div className="border-t border-border bg-muted/20">
                   {/* Tab switcher */}
-                  <div className="flex border-b border-border/50">
-                    {(["details", "costs", "fuel", "repairs"] as const).map(tab => (
+                  <div className="flex border-b border-border/50 overflow-x-auto">
+                    {(["details", "costs", "fuel", "repairs", "parts"] as const).map(tab => (
                       <button
                         key={tab}
                         onClick={() => setActiveTab(prev => ({ ...prev, [v.id]: tab }))}
-                        className={`px-4 py-2 text-xs font-medium transition-colors flex items-center gap-1.5
+                        className={`px-4 py-2 text-xs font-medium transition-colors flex items-center gap-1.5 whitespace-nowrap
                           ${(activeTab[v.id] ?? "details") === tab
                             ? "border-b-2 border-primary text-primary"
                             : "text-muted-foreground hover:text-foreground"}`}
@@ -756,11 +764,13 @@ export default function VehiclesPage() {
                         {tab === "details"  ? <Car className="w-3 h-3" />
                          : tab === "costs"  ? <Wrench className="w-3 h-3" />
                          : tab === "fuel"   ? <Droplet className="w-3 h-3" />
-                         : <ClipboardList className="w-3 h-3" />}
+                         : tab === "repairs" ? <ClipboardList className="w-3 h-3" />
+                         : <History className="w-3 h-3" />}
                         {tab === "details"  ? "Details"
                          : tab === "costs"  ? `Costs (${costs[v.id]?.length ?? 0})`
                          : tab === "fuel"   ? `Fuel (${fuelLogs[v.id]?.length ?? 0})`
-                         : `Repairs (${repairs[v.id]?.length ?? 0})`}
+                         : tab === "repairs" ? `Repairs (${repairs[v.id]?.length ?? 0})`
+                         : `Parts (${partsHistory[v.id]?.length ?? 0})`}
                       </button>
                     ))}
                   </div>
@@ -901,6 +911,57 @@ export default function VehiclesPage() {
                               </div>
                             );
                           })}
+                        </>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Parts history tab */}
+                  {(activeTab[v.id] ?? "details") === "parts" && (
+                    <div className="px-4 py-3 space-y-2">
+                      {!partsHistory[v.id] ? (
+                        <p className="text-xs text-muted-foreground">Loading…</p>
+                      ) : partsHistory[v.id].length === 0 ? (
+                        <p className="text-xs text-muted-foreground">No spare parts have been issued to this vehicle yet.</p>
+                      ) : (
+                        <>
+                          <div className="flex gap-4 text-xs text-muted-foreground pb-1 border-b border-border/50">
+                            <span>
+                              Total issued: <strong className="text-foreground">
+                                {partsHistory[v.id].reduce((s, i) => s + i.quantity_issued, 0).toLocaleString()}
+                              </strong> units
+                            </span>
+                            <span>
+                              {new Set(partsHistory[v.id].map(i => i.item_id)).size} part type(s)
+                            </span>
+                            <span>{partsHistory[v.id].length} issuance(s)</span>
+                          </div>
+                          <div className="space-y-1">
+                            {partsHistory[v.id].map(iss => (
+                              <div key={iss.id} className="flex items-center justify-between text-xs gap-3">
+                                <div className="flex items-center gap-2 min-w-0">
+                                  <History className="w-3 h-3 text-muted-foreground shrink-0" />
+                                  <div className="min-w-0">
+                                    <p className="font-medium truncate">
+                                      {iss.item?.name ?? iss.item_id.slice(0, 8)}
+                                    </p>
+                                    {iss.item?.part_number && (
+                                      <p className="text-muted-foreground">#{iss.item.part_number}</p>
+                                    )}
+                                  </div>
+                                </div>
+                                <div className="shrink-0 text-right space-y-0.5">
+                                  <p className="font-semibold tabular-nums">
+                                    {iss.quantity_issued % 1 === 0 ? iss.quantity_issued : iss.quantity_issued.toFixed(2)}
+                                    {" "}<span className="font-normal text-muted-foreground">{iss.item?.unit ?? ""}</span>
+                                  </p>
+                                  <p className="text-muted-foreground">
+                                    {new Date(iss.issued_at).toLocaleDateString("en-ZA", { day: "numeric", month: "short", year: "numeric" })}
+                                  </p>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
                         </>
                       )}
                     </div>
