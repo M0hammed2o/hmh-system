@@ -177,6 +177,24 @@ class WorkshopMR(TimestampMixin, Base):
         order_by="WorkshopQuote.created_at",
         viewonly=True,
     )
+    purchase_orders: Mapped[list["WorkshopPurchaseOrder"]] = relationship(
+        "WorkshopPurchaseOrder",
+        foreign_keys="[WorkshopPurchaseOrder.workshop_mr_id]",
+        order_by="WorkshopPurchaseOrder.created_at",
+        viewonly=True,
+    )
+    invoices: Mapped[list["WorkshopInvoice"]] = relationship(
+        "WorkshopInvoice",
+        foreign_keys="[WorkshopInvoice.workshop_mr_id]",
+        order_by="WorkshopInvoice.created_at",
+        viewonly=True,
+    )
+    delivery_notes: Mapped[list["WorkshopDeliveryNote"]] = relationship(
+        "WorkshopDeliveryNote",
+        foreign_keys="[WorkshopDeliveryNote.workshop_mr_id]",
+        order_by="WorkshopDeliveryNote.created_at",
+        viewonly=True,
+    )
 
     # Read-only resolved relationships (for API responses)
     site:    Mapped[Optional[object]] = relationship("Site",    foreign_keys=[site_id],    viewonly=True)
@@ -395,3 +413,122 @@ class WorkshopIssuance(TimestampMixin, Base):
 
     def __repr__(self) -> str:
         return f"<WorkshopIssuance item={self.item_id} vehicle={self.vehicle_id} qty={self.quantity_issued}>"
+
+
+class WorkshopPurchaseOrder(TimestampMixin, Base):
+    """Purchase Order generated from an approved WorkshopQuote."""
+    __tablename__ = "workshop_purchase_orders"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    workshop_mr_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("workshop_mrs.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    quote_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("workshop_quotes.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    po_number: Mapped[str] = mapped_column(String(50), nullable=False, unique=True)
+    supplier_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("suppliers.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    supplier_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    total_amount: Mapped[Optional[float]] = mapped_column(Numeric(14, 2), nullable=True)
+    currency: Mapped[str] = mapped_column(String(10), nullable=False, default="ZAR", server_default="ZAR")
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(50), nullable=False, default="DRAFT", server_default="DRAFT", index=True)
+    po_file_url: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
+    sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    sent_by: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    created_by: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    supplier: Mapped[Optional[object]] = relationship("Supplier", foreign_keys=[supplier_id], viewonly=True)
+    quote: Mapped[Optional[object]] = relationship("WorkshopQuote", foreign_keys=[quote_id], viewonly=True)
+
+    def __repr__(self) -> str:
+        return f"<WorkshopPurchaseOrder {self.po_number} status={self.status}>"
+
+
+class WorkshopInvoice(TimestampMixin, Base):
+    """Invoice received from supplier after a WorkshopPurchaseOrder is sent."""
+    __tablename__ = "workshop_invoices"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    workshop_mr_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("workshop_mrs.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    po_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("workshop_purchase_orders.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    invoice_number: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    supplier_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("suppliers.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    supplier_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    invoice_file_url: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
+    total_amount: Mapped[Optional[float]] = mapped_column(Numeric(14, 2), nullable=True)
+    currency: Mapped[str] = mapped_column(String(10), nullable=False, default="ZAR", server_default="ZAR")
+    invoice_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_by: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    supplier: Mapped[Optional[object]] = relationship("Supplier", foreign_keys=[supplier_id], viewonly=True)
+
+    def __repr__(self) -> str:
+        return f"<WorkshopInvoice {self.invoice_number} mr={self.workshop_mr_id}>"
+
+
+class WorkshopDeliveryNote(TimestampMixin, Base):
+    """Delivery note recorded when goods arrive from the supplier."""
+    __tablename__ = "workshop_delivery_notes"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    workshop_mr_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("workshop_mrs.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    po_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("workshop_purchase_orders.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    delivery_number: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    delivery_file_url: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
+    delivery_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    received_by_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_by: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    def __repr__(self) -> str:
+        return f"<WorkshopDeliveryNote {self.delivery_number} mr={self.workshop_mr_id}>"

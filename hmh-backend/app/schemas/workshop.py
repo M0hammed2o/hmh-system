@@ -250,6 +250,9 @@ class WorkshopMRRead(BaseModel):
     approvals: list[WorkshopMRApprovalRead] = []
     email_logs: list[WorkshopMREmailLogRead] = []
     quotes: list["WorkshopQuoteRead"] = []
+    purchase_orders: list["WorkshopPurchaseOrderRead"] = []
+    invoices: list["WorkshopInvoiceRead"] = []
+    delivery_notes: list["WorkshopDeliveryNoteRead"] = []
     site: Optional[_SiteBrief] = None
     vehicle: Optional[_VehicleBrief] = None
 
@@ -332,7 +335,101 @@ class WorkshopQuoteCreate(BaseModel):
     notes: Optional[str] = None
 
 
-# Update forward ref
+# ── Purchase Orders ───────────────────────────────────────────────────────────
+
+class WorkshopPurchaseOrderRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    workshop_mr_id: uuid.UUID
+    quote_id: Optional[uuid.UUID] = None
+    po_number: str
+    supplier_id: Optional[uuid.UUID] = None
+    supplier_name: Optional[str] = None
+    total_amount: Optional[float] = None
+    currency: str
+    notes: Optional[str] = None
+    status: str
+    po_file_url: Optional[str] = None
+    sent_at: Optional[datetime] = None
+    created_by: Optional[uuid.UUID] = None
+    created_at: datetime
+    updated_at: datetime
+    supplier: Optional[_SupplierBrief] = None
+
+
+class WorkshopPurchaseOrderCreate(BaseModel):
+    workshop_mr_id: uuid.UUID
+    quote_id: Optional[uuid.UUID] = None
+    supplier_id: Optional[uuid.UUID] = None
+    supplier_name: Optional[str] = None
+    total_amount: Optional[float] = None
+    currency: str = "ZAR"
+    notes: Optional[str] = None
+
+
+# ── Invoices ──────────────────────────────────────────────────────────────────
+
+class WorkshopInvoiceRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    workshop_mr_id: uuid.UUID
+    po_id: Optional[uuid.UUID] = None
+    invoice_number: Optional[str] = None
+    supplier_id: Optional[uuid.UUID] = None
+    supplier_name: Optional[str] = None
+    invoice_file_url: Optional[str] = None
+    total_amount: Optional[float] = None
+    currency: str
+    invoice_date: Optional[date] = None
+    notes: Optional[str] = None
+    created_by: Optional[uuid.UUID] = None
+    created_at: datetime
+    updated_at: datetime
+    supplier: Optional[_SupplierBrief] = None
+
+
+class WorkshopInvoiceCreate(BaseModel):
+    workshop_mr_id: uuid.UUID
+    po_id: Optional[uuid.UUID] = None
+    invoice_number: Optional[str] = None
+    supplier_id: Optional[uuid.UUID] = None
+    supplier_name: Optional[str] = None
+    total_amount: Optional[float] = None
+    currency: str = "ZAR"
+    invoice_date: Optional[date] = None
+    notes: Optional[str] = None
+
+
+# ── Delivery Notes ────────────────────────────────────────────────────────────
+
+class WorkshopDeliveryNoteRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    workshop_mr_id: uuid.UUID
+    po_id: Optional[uuid.UUID] = None
+    delivery_number: Optional[str] = None
+    delivery_file_url: Optional[str] = None
+    delivery_date: Optional[date] = None
+    received_by_name: Optional[str] = None
+    notes: Optional[str] = None
+    created_by: Optional[uuid.UUID] = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class WorkshopDeliveryNoteCreate(BaseModel):
+    workshop_mr_id: uuid.UUID
+    po_id: Optional[uuid.UUID] = None
+    delivery_number: Optional[str] = None
+    delivery_date: Optional[date] = None
+    received_by_name: Optional[str] = None
+    notes: Optional[str] = None
+
+
+# Update forward refs
 WorkshopMRRead.model_rebuild()
 
 

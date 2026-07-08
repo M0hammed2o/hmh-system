@@ -1406,3 +1406,148 @@ def send_workshop_mr_email(
 
     db.commit()
     return logs
+
+
+# ── Workshop PO emails ────────────────────────────────────────────────────────
+
+def build_workshop_po_email_body(mr, po, supplier_name: str) -> tuple[str, str]:
+    """Return (subject, html_body) for a workshop PO email sent to a supplier."""
+    mr_number  = mr.mr_number
+    po_number  = po.po_number
+    vehicle_reg  = mr.vehicle.registration if mr.vehicle else "—"
+    vehicle_name = mr.vehicle.name         if mr.vehicle else ""
+    site_name    = mr.site.name            if mr.site    else "—"
+    reply_to     = settings.smtp_sender_address or ""
+    amount_str   = ""
+    if po.total_amount is not None:
+        amount_str = f"{po.currency} {float(po.total_amount):,.2f}"
+
+    items_html = ""
+    for line in (mr.lines or []):
+        item = getattr(line, "item", None)
+        if not item:
+            continue
+        qty     = float(getattr(line, "quantity_requested", 0) or 0)
+        unit    = getattr(item, "unit", "each") or "each"
+        name    = getattr(item, "name", "—")
+        part_no = getattr(item, "part_number", None)
+        part_str = f"<br><span style='font-size:12px;color:#888'>#{part_no}</span>" if part_no else ""
+        items_html += (
+            f"<tr>"
+            f"<td style='padding:8px 12px;border-bottom:1px solid #eee'>{name}{part_str}</td>"
+            f"<td style='padding:8px 12px;border-bottom:1px solid #eee;text-align:right'>{qty:g}</td>"
+            f"<td style='padding:8px 12px;border-bottom:1px solid #eee;color:#555'>{unit}</td>"
+            f"</tr>"
+        )
+
+    amount_row = (
+        f"<tr><td style='padding:5px 0;color:#666'>Total Amount</td>"
+        f"<td style='font-weight:500'>{amount_str}</td></tr>"
+    ) if amount_str else ""
+
+    notes_row = (
+        f"<tr><td style='padding:5px 0;color:#666'>Notes</td>"
+        f"<td style='font-weight:500'>{po.notes}</td></tr>"
+    ) if po.notes else ""
+
+    subject = f"Purchase Order {po_number} — HMH Workshop"
+
+    body = f"""
+<html><body style="font-family:Arial,sans-serif;color:#1a1a1a;max-width:680px;margin:0 auto;background:#f7f7f7">
+<div style="background:#1d4ed8;padding:22px 32px">
+  <h2 style="color:white;margin:0;font-size:20px">HMH Group — Purchase Order</h2>
+  <p style="color:#bfdbfe;margin:4px 0 0;font-size:14px">{po_number} | MR Ref: {mr_number}</p>
+</div>
+<div style="background:white;padding:28px 32px">
+  <p>Dear {supplier_name},</p>
+  <p>Please find below our purchase order for vehicle maintenance on
+  <strong>{vehicle_reg}</strong>{f' ({vehicle_name})' if vehicle_name else ''}
+  at <strong>{site_name}</strong>.</p>
+
+  <table style="width:100%;border-collapse:collapse;margin:20px 0">
+    <thead>
+      <tr style="background:#f5f5f5">
+        <th style="text-align:left;padding:10px 12px;border-bottom:2px solid #1d4ed8">Part</th>
+        <th style="text-align:right;padding:10px 12px;border-bottom:2px solid #1d4ed8">Qty</th>
+        <th style="text-align:left;padding:10px 12px;border-bottom:2px solid #1d4ed8">Unit</th>
+      </tr>
+    </thead>
+    <tbody>{items_html}</tbody>
+  </table>
+
+  <table style="width:100%;border-collapse:collapse;margin:20px 0;font-size:14px">
+    <tr><td style="padding:5px 0;color:#666;width:150px">PO Number</td>
+        <td style="font-weight:500">{po_number}</td></tr>
+    <tr><td style="padding:5px 0;color:#666">Vehicle</td>
+        <td style="font-weight:500">{vehicle_reg}{f' — {vehicle_name}' if vehicle_name else ''}</td></tr>
+    <tr><td style="padding:5px 0;color:#666">Site</td>
+        <td style="font-weight:500">{site_name}</td></tr>
+    {amount_row}
+    {notes_row}
+  </table>
+
+  <p style="color:#555;font-size:13px;border-top:1px solid #eee;padding-top:16px;margin-top:20px">
+    Please reference <strong>{po_number}</strong> on your invoice and all correspondence.<br>
+    Send invoices and delivery documents to:
+    <a href="mailto:{reply_to}" style="color:#1d4ed8">{reply_to}</a>
+  </p>
+  <p style="color:#999;font-size:12px">HMH Group — Workshop &amp; Fleet Management</p>
+</div>
+</body></html>
+"""
+    return subject, body
+
+
+def send_workshop_po_email(
+    db: Session,
+    po,
+    mr,
+    sent_by_id: Optional[uuid.UUID] = None,
+) -> Optional[str]:
+    """Email a PO to the supplier. Updates po.status, po.sent_at, po.sent_by.
+
+    Returns an error string on failure, None on success. Never raises.
+    """
+    from datetime import datetime, timezone
+
+    supplier_name = (
+        (getattr(po.supplier, "name", None) if po.supplier else None)
+        or po.supplier_name
+        or "Supplier"
+    )
+    to_email = (
+        (getattr(po.supplier, "email", None) if po.supplier else None)
+        or ""
+    )
+    if not to_email:
+        error = f"No email address for supplier '{supplier_name}' — PO not sent."
+        logger.warning("workshop_po_email: %s", error)
+        return error
+
+    subject, body_html = build_workshop_po_email_body(mr, po, supplier_name)
+
+    now = datetime.now(timezone.utc)
+    error_msg: Optional[str] = None
+
+    if _smtp_is_real():
+        cc  = [x.strip() for x in (settings.procurement_cc_list  or "").split(",") if x.strip()]
+        bcc = [x.strip() for x in (settings.procurement_bcc_list or "").split(",") if x.strip()]
+        error_msg = _send_smtp(to_email, subject, body_html, cc=cc or None, bcc=bcc or None)
+        status_str = "FAILED" if error_msg else "SENT"
+    else:
+        logger.info("workshop_po_email MOCK to=%s subject=%s", to_email, subject)
+        status_str = "MOCK_SENT"
+
+    if status_str in ("SENT", "MOCK_SENT"):
+        po.status  = "SENT"
+        po.sent_at = now
+        po.sent_by = sent_by_id
+    po.updated_at = now
+
+    try:
+        db.commit()
+        db.refresh(po)
+    except Exception as exc:
+        logger.error("workshop_po_email db commit error: %s", exc)
+
+    return error_msg

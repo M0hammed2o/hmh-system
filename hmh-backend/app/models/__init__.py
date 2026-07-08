@@ -52,6 +52,9 @@ from app.models.workshop import (
     WorkshopIssuance,
     WorkshopQuote,
     WorkshopQuoteApproval,
+    WorkshopPurchaseOrder,
+    WorkshopInvoice,
+    WorkshopDeliveryNote,
 )
 
 __all__ = [
@@ -118,4 +121,7 @@ __all__ = [
     "WorkshopIssuance",
     "WorkshopQuote",
     "WorkshopQuoteApproval",
+    "WorkshopPurchaseOrder",
+    "WorkshopInvoice",
+    "WorkshopDeliveryNote",
 ]

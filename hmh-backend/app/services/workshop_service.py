@@ -20,15 +20,21 @@ from app.models.workshop import (
     WorkshopSupplierLink,
     WorkshopQuote,
     WorkshopQuoteApproval,
+    WorkshopPurchaseOrder,
+    WorkshopInvoice,
+    WorkshopDeliveryNote,
 )
 
 WORKSHOP_VOTES_REQUIRED = 3
 from app.schemas.workshop import (
     WorkshopCategoryCreate,
+    WorkshopDeliveryNoteCreate,
+    WorkshopInvoiceCreate,
     WorkshopIssuanceCreate,
     WorkshopItemCreate,
     WorkshopItemUpdate,
     WorkshopMRCreate,
+    WorkshopPurchaseOrderCreate,
     WorkshopQuoteCreate,
     WorkshopSupplierLinkCreate,
 )
@@ -556,3 +562,201 @@ def reject_quote(
     db.commit()
     db.refresh(q)
     return q
+
+
+# ── Workshop Purchase Orders ───────────────────────────────────────────────────
+
+def _next_po_number(db: Session) -> str:
+    count = db.query(func.count(WorkshopPurchaseOrder.id)).scalar() or 0
+    return f"WPO-{count + 1:04d}"
+
+
+def list_pos(db: Session, mr_id: uuid.UUID) -> list[WorkshopPurchaseOrder]:
+    return (
+        db.query(WorkshopPurchaseOrder)
+        .filter(WorkshopPurchaseOrder.workshop_mr_id == mr_id)
+        .order_by(WorkshopPurchaseOrder.created_at)
+        .all()
+    )
+
+
+def get_po(db: Session, po_id: uuid.UUID) -> WorkshopPurchaseOrder:
+    po = db.query(WorkshopPurchaseOrder).filter(WorkshopPurchaseOrder.id == po_id).first()
+    if not po:
+        raise NotFoundError(f"Purchase order {po_id} not found.")
+    return po
+
+
+def generate_po(
+    db: Session,
+    data: WorkshopPurchaseOrderCreate,
+    actor_id: uuid.UUID,
+) -> WorkshopPurchaseOrder:
+    mr = db.query(WorkshopMR).filter(WorkshopMR.id == data.workshop_mr_id).first()
+    if not mr:
+        raise NotFoundError("Workshop MR not found.")
+    if mr.status.value != "APPROVED":
+        raise ConflictError("POs can only be generated for APPROVED MRs.")
+
+    # Pre-fill from approved quote if provided
+    supplier_id   = data.supplier_id
+    supplier_name = data.supplier_name
+    total_amount  = data.total_amount
+    currency      = data.currency or "ZAR"
+
+    if data.quote_id:
+        q = db.query(WorkshopQuote).filter(WorkshopQuote.id == data.quote_id).first()
+        if q:
+            supplier_id   = supplier_id   or q.supplier_id
+            supplier_name = supplier_name or q.supplier_name
+            total_amount  = total_amount  if total_amount is not None else q.total_amount
+            currency      = q.currency or currency
+
+    po = WorkshopPurchaseOrder(
+        workshop_mr_id=data.workshop_mr_id,
+        quote_id=data.quote_id,
+        po_number=_next_po_number(db),
+        supplier_id=supplier_id,
+        supplier_name=supplier_name,
+        total_amount=total_amount,
+        currency=currency,
+        notes=data.notes,
+        status="DRAFT",
+        created_by=actor_id,
+    )
+    db.add(po)
+    db.commit()
+    db.refresh(po)
+    return po
+
+
+def attach_po_file(db: Session, po_id: uuid.UUID, file_url: str) -> WorkshopPurchaseOrder:
+    po = get_po(db, po_id)
+    po.po_file_url = file_url
+    po.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(po)
+    return po
+
+
+def send_po(
+    db: Session,
+    po_id: uuid.UUID,
+    actor_id: uuid.UUID,
+) -> tuple[WorkshopPurchaseOrder, Optional[str]]:
+    """Email PO to supplier. Returns (po, error_message_or_None)."""
+    from app.services.email_service import send_workshop_po_email
+
+    po = get_po(db, po_id)
+    mr = db.query(WorkshopMR).filter(WorkshopMR.id == po.workshop_mr_id).first()
+    if not mr:
+        raise NotFoundError("Associated MR not found.")
+
+    error = send_workshop_po_email(db, po, mr, sent_by_id=actor_id)
+    db.refresh(po)
+    return po, error
+
+
+# ── Workshop Invoices ─────────────────────────────────────────────────────────
+
+def list_invoices(db: Session, mr_id: uuid.UUID) -> list[WorkshopInvoice]:
+    return (
+        db.query(WorkshopInvoice)
+        .filter(WorkshopInvoice.workshop_mr_id == mr_id)
+        .order_by(WorkshopInvoice.created_at)
+        .all()
+    )
+
+
+def get_invoice(db: Session, invoice_id: uuid.UUID) -> WorkshopInvoice:
+    inv = db.query(WorkshopInvoice).filter(WorkshopInvoice.id == invoice_id).first()
+    if not inv:
+        raise NotFoundError(f"Invoice {invoice_id} not found.")
+    return inv
+
+
+def create_invoice(
+    db: Session,
+    data: WorkshopInvoiceCreate,
+    actor_id: uuid.UUID,
+) -> WorkshopInvoice:
+    mr = db.query(WorkshopMR).filter(WorkshopMR.id == data.workshop_mr_id).first()
+    if not mr:
+        raise NotFoundError("Workshop MR not found.")
+
+    inv = WorkshopInvoice(
+        workshop_mr_id=data.workshop_mr_id,
+        po_id=data.po_id,
+        invoice_number=data.invoice_number,
+        supplier_id=data.supplier_id,
+        supplier_name=data.supplier_name,
+        total_amount=data.total_amount,
+        currency=data.currency or "ZAR",
+        invoice_date=data.invoice_date,
+        notes=data.notes,
+        created_by=actor_id,
+    )
+    db.add(inv)
+    db.commit()
+    db.refresh(inv)
+    return inv
+
+
+def attach_invoice_file(db: Session, invoice_id: uuid.UUID, file_url: str) -> WorkshopInvoice:
+    inv = get_invoice(db, invoice_id)
+    inv.invoice_file_url = file_url
+    inv.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(inv)
+    return inv
+
+
+# ── Workshop Delivery Notes ───────────────────────────────────────────────────
+
+def list_delivery_notes(db: Session, mr_id: uuid.UUID) -> list[WorkshopDeliveryNote]:
+    return (
+        db.query(WorkshopDeliveryNote)
+        .filter(WorkshopDeliveryNote.workshop_mr_id == mr_id)
+        .order_by(WorkshopDeliveryNote.created_at)
+        .all()
+    )
+
+
+def get_delivery_note(db: Session, note_id: uuid.UUID) -> WorkshopDeliveryNote:
+    dn = db.query(WorkshopDeliveryNote).filter(WorkshopDeliveryNote.id == note_id).first()
+    if not dn:
+        raise NotFoundError(f"Delivery note {note_id} not found.")
+    return dn
+
+
+def create_delivery_note(
+    db: Session,
+    data: WorkshopDeliveryNoteCreate,
+    actor_id: uuid.UUID,
+) -> WorkshopDeliveryNote:
+    mr = db.query(WorkshopMR).filter(WorkshopMR.id == data.workshop_mr_id).first()
+    if not mr:
+        raise NotFoundError("Workshop MR not found.")
+
+    dn = WorkshopDeliveryNote(
+        workshop_mr_id=data.workshop_mr_id,
+        po_id=data.po_id,
+        delivery_number=data.delivery_number,
+        delivery_date=data.delivery_date,
+        received_by_name=data.received_by_name,
+        notes=data.notes,
+        created_by=actor_id,
+    )
+    db.add(dn)
+    db.commit()
+    db.refresh(dn)
+    return dn
+
+
+def attach_delivery_file(db: Session, note_id: uuid.UUID, file_url: str) -> WorkshopDeliveryNote:
+    dn = get_delivery_note(db, note_id)
+    dn.delivery_file_url = file_url
+    dn.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(dn)
+    return dn

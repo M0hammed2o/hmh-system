@@ -89,6 +89,57 @@ export interface WorkshopQuote {
   supplier: { id: string; name: string; email: string | null } | null;
 }
 
+export interface WorkshopPurchaseOrder {
+  id: string;
+  workshop_mr_id: string;
+  quote_id: string | null;
+  po_number: string;
+  supplier_id: string | null;
+  supplier_name: string | null;
+  total_amount: number | null;
+  currency: string;
+  notes: string | null;
+  status: "DRAFT" | "SENT" | "CANCELLED";
+  po_file_url: string | null;
+  sent_at: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+  supplier: { id: string; name: string; email: string | null } | null;
+}
+
+export interface WorkshopInvoice {
+  id: string;
+  workshop_mr_id: string;
+  po_id: string | null;
+  invoice_number: string | null;
+  supplier_id: string | null;
+  supplier_name: string | null;
+  invoice_file_url: string | null;
+  total_amount: number | null;
+  currency: string;
+  invoice_date: string | null;
+  notes: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+  supplier: { id: string; name: string; email: string | null } | null;
+}
+
+export interface WorkshopDeliveryNote {
+  id: string;
+  workshop_mr_id: string;
+  po_id: string | null;
+  delivery_number: string | null;
+  delivery_file_url: string | null;
+  delivery_date: string | null;
+  received_by_name: string | null;
+  notes: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface WorkshopMR {
   id: string;
   mr_number: string;
@@ -110,6 +161,9 @@ export interface WorkshopMR {
   vote_count: number;
   email_logs: WorkshopMREmailLog[];
   quotes: WorkshopQuote[];
+  purchase_orders: WorkshopPurchaseOrder[];
+  invoices: WorkshopInvoice[];
+  delivery_notes: WorkshopDeliveryNote[];
   // Resolved names (embedded by backend)
   site: { id: string; name: string; site_type: string } | null;
   vehicle: { id: string; registration: string; name: string } | null;
@@ -308,6 +362,111 @@ export const workshopApi = {
     const res = await client.post<{ data: WorkshopQuote }>(`/workshop/quotes/${quoteId}/reject`, {
       reason: reason ?? null,
     });
+    return res.data.data;
+  },
+
+  // ── Purchase Orders ───────────────────────────────────────────────────────
+
+  listPOs: async (mrId: string): Promise<WorkshopPurchaseOrder[]> => {
+    const res = await client.get<{ data: WorkshopPurchaseOrder[] }>("/workshop/pos/", {
+      params: { mr_id: mrId },
+    });
+    return res.data.data;
+  },
+
+  generatePO: async (body: {
+    workshop_mr_id: string;
+    quote_id?: string | null;
+    supplier_id?: string | null;
+    supplier_name?: string | null;
+    total_amount?: number | null;
+    currency?: string;
+    notes?: string | null;
+  }): Promise<WorkshopPurchaseOrder> => {
+    const res = await client.post<{ data: WorkshopPurchaseOrder }>("/workshop/pos/", body);
+    return res.data.data;
+  },
+
+  uploadPOFile: async (poId: string, file: File): Promise<WorkshopPurchaseOrder> => {
+    const form = new FormData();
+    form.append("file", file);
+    const res = await client.post<{ data: WorkshopPurchaseOrder }>(
+      `/workshop/pos/${poId}/upload-file`,
+      form,
+      { headers: { "Content-Type": "multipart/form-data" } },
+    );
+    return res.data.data;
+  },
+
+  sendPO: async (poId: string): Promise<WorkshopPurchaseOrder> => {
+    const res = await client.post<{ data: WorkshopPurchaseOrder }>(`/workshop/pos/${poId}/send`);
+    return res.data.data;
+  },
+
+  // ── Invoices ──────────────────────────────────────────────────────────────
+
+  listInvoices: async (mrId: string): Promise<WorkshopInvoice[]> => {
+    const res = await client.get<{ data: WorkshopInvoice[] }>("/workshop/invoices/", {
+      params: { mr_id: mrId },
+    });
+    return res.data.data;
+  },
+
+  createInvoice: async (body: {
+    workshop_mr_id: string;
+    po_id?: string | null;
+    invoice_number?: string | null;
+    supplier_id?: string | null;
+    supplier_name?: string | null;
+    total_amount?: number | null;
+    currency?: string;
+    invoice_date?: string | null;
+    notes?: string | null;
+  }): Promise<WorkshopInvoice> => {
+    const res = await client.post<{ data: WorkshopInvoice }>("/workshop/invoices/", body);
+    return res.data.data;
+  },
+
+  uploadInvoiceFile: async (invoiceId: string, file: File): Promise<WorkshopInvoice> => {
+    const form = new FormData();
+    form.append("file", file);
+    const res = await client.post<{ data: WorkshopInvoice }>(
+      `/workshop/invoices/${invoiceId}/upload-file`,
+      form,
+      { headers: { "Content-Type": "multipart/form-data" } },
+    );
+    return res.data.data;
+  },
+
+  // ── Delivery Notes ────────────────────────────────────────────────────────
+
+  listDeliveryNotes: async (mrId: string): Promise<WorkshopDeliveryNote[]> => {
+    const res = await client.get<{ data: WorkshopDeliveryNote[] }>("/workshop/delivery-notes/", {
+      params: { mr_id: mrId },
+    });
+    return res.data.data;
+  },
+
+  createDeliveryNote: async (body: {
+    workshop_mr_id: string;
+    po_id?: string | null;
+    delivery_number?: string | null;
+    delivery_date?: string | null;
+    received_by_name?: string | null;
+    notes?: string | null;
+  }): Promise<WorkshopDeliveryNote> => {
+    const res = await client.post<{ data: WorkshopDeliveryNote }>("/workshop/delivery-notes/", body);
+    return res.data.data;
+  },
+
+  uploadDeliveryFile: async (noteId: string, file: File): Promise<WorkshopDeliveryNote> => {
+    const form = new FormData();
+    form.append("file", file);
+    const res = await client.post<{ data: WorkshopDeliveryNote }>(
+      `/workshop/delivery-notes/${noteId}/upload-file`,
+      form,
+      { headers: { "Content-Type": "multipart/form-data" } },
+    );
     return res.data.data;
   },
 

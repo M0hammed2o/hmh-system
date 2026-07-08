@@ -613,6 +613,620 @@ function QuoteSectionPanel({
   );
 }
 
+// ── Phase D document upload modals ────────────────────────────────────────────
+
+function GeneratePOModal({
+  mr,
+  onClose,
+  onCreated,
+}: {
+  mr: WorkshopMR;
+  onClose: () => void;
+  onCreated: (updated: WorkshopMR) => void;
+}) {
+  const approvedQuote = mr.quotes.find(q => q.status === "APPROVED") ?? mr.quotes[0] ?? null;
+
+  const [quoteId,      setQuoteId]      = useState(approvedQuote?.id ?? "");
+  const [supplierName, setSupplierName] = useState(
+    approvedQuote?.supplier?.name ?? approvedQuote?.supplier_name ?? ""
+  );
+  const [amount,    setAmount]    = useState(approvedQuote?.total_amount?.toString() ?? "");
+  const [currency,  setCurrency]  = useState(approvedQuote?.currency ?? "ZAR");
+  const [notes,     setNotes]     = useState("");
+  const [file,      setFile]      = useState<File | null>(null);
+  const [loading,   setLoading]   = useState(false);
+  const [error,     setError]     = useState("");
+
+  const submit = async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const resolvedQuote = mr.quotes.find(q => q.id === quoteId) ?? null;
+      let po = await workshopApi.generatePO({
+        workshop_mr_id: mr.id,
+        quote_id: quoteId || null,
+        supplier_id: resolvedQuote?.supplier_id ?? null,
+        supplier_name: supplierName.trim() || null,
+        total_amount: amount ? parseFloat(amount) : null,
+        currency,
+        notes: notes.trim() || null,
+      });
+      if (file) {
+        po = await workshopApi.uploadPOFile(po.id, file);
+      }
+      const updated = await workshopApi.getMR(mr.id);
+      onCreated(updated);
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      setError(detail ?? "Failed to generate PO.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <Modal title="Generate Purchase Order" onClose={onClose}>
+      <div className="space-y-4">
+        {mr.quotes.length > 0 && (
+          <div className="space-y-1.5">
+            <Label>Based on Quote</Label>
+            <select
+              value={quoteId}
+              onChange={e => {
+                setQuoteId(e.target.value);
+                const q = mr.quotes.find(x => x.id === e.target.value);
+                if (q) {
+                  setSupplierName(q.supplier?.name ?? q.supplier_name ?? "");
+                  setAmount(q.total_amount?.toString() ?? "");
+                  setCurrency(q.currency);
+                }
+              }}
+              className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+            >
+              <option value="">— No quote selected —</option>
+              {mr.quotes.map(q => (
+                <option key={q.id} value={q.id}>
+                  {q.supplier?.name ?? q.supplier_name ?? "Supplier"} — {q.status}
+                  {q.total_amount != null ? ` — ${q.currency} ${q.total_amount.toFixed(2)}` : ""}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        <div className="space-y-1.5">
+          <Label>Supplier Name</Label>
+          <Input
+            placeholder="Supplier name"
+            value={supplierName}
+            onChange={e => setSupplierName(e.target.value)}
+          />
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div className="space-y-1.5">
+            <Label>Total Amount</Label>
+            <Input
+              type="number" min="0" step="0.01" placeholder="0.00"
+              value={amount} onChange={e => setAmount(e.target.value)}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label>Currency</Label>
+            <select
+              value={currency}
+              onChange={e => setCurrency(e.target.value)}
+              className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+            >
+              <option>ZAR</option><option>USD</option><option>EUR</option>
+            </select>
+          </div>
+        </div>
+
+        <div className="space-y-1.5">
+          <Label>PO Document (optional)</Label>
+          <input
+            type="file"
+            accept=".pdf,.doc,.docx"
+            onChange={e => setFile(e.target.files?.[0] ?? null)}
+            className="w-full text-sm text-muted-foreground file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border file:border-input file:text-sm file:font-medium file:bg-muted file:text-foreground hover:file:bg-muted/70 cursor-pointer"
+          />
+        </div>
+
+        <div className="space-y-1.5">
+          <Label>Notes (optional)</Label>
+          <textarea
+            rows={2} value={notes} onChange={e => setNotes(e.target.value)}
+            placeholder="Any additional notes…"
+            className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm resize-none"
+          />
+        </div>
+
+        {error && <p className="text-sm text-destructive">{error}</p>}
+        <div className="flex gap-2 pt-1">
+          <Button variant="outline" className="flex-1" onClick={onClose} disabled={loading}>Cancel</Button>
+          <Button className="flex-1" onClick={submit} disabled={loading}>
+            {loading ? "Creating…" : "Generate PO"}
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function RecordInvoiceModal({
+  mr,
+  onClose,
+  onCreated,
+}: {
+  mr: WorkshopMR;
+  onClose: () => void;
+  onCreated: (updated: WorkshopMR) => void;
+}) {
+  const sentPO = mr.purchase_orders.find(p => p.status === "SENT") ?? mr.purchase_orders[0] ?? null;
+
+  const [poId,         setPoId]         = useState(sentPO?.id ?? "");
+  const [invoiceNum,   setInvoiceNum]   = useState("");
+  const [supplierName, setSupplierName] = useState(sentPO?.supplier?.name ?? sentPO?.supplier_name ?? "");
+  const [amount,       setAmount]       = useState(sentPO?.total_amount?.toString() ?? "");
+  const [currency,     setCurrency]     = useState(sentPO?.currency ?? "ZAR");
+  const [invDate,      setInvDate]      = useState("");
+  const [notes,        setNotes]        = useState("");
+  const [file,         setFile]         = useState<File | null>(null);
+  const [loading,      setLoading]      = useState(false);
+  const [error,        setError]        = useState("");
+
+  const submit = async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const resolvedPO = mr.purchase_orders.find(p => p.id === poId) ?? null;
+      let inv = await workshopApi.createInvoice({
+        workshop_mr_id: mr.id,
+        po_id: poId || null,
+        invoice_number: invoiceNum.trim() || null,
+        supplier_id: resolvedPO?.supplier_id ?? null,
+        supplier_name: supplierName.trim() || null,
+        total_amount: amount ? parseFloat(amount) : null,
+        currency,
+        invoice_date: invDate || null,
+        notes: notes.trim() || null,
+      });
+      if (file) {
+        inv = await workshopApi.uploadInvoiceFile(inv.id, file);
+      }
+      const updated = await workshopApi.getMR(mr.id);
+      onCreated(updated);
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      setError(detail ?? "Failed to record invoice.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <Modal title="Record Invoice" onClose={onClose}>
+      <div className="space-y-4">
+        {mr.purchase_orders.length > 0 && (
+          <div className="space-y-1.5">
+            <Label>Linked PO</Label>
+            <select
+              value={poId}
+              onChange={e => {
+                setPoId(e.target.value);
+                const po = mr.purchase_orders.find(p => p.id === e.target.value);
+                if (po) {
+                  setSupplierName(po.supplier?.name ?? po.supplier_name ?? "");
+                  setAmount(po.total_amount?.toString() ?? "");
+                  setCurrency(po.currency);
+                }
+              }}
+              className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+            >
+              <option value="">— No PO —</option>
+              {mr.purchase_orders.map(po => (
+                <option key={po.id} value={po.id}>{po.po_number} — {po.status}</option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        <div className="grid grid-cols-2 gap-3">
+          <div className="space-y-1.5">
+            <Label>Invoice Number</Label>
+            <Input placeholder="INV-001" value={invoiceNum} onChange={e => setInvoiceNum(e.target.value)} />
+          </div>
+          <div className="space-y-1.5">
+            <Label>Invoice Date</Label>
+            <Input type="date" value={invDate} onChange={e => setInvDate(e.target.value)} />
+          </div>
+        </div>
+
+        <div className="space-y-1.5">
+          <Label>Supplier</Label>
+          <Input placeholder="Supplier name" value={supplierName} onChange={e => setSupplierName(e.target.value)} />
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div className="space-y-1.5">
+            <Label>Amount</Label>
+            <Input type="number" min="0" step="0.01" placeholder="0.00" value={amount} onChange={e => setAmount(e.target.value)} />
+          </div>
+          <div className="space-y-1.5">
+            <Label>Currency</Label>
+            <select
+              value={currency}
+              onChange={e => setCurrency(e.target.value)}
+              className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+            >
+              <option>ZAR</option><option>USD</option><option>EUR</option>
+            </select>
+          </div>
+        </div>
+
+        <div className="space-y-1.5">
+          <Label>Invoice Document</Label>
+          <input
+            type="file"
+            accept=".pdf,.jpg,.jpeg,.png"
+            onChange={e => setFile(e.target.files?.[0] ?? null)}
+            className="w-full text-sm text-muted-foreground file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border file:border-input file:text-sm file:font-medium file:bg-muted file:text-foreground hover:file:bg-muted/70 cursor-pointer"
+          />
+        </div>
+
+        <div className="space-y-1.5">
+          <Label>Notes (optional)</Label>
+          <textarea rows={2} value={notes} onChange={e => setNotes(e.target.value)} placeholder="Notes…"
+            className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm resize-none" />
+        </div>
+
+        {error && <p className="text-sm text-destructive">{error}</p>}
+        <div className="flex gap-2 pt-1">
+          <Button variant="outline" className="flex-1" onClick={onClose} disabled={loading}>Cancel</Button>
+          <Button className="flex-1" onClick={submit} disabled={loading}>
+            {loading ? "Saving…" : "Record Invoice"}
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function RecordDeliveryModal({
+  mr,
+  onClose,
+  onCreated,
+}: {
+  mr: WorkshopMR;
+  onClose: () => void;
+  onCreated: (updated: WorkshopMR) => void;
+}) {
+  const sentPO = mr.purchase_orders.find(p => p.status === "SENT") ?? mr.purchase_orders[0] ?? null;
+
+  const [poId,       setPoId]       = useState(sentPO?.id ?? "");
+  const [delivNum,   setDelivNum]   = useState("");
+  const [delivDate,  setDelivDate]  = useState("");
+  const [receivedBy, setReceivedBy] = useState("");
+  const [notes,      setNotes]      = useState("");
+  const [file,       setFile]       = useState<File | null>(null);
+  const [loading,    setLoading]    = useState(false);
+  const [error,      setError]      = useState("");
+
+  const submit = async () => {
+    setLoading(true);
+    setError("");
+    try {
+      let dn = await workshopApi.createDeliveryNote({
+        workshop_mr_id: mr.id,
+        po_id: poId || null,
+        delivery_number: delivNum.trim() || null,
+        delivery_date: delivDate || null,
+        received_by_name: receivedBy.trim() || null,
+        notes: notes.trim() || null,
+      });
+      if (file) {
+        dn = await workshopApi.uploadDeliveryFile(dn.id, file);
+      }
+      const updated = await workshopApi.getMR(mr.id);
+      onCreated(updated);
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      setError(detail ?? "Failed to record delivery.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <Modal title="Record Delivery Note" onClose={onClose}>
+      <div className="space-y-4">
+        {mr.purchase_orders.length > 0 && (
+          <div className="space-y-1.5">
+            <Label>Linked PO</Label>
+            <select
+              value={poId} onChange={e => setPoId(e.target.value)}
+              className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+            >
+              <option value="">— No PO —</option>
+              {mr.purchase_orders.map(po => (
+                <option key={po.id} value={po.id}>{po.po_number} — {po.status}</option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        <div className="grid grid-cols-2 gap-3">
+          <div className="space-y-1.5">
+            <Label>Delivery Note #</Label>
+            <Input placeholder="DN-001" value={delivNum} onChange={e => setDelivNum(e.target.value)} />
+          </div>
+          <div className="space-y-1.5">
+            <Label>Delivery Date</Label>
+            <Input type="date" value={delivDate} onChange={e => setDelivDate(e.target.value)} />
+          </div>
+        </div>
+
+        <div className="space-y-1.5">
+          <Label>Received By</Label>
+          <Input placeholder="Name of person who received the goods" value={receivedBy} onChange={e => setReceivedBy(e.target.value)} />
+        </div>
+
+        <div className="space-y-1.5">
+          <Label>Delivery Document</Label>
+          <input
+            type="file"
+            accept=".pdf,.jpg,.jpeg,.png"
+            onChange={e => setFile(e.target.files?.[0] ?? null)}
+            className="w-full text-sm text-muted-foreground file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border file:border-input file:text-sm file:font-medium file:bg-muted file:text-foreground hover:file:bg-muted/70 cursor-pointer"
+          />
+        </div>
+
+        <div className="space-y-1.5">
+          <Label>Notes (optional)</Label>
+          <textarea rows={2} value={notes} onChange={e => setNotes(e.target.value)} placeholder="Notes…"
+            className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm resize-none" />
+        </div>
+
+        {error && <p className="text-sm text-destructive">{error}</p>}
+        <div className="flex gap-2 pt-1">
+          <Button variant="outline" className="flex-1" onClick={onClose} disabled={loading}>Cancel</Button>
+          <Button className="flex-1" onClick={submit} disabled={loading}>
+            {loading ? "Saving…" : "Record Delivery"}
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+const PO_STATUS_STYLE: Record<string, string> = {
+  DRAFT:     "bg-gray-100 text-gray-600 border-gray-200",
+  SENT:      "bg-green-50 text-green-700 border-green-200",
+  CANCELLED: "bg-red-50 text-red-700 border-red-200",
+};
+
+function PhaseDPanel({
+  mr,
+  onMrUpdated,
+}: {
+  mr: WorkshopMR;
+  onMrUpdated: (updated: WorkshopMR) => void;
+}) {
+  const [showPO,       setShowPO]       = useState(false);
+  const [showInvoice,  setShowInvoice]  = useState(false);
+  const [showDelivery, setShowDelivery] = useState(false);
+  const [sendingPO,    setSendingPO]    = useState<string | null>(null);
+
+  const handleSendPO = async (po: WorkshopPurchaseOrder) => {
+    setSendingPO(po.id);
+    try {
+      await workshopApi.sendPO(po.id);
+      const updated = await workshopApi.getMR(mr.id);
+      onMrUpdated(updated);
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      alert(detail ?? "Failed to send PO.");
+    } finally {
+      setSendingPO(null);
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      {/* Purchase Orders */}
+      <div className="space-y-2">
+        <div className="flex items-center justify-between">
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+            Purchase Orders {mr.purchase_orders.length > 0 && `(${mr.purchase_orders.length})`}
+          </p>
+          <Button size="sm" variant="outline" className="h-7 text-xs px-3 gap-1.5" onClick={() => setShowPO(true)}>
+            <Plus className="w-3.5 h-3.5" />
+            Generate PO
+          </Button>
+        </div>
+        {mr.purchase_orders.length === 0 ? (
+          <p className="text-xs text-muted-foreground">No POs yet. Generate a PO from an approved quote.</p>
+        ) : (
+          <div className="space-y-2">
+            {mr.purchase_orders.map(po => (
+              <div key={po.id} className="border border-border rounded-xl p-3 bg-muted/20 space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <p className="text-sm font-semibold">{po.po_number}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {po.supplier?.name ?? po.supplier_name ?? "No supplier"}
+                      {po.total_amount != null && ` — ${po.currency} ${po.total_amount.toLocaleString("en-ZA", { minimumFractionDigits: 2 })}`}
+                    </p>
+                  </div>
+                  <span className={cn(
+                    "text-xs px-2 py-0.5 rounded-full border font-medium shrink-0",
+                    PO_STATUS_STYLE[po.status] ?? "bg-muted text-muted-foreground border-border"
+                  )}>
+                    {po.status}
+                  </span>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {po.po_file_url && (
+                    <a
+                      href={po.po_file_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+                    >
+                      <ClipboardList className="w-3.5 h-3.5" />
+                      View PO
+                    </a>
+                  )}
+                  {po.status === "DRAFT" && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-7 text-xs px-3 gap-1.5"
+                      disabled={sendingPO === po.id}
+                      onClick={() => handleSendPO(po)}
+                    >
+                      <Send className="w-3.5 h-3.5" />
+                      {sendingPO === po.id ? "Sending…" : "Send to Supplier"}
+                    </Button>
+                  )}
+                  {po.sent_at && (
+                    <span className="text-xs text-muted-foreground flex items-center gap-1">
+                      <Mail className="w-3.5 h-3.5" />
+                      Sent {shortDate(po.sent_at)}
+                    </span>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Invoices */}
+      <div className="space-y-2">
+        <div className="flex items-center justify-between">
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+            Invoices {mr.invoices.length > 0 && `(${mr.invoices.length})`}
+          </p>
+          <Button size="sm" variant="outline" className="h-7 text-xs px-3 gap-1.5" onClick={() => setShowInvoice(true)}>
+            <Plus className="w-3.5 h-3.5" />
+            Record Invoice
+          </Button>
+        </div>
+        {mr.invoices.length === 0 ? (
+          <p className="text-xs text-muted-foreground">No invoices recorded yet. Record an invoice when received from the supplier.</p>
+        ) : (
+          <div className="space-y-2">
+            {mr.invoices.map(inv => (
+              <div key={inv.id} className="border border-border rounded-xl p-3 bg-muted/20">
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <p className="text-sm font-medium">
+                      {inv.invoice_number ? `Invoice #${inv.invoice_number}` : "Invoice"}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {inv.supplier?.name ?? inv.supplier_name ?? ""}
+                      {inv.total_amount != null && ` — ${inv.currency} ${inv.total_amount.toLocaleString("en-ZA", { minimumFractionDigits: 2 })}`}
+                      {inv.invoice_date && ` · ${shortDate(inv.invoice_date)}`}
+                    </p>
+                  </div>
+                  <span className="text-xs px-2 py-0.5 rounded-full border bg-blue-50 text-blue-700 border-blue-200 font-medium shrink-0">
+                    RECEIVED
+                  </span>
+                </div>
+                {inv.invoice_file_url && (
+                  <a
+                    href={inv.invoice_file_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="mt-2 inline-flex items-center gap-1 text-xs text-primary hover:underline"
+                  >
+                    <ClipboardList className="w-3.5 h-3.5" />
+                    View Invoice
+                  </a>
+                )}
+                {inv.notes && <p className="mt-1 text-xs text-muted-foreground italic">{inv.notes}</p>}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Delivery Notes */}
+      <div className="space-y-2">
+        <div className="flex items-center justify-between">
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+            Delivery Notes {mr.delivery_notes.length > 0 && `(${mr.delivery_notes.length})`}
+          </p>
+          <Button size="sm" variant="outline" className="h-7 text-xs px-3 gap-1.5" onClick={() => setShowDelivery(true)}>
+            <Plus className="w-3.5 h-3.5" />
+            Record Delivery
+          </Button>
+        </div>
+        {mr.delivery_notes.length === 0 ? (
+          <p className="text-xs text-muted-foreground">No delivery notes recorded yet. Record when goods are received.</p>
+        ) : (
+          <div className="space-y-2">
+            {mr.delivery_notes.map(dn => (
+              <div key={dn.id} className="border border-border rounded-xl p-3 bg-muted/20">
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <p className="text-sm font-medium">
+                      {dn.delivery_number ? `Delivery #${dn.delivery_number}` : "Delivery Note"}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {dn.delivery_date && shortDate(dn.delivery_date)}
+                      {dn.received_by_name && ` · Received by ${dn.received_by_name}`}
+                    </p>
+                  </div>
+                  <span className="text-xs px-2 py-0.5 rounded-full border bg-green-50 text-green-700 border-green-200 font-medium shrink-0">
+                    DELIVERED
+                  </span>
+                </div>
+                {dn.delivery_file_url && (
+                  <a
+                    href={dn.delivery_file_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="mt-2 inline-flex items-center gap-1 text-xs text-primary hover:underline"
+                  >
+                    <ClipboardList className="w-3.5 h-3.5" />
+                    View Delivery Note
+                  </a>
+                )}
+                {dn.notes && <p className="mt-1 text-xs text-muted-foreground italic">{dn.notes}</p>}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {showPO && (
+        <GeneratePOModal
+          mr={mr}
+          onClose={() => setShowPO(false)}
+          onCreated={updated => { onMrUpdated(updated); setShowPO(false); }}
+        />
+      )}
+      {showInvoice && (
+        <RecordInvoiceModal
+          mr={mr}
+          onClose={() => setShowInvoice(false)}
+          onCreated={updated => { onMrUpdated(updated); setShowInvoice(false); }}
+        />
+      )}
+      {showDelivery && (
+        <RecordDeliveryModal
+          mr={mr}
+          onClose={() => setShowDelivery(false)}
+          onCreated={updated => { onMrUpdated(updated); setShowDelivery(false); }}
+        />
+      )}
+    </div>
+  );
+}
+
 function MRRequestsTab() {
   const { user, role } = useAuth();
   const [mrs,       setMrs]       = useState<WorkshopMR[]>([]);
@@ -852,6 +1466,12 @@ function MRRequestsTab() {
                             mr={mr}
                             userId={user?.id}
                             isAdmin={isAdmin}
+                            onMrUpdated={updated => setMrs(prev => prev.map(m => m.id === updated.id ? updated : m))}
+                          />
+                        </div>
+                        <div className="border-t border-border pt-3">
+                          <PhaseDPanel
+                            mr={mr}
                             onMrUpdated={updated => setMrs(prev => prev.map(m => m.id === updated.id ? updated : m))}
                           />
                         </div>

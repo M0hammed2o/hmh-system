@@ -13,6 +13,10 @@ from app.schemas.common import ApiSuccess
 from app.schemas.workshop import (
     WorkshopCategoryCreate,
     WorkshopCategoryRead,
+    WorkshopDeliveryNoteCreate,
+    WorkshopDeliveryNoteRead,
+    WorkshopInvoiceCreate,
+    WorkshopInvoiceRead,
     WorkshopIssuanceCreate,
     WorkshopIssuanceRead,
     WorkshopItemCreate,
@@ -22,6 +26,8 @@ from app.schemas.workshop import (
     WorkshopMRCreate,
     WorkshopMREmailLogRead,
     WorkshopMRRead,
+    WorkshopPurchaseOrderCreate,
+    WorkshopPurchaseOrderRead,
     WorkshopQuoteCreate,
     WorkshopQuoteRead,
     WorkshopSupplierLinkCreate,
@@ -438,3 +444,173 @@ def reject_quote(quote_id: uuid.UUID, body: QuoteRejectBody, db: DbSession, curr
         return ApiSuccess(data=WorkshopQuoteRead.model_validate(q), message="Quote rejected.")
     except (NotFoundError, ConflictError) as e:
         raise _error(e)
+
+
+# ── Purchase Orders ────────────────────────────────────────────────────────────
+
+@router.get(
+    "/pos/",
+    response_model=ApiSuccess[list[WorkshopPurchaseOrderRead]],
+    dependencies=[ALL_ROLES],
+)
+def list_pos(db: DbSession, mr_id: uuid.UUID = Query(...)):
+    pos = workshop_service.list_pos(db, mr_id)
+    return ApiSuccess(data=[WorkshopPurchaseOrderRead.model_validate(p) for p in pos])
+
+
+@router.post(
+    "/pos/",
+    response_model=ApiSuccess[WorkshopPurchaseOrderRead],
+    status_code=201,
+    dependencies=[OFFICE_AND_ABOVE],
+)
+def generate_po(body: WorkshopPurchaseOrderCreate, db: DbSession, current_user: CurrentUser):
+    try:
+        po = workshop_service.generate_po(db, body, current_user.id)
+        return ApiSuccess(
+            data=WorkshopPurchaseOrderRead.model_validate(po),
+            message=f"Purchase order {po.po_number} created.",
+        )
+    except (NotFoundError, ConflictError) as e:
+        raise _error(e)
+
+
+@router.post(
+    "/pos/{po_id}/upload-file",
+    response_model=ApiSuccess[WorkshopPurchaseOrderRead],
+    dependencies=[OFFICE_AND_ABOVE],
+)
+async def upload_po_file(
+    po_id: uuid.UUID,
+    db: DbSession,
+    current_user: CurrentUser,
+    file: UploadFile = File(...),
+):
+    from app.storage import save_upload
+
+    try:
+        workshop_service.get_po(db, po_id)
+    except NotFoundError as e:
+        raise _404(e)
+
+    content = await file.read()
+    ext = (file.filename or "").rsplit(".", 1)[-1].lower() or "pdf"
+    file_url = save_upload(content, f"workshop/pos/{po_id}/po.{ext}")
+    po = workshop_service.attach_po_file(db, po_id, file_url)
+    return ApiSuccess(data=WorkshopPurchaseOrderRead.model_validate(po), message="PO document uploaded.")
+
+
+@router.post(
+    "/pos/{po_id}/send",
+    response_model=ApiSuccess[WorkshopPurchaseOrderRead],
+    dependencies=[OFFICE_AND_ABOVE],
+)
+def send_po(po_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
+    try:
+        po, error = workshop_service.send_po(db, po_id, current_user.id)
+        msg = "PO sent to supplier." if not error else f"PO marked sent (email error: {error})."
+        return ApiSuccess(data=WorkshopPurchaseOrderRead.model_validate(po), message=msg)
+    except (NotFoundError, ConflictError) as e:
+        raise _error(e)
+
+
+# ── Invoices ───────────────────────────────────────────────────────────────────
+
+@router.get(
+    "/invoices/",
+    response_model=ApiSuccess[list[WorkshopInvoiceRead]],
+    dependencies=[ALL_ROLES],
+)
+def list_invoices(db: DbSession, mr_id: uuid.UUID = Query(...)):
+    invoices = workshop_service.list_invoices(db, mr_id)
+    return ApiSuccess(data=[WorkshopInvoiceRead.model_validate(i) for i in invoices])
+
+
+@router.post(
+    "/invoices/",
+    response_model=ApiSuccess[WorkshopInvoiceRead],
+    status_code=201,
+    dependencies=[OFFICE_AND_ABOVE],
+)
+def create_invoice(body: WorkshopInvoiceCreate, db: DbSession, current_user: CurrentUser):
+    try:
+        inv = workshop_service.create_invoice(db, body, current_user.id)
+        return ApiSuccess(data=WorkshopInvoiceRead.model_validate(inv), message="Invoice recorded.")
+    except (NotFoundError, ConflictError) as e:
+        raise _error(e)
+
+
+@router.post(
+    "/invoices/{invoice_id}/upload-file",
+    response_model=ApiSuccess[WorkshopInvoiceRead],
+    dependencies=[OFFICE_AND_ABOVE],
+)
+async def upload_invoice_file(
+    invoice_id: uuid.UUID,
+    db: DbSession,
+    current_user: CurrentUser,
+    file: UploadFile = File(...),
+):
+    from app.storage import save_upload
+
+    try:
+        workshop_service.get_invoice(db, invoice_id)
+    except NotFoundError as e:
+        raise _404(e)
+
+    content = await file.read()
+    ext = (file.filename or "").rsplit(".", 1)[-1].lower() or "pdf"
+    file_url = save_upload(content, f"workshop/invoices/{invoice_id}/invoice.{ext}")
+    inv = workshop_service.attach_invoice_file(db, invoice_id, file_url)
+    return ApiSuccess(data=WorkshopInvoiceRead.model_validate(inv), message="Invoice document uploaded.")
+
+
+# ── Delivery Notes ─────────────────────────────────────────────────────────────
+
+@router.get(
+    "/delivery-notes/",
+    response_model=ApiSuccess[list[WorkshopDeliveryNoteRead]],
+    dependencies=[ALL_ROLES],
+)
+def list_delivery_notes(db: DbSession, mr_id: uuid.UUID = Query(...)):
+    notes = workshop_service.list_delivery_notes(db, mr_id)
+    return ApiSuccess(data=[WorkshopDeliveryNoteRead.model_validate(n) for n in notes])
+
+
+@router.post(
+    "/delivery-notes/",
+    response_model=ApiSuccess[WorkshopDeliveryNoteRead],
+    status_code=201,
+    dependencies=[OFFICE_AND_ABOVE],
+)
+def create_delivery_note(body: WorkshopDeliveryNoteCreate, db: DbSession, current_user: CurrentUser):
+    try:
+        dn = workshop_service.create_delivery_note(db, body, current_user.id)
+        return ApiSuccess(data=WorkshopDeliveryNoteRead.model_validate(dn), message="Delivery note recorded.")
+    except (NotFoundError, ConflictError) as e:
+        raise _error(e)
+
+
+@router.post(
+    "/delivery-notes/{note_id}/upload-file",
+    response_model=ApiSuccess[WorkshopDeliveryNoteRead],
+    dependencies=[OFFICE_AND_ABOVE],
+)
+async def upload_delivery_file(
+    note_id: uuid.UUID,
+    db: DbSession,
+    current_user: CurrentUser,
+    file: UploadFile = File(...),
+):
+    from app.storage import save_upload
+
+    try:
+        workshop_service.get_delivery_note(db, note_id)
+    except NotFoundError as e:
+        raise _404(e)
+
+    content = await file.read()
+    ext = (file.filename or "").rsplit(".", 1)[-1].lower() or "pdf"
+    file_url = save_upload(content, f"workshop/delivery/{note_id}/delivery.{ext}")
+    dn = workshop_service.attach_delivery_file(db, note_id, file_url)
+    return ApiSuccess(data=WorkshopDeliveryNoteRead.model_validate(dn), message="Delivery note document uploaded.")
