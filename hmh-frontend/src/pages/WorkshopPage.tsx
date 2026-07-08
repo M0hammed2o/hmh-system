@@ -13,7 +13,7 @@ import { useAuth } from "@/hooks/useAuth";
 import {
   Wrench, ClipboardList, Package, Building2, CheckCircle2, Ban,
   ChevronRight, Plus, RefreshCw, Trash2, X, Pencil, TrendingDown,
-  TrendingUp, AlertTriangle, Clock, Send, Car, History,
+  TrendingUp, AlertTriangle, Clock, Send, Car, History, Mail,
 } from "lucide-react";
 import {
   workshopApi,
@@ -24,6 +24,7 @@ import {
   type WorkshopSupplierLink,
   type WorkshopIssuance,
   type WorkshopIssuanceCreate,
+  type WorkshopMREmailLog,
   type WorkshopItemCreate,
   type WorkshopItemUpdate,
   type WorkshopCategoryCreate,
@@ -141,6 +142,80 @@ function RejectModal({ mr, onClose, onRejected }: {
 
 const VOTES_REQUIRED = 3;
 
+const EMAIL_STATUS_STYLE: Record<string, string> = {
+  SENT:      "bg-green-50 text-green-700 border-green-200",
+  MOCK_SENT: "bg-blue-50 text-blue-700 border-blue-200",
+  FAILED:    "bg-red-50 text-red-700 border-red-200",
+};
+
+function EmailStatusPanel({
+  logs, onSend, sending,
+}: {
+  logs: WorkshopMREmailLog[];
+  onSend: (forceResend: boolean) => void;
+  sending: boolean;
+}) {
+  const hasSent = logs.some(l => l.status === "SENT" || l.status === "MOCK_SENT");
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between">
+        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Supplier Quote Request</p>
+        <Button
+          size="sm"
+          variant={hasSent ? "outline" : "default"}
+          disabled={sending}
+          onClick={() => onSend(hasSent)}
+          className="h-7 text-xs px-3 gap-1.5"
+        >
+          <Mail className="w-3.5 h-3.5" />
+          {sending ? "Sending…" : hasSent ? "Resend to Suppliers" : "Send to Suppliers"}
+        </Button>
+      </div>
+
+      {logs.length === 0 ? (
+        <p className="text-xs text-muted-foreground">
+          Not sent yet. Click "Send to Suppliers" to email linked suppliers for a quote.
+        </p>
+      ) : (
+        <div className="space-y-1.5">
+          {logs.map(log => (
+            <div key={log.id} className={cn(
+              "flex items-center justify-between text-xs px-3 py-2 rounded-lg border",
+              EMAIL_STATUS_STYLE[log.status] ?? "bg-muted text-muted-foreground border-border"
+            )}>
+              <div className="flex items-center gap-2 min-w-0">
+                <Mail className="w-3.5 h-3.5 shrink-0" />
+                <div className="min-w-0">
+                  <p className="font-medium truncate">
+                    {log.supplier?.name ?? log.sent_to_email}
+                  </p>
+                  <p className="text-[11px] opacity-75 truncate">
+                    {log.sent_to_email}
+                  </p>
+                </div>
+              </div>
+              <div className="text-right shrink-0 ml-3">
+                <p className="font-semibold">{log.status}</p>
+                {log.sent_at && (
+                  <p className="text-[11px] opacity-75">
+                    {new Date(log.sent_at).toLocaleDateString("en-ZA", { day: "numeric", month: "short" })}
+                  </p>
+                )}
+                {log.error_message && (
+                  <p className="text-[11px] text-red-600 max-w-[160px] truncate" title={log.error_message}>
+                    {log.error_message}
+                  </p>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function VoteProgress({ mr, userId }: { mr: WorkshopMR; userId: string | undefined }) {
   const nonOverride = mr.approvals.filter(a => !a.is_override);
   const hasVoted = userId ? nonOverride.some(a => a.approved_by === userId) : false;
@@ -185,6 +260,7 @@ function MRRequestsTab() {
   const [filter,    setFilter]    = useState<WorkshopMRStatus | "ALL">("ALL");
   const [expanded,  setExpanded]  = useState<string | null>(null);
   const [acting,    setActing]    = useState<string | null>(null);
+  const [sending,   setSending]   = useState<string | null>(null);
   const [rejectTarget, setRejectTarget] = useState<WorkshopMR | null>(null);
 
   const load = useCallback(() => {
@@ -210,6 +286,19 @@ function MRRequestsTab() {
       alert(detail ?? "Failed to cast vote.");
     } finally {
       setActing(null);
+    }
+  };
+
+  const handleSend = async (mr: WorkshopMR, forceResend: boolean) => {
+    setSending(mr.id);
+    try {
+      const logs = await workshopApi.sendToSuppliers(mr.id, forceResend);
+      setMrs(prev => prev.map(m => m.id === mr.id ? { ...m, email_logs: logs } : m));
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      alert(detail ?? "Failed to send emails.");
+    } finally {
+      setSending(null);
     }
   };
 
@@ -385,12 +474,19 @@ function MRRequestsTab() {
                       </p>
                     )}
 
-                    {/* Approval info */}
+                    {/* Approval info + email panel */}
                     {mr.status === "APPROVED" && (
-                      <p className="text-sm text-green-700 bg-green-50 rounded-lg px-3 py-2 flex items-center gap-1.5">
-                        <CheckCircle2 className="w-4 h-4" />
-                        Approved {mr.approved_at ? shortDate(mr.approved_at) : ""}
-                      </p>
+                      <div className="space-y-3">
+                        <p className="text-sm text-green-700 bg-green-50 rounded-lg px-3 py-2 flex items-center gap-1.5">
+                          <CheckCircle2 className="w-4 h-4" />
+                          Approved {mr.approved_at ? shortDate(mr.approved_at) : ""}
+                        </p>
+                        <EmailStatusPanel
+                          logs={mr.email_logs}
+                          sending={sending === mr.id}
+                          onSend={forceResend => handleSend(mr, forceResend)}
+                        />
+                      </div>
                     )}
 
                     {/* Vote progress */}

@@ -1165,3 +1165,244 @@ def send_quote_rejection_email(
     db.commit()
 
     return {"status": status_str, "sent_to": to_email}
+
+
+# ── Workshop MR quote-request emails ─────────────────────────────────────────
+
+def build_workshop_mr_email_body(mr, supplier, lines_with_items: list) -> tuple[str, str]:
+    """Return (subject, html_body) for a workshop MR quote-request email.
+
+    lines_with_items: list of (WorkshopMRLine, WorkshopItem) tuples for this supplier.
+    """
+    from app.models.supplier import Supplier as _S  # noqa: F401
+
+    mr_number     = mr.mr_number
+    contact_name  = (getattr(supplier, "contact_person", None) or getattr(supplier, "name", "Supplier"))
+    vehicle_reg   = mr.vehicle.registration if mr.vehicle else "—"
+    vehicle_name  = mr.vehicle.name         if mr.vehicle else ""
+    site_name     = mr.site.name            if mr.site    else "—"
+    needed_by     = mr.needed_by_date.strftime("%d %B %Y") if mr.needed_by_date else "As soon as possible"
+    reply_to      = settings.smtp_sender_address or ""
+
+    subject = f"Workshop Quote Request — {mr_number}"
+
+    items_html = ""
+    for _line, item in lines_with_items:
+        qty     = float(getattr(_line, "quantity_requested", 0) or 0)
+        unit    = getattr(item, "unit", "each") or "each"
+        name    = getattr(item, "name", "—")
+        part_no = getattr(item, "part_number", None)
+        part_str = f"<br><span style='font-size:12px;color:#888'>#{part_no}</span>" if part_no else ""
+        items_html += (
+            f"<tr>"
+            f"<td style='padding:8px 12px;border-bottom:1px solid #eee'>{name}{part_str}</td>"
+            f"<td style='padding:8px 12px;border-bottom:1px solid #eee;text-align:right'>{qty:g}</td>"
+            f"<td style='padding:8px 12px;border-bottom:1px solid #eee;color:#555'>{unit}</td>"
+            f"</tr>"
+        )
+
+    notes_row = (
+        f"<tr><td style='padding:5px 0;color:#666'>Notes</td>"
+        f"<td style='font-weight:500'>{mr.notes}</td></tr>"
+    ) if mr.notes else ""
+
+    body = f"""
+<html><body style="font-family:Arial,sans-serif;color:#1a1a1a;max-width:680px;margin:0 auto;background:#f7f7f7">
+<div style="background:#1d4ed8;padding:22px 32px">
+  <h2 style="color:white;margin:0;font-size:20px">HMH Group — Workshop Quote Request</h2>
+  <p style="color:#bfdbfe;margin:4px 0 0;font-size:14px">{mr_number}</p>
+</div>
+<div style="background:white;padding:28px 32px">
+  <p>Dear {contact_name},</p>
+  <p>We have an approved workshop material request for vehicle <strong>{vehicle_reg}</strong>
+  {f'({vehicle_name})' if vehicle_name else ''}.
+  Please provide a quote for the following parts:</p>
+
+  <table style="width:100%;border-collapse:collapse;margin:20px 0">
+    <thead>
+      <tr style="background:#f5f5f5">
+        <th style="text-align:left;padding:10px 12px;border-bottom:2px solid #1d4ed8">Part</th>
+        <th style="text-align:right;padding:10px 12px;border-bottom:2px solid #1d4ed8">Qty</th>
+        <th style="text-align:left;padding:10px 12px;border-bottom:2px solid #1d4ed8">Unit</th>
+      </tr>
+    </thead>
+    <tbody>{items_html}</tbody>
+  </table>
+
+  <table style="width:100%;border-collapse:collapse;margin:20px 0;font-size:14px">
+    <tr><td style="padding:5px 0;color:#666;width:150px">Vehicle</td>
+        <td style="font-weight:500">{vehicle_reg}{f' — {vehicle_name}' if vehicle_name else ''}</td></tr>
+    <tr><td style="padding:5px 0;color:#666">Site</td>
+        <td style="font-weight:500">{site_name}</td></tr>
+    <tr><td style="padding:5px 0;color:#666">Reason</td>
+        <td style="font-weight:500">{mr.reason}</td></tr>
+    <tr><td style="padding:5px 0;color:#666">Required by</td>
+        <td style="font-weight:500">{needed_by}</td></tr>
+    {notes_row}
+  </table>
+
+  <p style="color:#555;font-size:13px;border-top:1px solid #eee;padding-top:16px;margin-top:20px">
+    Please reply to this email with your quote (PDF or email).<br>
+    Reference <strong>{mr_number}</strong> on all correspondence.<br>
+    Send quotes, invoices and delivery documents to:
+    <a href="mailto:{reply_to}" style="color:#1d4ed8">{reply_to}</a>
+  </p>
+  <p style="color:#999;font-size:12px">HMH Group — Workshop &amp; Fleet Management</p>
+</div>
+</body></html>
+"""
+    return subject, body
+
+
+def send_workshop_mr_email(
+    db: Session,
+    mr,
+    sent_by_id: Optional[uuid.UUID] = None,
+    force_resend: bool = False,
+) -> list:
+    """Send quote-request emails to suppliers for an approved WorkshopMR.
+
+    Groups MR lines by the preferred supplier for each part's category.
+    One email per supplier. Logs each send to WorkshopMREmailLog.
+    Returns the list of log objects created.
+
+    Never raises — failures are recorded in the log.
+    """
+    from app.models.workshop import WorkshopMREmailLog, WorkshopSupplierLink, WorkshopItem
+
+    now = datetime.now(timezone.utc)
+
+    # ── Duplicate guard ───────────────────────────────────────────────────────
+    if not force_resend:
+        existing = (
+            db.query(WorkshopMREmailLog)
+            .filter(
+                WorkshopMREmailLog.workshop_mr_id == mr.id,
+                WorkshopMREmailLog.status.in_(["SENT", "MOCK_SENT"]),
+            )
+            .first()
+        )
+        if existing:
+            logger.info("Workshop MR %s email already sent — skipping duplicate.", mr.mr_number)
+            return [existing]
+
+    # ── Resolve items and group by supplier ───────────────────────────────────
+    # For each line: item → category → supplier_links → pick preferred supplier
+    supplier_lines: dict = {}   # supplier_id → [(line, item)]
+    no_supplier_lines: list = []
+
+    for line in mr.lines:
+        item = db.get(WorkshopItem, line.item_id)
+        if not item:
+            continue
+
+        # Find supplier links for this item's category (preferred first)
+        links = (
+            db.query(WorkshopSupplierLink)
+            .filter(WorkshopSupplierLink.category_id == item.category_id)
+            .order_by(WorkshopSupplierLink.is_preferred.desc())
+            .all()
+        )
+
+        if links:
+            # Use preferred supplier (first after ordering), or first available
+            chosen_sid = links[0].supplier_id
+            supplier_lines.setdefault(chosen_sid, []).append((line, item))
+        else:
+            no_supplier_lines.append((line, item))
+
+    logs: list = []
+
+    # ── Warn about parts with no supplier ────────────────────────────────────
+    if no_supplier_lines and not supplier_lines:
+        log = WorkshopMREmailLog(
+            workshop_mr_id=mr.id,
+            sent_to_email="(no supplier)",
+            email_subject=f"Workshop MR {mr.mr_number} — no supplier linked",
+            status="FAILED",
+            error_message=(
+                "No supplier links found for any parts category in this MR. "
+                "Add supplier links on the Suppliers tab first."
+            ),
+            sent_by=sent_by_id,
+            created_at=now,
+        )
+        db.add(log)
+        db.commit()
+        return [log]
+
+    # If some lines have no supplier, bundle them into whichever supplier gets the most lines
+    if no_supplier_lines and supplier_lines:
+        biggest = max(supplier_lines, key=lambda sid: len(supplier_lines[sid]))
+        supplier_lines[biggest].extend(no_supplier_lines)
+
+    # ── Send one email per supplier ───────────────────────────────────────────
+    from app.models.supplier import Supplier
+
+    total = len(supplier_lines)
+    for idx, (supplier_id, lines_items) in enumerate(supplier_lines.items(), 1):
+        supplier = db.get(Supplier, supplier_id)
+        if not supplier:
+            logger.warning("Workshop MR %s: supplier %s not found — skipping.", mr.mr_number, supplier_id)
+            continue
+
+        to_email = supplier.email or ""
+        subject, body_html = build_workshop_mr_email_body(mr, supplier, lines_items)
+        if total > 1:
+            subject = f"{subject} [{idx}/{total}]"
+
+        logger.info(
+            "workshop_email mr=%s supplier=%s to=%s parts=%d",
+            mr.mr_number, supplier.name, to_email or "(no email)", len(lines_items),
+        )
+
+        error_msg: Optional[str] = None
+        if not to_email:
+            status_str = "FAILED"
+            error_msg  = f"Supplier '{supplier.name}' has no email address."
+        elif not _smtp_is_real():
+            reason = "pytest" if _in_pytest() else ("EMAIL_MOCK_MODE" if settings.EMAIL_MOCK_MODE else "SMTP_ENABLED=false")
+            logger.info("workshop_email mock_sent mr=%s to=%s reason=%s", mr.mr_number, to_email, reason)
+            status_str = "MOCK_SENT"
+        else:
+            err = _send_smtp(
+                to_email, subject, body_html,
+                cc=settings.procurement_cc_list or None,
+                bcc=settings.procurement_bcc_list or None,
+            )
+            if err:
+                status_str = "FAILED"
+                error_msg  = err
+                logger.error("Workshop email failed for %s → %s: %s", mr.mr_number, supplier.name, err)
+            else:
+                status_str = "SENT"
+
+        log = WorkshopMREmailLog(
+            workshop_mr_id=mr.id,
+            supplier_id=supplier.id,
+            sent_to_email=to_email,
+            email_subject=subject,
+            email_body=body_html,
+            status=status_str,
+            error_message=error_msg,
+            sent_by=sent_by_id,
+            sent_at=now if status_str in ("SENT", "MOCK_SENT") else None,
+            created_at=now,
+        )
+        db.add(log)
+        logs.append(log)
+
+    if not logs:
+        log = WorkshopMREmailLog(
+            workshop_mr_id=mr.id,
+            sent_to_email="(all suppliers missing)",
+            status="FAILED",
+            error_message="All referenced suppliers could not be found in the database.",
+            sent_by=sent_by_id,
+            created_at=now,
+        )
+        db.add(log)
+        logs.append(log)
+
+    db.commit()
+    return logs

@@ -165,6 +165,12 @@ class WorkshopMR(TimestampMixin, Base):
         order_by="WorkshopMRApproval.approved_at",
         viewonly=True,
     )
+    email_logs: Mapped[list["WorkshopMREmailLog"]] = relationship(
+        "WorkshopMREmailLog",
+        foreign_keys="[WorkshopMREmailLog.workshop_mr_id]",
+        order_by="WorkshopMREmailLog.created_at",
+        viewonly=True,
+    )
 
     # Read-only resolved relationships (for API responses)
     site:    Mapped[Optional[object]] = relationship("Site",    foreign_keys=[site_id],    viewonly=True)
@@ -204,6 +210,41 @@ class WorkshopMRLine(Base):
 
     def __repr__(self) -> str:
         return f"<WorkshopMRLine item={self.item_id} qty={self.quantity_requested}>"
+
+
+class WorkshopMREmailLog(Base):
+    """Email log for quote-request emails sent to suppliers after a WorkshopMR is approved."""
+    __tablename__ = "workshop_mr_email_logs"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    workshop_mr_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("workshop_mrs.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    supplier_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("suppliers.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    sent_to_email:  Mapped[str]           = mapped_column(String(255), nullable=False)
+    email_subject:  Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    email_body:     Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    status:         Mapped[str]           = mapped_column(String(50),  nullable=False, index=True)
+    error_message:  Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    sent_by: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    sent_at:    Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime]           = mapped_column(DateTime(timezone=True), nullable=False)
+
+    supplier: Mapped[Optional[object]] = relationship("Supplier", foreign_keys=[supplier_id], viewonly=True)
+
+    def __repr__(self) -> str:
+        return f"<WorkshopMREmailLog mr={self.workshop_mr_id} to={self.sent_to_email} status={self.status}>"
 
 
 class WorkshopMRApproval(Base):

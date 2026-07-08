@@ -48,6 +48,7 @@ from app.models.workshop import (
     WorkshopMR,
     WorkshopMRLine,
     WorkshopMRApproval,
+    WorkshopMREmailLog,
     WorkshopIssuance,
 )
 
@@ -111,5 +112,6 @@ __all__ = [
     "WorkshopMR",
     "WorkshopMRLine",
     "WorkshopMRApproval",
+    "WorkshopMREmailLog",
     "WorkshopIssuance",
 ]

@@ -20,6 +20,7 @@ from app.schemas.workshop import (
     WorkshopItemUpdate,
     WorkshopMRApprovalRead,
     WorkshopMRCreate,
+    WorkshopMREmailLogRead,
     WorkshopMRRead,
     WorkshopSupplierLinkCreate,
     WorkshopSupplierLinkRead,
@@ -263,6 +264,31 @@ def approve_mr(mr_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
         return ApiSuccess(data=WorkshopMRRead.model_validate(mr), message="MR approved (admin override).")
     except (NotFoundError, ConflictError) as e:
         raise _error(e)
+
+
+class SendEmailBody(BaseModel):
+    force_resend: bool = False
+
+
+@router.post(
+    "/mrs/{mr_id}/send-to-suppliers",
+    response_model=ApiSuccess[list[WorkshopMREmailLogRead]],
+    dependencies=[OFFICE_AND_ABOVE],
+)
+def send_to_suppliers(mr_id: uuid.UUID, body: SendEmailBody, db: DbSession, current_user: CurrentUser):
+    """Send quote-request emails to suppliers for an approved Workshop MR."""
+    from app.services.email_service import send_workshop_mr_email
+    try:
+        mr = workshop_service.get_mr(db, mr_id)
+    except NotFoundError as e:
+        raise _404(e)
+    if mr.status.value != "APPROVED":
+        raise HTTPException(status_code=400, detail="MR must be APPROVED before sending to suppliers.")
+    logs = send_workshop_mr_email(db, mr, sent_by_id=current_user.id, force_resend=body.force_resend)
+    return ApiSuccess(
+        data=[WorkshopMREmailLogRead.model_validate(l) for l in logs],
+        message=f"{len(logs)} email(s) processed.",
+    )
 
 
 class RejectBody(BaseModel):

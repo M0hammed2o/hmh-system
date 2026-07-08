@@ -187,6 +187,31 @@ class WorkshopMRLineCreate(BaseModel):
         return v
 
 
+# ── MR Email Logs ────────────────────────────────────────────────────────────
+
+class _SupplierEmailBrief(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    name: str
+    email: Optional[str] = None
+
+
+class WorkshopMREmailLogRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    workshop_mr_id: uuid.UUID
+    supplier_id: Optional[uuid.UUID] = None
+    sent_to_email: str
+    email_subject: Optional[str] = None
+    status: str
+    error_message: Optional[str] = None
+    sent_at: Optional[datetime] = None
+    created_at: datetime
+    supplier: Optional[_SupplierEmailBrief] = None
+
+
 # ── MR Approvals ─────────────────────────────────────────────────────────────
 
 class WorkshopMRApprovalRead(BaseModel):
@@ -223,6 +248,7 @@ class WorkshopMRRead(BaseModel):
     updated_at: datetime
     lines: list[WorkshopMRLineRead] = []
     approvals: list[WorkshopMRApprovalRead] = []
+    email_logs: list[WorkshopMREmailLogRead] = []
     site: Optional[_SiteBrief] = None
     vehicle: Optional[_VehicleBrief] = None
 

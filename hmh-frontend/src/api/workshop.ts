@@ -36,6 +36,19 @@ export interface WorkshopMRLineBrief {
   item: { id: string; name: string; unit: string; part_number: string | null } | null;
 }
 
+export interface WorkshopMREmailLog {
+  id: string;
+  workshop_mr_id: string;
+  supplier_id: string | null;
+  sent_to_email: string;
+  email_subject: string | null;
+  status: "SENT" | "MOCK_SENT" | "FAILED";
+  error_message: string | null;
+  sent_at: string | null;
+  created_at: string;
+  supplier: { id: string; name: string; email: string | null } | null;
+}
+
 export interface WorkshopMRApproval {
   id: string;
   mr_id: string;
@@ -65,6 +78,7 @@ export interface WorkshopMR {
   lines: WorkshopMRLineBrief[];
   approvals: WorkshopMRApproval[];
   vote_count: number;
+  email_logs: WorkshopMREmailLog[];
   // Resolved names (embedded by backend)
   site: { id: string; name: string; site_type: string } | null;
   vehicle: { id: string; registration: string; name: string } | null;
@@ -204,6 +218,14 @@ export const workshopApi = {
     const res = await client.post<{ data: WorkshopMR }>(`/workshop/mrs/${mrId}/vote`, {
       notes: notes ?? null,
     });
+    return res.data.data;
+  },
+
+  sendToSuppliers: async (mrId: string, forceResend = false): Promise<WorkshopMREmailLog[]> => {
+    const res = await client.post<{ data: WorkshopMREmailLog[] }>(
+      `/workshop/mrs/${mrId}/send-to-suppliers`,
+      { force_resend: forceResend },
+    );
     return res.data.data;
   },
 
