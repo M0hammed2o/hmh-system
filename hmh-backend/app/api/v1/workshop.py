@@ -3,7 +3,7 @@
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 
 from app.core.exceptions import ConflictError, NotFoundError
@@ -22,6 +22,8 @@ from app.schemas.workshop import (
     WorkshopMRCreate,
     WorkshopMREmailLogRead,
     WorkshopMRRead,
+    WorkshopQuoteCreate,
+    WorkshopQuoteRead,
     WorkshopSupplierLinkCreate,
     WorkshopSupplierLinkRead,
 )
@@ -333,5 +335,106 @@ def issue_parts(body: WorkshopIssuanceCreate, db: DbSession, current_user: Curre
             data=WorkshopIssuanceRead.model_validate(issuance),
             message="Parts issued to vehicle.",
         )
+    except (NotFoundError, ConflictError) as e:
+        raise _error(e)
+
+
+# ── Workshop Quotes ────────────────────────────────────────────────────────────
+
+@router.get(
+    "/quotes/",
+    response_model=ApiSuccess[list[WorkshopQuoteRead]],
+    dependencies=[ALL_ROLES],
+)
+def list_quotes(db: DbSession, mr_id: uuid.UUID = Query(...)):
+    quotes = workshop_service.list_quotes(db, mr_id)
+    return ApiSuccess(data=[WorkshopQuoteRead.model_validate(q) for q in quotes])
+
+
+@router.post(
+    "/quotes/",
+    response_model=ApiSuccess[WorkshopQuoteRead],
+    status_code=201,
+    dependencies=[OFFICE_AND_ABOVE],
+)
+def create_quote(body: WorkshopQuoteCreate, db: DbSession, current_user: CurrentUser):
+    try:
+        q = workshop_service.create_quote(db, body, current_user.id)
+        return ApiSuccess(data=WorkshopQuoteRead.model_validate(q), message="Quote created.")
+    except (NotFoundError, ConflictError) as e:
+        raise _error(e)
+
+
+@router.post(
+    "/quotes/{quote_id}/upload-file",
+    response_model=ApiSuccess[WorkshopQuoteRead],
+    dependencies=[OFFICE_AND_ABOVE],
+)
+async def upload_quote_file(
+    quote_id: uuid.UUID,
+    db: DbSession,
+    current_user: CurrentUser,
+    file: UploadFile = File(...),
+):
+    from app.storage import save_upload
+
+    try:
+        workshop_service.get_quote(db, quote_id)
+    except NotFoundError as e:
+        raise _404(e)
+
+    content = await file.read()
+    ext = (file.filename or "").rsplit(".", 1)[-1].lower() or "pdf"
+    relative_path = f"workshop/quotes/{quote_id}/quote.{ext}"
+    file_url = save_upload(content, relative_path)
+
+    q = workshop_service.attach_quote_file(db, quote_id, file_url)
+    return ApiSuccess(data=WorkshopQuoteRead.model_validate(q), message="Quote file uploaded.")
+
+
+class QuoteVoteBody(BaseModel):
+    notes: Optional[str] = None
+
+
+@router.post(
+    "/quotes/{quote_id}/vote",
+    response_model=ApiSuccess[WorkshopQuoteRead],
+    dependencies=[OFFICE_AND_ABOVE],
+)
+def cast_quote_vote(quote_id: uuid.UUID, body: QuoteVoteBody, db: DbSession, current_user: CurrentUser):
+    try:
+        q = workshop_service.cast_quote_vote(db, quote_id, current_user.id, body.notes)
+        return ApiSuccess(data=WorkshopQuoteRead.model_validate(q), message="Vote cast on quote.")
+    except (NotFoundError, ConflictError) as e:
+        raise _error(e)
+
+
+@router.post(
+    "/quotes/{quote_id}/approve",
+    response_model=ApiSuccess[WorkshopQuoteRead],
+    dependencies=[OFFICE_ADMIN_AND_ABOVE],
+)
+def approve_quote(quote_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
+    """Admin override — approve quote without 3 votes."""
+    try:
+        q = workshop_service.approve_quote(db, quote_id, current_user.id)
+        return ApiSuccess(data=WorkshopQuoteRead.model_validate(q), message="Quote approved (admin override).")
+    except (NotFoundError, ConflictError) as e:
+        raise _error(e)
+
+
+class QuoteRejectBody(BaseModel):
+    reason: Optional[str] = None
+
+
+@router.post(
+    "/quotes/{quote_id}/reject",
+    response_model=ApiSuccess[WorkshopQuoteRead],
+    dependencies=[OFFICE_AND_ABOVE],
+)
+def reject_quote(quote_id: uuid.UUID, body: QuoteRejectBody, db: DbSession, current_user: CurrentUser):
+    try:
+        q = workshop_service.reject_quote(db, quote_id, current_user.id, body.reason)
+        return ApiSuccess(data=WorkshopQuoteRead.model_validate(q), message="Quote rejected.")
     except (NotFoundError, ConflictError) as e:
         raise _error(e)

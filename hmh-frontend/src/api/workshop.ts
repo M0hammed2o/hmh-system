@@ -59,6 +59,36 @@ export interface WorkshopMRApproval {
   voter: { id: string; full_name: string; email: string } | null;
 }
 
+export interface WorkshopQuoteApproval {
+  id: string;
+  quote_id: string;
+  approved_by: string | null;
+  approved_at: string;
+  is_override: boolean;
+  notes: string | null;
+  voter: { id: string; full_name: string; email: string } | null;
+}
+
+export interface WorkshopQuote {
+  id: string;
+  workshop_mr_id: string;
+  supplier_id: string | null;
+  supplier_name: string | null;
+  quote_file_url: string | null;
+  total_amount: number | null;
+  currency: string;
+  notes: string | null;
+  status: "PENDING" | "APPROVED" | "REJECTED";
+  rejection_reason: string | null;
+  submitted_at: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+  approvals: WorkshopQuoteApproval[];
+  vote_count: number;
+  supplier: { id: string; name: string; email: string | null } | null;
+}
+
 export interface WorkshopMR {
   id: string;
   mr_number: string;
@@ -79,6 +109,7 @@ export interface WorkshopMR {
   approvals: WorkshopMRApproval[];
   vote_count: number;
   email_logs: WorkshopMREmailLog[];
+  quotes: WorkshopQuote[];
   // Resolved names (embedded by backend)
   site: { id: string; name: string; site_type: string } | null;
   vehicle: { id: string; registration: string; name: string } | null;
@@ -226,6 +257,57 @@ export const workshopApi = {
       `/workshop/mrs/${mrId}/send-to-suppliers`,
       { force_resend: forceResend },
     );
+    return res.data.data;
+  },
+
+  // ── Quotes ────────────────────────────────────────────────────────────────
+
+  listQuotes: async (mrId: string): Promise<WorkshopQuote[]> => {
+    const res = await client.get<{ data: WorkshopQuote[] }>("/workshop/quotes/", {
+      params: { mr_id: mrId },
+    });
+    return res.data.data;
+  },
+
+  createQuote: async (body: {
+    workshop_mr_id: string;
+    supplier_id?: string | null;
+    supplier_name?: string | null;
+    total_amount?: number | null;
+    currency?: string;
+    notes?: string | null;
+  }): Promise<WorkshopQuote> => {
+    const res = await client.post<{ data: WorkshopQuote }>("/workshop/quotes/", body);
+    return res.data.data;
+  },
+
+  uploadQuoteFile: async (quoteId: string, file: File): Promise<WorkshopQuote> => {
+    const form = new FormData();
+    form.append("file", file);
+    const res = await client.post<{ data: WorkshopQuote }>(
+      `/workshop/quotes/${quoteId}/upload-file`,
+      form,
+      { headers: { "Content-Type": "multipart/form-data" } },
+    );
+    return res.data.data;
+  },
+
+  castQuoteVote: async (quoteId: string, notes?: string): Promise<WorkshopQuote> => {
+    const res = await client.post<{ data: WorkshopQuote }>(`/workshop/quotes/${quoteId}/vote`, {
+      notes: notes ?? null,
+    });
+    return res.data.data;
+  },
+
+  approveQuote: async (quoteId: string): Promise<WorkshopQuote> => {
+    const res = await client.post<{ data: WorkshopQuote }>(`/workshop/quotes/${quoteId}/approve`);
+    return res.data.data;
+  },
+
+  rejectQuote: async (quoteId: string, reason?: string): Promise<WorkshopQuote> => {
+    const res = await client.post<{ data: WorkshopQuote }>(`/workshop/quotes/${quoteId}/reject`, {
+      reason: reason ?? null,
+    });
     return res.data.data;
   },
 

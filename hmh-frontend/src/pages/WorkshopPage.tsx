@@ -25,6 +25,7 @@ import {
   type WorkshopIssuance,
   type WorkshopIssuanceCreate,
   type WorkshopMREmailLog,
+  type WorkshopQuote,
   type WorkshopItemCreate,
   type WorkshopItemUpdate,
   type WorkshopCategoryCreate,
@@ -252,6 +253,366 @@ function VoteProgress({ mr, userId }: { mr: WorkshopMR; userId: string | undefin
   );
 }
 
+const QUOTE_STATUS_STYLE: Record<string, string> = {
+  PENDING:  "bg-amber-50 text-amber-700 border-amber-200",
+  APPROVED: "bg-green-50 text-green-700 border-green-200",
+  REJECTED: "bg-red-50 text-red-700 border-red-200",
+};
+
+function UploadQuoteModal({
+  mr,
+  onClose,
+  onUploaded,
+}: {
+  mr: WorkshopMR;
+  onClose: () => void;
+  onUploaded: (updatedMr: WorkshopMR) => void;
+}) {
+  const supplierOptions = mr.email_logs
+    .filter(l => l.supplier)
+    .map(l => l.supplier!)
+    .filter((s, i, arr) => arr.findIndex(x => x.id === s.id) === i);
+
+  const [supplierId, setSupplierId] = useState(supplierOptions[0]?.id ?? "");
+  const [supplierName, setSupplierName] = useState("");
+  const [amount, setAmount] = useState("");
+  const [currency, setCurrency] = useState("ZAR");
+  const [notes, setNotes] = useState("");
+  const [file, setFile] = useState<File | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  const useCustomSupplier = supplierId === "__custom__" || supplierOptions.length === 0;
+
+  const submit = async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const resolvedSupplierId = (!useCustomSupplier && supplierId) ? supplierId : null;
+      const resolvedSupplierName = useCustomSupplier ? supplierName.trim() : null;
+
+      let q = await workshopApi.createQuote({
+        workshop_mr_id: mr.id,
+        supplier_id: resolvedSupplierId,
+        supplier_name: resolvedSupplierName,
+        total_amount: amount ? parseFloat(amount) : null,
+        currency,
+        notes: notes.trim() || null,
+      });
+
+      if (file) {
+        q = await workshopApi.uploadQuoteFile(q.id, file);
+      }
+
+      const updated = await workshopApi.getMR(mr.id);
+      onUploaded(updated);
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      setError(detail ?? "Failed to upload quote.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <Modal title="Upload Supplier Quote" onClose={onClose}>
+      <div className="space-y-4">
+        <div className="space-y-1.5">
+          <Label>Supplier</Label>
+          {supplierOptions.length > 0 ? (
+            <select
+              value={supplierId}
+              onChange={e => setSupplierId(e.target.value)}
+              className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+            >
+              {supplierOptions.map(s => (
+                <option key={s.id} value={s.id}>{s.name}</option>
+              ))}
+              <option value="__custom__">Other supplier…</option>
+            </select>
+          ) : null}
+          {useCustomSupplier && (
+            <Input
+              placeholder="Supplier name"
+              value={supplierName}
+              onChange={e => setSupplierName(e.target.value)}
+            />
+          )}
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div className="space-y-1.5">
+            <Label>Total Amount</Label>
+            <Input
+              type="number"
+              min="0"
+              step="0.01"
+              placeholder="0.00"
+              value={amount}
+              onChange={e => setAmount(e.target.value)}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label>Currency</Label>
+            <select
+              value={currency}
+              onChange={e => setCurrency(e.target.value)}
+              className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+            >
+              <option>ZAR</option>
+              <option>USD</option>
+              <option>EUR</option>
+            </select>
+          </div>
+        </div>
+
+        <div className="space-y-1.5">
+          <Label>Quote Document (PDF)</Label>
+          <input
+            type="file"
+            accept=".pdf,.doc,.docx,.jpg,.jpeg,.png"
+            onChange={e => setFile(e.target.files?.[0] ?? null)}
+            className="w-full text-sm text-muted-foreground file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border file:border-input file:text-sm file:font-medium file:bg-muted file:text-foreground hover:file:bg-muted/70 cursor-pointer"
+          />
+        </div>
+
+        <div className="space-y-1.5">
+          <Label>Notes (optional)</Label>
+          <textarea
+            rows={2}
+            value={notes}
+            onChange={e => setNotes(e.target.value)}
+            placeholder="Any additional notes…"
+            className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm resize-none"
+          />
+        </div>
+
+        {error && <p className="text-sm text-destructive">{error}</p>}
+
+        <div className="flex gap-2 pt-1">
+          <Button variant="outline" className="flex-1" onClick={onClose} disabled={loading}>Cancel</Button>
+          <Button className="flex-1" onClick={submit} disabled={loading}>
+            {loading ? "Uploading…" : "Submit Quote"}
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function QuoteVoteProgress({ quote, userId }: { quote: WorkshopQuote; userId: string | undefined }) {
+  const nonOverride = quote.approvals.filter(a => !a.is_override);
+  const pct = Math.min((nonOverride.length / VOTES_REQUIRED) * 100, 100);
+  return (
+    <div className="space-y-1.5 mt-2">
+      <div className="flex items-center justify-between text-xs">
+        <span className="text-muted-foreground">Approval votes</span>
+        <span className={cn("font-semibold", nonOverride.length >= VOTES_REQUIRED ? "text-green-600" : "text-amber-600")}>
+          {nonOverride.length}/{VOTES_REQUIRED}
+        </span>
+      </div>
+      <div className="h-1.5 bg-muted rounded-full overflow-hidden">
+        <div
+          className={cn("h-full rounded-full", nonOverride.length >= VOTES_REQUIRED ? "bg-green-500" : "bg-amber-400")}
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+      {nonOverride.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {nonOverride.map(a => (
+            <span key={a.id} className="text-[11px] px-1.5 py-0.5 bg-green-50 text-green-700 border border-green-200 rounded-full">
+              {a.voter?.full_name ?? "Office user"}
+            </span>
+          ))}
+        </div>
+      )}
+      {userId && nonOverride.some(a => a.approved_by === userId) && (
+        <p className="text-[11px] text-muted-foreground">You have already voted on this quote.</p>
+      )}
+    </div>
+  );
+}
+
+function QuoteSectionPanel({
+  mr,
+  userId,
+  isAdmin,
+  onMrUpdated,
+}: {
+  mr: WorkshopMR;
+  userId: string | undefined;
+  isAdmin: boolean;
+  onMrUpdated: (updated: WorkshopMR) => void;
+}) {
+  const [showUpload, setShowUpload] = useState(false);
+  const [acting, setActing] = useState<string | null>(null);
+
+  const handleVote = async (q: WorkshopQuote) => {
+    setActing(q.id);
+    try {
+      await workshopApi.castQuoteVote(q.id);
+      const updated = await workshopApi.getMR(mr.id);
+      onMrUpdated(updated);
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      alert(detail ?? "Failed to cast vote.");
+    } finally {
+      setActing(null);
+    }
+  };
+
+  const handleApprove = async (q: WorkshopQuote) => {
+    if (!window.confirm(`Override and approve this quote from ${q.supplier?.name ?? q.supplier_name ?? "supplier"}?`)) return;
+    setActing(q.id);
+    try {
+      await workshopApi.approveQuote(q.id);
+      const updated = await workshopApi.getMR(mr.id);
+      onMrUpdated(updated);
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      alert(detail ?? "Failed to approve quote.");
+    } finally {
+      setActing(null);
+    }
+  };
+
+  const handleReject = async (q: WorkshopQuote) => {
+    const reason = window.prompt("Reason for rejection (optional):");
+    if (reason === null) return;
+    setActing(q.id);
+    try {
+      await workshopApi.rejectQuote(q.id, reason || undefined);
+      const updated = await workshopApi.getMR(mr.id);
+      onMrUpdated(updated);
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      alert(detail ?? "Failed to reject quote.");
+    } finally {
+      setActing(null);
+    }
+  };
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between">
+        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+          Supplier Quotes {mr.quotes.length > 0 && `(${mr.quotes.length})`}
+        </p>
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-7 text-xs px-3 gap-1.5"
+          onClick={() => setShowUpload(true)}
+        >
+          <Plus className="w-3.5 h-3.5" />
+          Upload Quote
+        </Button>
+      </div>
+
+      {mr.quotes.length === 0 ? (
+        <p className="text-xs text-muted-foreground">
+          No quotes yet. Upload a quote received from a supplier.
+        </p>
+      ) : (
+        <div className="space-y-2">
+          {mr.quotes.map(q => {
+            const supplierLabel = q.supplier?.name ?? q.supplier_name ?? "Unknown supplier";
+            const hasVoted = userId ? q.approvals.some(a => a.approved_by === userId) : false;
+            return (
+              <div key={q.id} className="border border-border rounded-xl p-3 space-y-2 bg-muted/20">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium truncate">{supplierLabel}</p>
+                    {q.total_amount != null && (
+                      <p className="text-xs text-muted-foreground">
+                        {q.currency} {q.total_amount.toLocaleString("en-ZA", { minimumFractionDigits: 2 })}
+                      </p>
+                    )}
+                  </div>
+                  <span className={cn(
+                    "shrink-0 text-xs px-2 py-0.5 rounded-full border font-medium",
+                    QUOTE_STATUS_STYLE[q.status] ?? "bg-muted text-muted-foreground border-border"
+                  )}>
+                    {q.status}
+                  </span>
+                </div>
+
+                {q.quote_file_url && (
+                  <a
+                    href={q.quote_file_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+                  >
+                    <ClipboardList className="w-3.5 h-3.5" />
+                    View Quote Document
+                  </a>
+                )}
+
+                {q.notes && <p className="text-xs text-muted-foreground italic">{q.notes}</p>}
+
+                {q.rejection_reason && (
+                  <p className="text-xs text-destructive bg-destructive/10 rounded px-2 py-1">
+                    Rejected: {q.rejection_reason}
+                  </p>
+                )}
+
+                {q.status === "PENDING" && (
+                  <>
+                    <QuoteVoteProgress quote={q} userId={userId} />
+                    <div className="flex gap-2 pt-1">
+                      <Button
+                        size="sm"
+                        className="flex-1 h-7 text-xs"
+                        disabled={acting === q.id || hasVoted}
+                        onClick={() => handleVote(q)}
+                      >
+                        <CheckCircle2 className="w-3.5 h-3.5 mr-1" />
+                        {acting === q.id ? "Voting…" : hasVoted ? "Already Voted" : "Approve Vote"}
+                      </Button>
+                      {isAdmin && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 text-xs text-primary border-primary hover:bg-primary/10"
+                          disabled={acting === q.id}
+                          onClick={() => handleApprove(q)}
+                        >
+                          Override
+                        </Button>
+                      )}
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-7 text-xs border-destructive text-destructive hover:bg-destructive/10"
+                        disabled={acting === q.id}
+                        onClick={() => handleReject(q)}
+                      >
+                        Reject
+                      </Button>
+                    </div>
+                  </>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {showUpload && (
+        <UploadQuoteModal
+          mr={mr}
+          onClose={() => setShowUpload(false)}
+          onUploaded={updated => {
+            onMrUpdated(updated);
+            setShowUpload(false);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
 function MRRequestsTab() {
   const { user, role } = useAuth();
   const [mrs,       setMrs]       = useState<WorkshopMR[]>([]);
@@ -474,9 +835,9 @@ function MRRequestsTab() {
                       </p>
                     )}
 
-                    {/* Approval info + email panel */}
+                    {/* Approval info + email panel + quotes */}
                     {mr.status === "APPROVED" && (
-                      <div className="space-y-3">
+                      <div className="space-y-4">
                         <p className="text-sm text-green-700 bg-green-50 rounded-lg px-3 py-2 flex items-center gap-1.5">
                           <CheckCircle2 className="w-4 h-4" />
                           Approved {mr.approved_at ? shortDate(mr.approved_at) : ""}
@@ -486,6 +847,14 @@ function MRRequestsTab() {
                           sending={sending === mr.id}
                           onSend={forceResend => handleSend(mr, forceResend)}
                         />
+                        <div className="border-t border-border pt-3">
+                          <QuoteSectionPanel
+                            mr={mr}
+                            userId={user?.id}
+                            isAdmin={isAdmin}
+                            onMrUpdated={updated => setMrs(prev => prev.map(m => m.id === updated.id ? updated : m))}
+                          />
+                        </div>
                       </div>
                     )}
 

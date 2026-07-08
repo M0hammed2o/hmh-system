@@ -249,6 +249,7 @@ class WorkshopMRRead(BaseModel):
     lines: list[WorkshopMRLineRead] = []
     approvals: list[WorkshopMRApprovalRead] = []
     email_logs: list[WorkshopMREmailLogRead] = []
+    quotes: list["WorkshopQuoteRead"] = []
     site: Optional[_SiteBrief] = None
     vehicle: Optional[_VehicleBrief] = None
 
@@ -280,6 +281,59 @@ class WorkshopMRCreate(BaseModel):
         if not v:
             raise ValueError("At least one line item is required")
         return v
+
+
+# ── Workshop Quotes ───────────────────────────────────────────────────────────
+
+class WorkshopQuoteApprovalRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    quote_id: uuid.UUID
+    approved_by: Optional[uuid.UUID] = None
+    approved_at: datetime
+    is_override: bool
+    notes: Optional[str] = None
+    voter: Optional[_UserBrief] = None
+
+
+class WorkshopQuoteRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    workshop_mr_id: uuid.UUID
+    supplier_id: Optional[uuid.UUID] = None
+    supplier_name: Optional[str] = None
+    quote_file_url: Optional[str] = None
+    total_amount: Optional[float] = None
+    currency: str
+    notes: Optional[str] = None
+    status: str
+    rejection_reason: Optional[str] = None
+    submitted_at: Optional[datetime] = None
+    created_by: Optional[uuid.UUID] = None
+    created_at: datetime
+    updated_at: datetime
+    approvals: list[WorkshopQuoteApprovalRead] = []
+    supplier: Optional[_SupplierBrief] = None
+
+    @computed_field
+    @property
+    def vote_count(self) -> int:
+        return sum(1 for a in self.approvals if not a.is_override)
+
+
+class WorkshopQuoteCreate(BaseModel):
+    workshop_mr_id: uuid.UUID
+    supplier_id: Optional[uuid.UUID] = None
+    supplier_name: Optional[str] = None
+    total_amount: Optional[float] = None
+    currency: str = "ZAR"
+    notes: Optional[str] = None
+
+
+# Update forward ref
+WorkshopMRRead.model_rebuild()
 
 
 # ── Issuances ─────────────────────────────────────────────────────────────────

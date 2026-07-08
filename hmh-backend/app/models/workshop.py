@@ -171,6 +171,12 @@ class WorkshopMR(TimestampMixin, Base):
         order_by="WorkshopMREmailLog.created_at",
         viewonly=True,
     )
+    quotes: Mapped[list["WorkshopQuote"]] = relationship(
+        "WorkshopQuote",
+        foreign_keys="[WorkshopQuote.workshop_mr_id]",
+        order_by="WorkshopQuote.created_at",
+        viewonly=True,
+    )
 
     # Read-only resolved relationships (for API responses)
     site:    Mapped[Optional[object]] = relationship("Site",    foreign_keys=[site_id],    viewonly=True)
@@ -245,6 +251,78 @@ class WorkshopMREmailLog(Base):
 
     def __repr__(self) -> str:
         return f"<WorkshopMREmailLog mr={self.workshop_mr_id} to={self.sent_to_email} status={self.status}>"
+
+
+class WorkshopQuote(TimestampMixin, Base):
+    """Supplier quote received in response to an approved WorkshopMR."""
+    __tablename__ = "workshop_quotes"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    workshop_mr_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("workshop_mrs.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    supplier_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("suppliers.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    supplier_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    quote_file_url: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
+    total_amount: Mapped[Optional[float]] = mapped_column(Numeric(14, 2), nullable=True)
+    currency: Mapped[str] = mapped_column(String(10), nullable=False, default="ZAR", server_default="ZAR")
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(50), nullable=False, default="PENDING", server_default="PENDING", index=True)
+    rejection_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    submitted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_by: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+    approvals: Mapped[list["WorkshopQuoteApproval"]] = relationship(
+        "WorkshopQuoteApproval",
+        foreign_keys="[WorkshopQuoteApproval.quote_id]",
+        order_by="WorkshopQuoteApproval.approved_at",
+        viewonly=True,
+    )
+    supplier: Mapped[Optional[object]] = relationship("Supplier", foreign_keys=[supplier_id], viewonly=True)
+
+    def __repr__(self) -> str:
+        return f"<WorkshopQuote mr={self.workshop_mr_id} status={self.status}>"
+
+
+class WorkshopQuoteApproval(Base):
+    """Individual approval vote on a WorkshopQuote (3 votes required)."""
+    __tablename__ = "workshop_quote_approvals"
+    __table_args__ = (
+        UniqueConstraint("quote_id", "approved_by", name="uq_workshop_quote_approvals_quote_approver"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    quote_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("workshop_quotes.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    approved_by: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    approved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    is_override: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    voter: Mapped[Optional[object]] = relationship("User", foreign_keys=[approved_by], viewonly=True)
+
+    def __repr__(self) -> str:
+        return f"<WorkshopQuoteApproval quote={self.quote_id} by={self.approved_by}>"
 
 
 class WorkshopMRApproval(Base):

@@ -18,6 +18,8 @@ from app.models.workshop import (
     WorkshopMRLine,
     WorkshopStock,
     WorkshopSupplierLink,
+    WorkshopQuote,
+    WorkshopQuoteApproval,
 )
 
 WORKSHOP_VOTES_REQUIRED = 3
@@ -27,6 +29,7 @@ from app.schemas.workshop import (
     WorkshopItemCreate,
     WorkshopItemUpdate,
     WorkshopMRCreate,
+    WorkshopQuoteCreate,
     WorkshopSupplierLinkCreate,
 )
 
@@ -403,3 +406,153 @@ def issue_parts(
     db.commit()
     db.refresh(issuance)
     return issuance
+
+
+# ── Workshop Quotes ────────────────────────────────────────────────────────────
+
+def list_quotes(db: Session, mr_id: uuid.UUID) -> list[WorkshopQuote]:
+    return (
+        db.query(WorkshopQuote)
+        .filter(WorkshopQuote.workshop_mr_id == mr_id)
+        .order_by(WorkshopQuote.created_at)
+        .all()
+    )
+
+
+def get_quote(db: Session, quote_id: uuid.UUID) -> WorkshopQuote:
+    q = db.query(WorkshopQuote).filter(WorkshopQuote.id == quote_id).first()
+    if not q:
+        raise NotFoundError(f"Quote {quote_id} not found.")
+    return q
+
+
+def create_quote(
+    db: Session,
+    data: WorkshopQuoteCreate,
+    actor_id: uuid.UUID,
+) -> WorkshopQuote:
+    mr = db.query(WorkshopMR).filter(WorkshopMR.id == data.workshop_mr_id).first()
+    if not mr:
+        raise NotFoundError("Workshop MR not found.")
+    if mr.status.value != "APPROVED":
+        raise ConflictError("Quotes can only be submitted for APPROVED MRs.")
+
+    quote = WorkshopQuote(
+        workshop_mr_id=data.workshop_mr_id,
+        supplier_id=data.supplier_id,
+        supplier_name=data.supplier_name,
+        total_amount=data.total_amount,
+        currency=data.currency or "ZAR",
+        notes=data.notes,
+        status="PENDING",
+        submitted_at=datetime.now(timezone.utc),
+        created_by=actor_id,
+    )
+    db.add(quote)
+    db.commit()
+    db.refresh(quote)
+    return quote
+
+
+def attach_quote_file(
+    db: Session,
+    quote_id: uuid.UUID,
+    file_url: str,
+) -> WorkshopQuote:
+    q = get_quote(db, quote_id)
+    q.quote_file_url = file_url
+    q.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(q)
+    return q
+
+
+def cast_quote_vote(
+    db: Session,
+    quote_id: uuid.UUID,
+    voter_id: uuid.UUID,
+    notes: Optional[str] = None,
+) -> WorkshopQuote:
+    q = get_quote(db, quote_id)
+    if q.status != "PENDING":
+        raise ConflictError(f"Quote is already {q.status}.")
+
+    existing = (
+        db.query(WorkshopQuoteApproval)
+        .filter(
+            WorkshopQuoteApproval.quote_id == quote_id,
+            WorkshopQuoteApproval.approved_by == voter_id,
+        )
+        .first()
+    )
+    if existing:
+        raise ConflictError("You have already voted on this quote.")
+
+    vote = WorkshopQuoteApproval(
+        quote_id=quote_id,
+        approved_by=voter_id,
+        approved_at=datetime.now(timezone.utc),
+        is_override=False,
+        notes=notes,
+    )
+    db.add(vote)
+    db.flush()
+
+    non_override_count = (
+        db.query(func.count(WorkshopQuoteApproval.id))
+        .filter(
+            WorkshopQuoteApproval.quote_id == quote_id,
+            WorkshopQuoteApproval.is_override.is_(False),
+        )
+        .scalar()
+        or 0
+    )
+    if non_override_count >= WORKSHOP_VOTES_REQUIRED:
+        q.status = "APPROVED"
+        q.updated_at = datetime.now(timezone.utc)
+
+    db.commit()
+    db.refresh(q)
+    return q
+
+
+def approve_quote(
+    db: Session,
+    quote_id: uuid.UUID,
+    actor_id: uuid.UUID,
+) -> WorkshopQuote:
+    """Admin override — approve quote directly."""
+    q = get_quote(db, quote_id)
+    if q.status not in ("PENDING",):
+        raise ConflictError(f"Quote is already {q.status}.")
+
+    vote = WorkshopQuoteApproval(
+        quote_id=quote_id,
+        approved_by=actor_id,
+        approved_at=datetime.now(timezone.utc),
+        is_override=True,
+        notes="Admin override",
+    )
+    db.add(vote)
+    q.status = "APPROVED"
+    q.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(q)
+    return q
+
+
+def reject_quote(
+    db: Session,
+    quote_id: uuid.UUID,
+    actor_id: uuid.UUID,
+    reason: Optional[str] = None,
+) -> WorkshopQuote:
+    q = get_quote(db, quote_id)
+    if q.status not in ("PENDING",):
+        raise ConflictError(f"Quote is already {q.status}.")
+    q.status = "REJECTED"
+    q.rejection_reason = reason
+    q.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(q)
+    return q
