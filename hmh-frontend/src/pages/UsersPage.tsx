@@ -14,7 +14,7 @@ const ROLES: UserRole[] = ["OWNER", "OFFICE_ADMIN", "OFFICE_USER", "SITE_MANAGER
 
 const roleLabel: Record<UserRole, string> = {
   OWNER:             "Owner",
-  OFFICE_ADMIN:      "Office Admin",
+  OFFICE_ADMIN:      "Rafiq",
   OFFICE_USER:       "Office User",
   SITE_MANAGER:      "Site Manager",
   SITE_MANAGER_VIEW: "Site Manager View Only",
@@ -631,7 +631,7 @@ export default function UsersPage() {
           <p className="font-semibold text-base">Access Denied</p>
           <p className="text-sm text-muted-foreground mt-1">
             Your role (<span className="font-mono font-medium">{role ?? "unknown"}</span>) does not have
-            permission to view user management. Contact an Owner or Office Admin.
+            permission to view user management. Contact an Owner or Rafiq.
           </p>
         </div>
       </div>

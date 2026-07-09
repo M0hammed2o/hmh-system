@@ -462,7 +462,7 @@ function QuoteSectionPanel({
   };
 
   const handleApprove = async (q: WorkshopQuote) => {
-    if (!window.confirm(`Override and approve this quote from ${q.supplier?.name ?? q.supplier_name ?? "supplier"}?`)) return;
+    if (!window.confirm(`Rafiq/Owner override — approve quote from ${q.supplier?.name ?? q.supplier_name ?? "supplier"} without 3 votes?`)) return;
     setActing(q.id);
     try {
       await workshopApi.approveQuote(q.id);
@@ -1278,7 +1278,7 @@ function MRRequestsTab() {
   };
 
   const handleAdminApprove = async (mr: WorkshopMR) => {
-    if (!window.confirm(`Override the 3-vote requirement and approve ${mr.mr_number} directly?`)) return;
+    if (!window.confirm(`Rafiq/Owner override — approve ${mr.mr_number} without 3 votes?`)) return;
     setActing(mr.id);
     try {
       const updated = await workshopApi.approveMR(mr.id);
@@ -1501,7 +1501,7 @@ function MRRequestsTab() {
                             className="text-primary border-primary hover:bg-primary/10"
                             disabled={acting === mr.id}
                             onClick={() => handleAdminApprove(mr)}
-                            title="Override — approve without 3 votes"
+                            title="Rafiq/Owner only — approve without 3 votes"
                           >
                             Override Approve
                           </Button>
