@@ -21,6 +21,8 @@ class MaterialRequestItemRead(BaseModel):
     requested_quantity: float
     approved_quantity: Optional[float] = None
     over_boq_quantity: Optional[float] = None
+    extra_reason_type: Optional[str] = None
+    extra_reason_notes: Optional[str] = None
     unit: Optional[str] = None
     remarks: Optional[str] = None
 
@@ -38,6 +40,8 @@ class MaterialRequestItemCreate(BaseModel):
     )
     unit: Optional[str] = None
     remarks: Optional[str] = None
+    extra_reason_type: Optional[str] = None
+    extra_reason_notes: Optional[str] = None
 
 
 class MREmailLogRead(BaseModel):

@@ -3,6 +3,27 @@ import client from "./client";
 // Mirrors app/models/enums.py ProjectStatus
 export type ProjectStatus = "PLANNED" | "ACTIVE" | "PAUSED" | "COMPLETED";
 
+export interface Company {
+  id: string;
+  name: string;
+  registration_number: string | null;
+  contact_email: string | null;
+  contact_phone: string | null;
+  address: string | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CompanyCreate {
+  name: string;
+  registration_number?: string | null;
+  contact_email?: string | null;
+  contact_phone?: string | null;
+  address?: string | null;
+  notes?: string | null;
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -10,6 +31,8 @@ export interface Project {
   description: string | null;
   location: string | null;
   client_name: string | null;
+  company_id: string | null;
+  company: { id: string; name: string } | null;
   start_date: string | null;
   estimated_end_date: string | null;
   go_live_date: string | null;
@@ -25,6 +48,7 @@ export interface ProjectCreate {
   description?: string | null;
   location?: string | null;
   client_name?: string | null;
+  company_id?: string | null;
   start_date?: string | null;
   estimated_end_date?: string | null;
   go_live_date?: string | null;
@@ -37,6 +61,7 @@ export interface ProjectUpdate {
   description?: string | null;
   location?: string | null;
   client_name?: string | null;
+  company_id?: string | null;
   start_date?: string | null;
   estimated_end_date?: string | null;
   go_live_date?: string | null;

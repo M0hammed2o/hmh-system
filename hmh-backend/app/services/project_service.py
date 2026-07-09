@@ -89,6 +89,7 @@ def create_project(
         description=data.description,
         location=data.location,
         client_name=data.client_name,
+        company_id=data.company_id,
         start_date=data.start_date,
         estimated_end_date=data.estimated_end_date,
         go_live_date=data.go_live_date,
@@ -138,6 +139,8 @@ def update_project(
         project.location = data.location
     if "client_name" in update_fields:
         project.client_name = data.client_name
+    if "company_id" in update_fields:
+        project.company_id = data.company_id
     if "start_date" in update_fields:
         project.start_date = data.start_date
     if "estimated_end_date" in update_fields:

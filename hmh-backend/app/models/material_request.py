@@ -155,6 +155,8 @@ class MaterialRequestItem(Base):
     approved_quantity: Mapped[Optional[float]] = mapped_column(Numeric(14, 3), nullable=True)
     unit: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     over_boq_quantity: Mapped[Optional[float]] = mapped_column(Numeric(14, 3), nullable=True)
+    extra_reason_type: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    extra_reason_notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     remarks: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     request: Mapped["MaterialRequest"] = relationship("MaterialRequest", back_populates="items")

@@ -26,6 +26,9 @@ class FuelLogRead(BaseModel):
     recorded_by: uuid.UUID
     fuel_date: datetime
     odometer_reading: Optional[float] = None
+    hours_reading:    Optional[float] = None
+    hours_operated:   Optional[float] = None
+    fuel_per_hour:    Optional[float] = None
     distance_km:     Optional[float] = None
     efficiency_kpl:  Optional[float] = None
     l_per_100km:     Optional[float] = None
@@ -48,6 +51,8 @@ class FuelLogCreate(BaseModel):
     site_id: Optional[uuid.UUID] = None
     fuel_date: Optional[datetime] = None
     odometer_reading: Optional[float] = None
+    hours_reading: Optional[float] = None
+    hours_operated: Optional[float] = None
     notes: Optional[str] = None
 
     @field_validator("litres")

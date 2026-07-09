@@ -90,6 +90,10 @@ class FuelLog(TimestampMixin, Base):
     odometer_reading: Mapped[Optional[float]] = mapped_column(Numeric(10, 1), nullable=True)
     # Hours reading for hour-metered machines (migration 0057)
     hours_reading: Mapped[Optional[float]] = mapped_column(Numeric(10, 1), nullable=True)
+    # Hours operated since last fill — for machines (migration 0063)
+    hours_operated: Mapped[Optional[float]] = mapped_column(Numeric(10, 2), nullable=True)
+    # Fuel consumption per hour: litres / hours_operated (migration 0063)
+    fuel_per_hour: Mapped[Optional[float]] = mapped_column(Numeric(8, 3), nullable=True)
     # Link to a bulk fuel delivery that supplied this fill (migration 0057)
     fuel_delivery_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True),

@@ -24,6 +24,12 @@ class Project(TimestampMixin, Base):
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     location: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     client_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    company_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("companies.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     start_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     estimated_end_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     go_live_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
@@ -41,6 +47,9 @@ class Project(TimestampMixin, Base):
     )
 
     # Relationships
+    company: Mapped[Optional[object]] = relationship(
+        "Company", foreign_keys=[company_id], viewonly=True
+    )
     sites: Mapped[list["Site"]] = relationship(  # type: ignore[name-defined]
         "Site", back_populates="project", cascade="all, delete-orphan"
     )

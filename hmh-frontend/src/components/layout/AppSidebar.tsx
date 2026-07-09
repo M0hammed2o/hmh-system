@@ -29,6 +29,7 @@ const navGroups = [
     items: [
       { title: "Procurement",          path: "/procurement",           icon: ShoppingCart },
       { title: "Suppliers",            path: "/suppliers",             icon: Building2 },
+      { title: "Companies",            path: "/companies",             icon: Building2 },
       { title: "Deliveries",           path: "/deliveries",            icon: Truck },
       { title: "Reconciliation",       path: "/reconciliation",        icon: GitMerge },
       { title: "Procurement Analytics",path: "/procurement-analytics", icon: BarChart2 },

@@ -9,7 +9,7 @@ from typing import Literal
 from app.core.logging_config import get_logger
 from app.core.upload_validation import SPREADSHEET_MIMES, validate_upload
 from app.core.resource_access import get_and_check_project_resource
-from app.dependencies import ALL_ROLES, CurrentUser, DbSession, OFFICE_AND_ABOVE, check_project_access
+from app.dependencies import ALL_ROLES, CurrentUser, DbSession, OFFICE_AND_ABOVE, OFFICE_ADMIN_AND_ABOVE, check_project_access
 from app.models.boq import BOQItem
 
 _boq_log = get_logger(__name__)
@@ -49,7 +49,7 @@ def list_boq_headers(project_id: uuid.UUID, db: DbSession, current_user: Current
     "/",
     response_model=ApiSuccess[BOQHeaderRead],
     status_code=201,
-    dependencies=[OFFICE_AND_ABOVE],
+    dependencies=[OFFICE_ADMIN_AND_ABOVE],
 )
 def create_boq_header(
     project_id: uuid.UUID,
@@ -178,7 +178,7 @@ def get_boq_header(project_id: uuid.UUID, header_id: uuid.UUID, db: DbSession, c
 @project_boq_router.patch(
     "/{header_id}",
     response_model=ApiSuccess[BOQHeaderRead],
-    dependencies=[OFFICE_AND_ABOVE],
+    dependencies=[OFFICE_ADMIN_AND_ABOVE],
 )
 def update_boq_header(
     project_id: uuid.UUID, header_id: uuid.UUID, body: BOQHeaderUpdate, db: DbSession, current_user: CurrentUser
@@ -192,7 +192,7 @@ def update_boq_header(
     "/import-csv",
     response_model=ApiSuccess[BOQHeaderRead],
     status_code=201,
-    dependencies=[OFFICE_AND_ABOVE],
+    dependencies=[OFFICE_ADMIN_AND_ABOVE],
 )
 async def import_boq_csv(
     project_id: uuid.UUID,
@@ -233,7 +233,7 @@ def list_sections(header_id: uuid.UUID, db: DbSession):
     "/",
     response_model=ApiSuccess[BOQSectionRead],
     status_code=201,
-    dependencies=[OFFICE_AND_ABOVE],
+    dependencies=[OFFICE_ADMIN_AND_ABOVE],
 )
 def create_section(header_id: uuid.UUID, body: BOQSectionCreate, db: DbSession):
     section = boq_service.create_section(db, header_id, body)
@@ -256,7 +256,7 @@ def list_boq_items(section_id: uuid.UUID, db: DbSession):
     "/",
     response_model=ApiSuccess[BOQItemRead],
     status_code=201,
-    dependencies=[OFFICE_AND_ABOVE],
+    dependencies=[OFFICE_ADMIN_AND_ABOVE],
 )
 def create_boq_item(section_id: uuid.UUID, body: BOQItemCreate, db: DbSession):
     item = boq_service.create_item(db, section_id, body)
@@ -266,7 +266,7 @@ def create_boq_item(section_id: uuid.UUID, body: BOQItemCreate, db: DbSession):
 @boq_item_router.patch(
     "/{item_id}",
     response_model=ApiSuccess[BOQItemRead],
-    dependencies=[OFFICE_AND_ABOVE],
+    dependencies=[OFFICE_ADMIN_AND_ABOVE],
 )
 def update_boq_item(item_id: uuid.UUID, body: BOQItemUpdate, db: DbSession, current_user: CurrentUser):
     get_and_check_project_resource(db, current_user, BOQItem, item_id, "BOQ item not found.")
@@ -277,7 +277,7 @@ def update_boq_item(item_id: uuid.UUID, body: BOQItemUpdate, db: DbSession, curr
 @boq_item_router.post(
     "/{item_id}/apply-to-all-site-lots",
     response_model=ApiSuccess[dict],
-    dependencies=[OFFICE_AND_ABOVE],
+    dependencies=[OFFICE_ADMIN_AND_ABOVE],
 )
 def apply_item_to_all_site_lots(item_id: uuid.UUID, body: BOQItemUpdate, db: DbSession, current_user: CurrentUser):
     """
@@ -458,7 +458,7 @@ def apply_item_to_all_site_lots(item_id: uuid.UUID, body: BOQItemUpdate, db: DbS
 @boq_item_router.post(
     "/{item_id}/push-to-lots",
     response_model=ApiSuccess[dict],
-    dependencies=[OFFICE_AND_ABOVE],
+    dependencies=[OFFICE_ADMIN_AND_ABOVE],
 )
 def push_site_item_to_lots(item_id: uuid.UUID, body: BOQItemUpdate, db: DbSession, current_user: CurrentUser):
     """
@@ -566,7 +566,7 @@ def push_site_item_to_lots(item_id: uuid.UUID, body: BOQItemUpdate, db: DbSessio
 @boq_item_router.delete(
     "/{item_id}",
     response_model=ApiSuccess[None],
-    dependencies=[OFFICE_AND_ABOVE],
+    dependencies=[OFFICE_ADMIN_AND_ABOVE],
 )
 def delete_boq_item(item_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
     get_and_check_project_resource(db, current_user, BOQItem, item_id, "BOQ item not found.")
@@ -579,7 +579,7 @@ def delete_boq_item(item_id: uuid.UUID, db: DbSession, current_user: CurrentUser
 @boq_sections_router.patch(
     "/{section_id}",
     response_model=ApiSuccess[BOQSectionRead],
-    dependencies=[OFFICE_AND_ABOVE],
+    dependencies=[OFFICE_ADMIN_AND_ABOVE],
 )
 def update_section(header_id: uuid.UUID, section_id: uuid.UUID, body: BOQSectionUpdate, db: DbSession):
     section = boq_service.update_section(db, section_id, body)
@@ -589,7 +589,7 @@ def update_section(header_id: uuid.UUID, section_id: uuid.UUID, body: BOQSection
 @boq_sections_router.delete(
     "/{section_id}",
     response_model=ApiSuccess[SectionDeleteResult],
-    dependencies=[OFFICE_AND_ABOVE],
+    dependencies=[OFFICE_ADMIN_AND_ABOVE],
 )
 def delete_section(
     header_id: uuid.UUID,
@@ -635,7 +635,7 @@ class _MarkTemplateBody(BaseModel):
 @project_boq_router.post(
     "/{header_id}/mark-template",
     response_model=ApiSuccess[BOQHeaderRead],
-    dependencies=[OFFICE_AND_ABOVE],
+    dependencies=[OFFICE_ADMIN_AND_ABOVE],
 )
 def mark_as_template(project_id: uuid.UUID, header_id: uuid.UUID, db: DbSession, current_user: CurrentUser, body: _MarkTemplateBody):
     check_project_access(db, current_user, project_id)
@@ -649,7 +649,7 @@ def mark_as_template(project_id: uuid.UUID, header_id: uuid.UUID, db: DbSession,
     "/seed-standard-template",
     response_model=ApiSuccess[BOQHeaderRead],
     status_code=201,
-    dependencies=[OFFICE_AND_ABOVE],
+    dependencies=[OFFICE_ADMIN_AND_ABOVE],
 )
 def seed_standard_template(project_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
     """Create the Standard Residential Unit BOQ template for this project."""
@@ -666,7 +666,7 @@ class _CopyBoqBody(BaseModel):
     target_site_id:    uuid.UUID | None = None
 
 
-@boq_item_router.post("/headers/{header_id}/copy", status_code=201, dependencies=[OFFICE_AND_ABOVE])
+@boq_item_router.post("/headers/{header_id}/copy", status_code=201, dependencies=[OFFICE_ADMIN_AND_ABOVE])
 def copy_boq(header_id: uuid.UUID, body: _CopyBoqBody, db: DbSession, current_user: CurrentUser):
     """Copy a BOQ header (all sections + items) to a new header, optionally on a different site."""
     header = boq_service.copy_boq(
@@ -682,7 +682,7 @@ class _GenerateLotBoqsBody(BaseModel):
     lot_ids: list[uuid.UUID]
 
 
-@boq_item_router.post("/headers/{header_id}/generate-lot-boqs", dependencies=[OFFICE_AND_ABOVE])
+@boq_item_router.post("/headers/{header_id}/generate-lot-boqs", dependencies=[OFFICE_ADMIN_AND_ABOVE])
 def generate_lot_boqs(header_id: uuid.UUID, body: _GenerateLotBoqsBody, db: DbSession):
     """Copy all site-level BOQ items to lot-specific copies for each lot in lot_ids."""
     count = boq_service.generate_lot_boqs(db, header_id, body.lot_ids)
@@ -717,7 +717,7 @@ class _AdjustmentBody(BaseModel):
     notes:             str   | None = None
 
 
-@boq_item_router.post("/adjustments", status_code=201, dependencies=[OFFICE_AND_ABOVE])
+@boq_item_router.post("/adjustments", status_code=201, dependencies=[OFFICE_ADMIN_AND_ABOVE])
 def create_adjustment(body: _AdjustmentBody, db: DbSession, current_user: CurrentUser):
     """Record a BOQ credit, non-supply, or return."""
     adj = boq_service.create_adjustment(
@@ -744,7 +744,7 @@ def create_adjustment(body: _AdjustmentBody, db: DbSession, current_user: Curren
     )
 
 
-@boq_item_router.get("/adjustments", dependencies=[OFFICE_AND_ABOVE])
+@boq_item_router.get("/adjustments", dependencies=[OFFICE_ADMIN_AND_ABOVE])
 def list_adjustments(
     db: DbSession,
     project_id:      uuid.UUID | None = None,
@@ -798,7 +798,7 @@ def site_lot_boqs(site_id: uuid.UUID, db: DbSession):
     return ApiSuccess(data=data)
 
 
-@boq_item_router.post("/sites/{site_id}/generate-lot-boqs", dependencies=[OFFICE_AND_ABOVE])
+@boq_item_router.post("/sites/{site_id}/generate-lot-boqs", dependencies=[OFFICE_ADMIN_AND_ABOVE])
 def generate_site_lot_boqs(site_id: uuid.UUID, db: DbSession):
     """
     Find the site's BOQ header and generate lot-specific BOQ items
@@ -945,7 +945,7 @@ def generate_site_lot_boqs(site_id: uuid.UUID, db: DbSession):
     )
 
 
-@boq_item_router.post("/lots/{lot_id}/reset-to-site-boq", dependencies=[OFFICE_AND_ABOVE])
+@boq_item_router.post("/lots/{lot_id}/reset-to-site-boq", dependencies=[OFFICE_ADMIN_AND_ABOVE])
 def reset_lot_to_site_boq(lot_id: uuid.UUID, db: DbSession):
     """Delete lot-specific BOQ items and regenerate from the site BOQ."""
     count = boq_service.reset_lot_to_site_boq(db, lot_id)

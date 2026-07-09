@@ -11,6 +11,7 @@ from app.models.lot_type import LotType
 from app.models.lot import Lot
 from app.models.stage import StageMaster, ProjectStageStatus
 from app.models.access import UserProjectAccess, UserSiteAccess
+from app.models.company import Company, CompanySupplierLink
 from app.models.supplier import Supplier
 from app.models.item import ItemCategory, Item, ItemAlias
 from app.models.boq import BOQHeader, BOQSection, BOQItem
@@ -58,6 +59,8 @@ from app.models.workshop import (
 )
 
 __all__ = [
+    "Company",
+    "CompanySupplierLink",
     "User",
     "Project",
     "Site",

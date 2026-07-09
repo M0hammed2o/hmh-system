@@ -147,6 +147,8 @@ def create_request(
             unit=getattr(item_data, "unit", None),
             over_boq_quantity=over_qty,
             remarks=getattr(item_data, "remarks", None),
+            extra_reason_type=getattr(item_data, "extra_reason_type", None),
+            extra_reason_notes=getattr(item_data, "extra_reason_notes", None),
         )
         db.add(mr_item)
 

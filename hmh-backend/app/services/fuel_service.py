@@ -65,8 +65,15 @@ def create_fuel_log(
         fuel_date=_fuel_date,
         log_date=_fuel_date.date() if hasattr(_fuel_date, "date") else _fuel_date,  # legacy NOT NULL col
         odometer_reading=getattr(data, "odometer_reading", None),
+        hours_reading=getattr(data, "hours_reading", None),
+        hours_operated=getattr(data, "hours_operated", None),
         notes=data.notes,
     )
+    # ── Hours-based consumption for machines ──────────────────────────────────
+    hrs_operated = getattr(data, "hours_operated", None)
+    if hrs_operated and float(hrs_operated) > 0 and data.litres > 0:
+        log.fuel_per_hour = round(data.litres / float(hrs_operated), 3)
+
     # ── Consumption calculation from previous odometer reading ──────────────
     # Find the most recent fuel log for the same vehicle (if vehicle linked)
     if _fuel_date and data.vehicle_id and _fuel_date and getattr(data, "odometer_reading", None):

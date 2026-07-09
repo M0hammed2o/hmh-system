@@ -67,6 +67,7 @@ from app.api.v1.projects import router as projects_router
 from app.api.v1.sites import project_sites_router, sites_router
 from app.api.v1.lots import project_lots_router, lots_router
 from app.api.v1.stages import stages_router, project_stages_router
+from app.api.v1.companies import router as companies_router
 from app.api.v1.suppliers import router as suppliers_router
 from app.api.v1.items import router as items_router, categories_router
 from app.api.v1.boq import (
@@ -287,6 +288,7 @@ app.include_router(project_lots_router, prefix="/api/v1")
 app.include_router(lots_router, prefix="/api/v1")
 app.include_router(stages_router, prefix="/api/v1")
 app.include_router(project_stages_router, prefix="/api/v1")
+app.include_router(companies_router, prefix="/api/v1")
 app.include_router(suppliers_router, prefix="/api/v1")
 app.include_router(items_router, prefix="/api/v1")
 app.include_router(categories_router, prefix="/api/v1")
@@ -411,6 +413,75 @@ async def internal_process_notifications(request: Request):
                   result.get("sent", 0), result.get("mock_sent", 0),
                   result.get("failed", 0), result.get("skipped", 0))
         return JSONResponse(result)
+    except Exception:
+        _db.rollback()
+        raise
+    finally:
+        _db.close()
+
+
+# ── Internal: send daily WhatsApp summary ────────────────────────────────────
+
+@app.post("/api/v1/internal/send-daily-summary", include_in_schema=False)
+async def internal_send_daily_summary(request: Request):
+    """
+    Cron-triggered daily WhatsApp summary (6 pm).
+
+    Protected by X-Cron-Secret header (same CRON_SECRET as process-notifications).
+    Call via Windows Task Scheduler / server cron at 18:00 daily:
+
+      Invoke-WebRequest -Uri http://localhost:8000/api/v1/internal/send-daily-summary `
+          -Method POST -Headers @{"X-Cron-Secret"="<CRON_SECRET>"}
+
+    Sends to every AlertRecipient with receives_daily_summary=True.
+    """
+    if not settings.CRON_SECRET:
+        return JSONResponse({"detail": "Not found"}, status_code=404)
+
+    import secrets as _sec
+    header_secret = request.headers.get("X-Cron-Secret", "")
+    if not _sec.compare_digest(settings.CRON_SECRET, header_secret):
+        _log.warning("daily_summary_cron rejected invalid_secret ip=%s",
+                     request.client.host if request.client else "unknown")
+        return JSONResponse({"detail": "Forbidden"}, status_code=403)
+
+    from app.db.session import SessionLocal
+    from app.services.notification_service import build_daily_summary_text, enqueue_for_alert, process_queue
+    from app.services.alert_service import AlertStatus
+    from app.models.alert import SystemAlert
+    from app.models.enums import AlertSeverity, AlertType
+    from datetime import datetime, timezone
+
+    _db = SessionLocal()
+    try:
+        now = datetime.now(timezone.utc)
+        text = build_daily_summary_text(_db)
+
+        summary_alert = SystemAlert(
+            alert_type=AlertType.DAILY_SUMMARY,
+            severity=AlertSeverity.LOW,
+            title="Daily Business Summary",
+            message=text,
+            status=AlertStatus.OPEN,
+            notification_channel="whatsapp",
+            created_at=now,
+        )
+        _db.add(summary_alert)
+        _db.flush()
+
+        queued = enqueue_for_alert(_db, summary_alert)
+        counts = process_queue(_db)
+        _db.commit()
+
+        _log.info("daily_summary_cron queued=%d sent=%d mock=%d failed=%d",
+                  len(queued), counts.get("sent", 0),
+                  counts.get("mock_sent", 0), counts.get("failed", 0))
+
+        return JSONResponse({
+            "summary_preview": text[:200],
+            "recipients_queued": len(queued),
+            "send_counts": counts,
+        })
     except Exception:
         _db.rollback()
         raise

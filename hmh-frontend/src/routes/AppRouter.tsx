@@ -33,6 +33,7 @@ const LabourPage              = lazy(() => import("@/pages/LabourPage"));
 const GmailInboxPage          = lazy(() => import("@/pages/GmailInboxPage"));
 const FuelPage                = lazy(() => import("@/pages/FuelPage"));
 const SuppliersPage           = lazy(() => import("@/pages/SuppliersPage"));
+const CompaniesPage           = lazy(() => import("@/pages/CompaniesPage"));
 const SupplierProfilePage     = lazy(() => import("@/pages/SupplierProfilePage"));
 const VehiclesPage            = lazy(() => import("@/pages/VehiclesPage"));
 const WorkshopPage            = lazy(() => import("@/pages/WorkshopPage"));
@@ -154,6 +155,7 @@ export function AppRouter() {
             <Route path="fuel" element={<FuelPage />} />
             <Route path="suppliers" element={<SuppliersPage />} />
             <Route path="suppliers/:supplierId" element={<SupplierProfilePage />} />
+            <Route path="companies" element={<CompaniesPage />} />
             <Route path="vehicles" element={<VehiclesPage />} />
             <Route path="workshop" element={<WorkshopPage />} />
             <Route path="milestones" element={<MilestonesPage />} />

@@ -9,6 +9,14 @@ from pydantic import BaseModel, ConfigDict, field_validator
 from app.models.enums import ProjectStatus
 
 
+class CompanyMinRead(BaseModel):
+    """Minimal company info embedded in ProjectRead — avoids circular import."""
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    name: str
+
+
 class ProjectRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -18,6 +26,8 @@ class ProjectRead(BaseModel):
     description: Optional[str] = None
     location: Optional[str] = None
     client_name: Optional[str] = None
+    company_id: Optional[uuid.UUID] = None
+    company: Optional[CompanyMinRead] = None
     start_date: Optional[date] = None
     estimated_end_date: Optional[date] = None
     go_live_date: Optional[date] = None
@@ -33,6 +43,7 @@ class ProjectCreate(BaseModel):
     description: Optional[str] = None
     location: Optional[str] = None
     client_name: Optional[str] = None
+    company_id: Optional[uuid.UUID] = None
     start_date: Optional[date] = None
     estimated_end_date: Optional[date] = None
     go_live_date: Optional[date] = None
@@ -52,6 +63,7 @@ class ProjectUpdate(BaseModel):
     description: Optional[str] = None
     location: Optional[str] = None
     client_name: Optional[str] = None
+    company_id: Optional[uuid.UUID] = None
     start_date: Optional[date] = None
     estimated_end_date: Optional[date] = None
     go_live_date: Optional[date] = None
