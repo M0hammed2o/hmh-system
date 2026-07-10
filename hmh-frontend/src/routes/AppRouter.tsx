@@ -33,7 +33,8 @@ const LabourPage              = lazy(() => import("@/pages/LabourPage"));
 const GmailInboxPage          = lazy(() => import("@/pages/GmailInboxPage"));
 const FuelPage                = lazy(() => import("@/pages/FuelPage"));
 const SuppliersPage           = lazy(() => import("@/pages/SuppliersPage"));
-const CompaniesPage           = lazy(() => import("@/pages/CompaniesPage"));
+const CompaniesPage             = lazy(() => import("@/pages/CompaniesPage"));
+const ProjectCostSummaryPage    = lazy(() => import("@/pages/ProjectCostSummaryPage"));
 const SupplierProfilePage     = lazy(() => import("@/pages/SupplierProfilePage"));
 const VehiclesPage            = lazy(() => import("@/pages/VehiclesPage"));
 const WorkshopPage            = lazy(() => import("@/pages/WorkshopPage"));
@@ -134,6 +135,7 @@ export function AppRouter() {
             <Route path="users" element={<UsersPage />} />
             <Route path="projects" element={<ProjectsPage />} />
             <Route path="projects/:projectId" element={<ProjectDetailPage />} />
+            <Route path="projects/:projectId/cost-summary" element={<ProjectCostSummaryPage />} />
             <Route path="lots/:lotId" element={<LotDetailPage />} />
             <Route path="boq" element={<BOQPage />} />
             <Route path="boq/:projectId/:headerId/build" element={<BOQBuilderPage />} />

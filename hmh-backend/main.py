@@ -64,6 +64,7 @@ from app.api.health import router as health_router
 from app.api.v1.auth import router as auth_router
 from app.api.v1.users import router as users_router
 from app.api.v1.projects import router as projects_router
+from app.api.v1.cost_summary import router as cost_summary_router
 from app.api.v1.sites import project_sites_router, sites_router
 from app.api.v1.lots import project_lots_router, lots_router
 from app.api.v1.stages import stages_router, project_stages_router
@@ -282,6 +283,7 @@ app.include_router(health_router)
 app.include_router(auth_router, prefix="/api/v1")
 app.include_router(users_router, prefix="/api/v1")
 app.include_router(projects_router, prefix="/api/v1")
+app.include_router(cost_summary_router, prefix="/api/v1")
 app.include_router(project_sites_router, prefix="/api/v1")
 app.include_router(sites_router, prefix="/api/v1")
 app.include_router(project_lots_router, prefix="/api/v1")

@@ -11,11 +11,11 @@
  */
 
 import { useEffect, useCallback, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, Link } from "react-router-dom";
 import { useAuthContext } from "@/context/AuthContext";
 import {
   FileSpreadsheet, TrendingUp, Building2, Package, Users,
-  Wrench, ChevronRight, RefreshCw, AlertTriangle, CheckCircle2,
+  Wrench, ChevronRight, RefreshCw, AlertTriangle, CheckCircle2, BarChart2,
   RotateCcw, ExternalLink, Download, Printer, HardHat,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -536,6 +536,21 @@ export default function BOQPage() {
             service={masterSummary.service_total}
             canSeeTotals={canSeeTotals}
           />
+
+          {selectedProjectId && (
+            <Link to={`/projects/${selectedProjectId}/cost-summary`}>
+              <div className="bg-primary/5 border border-primary/20 rounded-xl px-5 py-3 flex items-center justify-between hover:bg-primary/10 transition-colors cursor-pointer">
+                <div className="flex items-center gap-2.5">
+                  <BarChart2 className="w-4 h-4 text-primary" />
+                  <div>
+                    <p className="text-sm font-semibold text-primary">Full Project Cost Summary</p>
+                    <p className="text-xs text-muted-foreground">BOQ + procurement + labour + fuel + vehicle repairs + extra/breakage costs</p>
+                  </div>
+                </div>
+                <ChevronRight className="w-4 h-4 text-primary" />
+              </div>
+            </Link>
+          )}
 
           <div>
             <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">

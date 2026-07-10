@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import {
   ArrowLeft, Plus, MapPin, Calendar, Building2, Pencil, Layers, Wand2,
-  FileSpreadsheet, ChevronRight, Copy, Trash2, Tag, X, Check, Zap, Warehouse,
+  FileSpreadsheet, ChevronRight, Copy, Trash2, Tag, X, Check, Zap, Warehouse, BarChart2,
 } from "lucide-react";
 import { SitesBulkCreateModal } from "@/components/SitesBulkCreateModal";
 import { LotsGeneratorModal } from "@/components/LotsGeneratorModal";
@@ -1098,6 +1098,12 @@ export default function ProjectDetailPage() {
               <Badge variant={projectStatusVariant[project.status]}>
                 {projectStatusLabel[project.status]}
               </Badge>
+              <Link to={`/projects/${project.id}/cost-summary`}>
+                <Button size="sm" variant="outline">
+                  <BarChart2 className="w-3.5 h-3.5" />
+                  Cost Summary
+                </Button>
+              </Link>
               <Button size="sm" variant="outline" onClick={() => setShowEditProject(true)}>
                 <Pencil className="w-3.5 h-3.5" />
                 Edit
