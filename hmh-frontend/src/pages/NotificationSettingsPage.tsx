@@ -7,7 +7,7 @@
 import React, { useEffect, useState } from "react";
 import {
   Plus, Trash2, Send, CheckCircle2, AlertTriangle,
-  MessageSquare, RefreshCw, Edit2, X,
+  MessageSquare, RefreshCw, Edit2, X, Clock,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -180,6 +180,8 @@ export default function NotificationSettingsPage() {
   const [editTarget, setEditTarget] = useState<AlertRecipient | null>(null);
   const [testingId, setTestingId]   = useState<string | null>(null);
   const [testResult, setTestResult] = useState<Record<string, string>>({});
+  const [sendingSummary, setSendingSummary] = useState(false);
+  const [summaryResult, setSummaryResult]   = useState<string | null>(null);
 
   const loadAll = async () => {
     setLoading(true);
@@ -212,6 +214,19 @@ export default function NotificationSettingsPage() {
     } catch {
       setTestResult(prev => ({ ...prev, [id]: "Test failed" }));
     } finally { setTestingId(null); }
+  };
+
+  const handleTriggerSummary = async () => {
+    setSendingSummary(true);
+    setSummaryResult(null);
+    try {
+      const result = await notificationSettingsApi.triggerDailySummary();
+      setSummaryResult(`Sent to ${result.queued} recipient(s) — ${result.sent} sent, ${result.mock_sent} mock, ${result.failed} failed.`);
+    } catch {
+      setSummaryResult("Failed to trigger summary.");
+    } finally {
+      setSendingSummary(false);
+    }
   };
 
   const handleSaved = (r: AlertRecipient) => {
@@ -273,9 +288,24 @@ export default function NotificationSettingsPage() {
           <input type="checkbox" checked={showInactive} onChange={e => setShowInactive(e.target.checked)} className="accent-primary" />
           Show inactive recipients
         </label>
-        <Button size="sm" variant="outline" onClick={loadAll}>
-          <RefreshCw className="w-3.5 h-3.5 mr-1" />Refresh
-        </Button>
+        <div className="flex items-center gap-2 flex-wrap">
+          <Button size="sm" variant="outline" onClick={loadAll}>
+            <RefreshCw className="w-3.5 h-3.5 mr-1" />Refresh
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={handleTriggerSummary}
+            disabled={sendingSummary}
+            className="border-amber-400 text-amber-700 hover:bg-amber-50 dark:text-amber-400 dark:hover:bg-amber-950/30"
+          >
+            <Clock className="w-3.5 h-3.5 mr-1" />
+            {sendingSummary ? "Sending…" : "Send Daily Summary Now"}
+          </Button>
+          {summaryResult && (
+            <span className="text-xs text-muted-foreground">{summaryResult}</span>
+          )}
+        </div>
       </div>
 
       {/* Recipients table */}

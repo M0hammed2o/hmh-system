@@ -13,7 +13,7 @@ export const ALERT_CATEGORIES = [
   { key: "receives_material_alerts",    label: "Materials",   description: "Stock shortages and overuse" },
   { key: "receives_invoice_alerts",     label: "Invoices",    description: "Invoice issues and mismatches" },
   { key: "receives_vehicle_alerts",     label: "Vehicles",    description: "Fleet repairs and fuel" },
-  { key: "receives_daily_summary",      label: "Daily Summary", description: "Morning digest" },
+  { key: "receives_daily_summary",      label: "Daily Summary", description: "6pm evening summary" },
 ] as const;
 
 export type AlertCategoryKey = typeof ALERT_CATEGORIES[number]["key"];
@@ -108,6 +108,13 @@ export const notificationSettingsApi = {
 
   getQueueStats: async (): Promise<QueueStats> => {
     const res = await client.get<{ data: QueueStats }>("/notification-settings/queue-stats");
+    return res.data.data;
+  },
+
+  triggerDailySummary: async (): Promise<{ queued: number; sent: number; mock_sent: number; failed: number }> => {
+    const res = await client.post<{ data: { queued: number; sent: number; mock_sent: number; failed: number }; message: string }>(
+      "/notification-settings/trigger-daily-summary"
+    );
     return res.data.data;
   },
 };

@@ -263,3 +263,49 @@ def queue_stats(db: DbSession):
         "acknowledged": counts.get("ACKNOWLEDGED", 0),
         "total":        sum(counts.values()),
     })
+
+
+# ── Trigger daily summary (authenticated, for testing from UI) ────────────────
+
+@router.post("/trigger-daily-summary", response_model=ApiSuccess[dict], dependencies=[OFFICE_AND_ABOVE])
+def trigger_daily_summary(db: DbSession):
+    """
+    Manually trigger the 6pm daily summary right now.
+    Builds the summary text and sends to all recipients with receives_daily_summary=True.
+    Useful for testing the summary before the automated 6pm cron fires.
+    """
+    from app.models.alert import SystemAlert
+    from app.models.alert_recipient import AlertRecipient
+    from app.models.enums import AlertType, AlertSeverity, NotificationChannel
+    from app.services.notification_service import build_daily_summary_text, enqueue_for_alert, process_queue
+
+    recipients = (
+        db.query(AlertRecipient)
+        .filter(AlertRecipient.is_active == True, AlertRecipient.receives_daily_summary == True)  # noqa: E712
+        .all()
+    )
+    if not recipients:
+        return ApiSuccess(data={"queued": 0, "sent": 0}, message="No recipients have Daily Summary enabled.")
+
+    text = build_daily_summary_text(db)
+    alert = SystemAlert(
+        alert_type=AlertType.DAILY_SUMMARY,
+        severity=AlertSeverity.LOW,
+        title="Daily Summary",
+        message=text,
+        notification_channel=NotificationChannel.WHATSAPP,
+    )
+    db.add(alert)
+    db.flush()
+
+    queued = 0
+    for r in recipients:
+        enqueue_for_alert(db, alert, r)
+        queued += 1
+    db.commit()
+
+    sent, mock, failed = process_queue(db)
+    return ApiSuccess(
+        data={"queued": queued, "sent": sent, "mock_sent": mock, "failed": failed},
+        message=f"Daily summary sent to {queued} recipient(s).",
+    )
