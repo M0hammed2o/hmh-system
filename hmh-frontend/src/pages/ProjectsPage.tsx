@@ -12,7 +12,6 @@ import { PageHeader } from "@/components/shared/PageHeader";
 import { StatCard } from "@/components/shared/StatCard";
 import { Modal } from "@/components/shared/Modal";
 import { projectsApi, type Project, type ProjectCreate, type ProjectStatus } from "@/api/projects";
-import { companiesApi, type Company } from "@/api/companies";
 import { formatDate } from "@/lib/format";
 
 const statusVariant: Record<ProjectStatus, "success" | "default" | "secondary" | "outline"> = {
@@ -40,15 +39,10 @@ function CreateProjectModal({ onClose, onCreated }: CreateProjectModalProps) {
   const [form, setForm] = useState<ProjectCreate>({
     name: "", code: "", client_name: "", location: "",
     start_date: "", estimated_end_date: "", description: "",
-    status: "PLANNED", company_id: null,
+    status: "PLANNED",
   });
-  const [companies, setCompanies] = useState<Company[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-
-  useEffect(() => {
-    companiesApi.list().then(setCompanies).catch(() => {});
-  }, []);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -64,7 +58,6 @@ function CreateProjectModal({ onClose, onCreated }: CreateProjectModalProps) {
         estimated_end_date: form.estimated_end_date || null,
         description: form.description || null,
         status: form.status,
-        company_id: form.company_id || null,
       });
       onCreated(created);
     } catch (err: unknown) {
@@ -102,12 +95,20 @@ function CreateProjectModal({ onClose, onCreated }: CreateProjectModalProps) {
         </div>
         <div className="grid grid-cols-2 gap-4">
           <div className="space-y-2">
-            <Label>Client Name</Label>
-            <Input
+            <Label className="flex items-center gap-1.5">
+              <Building2 className="w-3.5 h-3.5" />
+              Company
+            </Label>
+            <select
               value={form.client_name ?? ""}
               onChange={(e) => setForm({ ...form, client_name: e.target.value })}
-              placeholder="e.g. Housing Development Agency"
-            />
+              required
+              className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+            >
+              <option value="">— Select company —</option>
+              <option value="HMH Group">HMH Group</option>
+              <option value="Minerat Construction &amp; Civils">Minerat Construction &amp; Civils</option>
+            </select>
           </div>
           <div className="space-y-2">
             <Label>Location</Label>
@@ -117,28 +118,6 @@ function CreateProjectModal({ onClose, onCreated }: CreateProjectModalProps) {
               placeholder="e.g. Cosmo City, Johannesburg"
             />
           </div>
-        </div>
-        <div className="space-y-2">
-          <Label className="flex items-center gap-1">
-            <Building2 className="w-3.5 h-3.5" />
-            Linked Company
-            <span className="text-muted-foreground font-normal ml-1">(restricts procurement suppliers)</span>
-          </Label>
-          <select
-            value={form.company_id ?? ""}
-            onChange={(e) => setForm({ ...form, company_id: e.target.value || null })}
-            className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
-          >
-            <option value="">— No company (all suppliers available) —</option>
-            {companies.map((c) => (
-              <option key={c.id} value={c.id}>{c.name}</option>
-            ))}
-          </select>
-          {companies.length === 0 && (
-            <p className="text-xs text-muted-foreground">
-              No companies created yet. Add companies in Settings → Companies.
-            </p>
-          )}
         </div>
         <div className="grid grid-cols-2 gap-4">
           <div className="space-y-2">
@@ -343,12 +322,9 @@ export default function ProjectsPage() {
                         </span>
                       )}
                       {project.client_name && (
-                        <span>Client: {project.client_name}</span>
-                      )}
-                      {project.company && (
                         <span className="flex items-center gap-1">
                           <Building2 className="w-3 h-3" />
-                          {project.company.name}
+                          {project.client_name}
                         </span>
                       )}
                     </div>

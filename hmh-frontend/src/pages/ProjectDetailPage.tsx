@@ -154,7 +154,21 @@ function EditProjectModal({
           {field("Project Code", "code", { mono: true })}
         </div>
         <div className="grid grid-cols-2 gap-4">
-          {field("Client Name", "client_name")}
+          <div className="space-y-2">
+            <Label className="flex items-center gap-1.5">
+              <Building2 className="w-3.5 h-3.5" />
+              Company
+            </Label>
+            <select
+              value={(form.client_name as string) ?? ""}
+              onChange={(e) => setForm({ ...form, client_name: e.target.value })}
+              className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+            >
+              <option value="">— Select company —</option>
+              <option value="HMH Group">HMH Group</option>
+              <option value="Minerat Construction &amp; Civils">Minerat Construction &amp; Civils</option>
+            </select>
+          </div>
           {field("Location", "location")}
         </div>
         <div className="grid grid-cols-2 gap-4">

@@ -610,8 +610,8 @@ function CreateMRModal({ projectId: defaultProjectId, sites, isMainWarehouse = f
 
 // ── MR Detail Modal ───────────────────────────────────────────────────────────
 
-function MRDetailModal({ mr, suppliers, onClose, onUpdated }: {
-  mr: MaterialRequest; suppliers: Supplier[]; onClose: () => void; onUpdated: () => void;
+function MRDetailModal({ mr, suppliers, defaultIssuingCompany, onClose, onUpdated }: {
+  mr: MaterialRequest; suppliers: Supplier[]; defaultIssuingCompany?: string; onClose: () => void; onUpdated: () => void;
 }) {
   const { role, user } = useAuthContext();
   const isProcurementLead = role === "PROCUREMENT_LEAD" || role === "OWNER";
@@ -619,7 +619,7 @@ function MRDetailModal({ mr, suppliers, onClose, onUpdated }: {
   const [error, setError] = useState("");
   const [result, setResult] = useState("");
   const [overBoqReason, setOverBoqReason] = useState("");
-  const [issuingCompany, setIssuingCompany] = useState("HMH_GROUP");
+  const [issuingCompany, setIssuingCompany] = useState(defaultIssuingCompany ?? "HMH_GROUP");
   const [showReject, setShowReject] = useState(false);
   const [rejectReason, setRejectReason] = useState("");
   const [showConvert, setShowConvert] = useState(false);
@@ -1315,9 +1315,17 @@ function BOQVarianceBadge({ pct }: { pct: number | null | undefined }) {
   return <span className={cn("text-[10px] font-semibold border rounded px-1.5 py-0.5", color)}>{pct > 0 ? "+" : ""}{pct.toFixed(1)}% BOQ</span>;
 }
 
-function PipelinePanelModal({ mrId, suppliers, onClose, onUpdated }: {
+function clientNameToIssuingKey(clientName: string | null | undefined): string {
+  if (!clientName) return "HMH_GROUP";
+  const n = clientName.toLowerCase();
+  if (n.includes("minerat")) return "MINERAT";
+  return "HMH_GROUP";
+}
+
+function PipelinePanelModal({ mrId, suppliers, defaultIssuingCompany, onClose, onUpdated }: {
   mrId: string;
   suppliers: Supplier[];
+  defaultIssuingCompany?: string;
   onClose: () => void;
   onUpdated: () => void;
 }) {
@@ -1328,7 +1336,7 @@ function PipelinePanelModal({ mrId, suppliers, onClose, onUpdated }: {
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [actionError, setActionError] = useState("");
   const [overBoqReason, setOverBoqReason] = useState("");
-  const [pipelineIssuingCompany, setPipelineIssuingCompany] = useState("HMH_GROUP");
+  const [pipelineIssuingCompany, setPipelineIssuingCompany] = useState(defaultIssuingCompany ?? "HMH_GROUP");
   const [showRejectMR, setShowRejectMR] = useState(false);
   const [rejectMRReason, setRejectMRReason] = useState("");
   const [pipelineApprovals, setPipelineApprovals] = useState<MRApprovalVote[]>([]);
@@ -2782,6 +2790,7 @@ export default function ProcurementPage() {
         <PipelinePanelModal
           mrId={selectedPipelineMRId}
           suppliers={suppliers}
+          defaultIssuingCompany={clientNameToIssuingKey(projects.find(p => p.id === projectId)?.client_name)}
           onClose={() => setSelectedPipelineMRId(null)}
           onUpdated={() => { loadData(); }}
         />
