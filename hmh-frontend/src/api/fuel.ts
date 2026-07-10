@@ -38,6 +38,10 @@ export interface FuelLog {
   distance_km:      number | null;
   efficiency_kpl:   number | null;
   l_per_100km:      number | null;
+  // Machine hours (migration 0063)
+  hours_reading:    number | null;
+  hours_operated:   number | null;
+  fuel_per_hour:    number | null;
   // Evidence photos (migration 0012)
   photo_odometer: string | null;
   photo_pump:     string | null;
@@ -58,6 +62,8 @@ export interface FuelLogCreate {
   site_id?: string | null;
   fuel_date?: string | null;
   odometer_reading?: number | null;
+  hours_reading?:    number | null;
+  hours_operated?:   number | null;
   notes?: string | null;
 }
 

@@ -55,6 +55,7 @@ function LogFuelModal({ open, onClose, projects, onDone }: {
   const [siteId,         setSiteId]         = useState("");
   const [fuelDate,       setFuelDate]       = useState(() => new Date().toISOString().slice(0, 10));
   const [odometer,       setOdometer]       = useState("");
+  const [hoursOperated,  setHoursOperated]  = useState("");
   const [notes,          setNotes]          = useState("");
   const [photoOdo,       setPhotoOdo]       = useState<File | null>(null);
   const [photoPump,      setPhotoPump]      = useState<File | null>(null);
@@ -88,6 +89,7 @@ function LogFuelModal({ open, onClose, projects, onDone }: {
         vehicle_id:       vehicleId || null,
         fuel_date:        fuelDate ? new Date(fuelDate).toISOString() : null,
         odometer_reading: odometer ? parseFloat(odometer) : null,
+        hours_operated:   hoursOperated ? parseFloat(hoursOperated) : null,
         notes:            notes || null,
         photo_odometer:   photoOdo,
         photo_pump:       photoPump,
@@ -159,6 +161,18 @@ function LogFuelModal({ open, onClose, projects, onDone }: {
             <input type="number" min="0" step="1" value={odometer} onChange={e => setOdometer(e.target.value)}
                    placeholder="e.g. 45230" className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm" />
           </div>
+          {(usageType === "EQUIPMENT" || usageType === "GENERATOR") && (
+            <div>
+              <label className="text-xs text-muted-foreground block mb-1">Hours Operated</label>
+              <input type="number" min="0" step="0.1" value={hoursOperated} onChange={e => setHoursOperated(e.target.value)}
+                     placeholder="e.g. 8.5" className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm" />
+              {hoursOperated && litres && (
+                <p className="text-[10px] text-muted-foreground mt-1">
+                  = {(parseFloat(litres) / parseFloat(hoursOperated)).toFixed(2)} L/hr
+                </p>
+              )}
+            </div>
+          )}
           <div>
             <label className="text-xs text-muted-foreground block mb-1">Equipment / Ref</label>
             <input type="text" value={equipmentRef} onChange={e => setEquipmentRef(e.target.value)}
@@ -300,6 +314,7 @@ export default function FuelPage() {
                   <th className="text-right px-3 py-3 font-medium text-muted-foreground">Distance</th>
                   <th className="text-right px-3 py-3 font-medium text-muted-foreground">km/L</th>
                   <th className="text-right px-3 py-3 font-medium text-muted-foreground">L/100km</th>
+                  <th className="text-right px-3 py-3 font-medium text-muted-foreground">L/hr</th>
                   <th className="text-left px-3 py-3 font-medium text-muted-foreground">Photos</th>
                   <th className="px-3 py-3 w-8 text-muted-foreground font-medium">+</th>
                   <th className="px-3 py-3 w-8" />
@@ -375,6 +390,13 @@ export default function FuelPage() {
                             {log.l_per_100km.toFixed(1)}
                           </span>
                         ) : "—"}
+                      </td>
+                      <td className="px-3 py-2.5 text-right text-xs text-muted-foreground">
+                        {log.fuel_per_hour != null
+                          ? <span className="font-medium tabular-nums">{log.fuel_per_hour.toFixed(2)}</span>
+                          : log.hours_operated != null
+                            ? <span className="tabular-nums">{(log.litres / log.hours_operated).toFixed(2)}</span>
+                            : "—"}
                       </td>
                       <td className="px-3 py-2.5">
                         <div className="flex flex-col gap-0.5">
