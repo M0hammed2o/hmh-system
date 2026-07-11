@@ -117,4 +117,11 @@ export const notificationSettingsApi = {
     );
     return res.data.data;
   },
+
+  scanPaymentDue: async (): Promise<{ warnings_queued: number; overdue_queued: number; already_notified: number; errors: number; scanned: number }> => {
+    const res = await client.post<{ data: { warnings_queued: number; overdue_queued: number; already_notified: number; errors: number; scanned: number } }>(
+      "/notification-settings/scan-payment-due"
+    );
+    return res.data.data;
+  },
 };

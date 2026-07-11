@@ -61,6 +61,15 @@ def create_invoice(
         )
 
     now = datetime.now(timezone.utc)
+    # Auto-calculate due_date from supplier payment_due_days when not provided
+    computed_due_date = data.due_date
+    if not computed_due_date and data.invoice_date:
+        from app.models.supplier import Supplier as _SupModel
+        from datetime import timedelta
+        _sup = db.get(_SupModel, data.supplier_id)
+        if _sup and _sup.payment_due_days:
+            computed_due_date = data.invoice_date + timedelta(days=_sup.payment_due_days)
+
     invoice = Invoice(
         invoice_number=data.invoice_number,
         supplier_id=data.supplier_id,
@@ -68,7 +77,7 @@ def create_invoice(
         site_id=data.site_id,
         purchase_order_id=data.purchase_order_id,
         invoice_date=data.invoice_date,
-        due_date=data.due_date,
+        due_date=computed_due_date,
         subtotal_amount=data.subtotal_amount,
         vat_amount=data.vat_amount,
         total_amount=data.total_amount,

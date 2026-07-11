@@ -7,7 +7,7 @@
 import React, { useEffect, useState } from "react";
 import {
   Plus, Trash2, Send, CheckCircle2, AlertTriangle,
-  MessageSquare, RefreshCw, Edit2, X, Clock,
+  MessageSquare, RefreshCw, Edit2, X, Clock, CreditCard,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -180,8 +180,10 @@ export default function NotificationSettingsPage() {
   const [editTarget, setEditTarget] = useState<AlertRecipient | null>(null);
   const [testingId, setTestingId]   = useState<string | null>(null);
   const [testResult, setTestResult] = useState<Record<string, string>>({});
-  const [sendingSummary, setSendingSummary] = useState(false);
-  const [summaryResult, setSummaryResult]   = useState<string | null>(null);
+  const [sendingSummary,  setSendingSummary]  = useState(false);
+  const [summaryResult,   setSummaryResult]   = useState<string | null>(null);
+  const [scanningPayment, setScanningPayment] = useState(false);
+  const [scanResult,      setScanResult]      = useState<string | null>(null);
 
   const loadAll = async () => {
     setLoading(true);
@@ -226,6 +228,21 @@ export default function NotificationSettingsPage() {
       setSummaryResult("Failed to trigger summary.");
     } finally {
       setSendingSummary(false);
+    }
+  };
+
+  const handleScanPaymentDue = async () => {
+    setScanningPayment(true);
+    setScanResult(null);
+    try {
+      const result = await notificationSettingsApi.scanPaymentDue();
+      setScanResult(
+        `Scanned ${result.scanned} invoices — ${result.warnings_queued} due-soon alerts, ${result.overdue_queued} overdue alerts, ${result.already_notified} already notified.`
+      );
+    } catch {
+      setScanResult("Payment due scan failed.");
+    } finally {
+      setScanningPayment(false);
     }
   };
 
@@ -304,6 +321,19 @@ export default function NotificationSettingsPage() {
           </Button>
           {summaryResult && (
             <span className="text-xs text-muted-foreground">{summaryResult}</span>
+          )}
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={handleScanPaymentDue}
+            disabled={scanningPayment}
+            className="border-blue-400 text-blue-700 hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-950/30"
+          >
+            <CreditCard className="w-3.5 h-3.5 mr-1" />
+            {scanningPayment ? "Scanning…" : "Scan Payment Due Now"}
+          </Button>
+          {scanResult && (
+            <span className="text-xs text-muted-foreground">{scanResult}</span>
           )}
         </div>
       </div>

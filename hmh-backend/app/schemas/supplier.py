@@ -20,6 +20,7 @@ class SupplierRead(BaseModel):
     whatsapp_number: Optional[str] = None
     vat_number: Optional[str] = None
     payment_terms: Optional[str] = None
+    payment_due_days: Optional[int] = None
     notes: Optional[str] = None
     customer_account_code: Optional[str] = None
     is_active: bool
@@ -40,6 +41,7 @@ class SupplierCreate(BaseModel):
     whatsapp_number: Optional[str] = None
     vat_number: Optional[str] = None
     payment_terms: Optional[str] = None
+    payment_due_days: Optional[int] = None
     notes: Optional[str] = None
     customer_account_code: Optional[str] = None
     # Defaults to False so quick-create forms don't require a VAT number.
@@ -84,6 +86,7 @@ class SupplierUpdate(BaseModel):
     whatsapp_number: Optional[str] = None
     vat_number: Optional[str] = None
     payment_terms: Optional[str] = None
+    payment_due_days: Optional[int] = None
     notes: Optional[str] = None
     customer_account_code: Optional[str] = None
     is_active: Optional[bool] = None

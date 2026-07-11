@@ -26,8 +26,10 @@ import {
   Package, ArrowRight, ArrowLeft, RefreshCw, History,
   AlertTriangle, X, Truck, ChevronDown, ChevronUp,
   Warehouse, Clock, CheckCircle2, Plus, SlidersHorizontal,
+  SendHorizonal, Vote, ShieldCheck,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PageHeader } from "@/components/shared/PageHeader";
 import { projectsApi, type Project } from "@/api/projects";
@@ -39,6 +41,11 @@ import {
   type WarehouseStockItem,
   type WarehouseMovement,
 } from "@/api/warehouse";
+import {
+  warehouseTransfersApi,
+  type WarehouseTransferRequest,
+} from "@/api/warehouseTransfers";
+import { useAuthContext } from "@/context/AuthContext";
 import { cn } from "@/lib/utils";
 import { formatDate } from "@/lib/format";
 
@@ -662,10 +669,289 @@ function ShortageAlerts({
   );
 }
 
+// ── Request Project Transfer Modal ───────────────────────────────────────────
+
+function RequestTransferModal({
+  fromProjectId,
+  projects,
+  stock,
+  onClose,
+  onDone,
+}: {
+  fromProjectId: string;
+  projects: Project[];
+  stock: WarehouseStockItem[];
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [toProjectId, setToProjectId] = useState("");
+  const [itemId,      setItemId]      = useState(stock[0]?.item_id ?? "");
+  const [quantity,    setQuantity]    = useState("");
+  const [reason,      setReason]      = useState("");
+  const [notes,       setNotes]       = useState("");
+  const [loading,     setLoading]     = useState(false);
+  const [error,       setError]       = useState("");
+
+  const selectedItem = stock.find(s => s.item_id === itemId);
+  const otherProjects = projects.filter(p => p.id !== fromProjectId);
+
+  const submit = async () => {
+    const qty = parseFloat(quantity);
+    if (!toProjectId)     { setError("Select a destination project."); return; }
+    if (!itemId)          { setError("Select an item."); return; }
+    if (!qty || qty <= 0) { setError("Enter a valid quantity."); return; }
+    if (!reason.trim())   { setError("Provide a reason for the transfer."); return; }
+    setLoading(true); setError("");
+    try {
+      await warehouseTransfersApi.submitRequest(fromProjectId, {
+        to_project_id: toProjectId,
+        item_id: itemId,
+        quantity: qty,
+        reason: reason.trim(),
+        notes: notes.trim() || undefined,
+      });
+      onDone(); onClose();
+    } catch (err: unknown) {
+      const d = (err as { response?: { data?: { detail?: string; message?: string } } })?.response?.data;
+      setError(d?.message ?? d?.detail ?? "Transfer request failed.");
+    } finally { setLoading(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
+      <div className="bg-card border border-border rounded-2xl w-full max-w-md p-6 space-y-4" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="font-semibold text-base">Request Project Transfer</h3>
+            <p className="text-xs text-muted-foreground mt-0.5">Requires 3 office approvals before stock moves</p>
+          </div>
+          <button onClick={onClose}><X className="w-4 h-4 text-muted-foreground" /></button>
+        </div>
+
+        <div className="space-y-3">
+          <div>
+            <label className="text-xs text-muted-foreground block mb-1">Destination project</label>
+            <select value={toProjectId} onChange={e => setToProjectId(e.target.value)}
+              className="w-full h-10 rounded-md border border-input bg-background px-3 text-sm">
+              <option value="">— Select project —</option>
+              {otherProjects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+          </div>
+
+          <div>
+            <label className="text-xs text-muted-foreground block mb-1">Item</label>
+            {stock.length === 0 ? (
+              <p className="text-xs text-muted-foreground bg-muted/40 rounded-md px-3 py-2.5">No stock in warehouse.</p>
+            ) : (
+              <select value={itemId} onChange={e => setItemId(e.target.value)}
+                className="w-full h-10 rounded-md border border-input bg-background px-3 text-sm">
+                {stock.map(s => (
+                  <option key={s.item_id} value={s.item_id}>
+                    {s.item_name} — {fmt(s.on_hand)} {s.unit ?? ""} available
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
+
+          {selectedItem && (
+            <div>
+              <label className="text-xs text-muted-foreground block mb-1">
+                Quantity ({selectedItem.unit ?? "units"})
+              </label>
+              <input type="number" min="0.001" step="any" max={selectedItem.on_hand}
+                value={quantity} onChange={e => setQuantity(e.target.value)}
+                placeholder={`Max ${fmt(selectedItem.on_hand)}`}
+                className="w-full h-10 rounded-md border border-input bg-background px-3 text-sm" />
+            </div>
+          )}
+
+          <div>
+            <label className="text-xs text-muted-foreground block mb-1">Reason <span className="text-destructive">*</span></label>
+            <textarea value={reason} onChange={e => setReason(e.target.value)} rows={2}
+              placeholder="e.g. Excess stock no longer needed on this project"
+              className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm resize-none" />
+          </div>
+
+          <div>
+            <label className="text-xs text-muted-foreground block mb-1">Additional notes (optional)</label>
+            <input type="text" value={notes} onChange={e => setNotes(e.target.value)}
+              placeholder="Any extra details"
+              className="w-full h-10 rounded-md border border-input bg-background px-3 text-sm" />
+          </div>
+        </div>
+
+        {error && <p className="text-xs text-destructive bg-destructive/10 rounded-lg px-3 py-2">{error}</p>}
+
+        <div className="bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 rounded-lg px-3 py-2">
+          <p className="text-xs text-amber-700 dark:text-amber-400">
+            This request will be sent to the office for approval. Stock will only move once 3 approvals are received (or overridden by the owner).
+          </p>
+        </div>
+
+        <div className="flex gap-2 pt-1">
+          <Button onClick={submit} disabled={loading || stock.length === 0} className="flex-1">
+            <SendHorizonal className="w-3.5 h-3.5" />
+            {loading ? "Submitting…" : "Submit Request"}
+          </Button>
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Transfer Requests Panel ───────────────────────────────────────────────────
+
+function TransferRequestsPanel({
+  transfers,
+  onVote,
+  onOverride,
+  onReject,
+  role,
+}: {
+  transfers: WarehouseTransferRequest[];
+  onVote: (id: string) => void;
+  onOverride: (id: string) => void;
+  onReject: (id: string, reason: string) => void;
+  role: string;
+}) {
+  const [rejectId,     setRejectId]     = useState<string | null>(null);
+  const [rejectReason, setRejectReason] = useState("");
+  const [rejectLoading, setRejectLoading] = useState(false);
+
+  const isOffice = ["OWNER", "OFFICE_ADMIN", "OFFICE_USER", "PROCUREMENT_LEAD"].includes(role);
+  const isOwner  = role === "OWNER";
+
+  const statusBadge = (status: string) => {
+    if (status === "EXECUTED") return <Badge variant="success">Executed</Badge>;
+    if (status === "REJECTED") return <Badge variant="destructive">Rejected</Badge>;
+    return <Badge variant="secondary">Pending Approval</Badge>;
+  };
+
+  return (
+    <div className="bg-card border border-border rounded-xl overflow-hidden">
+      <div className="px-4 py-3 border-b border-border bg-muted/30 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <SendHorizonal className="w-4 h-4 text-primary" />
+          <span className="text-sm font-semibold">Project Transfer Requests</span>
+          {transfers.filter(t => t.status === "PENDING").length > 0 && (
+            <span className="text-xs bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-400 rounded-full px-2 py-0.5 font-medium">
+              {transfers.filter(t => t.status === "PENDING").length} pending
+            </span>
+          )}
+        </div>
+      </div>
+
+      {transfers.length === 0 ? (
+        <p className="text-xs text-muted-foreground text-center px-4 py-6">No transfer requests for this project.</p>
+      ) : (
+        <div className="divide-y divide-border/40">
+          {transfers.map(tr => (
+            <div key={tr.id} className="p-4 space-y-3">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <p className="text-sm font-medium">{tr.item_name ?? "Unknown item"}</p>
+                    {statusBadge(tr.status)}
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    {fmt(tr.quantity)} {tr.unit ?? ""} · From: <span className="font-medium">{tr.from_project_name}</span>
+                    {" → "}To: <span className="font-medium">{tr.to_project_name}</span>
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    Requested by {tr.requested_by_name ?? "—"} · {formatDate(tr.requested_at)}
+                  </p>
+                  <p className="text-xs text-foreground/80 mt-1 italic">"{tr.reason}"</p>
+                </div>
+              </div>
+
+              {tr.status === "PENDING" && (
+                <>
+                  {/* Vote progress */}
+                  <div className="space-y-1.5">
+                    <div className="flex justify-between text-[11px] text-muted-foreground">
+                      <span>Approvals</span>
+                      <span>{tr.vote_count} / {tr.votes_required}</span>
+                    </div>
+                    <div className="h-1.5 bg-muted rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-primary rounded-full transition-all"
+                        style={{ width: `${Math.min((tr.vote_count / tr.votes_required) * 100, 100)}%` }}
+                      />
+                    </div>
+                    {tr.votes.map(v => (
+                      <div key={v.id} className="flex items-center gap-1.5 text-[11px]">
+                        <CheckCircle2 className="w-3 h-3 text-green-500 shrink-0" />
+                        <span>{v.voted_by_name ?? "—"}</span>
+                        {v.is_override && <span className="text-amber-600 text-[10px]">(override)</span>}
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Actions */}
+                  {isOffice && (
+                    <div className="flex gap-2 flex-wrap">
+                      <Button size="sm" variant="outline" className="h-7 text-xs gap-1"
+                        onClick={() => onVote(tr.id)}>
+                        <Vote className="w-3 h-3" />Approve
+                      </Button>
+                      {isOwner && (
+                        <Button size="sm" variant="outline" className="h-7 text-xs gap-1 border-amber-500 text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-950/20"
+                          onClick={() => onOverride(tr.id)}>
+                          <ShieldCheck className="w-3 h-3" />Override
+                        </Button>
+                      )}
+                      <Button size="sm" variant="ghost" className="h-7 text-xs text-destructive hover:text-destructive"
+                        onClick={() => setRejectId(tr.id)}>
+                        Reject
+                      </Button>
+                    </div>
+                  )}
+                </>
+              )}
+
+              {tr.status === "REJECTED" && tr.rejection_reason && (
+                <p className="text-xs text-destructive bg-destructive/10 rounded px-2 py-1">
+                  Rejected: {tr.rejection_reason}
+                </p>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Inline reject dialog */}
+      {rejectId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setRejectId(null)}>
+          <div className="bg-card border border-border rounded-2xl w-full max-w-sm p-5 space-y-4" onClick={e => e.stopPropagation()}>
+            <h3 className="font-semibold text-sm">Reject Transfer Request</h3>
+            <textarea value={rejectReason} onChange={e => setRejectReason(e.target.value)} rows={3}
+              placeholder="Reason for rejection"
+              className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm resize-none" />
+            <div className="flex gap-2">
+              <Button size="sm" variant="destructive" disabled={!rejectReason.trim() || rejectLoading}
+                onClick={async () => {
+                  setRejectLoading(true);
+                  await onReject(rejectId, rejectReason.trim());
+                  setRejectId(null); setRejectReason(""); setRejectLoading(false);
+                }}>
+                {rejectLoading ? "Rejecting…" : "Confirm Reject"}
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => setRejectId(null)}>Cancel</Button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function ProjectWarehousePage() {
   const [searchParams] = useSearchParams();
+  const { role } = useAuthContext();
   const [projects,   setProjects]   = useState<Project[]>([]);
   const [sites,      setSites]      = useState<Site[]>([]);
   const [projectId,  setProjectId]  = useState(searchParams.get("project") ?? "");
@@ -674,15 +960,17 @@ export default function ProjectWarehousePage() {
   const [deliveries, setDeliveries] = useState<Delivery[]>([]);
   const [mrs,        setMRs]        = useState<MaterialRequest[]>([]);
   const [history,    setHistory]    = useState<WarehouseMovement[]>([]);
+  const [transfers,  setTransfers]  = useState<WarehouseTransferRequest[]>([]);
   const [loading,    setLoading]    = useState(false);
   const [showHist,   setShowHist]   = useState(false);
   const [histLoad,   setHistLoad]   = useState(false);
   const [error,      setError]      = useState("");
 
-  const [dispatchItem,     setDispatchItem]     = useState<WarehouseStockItem | null>(null);
-  const [showReturn,       setShowReturn]       = useState(false);
-  const [showAddMaterial,  setShowAddMaterial]  = useState(false);
-  const [adjustItem,       setAdjustItem]       = useState<WarehouseStockItem | null>(null);
+  const [dispatchItem,    setDispatchItem]    = useState<WarehouseStockItem | null>(null);
+  const [showReturn,      setShowReturn]      = useState(false);
+  const [showAddMaterial, setShowAddMaterial] = useState(false);
+  const [adjustItem,      setAdjustItem]      = useState<WarehouseStockItem | null>(null);
+  const [showTransfer,    setShowTransfer]    = useState(false);
 
   useEffect(() => {
     projectsApi.list(1, 100, "ACTIVE").then(r => {
@@ -701,14 +989,16 @@ export default function ProjectWarehousePage() {
     if (!projectId) return;
     setLoading(true); setError("");
     try {
-      const [s, d, m] = await Promise.all([
+      const [s, d, m, t] = await Promise.all([
         warehouseApi.getMainStock(projectId),
         deliveriesApi.list(projectId),
         materialRequestsApi.list(projectId),
+        warehouseTransfersApi.listForProject(projectId),
       ]);
       setStock(s);
       setDeliveries(d);
       setMRs(m);
+      setTransfers(t);
     } catch { setError("Failed to load project warehouse data."); }
     finally { setLoading(false); }
   }, [projectId]);
@@ -735,7 +1025,7 @@ export default function ProjectWarehousePage() {
         description="Operational stock for each project — incoming, on-hand, dispatch queue, and history."
         actions={
           projectId ? (
-            <div className="flex gap-2">
+            <div className="flex gap-2 flex-wrap">
               <Button size="sm" variant="outline"
                 onClick={() => setShowAddMaterial(true)}>
                 <Plus className="w-4 h-4" />Add Material
@@ -743,6 +1033,10 @@ export default function ProjectWarehousePage() {
               <Button size="sm" variant="outline"
                 onClick={() => setShowReturn(true)} disabled={sites.length === 0}>
                 <ArrowLeft className="w-4 h-4" />Receive Return
+              </Button>
+              <Button size="sm" variant="outline"
+                onClick={() => setShowTransfer(true)} disabled={stock.length === 0}>
+                <SendHorizonal className="w-4 h-4" />Request Transfer
               </Button>
             </div>
           ) : undefined
@@ -854,6 +1148,33 @@ export default function ProjectWarehousePage() {
           {/* E) Shortages */}
           <ShortageAlerts stock={stock} mrs={mrs} />
 
+          {/* F) Transfer Requests */}
+          <TransferRequestsPanel
+            transfers={transfers}
+            role={role ?? ""}
+            onVote={async (id) => {
+              try { await warehouseTransfersApi.castVote(id); await loadAll(); }
+              catch (e: unknown) {
+                const d = (e as { response?: { data?: { message?: string } } })?.response?.data;
+                alert(d?.message ?? "Vote failed.");
+              }
+            }}
+            onOverride={async (id) => {
+              try { await warehouseTransfersApi.overrideApprove(id, "Owner override"); await loadAll(); }
+              catch (e: unknown) {
+                const d = (e as { response?: { data?: { message?: string } } })?.response?.data;
+                alert(d?.message ?? "Override failed.");
+              }
+            }}
+            onReject={async (id, reason) => {
+              try { await warehouseTransfersApi.reject(id, reason); await loadAll(); }
+              catch (e: unknown) {
+                const d = (e as { response?: { data?: { message?: string } } })?.response?.data;
+                alert(d?.message ?? "Reject failed.");
+              }
+            }}
+          />
+
           {/* D) Movement History */}
           <div className="bg-card border border-border rounded-xl overflow-hidden">
             <button className="w-full flex items-center justify-between px-4 py-3 hover:bg-muted/30 transition-colors"
@@ -947,6 +1268,15 @@ export default function ProjectWarehousePage() {
           projectId={projectId}
           item={adjustItem}
           onClose={() => setAdjustItem(null)}
+          onDone={loadAll}
+        />
+      )}
+      {showTransfer && projectId && (
+        <RequestTransferModal
+          fromProjectId={projectId}
+          projects={projects}
+          stock={stock}
+          onClose={() => setShowTransfer(false)}
           onDone={loadAll}
         />
       )}

@@ -1216,7 +1216,8 @@ function EditSupplierModal({
   const [whatsapp, setWhatsapp] = useState(supplier.whatsapp_number ?? "");
   const [address, setAddress] = useState(supplier.address ?? "");
   const [contactPerson, setContactPerson] = useState(supplier.contact_person ?? "");
-  const [paymentTerms, setPaymentTerms] = useState(supplier.payment_terms ?? "");
+  const [paymentTerms,   setPaymentTerms]   = useState(supplier.payment_terms ?? "");
+  const [paymentDueDays, setPaymentDueDays] = useState(supplier.payment_due_days != null ? String(supplier.payment_due_days) : "");
   const [vatNumber, setVatNumber] = useState(supplier.vat_number ?? "");
   const [notes, setNotes] = useState(supplier.notes ?? "");
   const [vatRegistered, setVatRegistered] = useState(supplier.vat_registered);
@@ -1236,6 +1237,7 @@ function EditSupplierModal({
     setAddress(supplier.address ?? "");
     setContactPerson(supplier.contact_person ?? "");
     setPaymentTerms(supplier.payment_terms ?? "");
+    setPaymentDueDays(supplier.payment_due_days != null ? String(supplier.payment_due_days) : "");
     setVatNumber(supplier.vat_number ?? "");
     setNotes(supplier.notes ?? "");
     setVatRegistered(supplier.vat_registered);
@@ -1263,6 +1265,7 @@ function EditSupplierModal({
         address: address.trim() || null,
         contact_person: contactPerson.trim() || null,
         payment_terms: paymentTerms.trim() || null,
+        payment_due_days: paymentDueDays.trim() ? parseInt(paymentDueDays, 10) : null,
         customer_account_code: accountCode.trim() || null,
         vat_number: vatNumber.trim() || null,
         notes: notes.trim() || null,
@@ -1358,6 +1361,21 @@ function EditSupplierModal({
                 onChange={(e) => setPaymentTerms(e.target.value)}
                 className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm"
                 placeholder="e.g. 30 days EOM"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-muted-foreground block mb-1">
+                Payment Due Days
+                <span className="text-muted-foreground/60 ml-1">(for automatic alerts)</span>
+              </label>
+              <input
+                type="number"
+                min="1"
+                max="365"
+                value={paymentDueDays}
+                onChange={(e) => setPaymentDueDays(e.target.value)}
+                className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm"
+                placeholder="e.g. 30"
               />
             </div>
             <div>
@@ -1650,6 +1668,9 @@ export default function SupplierProfilePage() {
           {supplier.address && <InfoRow label="Address" value={supplier.address} />}
           {supplier.payment_terms && (
             <InfoRow label="Payment Terms" value={supplier.payment_terms} />
+          )}
+          {supplier.payment_due_days != null && (
+            <InfoRow label="Payment Due" value={`Net ${supplier.payment_due_days} days`} />
           )}
           {!supplier.contact_person &&
             !supplier.email &&

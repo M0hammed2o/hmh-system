@@ -3,7 +3,7 @@
 import uuid
 from typing import Optional
 
-from sqlalchemy import Boolean, Enum, Numeric, String, Text
+from sqlalchemy import Boolean, Enum, Integer, Numeric, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -27,6 +27,7 @@ class Supplier(TimestampMixin, Base):
     whatsapp_number: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     vat_number: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     payment_terms: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    payment_due_days: Mapped[Optional[int]] = mapped_column(nullable=True)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 

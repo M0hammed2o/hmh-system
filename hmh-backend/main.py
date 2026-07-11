@@ -365,6 +365,10 @@ app.include_router(warehouse_router, prefix="/api/v1")
 app.include_router(project_warehouse_router, prefix="/api/v1")
 app.include_router(global_warehouse_router, prefix="/api/v1")
 
+from app.api.v1.warehouse_transfers import router as wt_router, project_wt_router
+app.include_router(wt_router, prefix="/api/v1")
+app.include_router(project_wt_router, prefix="/api/v1")
+
 from app.api.v1.lot_types import project_lot_types_router, lot_types_router
 app.include_router(project_lot_types_router, prefix="/api/v1")
 app.include_router(lot_types_router, prefix="/api/v1")
@@ -484,6 +488,44 @@ async def internal_send_daily_summary(request: Request):
             "recipients_queued": len(queued),
             "send_counts": counts,
         })
+    except Exception:
+        _db.rollback()
+        raise
+    finally:
+        _db.close()
+
+
+# ── Internal: scan invoices for approaching/overdue payment due dates ─────────
+
+@app.post("/api/v1/internal/scan-payment-due", include_in_schema=False)
+async def internal_scan_payment_due(request: Request):
+    """
+    Cron-triggered daily scan for invoices approaching or past their payment due date.
+
+    Protected by X-Cron-Secret. Run daily (e.g. at 08:00):
+      Invoke-WebRequest -Uri http://localhost:8000/api/v1/internal/scan-payment-due `
+          -Method POST -Headers @{"X-Cron-Secret"="<CRON_SECRET>"}
+
+    Alerts recipients with receives_payment_alerts=True or receives_invoice_alerts=True.
+    """
+    if not settings.CRON_SECRET:
+        return JSONResponse({"detail": "Not found"}, status_code=404)
+
+    import secrets as _sec2
+    header_secret = request.headers.get("X-Cron-Secret", "")
+    if not _sec2.compare_digest(settings.CRON_SECRET, header_secret):
+        _log.warning("scan_payment_due_cron rejected invalid_secret ip=%s",
+                     request.client.host if request.client else "unknown")
+        return JSONResponse({"detail": "Forbidden"}, status_code=403)
+
+    from app.db.session import SessionLocal
+    from app.services.payment_due_service import scan_payment_due
+
+    _db = SessionLocal()
+    try:
+        result = scan_payment_due(_db)
+        _log.info("scan_payment_due_cron %s", result)
+        return JSONResponse(result)
     except Exception:
         _db.rollback()
         raise

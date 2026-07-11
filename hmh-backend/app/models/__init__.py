@@ -41,6 +41,7 @@ from app.models.mr_email_log import MREmailLog
 from app.models.quotation import Quotation
 from app.models.procurement_reconciliation import ProcurementReconciliation
 from app.models.work_done import SubcontractorWorkDone
+from app.models.warehouse_transfer import WarehouseTransferRequest, WarehouseTransferVote
 from app.models.workshop import (
     WorkshopCategory,
     WorkshopItem,
@@ -127,4 +128,6 @@ __all__ = [
     "WorkshopPurchaseOrder",
     "WorkshopInvoice",
     "WorkshopDeliveryNote",
+    "WarehouseTransferRequest",
+    "WarehouseTransferVote",
 ]

@@ -13,6 +13,7 @@ export interface Supplier {
   whatsapp_number: string | null;
   vat_number: string | null;
   payment_terms: string | null;
+  payment_due_days: number | null;
   notes: string | null;
   customer_account_code: string | null;
   is_active: boolean;
@@ -43,6 +44,7 @@ export interface SupplierCreate {
   whatsapp_number?: string | null;
   vat_number?: string | null;
   payment_terms?: string | null;
+  payment_due_days?: number | null;
   notes?: string | null;
   customer_account_code?: string | null;
   vat_registered?: boolean;
@@ -60,6 +62,7 @@ export interface SupplierUpdate {
   whatsapp_number?: string | null;
   vat_number?: string | null;
   payment_terms?: string | null;
+  payment_due_days?: number | null;
   notes?: string | null;
   customer_account_code?: string | null;
   is_active?: boolean;

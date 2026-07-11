@@ -309,3 +309,16 @@ def trigger_daily_summary(db: DbSession):
         data={"queued": queued, "sent": sent, "mock_sent": mock, "failed": failed},
         message=f"Daily summary sent to {queued} recipient(s).",
     )
+
+
+# ── Trigger payment due scan (authenticated, for testing from UI) ─────────────
+
+@router.post("/scan-payment-due", response_model=ApiSuccess[dict], dependencies=[OFFICE_AND_ABOVE])
+def scan_payment_due_now(db: DbSession):
+    """
+    Manually trigger the payment-due invoice scan right now.
+    Sends PAYMENT_DUE / OVERDUE_PAYMENT alerts for invoices due within 7 days or overdue.
+    """
+    from app.services.payment_due_service import scan_payment_due
+    result = scan_payment_due(db)
+    return ApiSuccess(data=result, message="Payment due scan completed.")
