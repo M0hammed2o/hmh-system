@@ -12,6 +12,8 @@ build/
 # Env files
 .env
 .env.*
+!.env.example
+!**/.env.example
 
 # OS
 .DS_Store
@@ -27,3 +29,20 @@ credentials/
 *credentials*.json
 *service-account*.json
 *serviceaccount*.json
+
+# Local dev tools (not part of the application)
+hmh-backend/gen_invoice.py
+hmh-backend/query
+ocr_test.png
+
+# Root-level screenshot tool originals (moved to tools/screenshots/ — originals kept locally)
+/screenshot_analytics.js
+/package.json
+/package-lock.json
+
+# Screenshot tool — credentials and output
+tools/screenshots/.env
+tools/screenshots/output/
+
+# Claude Code
+.claude/scheduled_tasks.lock

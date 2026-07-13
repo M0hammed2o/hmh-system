@@ -1,0 +1,8 @@
+{
+  "name": "hmh-screenshot-tool",
+  "private": true,
+  "description": "Playwright screenshots of HMH analytics tabs for visual QA.",
+  "devDependencies": {
+    "playwright": "^1.60.0"
+  }
+}
