@@ -429,8 +429,8 @@ class TestProjectLotMaterialSummary:
         stage = db.query(StageMaster).first()
         if not stage:
             stage = StageMaster(
-                id=uuid.uuid4(), name="Test", sequence_order=1,
-                description="T", created_at=now,
+                id=uuid.uuid4(), name="Test", code="TST",
+                sequence_order=1, description="T", created_at=now, updated_at=now,
             )
             db.add(stage)
             db.flush()

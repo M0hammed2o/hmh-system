@@ -1,6 +1,31 @@
 # CHANGELOG — HMH Construction OS
 <!-- Newest first. Dates and commits verified from `git log --format="%h %ad %s" --date=short`. -->
 
+## [2026-07-19] — Municipality Progress Claim + Programme Planning + Weekly Plans (migration 0068)
+
+New modules: municipality progress claims, programme activities, and weekly work plans.
+
+**Backend**
+- Alembic migration 0068: `municipality_progress_claims`, `progress_claim_lines`, `progress_claim_evidence`, `programme_activities`, `weekly_plans`, `weekly_plan_items` tables; `CLAIM_READY_FOR_PRICING`, `CLAIM_APPROVED`, `WEEKLY_PLAN_DUE` alert types; `PROGRESS_CLAIM`, `PROGRAMME_ACTIVITY`, `WEEKLY_PLAN` attachment entities
+- Models: `MunicipalityProgressClaim`, `ProgressClaimLine`, `ProgressClaimEvidence`, `ProgrammeActivity`, `WeeklyPlan`, `WeeklyPlanItem` (anti-double-count unique constraint on claim lines)
+- Services: `progress_claim_service` (generate from 3 sources, state machine, PDF export), `programme_service`, `weekly_plan_service`, `progress_propagation_service` (WeeklyPlanItem → ProgrammeActivity → StageStatus → Lot → Project chain)
+- API: 6 routers registered in `main.py` (`/projects/{id}/progress-claims`, `/progress-claims`, `/projects/{id}/programme`, `/programme`, `/projects/{id}/weekly-plans`, `/weekly-plans`)
+- **No-pricing rule enforced**: `rate`, `unit_price`, `claim_amount` deliberately absent from `ProgressClaimLine`
+- AP-02 / AP-04 / AP-15 compliance maintained
+
+**Frontend**
+- `ProgressClaimsPage` + `ProgressClaimDetailPage`: project picker, claim CRUD, generate lines, status transitions, Export PDF, no-pricing notice
+- `ProgrammePlanPage`: activity CRUD, baseline lock, progress bars, critical path/milestone indicators
+- `WeeklyPlanPage`: dual-column plan list + item detail, mark-done, submit/approve flow
+- API clients: `progressClaims.ts`, `programme.ts`, `weeklyPlans.ts`
+- AppRouter: 4 new routes; AppSidebar: 3 new items under "Progress" group
+
+**Tests**
+- 38 tests (T01-T38) in `tests/test_progress_claims.py` — all pass
+- `StageMaster` model corrected: added `code`, `is_active`, `updated_at` columns to match live DB schema
+
+---
+
 ## [2026-07-11] ec5d1f2 — Warehouse Transfer Approval + Supplier Payment Due Alerts
 
 **Warehouse Transfer (project-to-project stock movement):**

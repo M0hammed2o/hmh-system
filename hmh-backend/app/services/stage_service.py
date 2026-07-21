@@ -16,16 +16,16 @@ from app.schemas.stage import ProjectStageStatusRead, StageStatusUpsert
 
 
 _DEFAULT_STAGES = [
-    (1,  "Foundation",   "Excavation, footings and strip foundations"),
-    (2,  "Slab",         "Ground floor concrete slab and blinding"),
-    (3,  "Brickwork",    "External and internal brickwork"),
-    (4,  "Roofing",      "Roof structure, sheeting and gutters"),
-    (5,  "Plumbing",     "Water supply and drainage installation"),
-    (6,  "Electrical",   "Wiring, DB board and fitting out"),
-    (7,  "Plastering",   "Internal and external plaster"),
-    (8,  "Painting",     "Interior and exterior painting"),
-    (9,  "Finishing",    "Tiling, doors, windows, skirting and fixtures"),
-    (10, "Handover",     "Final inspection, snag list and handover"),
+    (1,  "FOUND",  "Foundation",   "Excavation, footings and strip foundations"),
+    (2,  "SLAB",   "Slab",         "Ground floor concrete slab and blinding"),
+    (3,  "BRICK",  "Brickwork",    "External and internal brickwork"),
+    (4,  "ROOF",   "Roofing",      "Roof structure, sheeting and gutters"),
+    (5,  "PLUMB",  "Plumbing",     "Water supply and drainage installation"),
+    (6,  "ELEC",   "Electrical",   "Wiring, DB board and fitting out"),
+    (7,  "PLAST",  "Plastering",   "Internal and external plaster"),
+    (8,  "PAINT",  "Painting",     "Interior and exterior painting"),
+    (9,  "FINISH", "Finishing",    "Tiling, doors, windows, skirting and fixtures"),
+    (10, "HANDOV", "Handover",     "Final inspection, snag list and handover"),
 ]
 
 
@@ -38,14 +38,17 @@ def seed_default_stages(db: Session) -> list[StageMaster]:
     now = datetime.now(timezone.utc)
     existing_orders = {s.sequence_order for s in db.query(StageMaster.sequence_order).all()}
 
-    for seq, name, desc in _DEFAULT_STAGES:
-        if seq not in existing_orders:
+    existing_codes = {s.code for s in db.query(StageMaster.code).all() if s.code}
+    for seq, code, name, desc in _DEFAULT_STAGES:
+        if seq not in existing_orders and code not in existing_codes:
             db.add(StageMaster(
                 id=uuid.uuid4(),
                 name=name,
+                code=code,
                 sequence_order=seq,
                 description=desc,
                 created_at=now,
+                updated_at=now,
             ))
 
     db.commit()

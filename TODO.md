@@ -39,6 +39,15 @@ Priority: **P0** = production blocker · **P1** = high · **P2** = medium · **P
 
 ## P2 — Medium Priority
 
+- [ ] **Progress Claim → Municipality Invoice link**
+  When a claim is APPROVED, allow creating a `MunicipalityInvoice` pre-populated with the claim lines. Currently the FK `invoice_id` exists on `municipality_progress_claims` but the forward-create flow is not implemented. Requires business sign-off on pricing workflow.
+
+- [ ] **Pricing layer on Progress Claim (READY_FOR_PRICING state)**
+  Add BOQ-rate lookup or manual unit-price entry on claim lines when status is `READY_FOR_PRICING`. Rate entry and amount calculation intentionally deferred — no implementation without explicit approval.
+
+- [ ] **Programme Plan Gantt view**
+  `ProgrammePlanPage` shows a card list. A Gantt timeline (activity bars with predecessor arrows) would be the natural next step. Consider a lightweight SVG renderer — no external charting dependency unless user approves.
+
 - [ ] **Timeline feature — backend enhancement**
   `TimelinePage.tsx` exists and renders a timeline of stage updates, deliveries, usage, and alerts.
   A unified `/api/v1/projects/{id}/timeline` endpoint that aggregates these in chronological order would replace the current per-type client-side fetching. **Do not implement without explicit user sign-off** — this was identified in the discovery session as pending.

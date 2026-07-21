@@ -118,7 +118,7 @@ def test_milestone_blocked_count(db: Session, client: TestClient, dash_setup: di
     now = datetime.now(timezone.utc)
     stage = db.query(StageMaster).first()
     if not stage:
-        stage = StageMaster(id=uuid.uuid4(), name="X", sequence_order=99, created_at=now)
+        stage = StageMaster(id=uuid.uuid4(), name="X", code="X", sequence_order=99, created_at=now, updated_at=now)
         db.add(stage); db.flush()
 
     db.add(ProjectStageStatus(

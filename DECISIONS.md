@@ -39,8 +39,18 @@ When a transfer accumulates 3 votes it immediately writes ledger rows and marks 
 **2026-07-08 — Workshop MR reuses the same 3-person approval pattern as regular MR.**
 Workshop repair requests go through a vote-gated approval (3 OFFICE_AND_ABOVE votes or OWNER override) matching the existing `STAFF_VOTES_REQUIRED` / `TRANSFER_VOTES_REQUIRED` pattern. Consistency: code reviewers and ops can reason about all approval flows the same way.
 
+**2026-07-19 — No pricing fields on ProgressClaimLine; pricing is a downstream step.**
+`rate`, `unit_price`, `claim_amount` are deliberately absent from `progress_claim_lines`. A municipality progress claim shows what work was done; a subsequent municipality invoice (separate model) adds rates and calculates amounts. Rationale: prevents premature pricing by site staff; maintains clean separation between evidence of completion and financial valuation. Never add monetary fields to `ProgressClaimLine` without explicit business sign-off.
+
+**2026-07-19 — Progress propagation chain is one-directional and never decreases.**
+`progress_propagation_service` updates WeeklyPlanItem → ProgrammeActivity → StageStatus → Lot → Project. Progress values are only written if the new value exceeds the current value. Rationale: progress reporting should only move forward; a lower reported value is a data-entry error, not a genuine regression. Admin override required for actual rollback.
+
+**2026-07-19 — Claim line uniqueness enforced via DB constraint, not application logic.**
+`UniqueConstraint("claim_id", "lot_id", "stage_status_id", "source_type")` on `progress_claim_lines` prevents double-counting at the DB level. Application `_exists()` check is a performance optimisation only.
+
 ---
 
 ## Lessons (repeated-mistake register)
 
-_No repeated mistakes have been logged yet. When the same class of error occurs twice, add a Lesson entry here._
+**Lesson 2026-07-19 — ORM model must declare all NOT NULL columns with no server default.**
+`StageMaster` in `app/models/stage.py` was missing `code`, `is_active`, and `updated_at` columns that exist in the DB. The test suite hit `NotNullViolation` errors when inserting. Going forward: before writing tests that create model instances, verify the model matches the live migration SQL with `\d <table>` or inspect the migration that created the table. If a column has a server default in SQL (`server_default=func.now()`), add that to the ORM mapped column too so the model can be used without explicitly supplying the value.

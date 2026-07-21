@@ -61,7 +61,7 @@ def prop_setup(db: Session, client: TestClient):
     if not stage:
         stage = StageMaster(
             id=uuid.uuid4(), name="Foundation",
-            sequence_order=1, description="Test", created_at=now,
+            code="FOUND", sequence_order=1, description="Test", created_at=now, updated_at=now,
         )
         db.add(stage)
         db.flush()

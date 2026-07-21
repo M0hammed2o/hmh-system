@@ -314,11 +314,14 @@ class TestMilestoneLink:
         now = datetime.now(timezone.utc)
 
         # Create stage master + project stage status
+        _scode = _uuid.uuid4().hex[:6]
         stage = StageMaster(
             id=_uuid.uuid4(),
-            name=f"Test Stage {_uuid.uuid4().hex[:4]}",
-            sequence_order=999,
+            name=f"Test Stage {_scode}",
+            code=f"TS-{_scode}",
+            sequence_order=_uuid.uuid4().int % 10000 + 5000,
             created_at=now,
+            updated_at=now,
         )
         db.add(stage)
         db.flush()

@@ -8,9 +8,9 @@ Browser (React SPA)
      ▼
 FastAPI (Render web service — hmh-backend.onrender.com)
      │
-     ├── app/api/v1/          ← 50+ route modules
-     ├── app/services/        ← Business logic (45 service files)
-     ├── app/models/          ← SQLAlchemy ORM (40 models)
+     ├── app/api/v1/          ← 50+ route modules (progress claims, programme, weekly plans added Phase 6)
+     ├── app/services/        ← Business logic (49 service files)
+     ├── app/models/          ← SQLAlchemy ORM (43 models)
      │
      ├── PostgreSQL 15        ← Primary data store
      │

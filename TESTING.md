@@ -84,6 +84,8 @@ pytest tests/ -x -v
 | `test_boq_adjustment.py` | BOQ adjustment entries |
 | `test_audit_fixes.py` | Audit log integrity |
 | `test_whatsapp.py` | WhatsApp notification send/receive |
+| `test_progress_claims.py` | Municipality progress claims: generation, transitions, PDF, no-pricing, propagation (38 tests — Phase 6) |
+| `test_stage_tracking.py` | Stage milestone tracking, seed, progress and alert workflows |
 
 ### Notable Gaps (see KNOWN_BUGS.md)
 - Warehouse transfer approval flow: **no tests** — `tests/test_warehouse_transfer_flow.py` needed

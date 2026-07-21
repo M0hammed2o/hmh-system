@@ -91,6 +91,22 @@ Status labels: **Open**, **Accepted risk**, **Deferred**, **Production blocker**
 **Impact:** Municipality invoices and general expenses are not included in the project cost summary's total_actual. If these exist for a project, the cost summary understates actual spend.
 **Fix:** Add queries for `MunicipalityInvoice` and `Expense` totals in `_build_summary()`.
 
+---
+
+## Pre-existing Test Failures (as of 2026-07-21, not caused by Phase 6)
+
+The following tests fail in the full suite due to pre-existing model or business-rule drift. They are tracked here to distinguish them from implementation regressions.
+
+| Test file | Count | Root cause |
+|-----------|-------|-----------|
+| `test_payments.py` | 11 | `Payment.payment_date NOT NULL` model drift — column added to DB but not to model constructor in tests |
+| `test_procurement_pipeline.py::TestQuoteApprove` | 5 | Role permission and status assertion mismatch — quote approval requires updated role checks |
+| `test_mr_pipeline_close.py` | 3 | Asserts `CLOSED` status but service uses `CONVERTED_TO_PO` |
+| `test_e2e_procurement_pipeline.py` | 6 | Test ordering dependency — passes when run in isolation |
+| `test_gmail_processing.py` | 1 | Email matching regex mismatch |
+
+**Total pre-existing:** 26 failures. None caused by or related to Phase 6 (municipality claims, programme plan, weekly planning).
+
 ### No project-level progress percentage — only manual lot/stage fields
 **Files:** `app/models/project.py`, `app/models/lot.py`, `app/models/stage.py`
 **Status:** Open (design gap)

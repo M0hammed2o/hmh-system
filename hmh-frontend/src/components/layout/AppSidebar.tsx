@@ -3,6 +3,7 @@ import {
   LayoutDashboard, Users, FolderKanban, FileSpreadsheet,
   ShoppingCart, Truck, Package, CreditCard, Bell, Settings, LogOut, HardHat,
   Droplet, Building2, Car, FileCheck2, Smartphone, Mail, Clock, Flag, Warehouse, BarChart2, ClipboardList, Receipt, GitMerge, Wrench,
+  FileText, GitBranch, CalendarCheck,
 } from "lucide-react";
 import { HMHLogo } from "@/components/HMHLogo";
 import { TOKEN_KEY, REFRESH_TOKEN_KEY, ROLE_KEY } from "@/lib/constants";
@@ -70,7 +71,10 @@ const navGroups = [
   {
     label: "Progress",
     items: [
-      { title: "Milestones",      path: "/milestones",     icon: Flag },
+      { title: "Milestones",       path: "/milestones",      icon: Flag          },
+      { title: "Progress Claims",  path: "/progress-claims", icon: FileText      },
+      { title: "Programme Plan",   path: "/programme",       icon: GitBranch     },
+      { title: "Weekly Plans",     path: "/weekly-plans",    icon: CalendarCheck },
     ],
   },
   {

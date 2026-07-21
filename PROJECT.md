@@ -3,7 +3,7 @@
 
 ## Purpose
 Full-stack construction management platform for HMH Group and Minerat Construction & Civils.
-Covers project hierarchy (project → site → lot), full procurement pipeline (MR → Quote → PO → Delivery → Invoice → Payment), warehouse and stock management, workshop/fleet management with repair workflow, WhatsApp-based alert system, Gmail OCR pipeline for automated invoice ingestion, and reporting. Two portal modes: office (full) and site (restricted tablet view).
+Covers project hierarchy (project → site → lot), full procurement pipeline (MR → Quote → PO → Delivery → Invoice → Payment), warehouse and stock management, workshop/fleet management with repair workflow, municipality progress claims (physical evidence only — no pricing), programme planning (Gantt-style with baseline), weekly work planning with progress propagation, WhatsApp-based alert system, Gmail OCR pipeline for automated invoice ingestion, and reporting. Two portal modes: office (full) and site (restricted tablet view).
 
 ## Stack
 | Layer | Technology | Version |

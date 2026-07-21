@@ -48,6 +48,10 @@ const WorkDonePage            = lazy(() => import("@/pages/WorkDonePage"));
 const MonthlySubcontractorSummaryPage = lazy(() => import("@/pages/MonthlySubcontractorSummaryPage"));
 const MunicipalityInvoicePage         = lazy(() => import("@/pages/MunicipalityInvoicePage"));
 const DocumentCenterPage              = lazy(() => import("@/pages/DocumentCenterPage"));
+const ProgressClaimsPage              = lazy(() => import("@/pages/ProgressClaimsPage"));
+const ProgressClaimDetailPage         = lazy(() => import("@/pages/ProgressClaimDetailPage"));
+const ProgrammePlanPage               = lazy(() => import("@/pages/ProgrammePlanPage"));
+const WeeklyPlanPage                  = lazy(() => import("@/pages/WeeklyPlanPage"));
 
 function PageLoader() {
   return (
@@ -170,6 +174,10 @@ export function AppRouter() {
             <Route path="work-done/monthly-summary" element={<MonthlySubcontractorSummaryPage />} />
             <Route path="municipality-invoices" element={<MunicipalityInvoicePage />} />
             <Route path="documents" element={<DocumentCenterPage />} />
+            <Route path="progress-claims" element={<ProgressClaimsPage />} />
+            <Route path="progress-claims/:claimId" element={<ProgressClaimDetailPage />} />
+            <Route path="programme" element={<ProgrammePlanPage />} />
+            <Route path="weekly-plans" element={<WeeklyPlanPage />} />
           </Route>
 
           <Route path="*" element={<Navigate to="/" replace />} />

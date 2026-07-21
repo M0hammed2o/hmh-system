@@ -46,3 +46,7 @@ tools/screenshots/output/
 
 # Claude Code
 .claude/scheduled_tasks.lock
+
+# Local database backups
+*.sql.backup
+hmh_system_backup_*.sql

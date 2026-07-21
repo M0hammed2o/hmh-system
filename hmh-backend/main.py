@@ -379,6 +379,18 @@ app.include_router(document_center_router)
 from app.api.v1.workshop import router as workshop_router
 app.include_router(workshop_router, prefix="/api/v1")
 
+from app.api.v1.progress_claims import project_claim_router, claim_router
+app.include_router(project_claim_router, prefix="/api/v1")
+app.include_router(claim_router, prefix="/api/v1")
+
+from app.api.v1.programme import programme_project_router, programme_router
+app.include_router(programme_project_router, prefix="/api/v1")
+app.include_router(programme_router, prefix="/api/v1")
+
+from app.api.v1.weekly_plans import weekly_plan_project_router, weekly_plan_router
+app.include_router(weekly_plan_project_router, prefix="/api/v1")
+app.include_router(weekly_plan_router, prefix="/api/v1")
+
 # ── Static file serving for uploaded documents ────────────────────────────────
 # Use settings.UPLOAD_DIR (absolute path from env) so the static mount and all
 # file-save calls (stages, deliveries, usage, gmail) reference the SAME directory.

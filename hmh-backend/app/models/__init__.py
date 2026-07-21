@@ -42,6 +42,9 @@ from app.models.quotation import Quotation
 from app.models.procurement_reconciliation import ProcurementReconciliation
 from app.models.work_done import SubcontractorWorkDone
 from app.models.warehouse_transfer import WarehouseTransferRequest, WarehouseTransferVote
+from app.models.progress_claim import MunicipalityProgressClaim, ProgressClaimLine, ProgressClaimEvidence
+from app.models.programme import ProgrammeActivity
+from app.models.weekly_plan import WeeklyPlan, WeeklyPlanItem
 from app.models.workshop import (
     WorkshopCategory,
     WorkshopItem,
@@ -130,4 +133,10 @@ __all__ = [
     "WorkshopDeliveryNote",
     "WarehouseTransferRequest",
     "WarehouseTransferVote",
+    "MunicipalityProgressClaim",
+    "ProgressClaimLine",
+    "ProgressClaimEvidence",
+    "ProgrammeActivity",
+    "WeeklyPlan",
+    "WeeklyPlanItem",
 ]

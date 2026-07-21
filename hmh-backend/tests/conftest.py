@@ -1,7 +1,10 @@
 """
 Pytest fixtures for HMH backend tests.
 
-Uses a dedicated test database (or the real DB if TEST_DATABASE_URL not set).
+TEST_DATABASE_URL must be set explicitly — the test suite must NEVER fall back to
+DATABASE_URL (the main local DB). Running tests against the main DB causes
+create_all() to pre-create tables, which breaks Alembic migration runs.
+
 Each test that needs a clean slate uses the `db` fixture with rollback.
 The FastAPI test client is provided via `client` fixture.
 """
@@ -27,7 +30,13 @@ import app.models  # registers all models on Base.metadata
 from main import app
 
 # ── Test DB setup ──────────────────────────────────────────────────────────────
-TEST_DB_URL = os.getenv("TEST_DATABASE_URL", settings.DATABASE_URL)
+TEST_DB_URL = os.getenv("TEST_DATABASE_URL")
+if not TEST_DB_URL:
+    raise RuntimeError(
+        "TEST_DATABASE_URL is not set. "
+        "The test suite must use a dedicated database, never DATABASE_URL. "
+        "Set TEST_DATABASE_URL=postgresql://hmh:hmhdev@localhost:55432/hmh_test and re-run."
+    )
 
 engine = create_engine(TEST_DB_URL, pool_pre_ping=True, echo=False)
 TestSessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False, expire_on_commit=False)
@@ -531,6 +540,23 @@ def ensure_tables():
                     IF NOT EXISTS (SELECT 1 FROM information_schema.columns
                         WHERE table_name='mr_quotes' AND column_name='{_col}')
                     THEN ALTER TABLE mr_quotes ADD COLUMN {_col} {_type}; END IF;
+                END $$;
+            """))
+
+    # migration 0068: progress claim, programme, weekly plan alert+entity enum values
+    with engine.begin() as conn:
+        for _val in ["CLAIM_READY_FOR_PRICING", "CLAIM_APPROVED", "WEEKLY_PLAN_DUE"]:
+            conn.execute(_t(f"""
+                DO $$ BEGIN
+                    ALTER TYPE alert_type_enum ADD VALUE IF NOT EXISTS '{_val}';
+                EXCEPTION WHEN others THEN NULL;
+                END $$;
+            """))
+        for _val in ["PROGRESS_CLAIM", "PROGRAMME_ACTIVITY", "WEEKLY_PLAN"]:
+            conn.execute(_t(f"""
+                DO $$ BEGIN
+                    ALTER TYPE attachment_entity_enum ADD VALUE IF NOT EXISTS '{_val}';
+                EXCEPTION WHEN others THEN NULL;
                 END $$;
             """))
 

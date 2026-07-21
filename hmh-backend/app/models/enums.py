@@ -165,6 +165,10 @@ class AlertType(str, enum.Enum):
     DUPLICATE_INVOICE            = "DUPLICATE_INVOICE"      # same invoice number submitted again
     OCR_EXTRACTION_FAILED        = "OCR_EXTRACTION_FAILED"  # attachment OCR produced no usable text
     SUPPLIER_MISMATCH            = "SUPPLIER_MISMATCH"      # supplier in doc ≠ PO supplier
+    # Progress Claim / Programme
+    CLAIM_READY_FOR_PRICING      = "CLAIM_READY_FOR_PRICING"
+    CLAIM_APPROVED               = "CLAIM_APPROVED"
+    WEEKLY_PLAN_DUE              = "WEEKLY_PLAN_DUE"
 
 
 class NotificationChannel(str, enum.Enum):
@@ -220,7 +224,10 @@ class AttachmentEntity(str, enum.Enum):
     SUPPLIER         = "SUPPLIER"          # Phase 3I: supplier documents
     LOT              = "LOT"               # Phase 3K: lot/unit documents
     PROJECT          = "PROJECT"           # Phase 3K: project-level documents
-    WORK_DONE        = "WORK_DONE"         # Phase 6B: subcontractor work done photos
+    WORK_DONE         = "WORK_DONE"         # Phase 6B: subcontractor work done photos
+    PROGRESS_CLAIM    = "PROGRESS_CLAIM"   # Progress claim documents
+    PROGRAMME_ACTIVITY = "PROGRAMME_ACTIVITY"
+    WEEKLY_PLAN       = "WEEKLY_PLAN"
 
 
 class AttachmentType(str, enum.Enum):
@@ -432,3 +439,53 @@ class DocMatchStatus(str, enum.Enum):
     MISMATCH     = "MISMATCH"
     UNMATCHED    = "UNMATCHED"
     NEEDS_REVIEW = "NEEDS_REVIEW"
+
+
+# ── Municipality Progress Claim enums ─────────────────────────────────────────
+
+class ProgressClaimStatus(str, enum.Enum):
+    DRAFT             = "DRAFT"
+    GENERATED         = "GENERATED"
+    UNDER_REVIEW      = "UNDER_REVIEW"
+    READY_FOR_PRICING = "READY_FOR_PRICING"
+    APPROVED          = "APPROVED"
+    EXPORTED          = "EXPORTED"
+    CANCELLED         = "CANCELLED"
+
+
+class ClaimSourceType(str, enum.Enum):
+    STAGE_MILESTONE = "STAGE_MILESTONE"
+    WORK_DONE       = "WORK_DONE"
+    JOB_CARD        = "JOB_CARD"
+
+
+# ── Programme Plan enums ──────────────────────────────────────────────────────
+
+class ProgrammeActivityStatus(str, enum.Enum):
+    NOT_STARTED = "NOT_STARTED"
+    IN_PROGRESS = "IN_PROGRESS"
+    DELAYED     = "DELAYED"
+    BLOCKED     = "BLOCKED"
+    COMPLETED   = "COMPLETED"
+    VERIFIED    = "VERIFIED"
+    CANCELLED   = "CANCELLED"
+
+
+class ProgrammeActivityType(str, enum.Enum):
+    CONSTRUCTION = "CONSTRUCTION"
+    PROCUREMENT  = "PROCUREMENT"
+    INSPECTION   = "INSPECTION"
+    ADMIN        = "ADMIN"
+    MILESTONE    = "MILESTONE"
+
+
+# ── Weekly Plan enums ─────────────────────────────────────────────────────────
+
+class WeeklyPlanStatus(str, enum.Enum):
+    DRAFT       = "DRAFT"
+    SUBMITTED   = "SUBMITTED"
+    APPROVED    = "APPROVED"
+    IN_PROGRESS = "IN_PROGRESS"
+    COMPLETED   = "COMPLETED"
+    REVIEWED    = "REVIEWED"
+    CANCELLED   = "CANCELLED"
