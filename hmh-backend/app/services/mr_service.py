@@ -107,6 +107,17 @@ def create_request(
             if not site or site.project_id != project_id:
                 raise NotFoundError(f"Site {data.site_id} not found in this project.")
 
+    procurement_category = getattr(data, "procurement_category", None) or "MATERIAL"
+    # Fuel must never appear as a BOQ item merely because it shares the
+    # procurement pipeline — enforced here, server-side, not left to the
+    # frontend to hide the field. A FUEL request's items may never carry a
+    # boq_item_id, so BOQ consumption/valuation queries (which only ever
+    # look at rows with a real boq_item_id) stay structurally blind to fuel.
+    if procurement_category == "FUEL":
+        for item_data in data.items:
+            if getattr(item_data, "boq_item_id", None):
+                raise ValidationError("A Fuel request item cannot be linked to a BOQ item.")
+
     now = datetime.now(timezone.utc)
     mr = MaterialRequest(
         request_number=_generate_request_number(db, project_id),
@@ -116,7 +127,7 @@ def create_request(
         stage_id=getattr(data, "stage_id", None),
         requested_by=requested_by_id,
         preferred_supplier_id=getattr(data, "preferred_supplier_id", None),
-        procurement_category=getattr(data, "procurement_category", None) or "MATERIAL",
+        procurement_category=procurement_category,
         priority=getattr(data, "priority", MRPriority.NORMAL),
         delivery_destination=getattr(data, "delivery_destination", DeliveryDestination.SITE_STORE),
         status=RecordStatus.DRAFT,

@@ -1,6 +1,7 @@
 import client from "./client";
 
 export type MRStatus = "DRAFT" | "SUBMITTED" | "APPROVED" | "REJECTED";
+export type ProcurementCategory = "MATERIAL" | "FUEL";
 
 export interface MRItem {
   id: string;
@@ -25,6 +26,7 @@ export interface MaterialRequest {
   requested_by: string;
   requested_by_user_id: string;
   preferred_supplier_id: string | null;
+  procurement_category: ProcurementCategory;
   priority: string;
   delivery_destination: string;
   status: MRStatus;
@@ -63,6 +65,7 @@ export interface MaterialRequestCreate {
   site_id?: string | null;
   lot_id?: string | null;
   preferred_supplier_id?: string | null;
+  procurement_category?: ProcurementCategory;
   delivery_destination?: "SITE_STORE" | "MAIN_WAREHOUSE" | null;
   needed_by_date?: string | null;
   notes?: string | null;

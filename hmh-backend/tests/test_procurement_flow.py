@@ -16,6 +16,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
+from app.models.material_request import MaterialRequest, MaterialRequestItem
 from tests.conftest import (
     auth, login, make_item, make_lot, make_project, make_site,
     make_stock, make_supplier, make_user, make_user_project_access,
@@ -114,7 +115,6 @@ def test_pre_existing_material_requests_backfilled_to_material(db: Session, setu
     migration's backfill for genuinely pre-existing rows."""
     import uuid as _uuid
     from datetime import datetime, timezone
-    from app.models.material_request import MaterialRequest
     from app.models.enums import RecordStatus
 
     mr = MaterialRequest(
@@ -126,6 +126,95 @@ def test_pre_existing_material_requests_backfilled_to_material(db: Session, setu
     )
     db.add(mr); db.commit(); db.refresh(mr)
     assert mr.procurement_category == "MATERIAL"
+
+
+def test_fuel_mr_without_boq_link_succeeds(db: Session, client: TestClient, setup: dict):
+    tok = login(client, setup["office"]["email"], setup["office"]["password"])
+    r = client.post(
+        f"/api/v1/projects/{setup['project']['id']}/material-requests/",
+        json={
+            "site_id": setup["site"]["id"],
+            "procurement_category": "FUEL",
+            "items": [{"description": "Diesel", "requested_quantity": 1000.0, "unit": "L"}],
+        },
+        headers=auth(tok),
+    )
+    assert r.status_code == 201, r.text
+    data = r.json()["data"]
+    assert data["procurement_category"] == "FUEL"
+    assert data["items"][0]["boq_item_id"] is None
+
+
+def test_fuel_mr_with_boq_item_link_is_rejected(db: Session, client: TestClient, setup: dict, ):
+    """Fuel must never become a BOQ item — server-side, not just UI hiding."""
+    from tests.conftest import make_boq_item
+    boq_item = make_boq_item(db, setup["project"]["id"], setup["lot"]["id"], setup["item"]["id"])
+    tok = login(client, setup["office"]["email"], setup["office"]["password"])
+    r = client.post(
+        f"/api/v1/projects/{setup['project']['id']}/material-requests/",
+        json={
+            "site_id": setup["site"]["id"],
+            "procurement_category": "FUEL",
+            "items": [{
+                "description": "Diesel", "requested_quantity": 1000.0, "unit": "L",
+                "boq_item_id": boq_item["boq_item_id"],
+            }],
+        },
+        headers=auth(tok),
+    )
+    assert r.status_code == 422, r.text
+    assert "BOQ" in r.text
+    # Nothing must have been persisted — the whole request fails atomically.
+    assert db.query(MaterialRequest).filter(
+        MaterialRequest.project_id == uuid.UUID(setup["project"]["id"]),
+        MaterialRequest.procurement_category == "FUEL",
+    ).count() == 0
+
+
+def test_material_mr_with_legitimate_boq_link_still_works(db: Session, client: TestClient, setup: dict):
+    """MATERIAL requests are completely unaffected by the FUEL/BOQ exclusion rule."""
+    from tests.conftest import make_boq_item
+    boq_item = make_boq_item(db, setup["project"]["id"], setup["lot"]["id"], setup["item"]["id"])
+    tok = login(client, setup["office"]["email"], setup["office"]["password"])
+    r = client.post(
+        f"/api/v1/projects/{setup['project']['id']}/material-requests/",
+        json={
+            "site_id": setup["site"]["id"],
+            "procurement_category": "MATERIAL",
+            "items": [{
+                "description": "Cement bags", "requested_quantity": 5.0, "unit": "bag",
+                "boq_item_id": boq_item["boq_item_id"],
+            }],
+        },
+        headers=auth(tok),
+    )
+    assert r.status_code == 201, r.text
+    assert r.json()["data"]["items"][0]["boq_item_id"] == boq_item["boq_item_id"]
+
+
+def test_fuel_mr_items_never_carry_boq_linkage_at_the_data_level(db: Session, client: TestClient, setup: dict):
+    """Direct-query invariant: no MaterialRequestItem belonging to a FUEL
+    MaterialRequest may ever have a boq_item_id, regardless of which service
+    or report later aggregates BOQ consumption/variance from boq_item_id —
+    a Fuel item is structurally invisible to all of it because this is
+    always false for FUEL rows."""
+    tok = login(client, setup["office"]["email"], setup["office"]["password"])
+    client.post(
+        f"/api/v1/projects/{setup['project']['id']}/material-requests/",
+        json={
+            "site_id": setup["site"]["id"],
+            "procurement_category": "FUEL",
+            "items": [{"description": "Diesel", "requested_quantity": 500.0, "unit": "L"}],
+        },
+        headers=auth(tok),
+    )
+    violating = (
+        db.query(MaterialRequestItem)
+        .join(MaterialRequest, MaterialRequestItem.material_request_id == MaterialRequest.id)
+        .filter(MaterialRequest.procurement_category == "FUEL", MaterialRequestItem.boq_item_id.isnot(None))
+        .count()
+    )
+    assert violating == 0
 
 
 def test_mr_approve_flow(db: Session, client: TestClient, setup: dict):

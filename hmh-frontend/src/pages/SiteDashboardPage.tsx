@@ -30,6 +30,7 @@ import { warehouseApi, type WarehouseStockItem } from "@/api/warehouse";
 import { jobCardsApi, type JobCard } from "@/api/jobCards";
 import { getDrafts, removeDraft, type OfflineDraft } from "@/utils/offlineDrafts";
 import { procurementApi, type BOQSearchResult } from "@/api/procurement";
+import { fuelManagementApi, type FuelTypeDefinition } from "@/api/fuelManagement";
 import { SiteVehicles } from "@/components/site/SiteVehicles";
 import { SiteWorkshop } from "@/components/site/SiteWorkshop";
 import { cn } from "@/lib/utils";
@@ -1322,6 +1323,7 @@ function RequestMaterialModal({ projectId, siteId, lotId, onClose, onDone }: {
   projectId: string; siteId: string; lotId: string;
   onClose: () => void; onDone: () => void;
 }) {
+  const [requestType,  setRequestType]  = useState<"MATERIAL" | "FUEL">("MATERIAL");
   const [cart,         setCart]         = useState<CartItem[]>([]);
   const [search,       setSearch]       = useState("");
   const [results,      setResults]      = useState<BOQSearchResult[]>([]);
@@ -1332,6 +1334,21 @@ function RequestMaterialModal({ projectId, siteId, lotId, onClose, onDone }: {
   const [error,        setError]        = useState("");
   const [savedOffline, setSavedOffline] = useState(false);
   const searchTimer = useRef<ReturnType<typeof setTimeout>>();
+
+  // ── Fuel request fields — a Fuel request is a single self-contained line
+  // (litres of one fuel type), unlike a BOQ material request's mixed cart,
+  // so it gets its own minimal form rather than reusing the BOQ cart UI.
+  // Fuel travels through this same Material Request pipeline
+  // (procurement_category=FUEL) but is never linked to a boq_item_id.
+  const [fuelTypes,   setFuelTypes]   = useState<FuelTypeDefinition[]>([]);
+  const [fuelTypeId,  setFuelTypeId]  = useState("");
+  const [fuelLitres,  setFuelLitres]  = useState("");
+  useEffect(() => {
+    if (requestType !== "FUEL" || fuelTypes.length > 0) return;
+    fuelManagementApi.fuelTypes()
+      .then(types => { setFuelTypes(types); setFuelTypeId(prev => prev || types[0]?.id || ""); })
+      .catch(() => setFuelTypes([]));
+  }, [requestType, fuelTypes.length]);
 
   // Debounced BOQ search
   useEffect(() => {
@@ -1378,34 +1395,67 @@ function RequestMaterialModal({ projectId, siteId, lotId, onClose, onDone }: {
   const removeCart = (i: number) => setCart(prev => prev.filter((_, idx) => idx !== i));
 
   const validItems = cart.filter(c => c.description.trim() && parseFloat(c.qty) > 0);
+  const fuelTypeName = fuelTypes.find(t => t.id === fuelTypeId)?.name;
+  const fuelValid = !!fuelTypeId && parseFloat(fuelLitres) > 0;
+
+  const submitMaterial = async () => {
+    const supplierFromBOQ = cart.find(c => c.mode === "boq" && c.supplier_id)?.supplier_id;
+    const mr = await materialRequestsApi.create(projectId, {
+      site_id:               siteId  || null,
+      lot_id:                lotId   || null,
+      procurement_category:  "MATERIAL",
+      delivery_destination:  "SITE_STORE",
+      needed_by_date:        neededBy || null,
+      notes:                 notes    || null,
+      preferred_supplier_id: supplierFromBOQ ?? null,
+      items: validItems.map(c => ({
+        description:          c.description.trim(),
+        quantity_requested:   parseFloat(c.qty),
+        unit:                 c.unit.trim() || null,
+        boq_item_id:          c.boq_item_id,
+        preferred_supplier_id: c.supplier_id || null,
+        notes:                c.mode === "custom" ? "Outside BOQ — one-time purchase" : null,
+      })),
+    });
+    await materialRequestsApi.submit(mr.id);
+  };
+
+  const submitFuel = async () => {
+    // No boq_item_id, no catalogue item_id — a Fuel request is never a BOQ
+    // item. Supplier selection is not made here; it happens in office
+    // procurement once the request is approved (RFQ/quote/PO), same as any
+    // other Material Request.
+    const mr = await materialRequestsApi.create(projectId, {
+      site_id:              siteId || null,
+      lot_id:               null,
+      procurement_category: "FUEL",
+      delivery_destination: "SITE_STORE",
+      needed_by_date:       neededBy || null,
+      notes:                notes || null,
+      items: [{
+        description:        fuelTypeName || "Fuel",
+        quantity_requested:  parseFloat(fuelLitres),
+        unit:                "L",
+      }],
+    });
+    await materialRequestsApi.submit(mr.id);
+  };
 
   const submit = async () => {
-    if (validItems.length === 0) { setError("Add at least one item with a name and quantity."); return; }
+    if (requestType === "MATERIAL" && validItems.length === 0) {
+      setError("Add at least one item with a name and quantity."); return;
+    }
+    if (requestType === "FUEL" && !fuelValid) {
+      setError("Choose a fuel type and enter the litres required."); return;
+    }
     if (!projectId) { setError("No project selected."); return; }
     setLoading(true); setError("");
     try {
-      const supplierFromBOQ = cart.find(c => c.mode === "boq" && c.supplier_id)?.supplier_id;
-      const mr = await materialRequestsApi.create(projectId, {
-        site_id:               siteId  || null,
-        lot_id:                lotId   || null,
-        delivery_destination:  "SITE_STORE",
-        needed_by_date:        neededBy || null,
-        notes:                 notes    || null,
-        preferred_supplier_id: supplierFromBOQ ?? null,
-        items: validItems.map(c => ({
-          description:          c.description.trim(),
-          quantity_requested:   parseFloat(c.qty),
-          unit:                 c.unit.trim() || null,
-          boq_item_id:          c.boq_item_id,
-          preferred_supplier_id: c.supplier_id || null,
-          notes:                c.mode === "custom" ? "Outside BOQ — one-time purchase" : null,
-        })),
-      });
-      await materialRequestsApi.submit(mr.id);
+      if (requestType === "FUEL") await submitFuel(); else await submitMaterial();
       onDone();
     } catch (err: unknown) {
       const isOffline = !navigator.onLine || (err as { code?: string })?.code === "ERR_NETWORK";
-      if (isOffline) {
+      if (isOffline && requestType === "MATERIAL") {
         const { saveDraft } = await import("@/utils/offlineDrafts");
         saveDraft({
           type: "material_request", projectId, siteId, lotId,
@@ -1415,8 +1465,11 @@ function RequestMaterialModal({ projectId, siteId, lotId, onClose, onDone }: {
           },
         });
         setSavedOffline(true);
+      } else if (isOffline) {
+        setError("You're offline — Fuel requests need a connection to submit. Please try again once back online.");
       } else {
-        setError("Failed to submit request. Please try again.");
+        const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+        setError(detail || "Failed to submit request. Please try again.");
       }
     } finally {
       setLoading(false);
@@ -1439,6 +1492,60 @@ function RequestMaterialModal({ projectId, siteId, lotId, onClose, onDone }: {
       ) : (
         <div className="space-y-3">
 
+          {/* ── Request type ───────────────────────────────────────── */}
+          <div className="flex gap-1 bg-muted/50 p-1 rounded-lg text-sm">
+            <button type="button" onClick={() => setRequestType("MATERIAL")}
+              className={cn("flex-1 py-1.5 rounded-md font-medium transition-colors",
+                requestType === "MATERIAL" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground")}>
+              BOQ Material
+            </button>
+            <button type="button" onClick={() => setRequestType("FUEL")}
+              className={cn("flex-1 py-1.5 rounded-md font-medium transition-colors flex items-center justify-center gap-1.5",
+                requestType === "FUEL" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground")}>
+              <Droplet className="w-3.5 h-3.5" /> Fuel
+            </button>
+          </div>
+
+          {requestType === "FUEL" ? (
+            <div className="space-y-3">
+              <div className="space-y-1">
+                <Label className="text-xs font-medium">Fuel type</Label>
+                <select className="input" value={fuelTypeId} onChange={e => setFuelTypeId(e.target.value)}>
+                  {fuelTypes.length === 0 && <option value="">Loading fuel types…</option>}
+                  {fuelTypes.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                </select>
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs font-medium">Litres required</Label>
+                <Input type="number" inputMode="decimal" min="0.01" placeholder="e.g. 1000"
+                  value={fuelLitres} onChange={e => setFuelLitres(e.target.value)} />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="rm-fuel-date" className="text-xs">Required date (optional)</Label>
+                <Input id="rm-fuel-date" type="date" min={todayStr()}
+                       value={neededBy} onChange={e => setNeededBy(e.target.value)} />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="rm-fuel-notes" className="text-xs">Purpose / notes (optional)</Label>
+                <textarea
+                  id="rm-fuel-notes" rows={2}
+                  value={notes} onChange={e => setNotes(e.target.value)}
+                  placeholder="What is this fuel for?"
+                  className="w-full px-3 py-2 text-sm rounded-md border border-border bg-background resize-none
+                             focus:outline-none focus:ring-1 focus:ring-primary"
+                />
+              </div>
+              <div className="text-xs text-muted-foreground bg-muted/40 rounded-lg px-3 py-2">
+                Delivery/site: <strong>{siteId ? "This site" : "Project"}</strong> — office selects the
+                supplier and arranges the order once approved.
+              </div>
+              {error && <p className="text-xs text-destructive">{error}</p>}
+              <Button onClick={submit} disabled={loading || !fuelValid} className="w-full">
+                {loading ? "Submitting…" : "Submit fuel request"}
+              </Button>
+            </div>
+          ) : (
+          <>
           {/* ── BOQ Search ─────────────────────────────────────────── */}
           <div className="space-y-1">
             <Label className="text-xs font-medium">Search BOQ Materials</Label>
@@ -1610,6 +1717,8 @@ function RequestMaterialModal({ projectId, siteId, lotId, onClose, onDone }: {
                 ? "Search and add items above"
                 : `Submit Request (${validItems.length} item${validItems.length !== 1 ? "s" : ""})`}
           </Button>
+          </>
+          )}
         </div>
       )}
     </ModalShell>
