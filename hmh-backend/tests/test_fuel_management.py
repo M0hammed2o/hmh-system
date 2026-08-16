@@ -550,6 +550,191 @@ def test_legacy_fuel_log_still_works_before_fuel_management_cutover(client, db):
     assert r.status_code == 201, r.text
 
 
+def test_business_example_1000l_diesel_partial_deliveries_and_two_vehicle_issues(client, db):
+    """The exact business scenario approved before implementation began.
+
+    1000L Diesel requested via Request Materials (no BOQ) -> office approval
+    -> real PO -> invoice attachable -> two partial deliveries (600L + 400L)
+    confirmed as 595L + 400L = 995L total (never 1000, never duplicated,
+    idempotent under retry) -> storage cutover confirmed by that real
+    evidence -> Vehicle A issued 100L -> Vehicle B issued 100L -> no
+    duplicate FuelLog anywhere -> supplier history shows the real PO ->
+    procurement DeliveryItem records stay untouched by the Fuel-side
+    confirmation -> both variance types auditable -> reconciliation works.
+    """
+    from app.models.delivery import DeliveryItem
+    from app.models.fuel import FuelLog
+    from app.models.purchase_order import PurchaseOrder
+
+    owner = make_user(db, role="OWNER")
+    project = make_project(db, owner["id"])
+    site = make_site(db, project["id"])
+    supplier = make_supplier(db)
+    db.commit()
+    hdr = auth(login(client, owner["email"], owner["password"]))
+    pid = project["id"]
+
+    diesel = db.query(FuelTypeDefinition).filter_by(code="DIESEL").first()
+    if not diesel:
+        diesel = FuelTypeDefinition(code="DIESEL", name="Diesel", is_active=True)
+        db.add(diesel); db.flush()
+
+    # Storage exists but has no evidence yet — not cut over.
+    r = client.post(f"/api/v1/projects/{pid}/fuel-management/storage", json={
+        "site_id": site["id"], "fuel_type_id": str(diesel.id), "name": "Site Diesel Tank",
+        "capacity_litres": 5000,
+    }, headers=hdr)
+    assert r.status_code == 201, r.text
+    storage_id = r.json()["data"]["id"]
+    assert r.json()["data"]["cutover_confirmed_at"] is None
+
+    def storage_balance():
+        storages = client.get(f"/api/v1/projects/{pid}/fuel-management/storage", headers=hdr).json()["data"]
+        return next(s for s in storages if s["id"] == storage_id)
+
+    # 1. Site clerk requests 1000L Diesel via Request Materials — FUEL category, no BOQ link.
+    r = client.post(f"/api/v1/projects/{pid}/material-requests/", json={
+        "site_id": site["id"], "procurement_category": "FUEL",
+        "items": [{"description": "Diesel", "requested_quantity": 1000.0, "unit": "L"}],
+    }, headers=hdr)
+    assert r.status_code == 201, r.text
+    mr = r.json()["data"]
+    assert mr["procurement_category"] == "FUEL"
+    assert mr["items"][0]["boq_item_id"] is None
+    mr_id = mr["id"]
+
+    # 2. Office approval — the exact same endpoints as a MATERIAL request.
+    assert client.post(f"/api/v1/material-requests/{mr_id}/submit", headers=hdr).status_code == 200
+    assert client.post(f"/api/v1/material-requests/{mr_id}/approve", json={}, headers=hdr).status_code == 200
+
+    # 3. Office selects the supplier and converts to a real PO.
+    r = client.post(f"/api/v1/material-requests/{mr_id}/convert-to-po", json={
+        "supplier_id": supplier["id"],
+        "items": [{"description": "Diesel", "quantity": 1000, "unit": "L", "rate": 25.0}],
+    }, headers=hdr)
+    assert r.status_code == 201, r.text
+    po_id = r.json()["data"]["po_id"]
+
+    # 4. Invoice is attachable against the real PO.
+    r_inv = client.post(f"/api/v1/projects/{pid}/invoices/", json={
+        "invoice_number": f"INV-DIESEL-{uuid.uuid4().hex[:6].upper()}",
+        "supplier_id": supplier["id"], "purchase_order_id": po_id, "total_amount": 25000.0,
+    }, headers=hdr)
+    assert r_inv.status_code == 201, r_inv.text
+
+    # 5. First delivery: 600L physically delivered, recorded as a real DeliveryItem.
+    r = client.post(f"/api/v1/projects/{pid}/deliveries/", json={
+        "supplier_id": supplier["id"], "site_id": site["id"], "purchase_order_id": po_id,
+        "supplier_delivery_note_number": "DN-DIESEL-1",
+        "items": [{"description": "Diesel", "quantity_received": 600.0, "unit": "L"}],
+    }, headers=hdr)
+    assert r.status_code == 201, r.text
+    delivery_item_1 = r.json()["data"]["items"][0]["id"]
+
+    # 6. Fuel receipt confirms 595L (physical dip differs slightly from the documented 600L).
+    hand_off_url = f"/api/v1/projects/{pid}/fuel-management/deliveries/from-procurement"
+    r = client.post(hand_off_url, json={
+        "delivery_item_id": delivery_item_1, "storage_location_id": storage_id, "confirmed_litres": 595.0,
+    }, headers=hdr)
+    assert r.status_code == 201, r.text
+    fd1 = r.json()["data"]
+    assert fd1["litres_delivered"] == 600.0
+    assert fd1["confirmed_litres"] == 595.0
+    assert fd1["supplier_variance_litres"] == -5.0
+
+    storage = storage_balance()
+    assert storage["cutover_confirmed_at"] is not None
+    assert storage["calculated_balance_litres"] == 595.0
+
+    # Retry the exact same hand-off (double-click) — idempotent, no double stock.
+    r_retry = client.post(hand_off_url, json={
+        "delivery_item_id": delivery_item_1, "storage_location_id": storage_id, "confirmed_litres": 595.0,
+    }, headers=hdr)
+    assert r_retry.status_code == 201, r_retry.text
+    assert r_retry.json()["data"]["id"] == fd1["id"]
+    assert storage_balance()["calculated_balance_litres"] == 595.0
+
+    # 7. Second, partial delivery: 400L, confirmed in full with meter readings this time.
+    r = client.post(f"/api/v1/projects/{pid}/deliveries/", json={
+        "supplier_id": supplier["id"], "site_id": site["id"], "purchase_order_id": po_id,
+        "supplier_delivery_note_number": "DN-DIESEL-2",
+        "items": [{"description": "Diesel", "quantity_received": 400.0, "unit": "L"}],
+    }, headers=hdr)
+    assert r.status_code == 201, r.text
+    delivery_item_2 = r.json()["data"]["items"][0]["id"]
+
+    r = client.post(hand_off_url, json={
+        "delivery_item_id": delivery_item_2, "storage_location_id": storage_id, "confirmed_litres": 400.0,
+        "opening_reading": 1000.0, "closing_reading": 1400.0,
+    }, headers=hdr)
+    assert r.status_code == 201, r.text
+    fd2 = r.json()["data"]
+    assert fd2["supplier_variance_litres"] == 0.0
+    assert fd2["meter_variance_litres"] == 0.0
+
+    # Total confirmed stock: 595 + 400 = 995L — never 1000, never duplicated.
+    assert storage_balance()["calculated_balance_litres"] == 995.0
+
+    # Procurement DeliveryItem records stay exactly as documented, untouched by
+    # the Fuel-side confirmation — the two layers never overwrite each other.
+    di1 = db.query(DeliveryItem).filter(DeliveryItem.id == uuid.UUID(delivery_item_1)).first()
+    assert float(di1.quantity_received) == 600.0
+
+    # 8. Vehicle A receives 100L.
+    vehicle_a = Vehicle(
+        registration=f"VA-{uuid.uuid4().hex[:5]}", name="Vehicle A", vehicle_type=VehicleType.BAKKIE,
+        status=VehicleStatus.ACTIVE, assigned_project_id=uuid.UUID(pid), fuel_consumption_per_100km=10,
+    )
+    db.add(vehicle_a); db.commit()
+    issue_body_a = {
+        "storage_location_id": storage_id, "fuel_type_id": str(diesel.id),
+        "vehicle_id": str(vehicle_a.id), "destination_type": "VEHICLE", "litres": 100,
+        "odometer_reading": 1000, "evidence_override_reason": "business-example scenario test",
+    }
+    r = client.post(f"/api/v1/projects/{pid}/fuel-management/issues", json=issue_body_a, headers=hdr)
+    assert r.status_code == 201, r.text
+    issue_a = r.json()["data"]
+    assert issue_a["litres"] == 100.0
+    assert storage_balance()["calculated_balance_litres"] == 895.0
+
+    # Vehicle A's own fuel history shows the same 100L issue — consumption/anomaly
+    # calc ran (first-ever fill has no prior odometer, so distance is None, no
+    # false-positive anomaly).
+    r_a = client.get(f"/api/v1/projects/{pid}/fuel-management/issues",
+                     params={"vehicle_id": str(vehicle_a.id)}, headers=hdr)
+    assert r_a.status_code == 200
+    assert len(r_a.json()["data"]) == 1
+    assert r_a.json()["data"][0]["id"] == issue_a["id"]
+    assert r_a.json()["data"][0]["anomaly_flag"] is False
+
+    # 9. Vehicle B receives 100L.
+    vehicle_b = Vehicle(
+        registration=f"VB-{uuid.uuid4().hex[:5]}", name="Vehicle B", vehicle_type=VehicleType.BAKKIE,
+        status=VehicleStatus.ACTIVE, assigned_project_id=uuid.UUID(pid), fuel_consumption_per_100km=10,
+    )
+    db.add(vehicle_b); db.commit()
+    issue_body_b = {**issue_body_a, "vehicle_id": str(vehicle_b.id), "odometer_reading": 500}
+    r = client.post(f"/api/v1/projects/{pid}/fuel-management/issues", json=issue_body_b, headers=hdr)
+    assert r.status_code == 201, r.text
+    assert storage_balance()["calculated_balance_litres"] == 795.0
+
+    # No duplicate FuelLog anywhere — FuelIssue is the sole ledger for these fills.
+    assert db.query(FuelLog).filter(FuelLog.vehicle_id.in_([vehicle_a.id, vehicle_b.id])).count() == 0
+
+    # Supplier history naturally shows the real Fuel procurement chain — no
+    # parallel Fuel supplier-history engine exists or is needed.
+    supplier_pos = db.query(PurchaseOrder).filter(PurchaseOrder.supplier_id == uuid.UUID(supplier["id"])).all()
+    assert any(str(p.id) == po_id for p in supplier_pos)
+
+    # Reconciliation still works against the resulting stock.
+    r_rec = client.post(f"/api/v1/projects/{pid}/fuel-management/reconciliations", json={
+        "storage_location_id": storage_id, "physical_balance_litres": 795.0,
+        "explanation": "Physical dip matches calculated stock",
+    }, headers=hdr)
+    assert r_rec.status_code == 201, r_rec.text
+    assert r_rec.json()["data"]["variance_litres"] == 0.0
+
+
 def test_fuel_schema_has_no_boq_dependency():
     """Fuel quantities remain structurally separate from BOQ/procurement totals."""
     tables = [
