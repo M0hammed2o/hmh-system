@@ -116,6 +116,7 @@ def create_request(
         stage_id=getattr(data, "stage_id", None),
         requested_by=requested_by_id,
         preferred_supplier_id=getattr(data, "preferred_supplier_id", None),
+        procurement_category=getattr(data, "procurement_category", None) or "MATERIAL",
         priority=getattr(data, "priority", MRPriority.NORMAL),
         delivery_destination=getattr(data, "delivery_destination", DeliveryDestination.SITE_STORE),
         status=RecordStatus.DRAFT,

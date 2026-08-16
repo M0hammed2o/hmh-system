@@ -62,6 +62,72 @@ def test_create_mr(db: Session, client: TestClient, setup: dict):
     assert data["request_number"].startswith("MR-")
 
 
+def test_mr_defaults_to_material_procurement_category(db: Session, client: TestClient, setup: dict):
+    """Existing MR creation (no procurement_category in the request body) must
+    behave exactly as before the Fuel-procurement-category column was added."""
+    tok = login(client, setup["office"]["email"], setup["office"]["password"])
+    r = client.post(
+        f"/api/v1/projects/{setup['project']['id']}/material-requests/",
+        json={
+            "site_id": setup["site"]["id"],
+            "items": [{"description": "Cement bags", "requested_quantity": 5.0, "unit": "bag"}],
+        },
+        headers=auth(tok),
+    )
+    assert r.status_code == 201, r.text
+    assert r.json()["data"]["procurement_category"] == "MATERIAL"
+
+
+def test_mr_can_be_created_with_explicit_fuel_category(db: Session, client: TestClient, setup: dict):
+    tok = login(client, setup["office"]["email"], setup["office"]["password"])
+    r = client.post(
+        f"/api/v1/projects/{setup['project']['id']}/material-requests/",
+        json={
+            "site_id": setup["site"]["id"],
+            "procurement_category": "FUEL",
+            "items": [{"description": "Diesel", "requested_quantity": 1000.0, "unit": "L"}],
+        },
+        headers=auth(tok),
+    )
+    assert r.status_code == 201, r.text
+    assert r.json()["data"]["procurement_category"] == "FUEL"
+
+
+def test_mr_rejects_invalid_procurement_category(db: Session, client: TestClient, setup: dict):
+    tok = login(client, setup["office"]["email"], setup["office"]["password"])
+    r = client.post(
+        f"/api/v1/projects/{setup['project']['id']}/material-requests/",
+        json={
+            "site_id": setup["site"]["id"],
+            "procurement_category": "NOT_A_REAL_CATEGORY",
+            "items": [{"description": "Cement bags", "requested_quantity": 5.0, "unit": "bag"}],
+        },
+        headers=auth(tok),
+    )
+    assert r.status_code == 422, r.text
+
+
+def test_pre_existing_material_requests_backfilled_to_material(db: Session, setup: dict):
+    """Simulates a row that predates the procurement_category column/migration
+    by inserting directly at the ORM level without specifying the field —
+    the column default must still resolve it to MATERIAL, matching the
+    migration's backfill for genuinely pre-existing rows."""
+    import uuid as _uuid
+    from datetime import datetime, timezone
+    from app.models.material_request import MaterialRequest
+    from app.models.enums import RecordStatus
+
+    mr = MaterialRequest(
+        request_number=f"MR-LEGACY-{_uuid.uuid4().hex[:6]}",
+        project_id=_uuid.UUID(setup["project"]["id"]),
+        requested_by=_uuid.UUID(setup["office"]["id"]),
+        status=RecordStatus.DRAFT,
+        requested_date=datetime.now(timezone.utc),
+    )
+    db.add(mr); db.commit(); db.refresh(mr)
+    assert mr.procurement_category == "MATERIAL"
+
+
 def test_mr_approve_flow(db: Session, client: TestClient, setup: dict):
     """MR: DRAFT → submit → SUBMITTED → approve → APPROVED."""
     tok = login(client, setup["office"]["email"], setup["office"]["password"])

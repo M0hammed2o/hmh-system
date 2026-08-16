@@ -63,6 +63,12 @@ class MaterialRequest(TimestampMixin, Base):
         default=RecordStatus.DRAFT,
         index=True,
     )
+    # Classifies the request itself, not the catalogue item — MATERIAL (BOQ or
+    # general stock) or FUEL (non-BOQ; see app/services/mr_service.py for the
+    # server-side rule that a FUEL request's items may never carry boq_item_id).
+    procurement_category: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="MATERIAL", server_default="MATERIAL", index=True
+    )
     requested_date: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )

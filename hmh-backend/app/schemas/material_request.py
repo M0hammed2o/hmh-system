@@ -2,11 +2,13 @@
 
 import uuid
 from datetime import date, datetime
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
 from app.models.enums import DeliveryDestination, MRPriority, RecordStatus
+
+ProcurementCategory = Literal["MATERIAL", "FUEL"]
 
 
 class MaterialRequestItemRead(BaseModel):
@@ -67,6 +69,7 @@ class MaterialRequestRead(BaseModel):
     stage_id: Optional[uuid.UUID] = None
     requested_by: uuid.UUID
     preferred_supplier_id: Optional[uuid.UUID] = None
+    procurement_category: ProcurementCategory = "MATERIAL"
     priority: MRPriority = MRPriority.NORMAL
     delivery_destination: DeliveryDestination = DeliveryDestination.SITE_STORE
     status: RecordStatus
@@ -92,6 +95,7 @@ class MaterialRequestCreate(BaseModel):
     lot_id: Optional[uuid.UUID] = None
     stage_id: Optional[uuid.UUID] = None
     preferred_supplier_id: Optional[uuid.UUID] = None
+    procurement_category: ProcurementCategory = "MATERIAL"
     priority: MRPriority = MRPriority.NORMAL
     delivery_destination: DeliveryDestination = DeliveryDestination.SITE_STORE
     needed_by_date: Optional[date] = None

@@ -560,6 +560,28 @@ def ensure_tables():
                 END $$;
             """))
 
+    # migration 0071: procurement_category on material_requests
+    with engine.begin() as conn:
+        conn.execute(_t("""
+            DO $$ BEGIN
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                    WHERE table_name='material_requests' AND column_name='procurement_category')
+                THEN ALTER TABLE material_requests
+                    ADD COLUMN procurement_category VARCHAR(20) NOT NULL DEFAULT 'MATERIAL';
+                END IF;
+            END $$;
+        """))
+        conn.execute(_t("""
+            DO $$ BEGIN
+                IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                    WHERE conname = 'ck_material_requests_procurement_category')
+                THEN ALTER TABLE material_requests
+                    ADD CONSTRAINT ck_material_requests_procurement_category
+                    CHECK (procurement_category IN ('MATERIAL', 'FUEL'));
+                END IF;
+            END $$;
+        """))
+
     yield
 
 
