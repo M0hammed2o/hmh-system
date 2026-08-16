@@ -1005,7 +1005,7 @@ export default function VehiclesPage() {
                                     {entry.reversed && (
                                       <Badge variant="secondary" className="text-[10px] px-1.5 py-0">Reversed</Badge>
                                     )}
-                                    {entry.anomaly && <AlertTriangle className="w-3 h-3 text-destructive" title="Review required" />}
+                                    {entry.anomaly && <span title="Review required"><AlertTriangle className="w-3 h-3 text-destructive" /></span>}
                                   </div>
                                   <div className="text-muted-foreground pl-5 flex flex-wrap gap-2">
                                     {v.uses_hours
