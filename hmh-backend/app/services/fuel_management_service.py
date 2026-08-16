@@ -21,7 +21,7 @@ from app.models.fuel_management import (
 from app.models.delivery import Delivery, DeliveryItem
 from app.models.material_request import MaterialRequest
 from app.models.project import Project
-from app.models.purchase_order import PurchaseOrder
+from app.models.purchase_order import PurchaseOrder, PurchaseOrderItem
 from app.models.site import Site
 from app.models.supplier import Supplier
 from app.models.vehicle import FuelDelivery, Vehicle
@@ -163,6 +163,27 @@ def stock_balance(db: Session, storage_id: uuid.UUID, *, as_of: Optional[datetim
         issued_q = issued_q.filter(FuelIssue.issued_at <= as_of)
         adjusted_q = adjusted_q.filter(FuelStockAdjustment.created_at <= as_of)
     return round(float(delivered_q.scalar() or 0) - float(issued_q.scalar() or 0) + float(adjusted_q.scalar() or 0), 2)
+
+
+def _weighted_avg_cost_per_litre(db: Session, storage_id: uuid.UUID, *, as_of: Optional[datetime] = None) -> Optional[float]:
+    """Moving weighted-average cost across this storage's VERIFIED deliveries
+    that actually recorded a cost_per_litre — standard weighted-average
+    inventory costing. Returns None (never a fabricated number) when no
+    delivery into this storage has a recorded cost."""
+    q = db.query(
+        func.coalesce(func.sum(FuelDelivery.confirmed_litres * FuelDelivery.cost_per_litre), 0),
+        func.coalesce(func.sum(FuelDelivery.confirmed_litres), 0),
+    ).filter(
+        FuelDelivery.storage_location_id == storage_id,
+        FuelDelivery.verification_status == "VERIFIED",
+        FuelDelivery.cost_per_litre.isnot(None),
+    )
+    if as_of:
+        q = q.filter(FuelDelivery.delivered_at <= as_of)
+    cost_sum, litres_sum = q.one()
+    if not litres_sum:
+        return None
+    return round(float(cost_sum) / float(litres_sum), 4)
 
 
 def _validate_order_links(db: Session, project_id: uuid.UUID, data):
@@ -431,6 +452,7 @@ def record_delivery(db: Session, order_id: uuid.UUID, data: FuelDeliveryCreate,
         closing_reading=data.closing_reading, calculated_received_litres=calculated,
         confirmed_litres=confirmed, variance_litres=supplier_variance,
         supplier_variance_litres=supplier_variance, meter_variance_litres=meter_variance,
+        cost_per_litre=data.cost_per_litre,
         tanker_registration=data.tanker_registration, driver_details=data.driver_details,
         received_by=actor_id, recorded_by=actor_id, verification_status="PENDING",
         excess_override=excess, excess_override_reason=data.excess_reason if excess else None,
@@ -508,6 +530,21 @@ def receive_delivery_from_procurement(
     supplier_variance = round(confirmed - litres_delivered, 2)
     meter_variance = round(confirmed - calculated, 2) if calculated is not None else None
 
+    # Real procurement rate, never fabricated — explicit override, else the
+    # linked PO line, else a description match within the same PO.
+    resolved_cost = data.cost_per_litre
+    if resolved_cost is None and delivery_item.purchase_order_item_id:
+        poi = db.get(PurchaseOrderItem, delivery_item.purchase_order_item_id)
+        if poi and poi.rate:
+            resolved_cost = float(poi.rate)
+    if resolved_cost is None:
+        po_items = db.query(PurchaseOrderItem).filter(PurchaseOrderItem.purchase_order_id == po.id).all()
+        match = next(
+            (p for p in po_items if p.description.strip().lower() == delivery_item.description.strip().lower()), None,
+        )
+        if match and match.rate:
+            resolved_cost = float(match.rate)
+
     fuel_delivery = FuelDelivery(
         order_id=None, procurement_delivery_item_id=delivery_item.id,
         project_id=delivery.project_id, site_id=delivery.site_id,
@@ -519,6 +556,7 @@ def receive_delivery_from_procurement(
         closing_reading=data.closing_reading, calculated_received_litres=calculated,
         confirmed_litres=confirmed, variance_litres=supplier_variance,
         supplier_variance_litres=supplier_variance, meter_variance_litres=meter_variance,
+        cost_per_litre=resolved_cost,
         tanker_registration=data.tanker_registration, driver_details=data.driver_details,
         received_by=actor_id, recorded_by=actor_id, verification_status="VERIFIED",
         verified_by=actor_id, verified_at=_now(), notes=data.notes,
@@ -597,6 +635,7 @@ def record_manual_emergency_delivery(
         closing_reading=data.closing_reading, calculated_received_litres=calculated,
         confirmed_litres=confirmed, variance_litres=supplier_variance,
         supplier_variance_litres=supplier_variance, meter_variance_litres=meter_variance,
+        cost_per_litre=data.cost_per_litre,
         tanker_registration=data.tanker_registration, driver_details=data.driver_details,
         received_by=actor_id, recorded_by=actor_id, verification_status="VERIFIED",
         verified_by=actor_id, verified_at=_now(), notes=data.notes,
@@ -795,6 +834,9 @@ def create_issue(db: Session, project_id: uuid.UUID, data: FuelIssueCreate, acto
     if anomaly_reasons:
         feasibility_status = "OVERRIDDEN" if override_required else "REVIEW"
 
+    unit_cost = _weighted_avg_cost_per_litre(db, storage.id, as_of=data.issued_at)
+    total_cost = round(unit_cost * data.litres, 2) if unit_cost is not None else None
+
     issue = FuelIssue(
         issue_number=_number("FUI"), project_id=project_id, site_id=data.site_id or storage.site_id,
         storage_location_id=storage.id, fuel_type_id=data.fuel_type_id,
@@ -814,7 +856,7 @@ def create_issue(db: Session, project_id: uuid.UUID, data: FuelIssueCreate, acto
         feasibility_override_reason=data.feasibility_override_reason if override_required else None,
         feasibility_override_by=actor_id if override_required else None,
         feasibility_override_at=_now() if override_required else None,
-        is_reversed=False,
+        is_reversed=False, unit_cost=unit_cost, total_cost=total_cost,
     )
     db.add(issue); db.flush()
     _audit(db, actor_id, AuditAction.ISSUE, "FUEL_ISSUE", issue.id,

@@ -147,6 +147,7 @@ class FuelDeliveryCreate(BaseModel):
     notes: Optional[str] = None
     allow_excess: bool = False
     excess_reason: Optional[str] = None
+    cost_per_litre: Optional[float] = Field(default=None, gt=0)
 
     @model_validator(mode="after")
     def readings_are_complete(self):
@@ -179,6 +180,7 @@ class FuelDeliveryRead(OrmModel):
     meter_variance_litres: Optional[float] = None
     is_manual_emergency: bool = False
     emergency_reason: Optional[str] = None
+    cost_per_litre: Optional[float] = None
     tanker_registration: Optional[str]
     driver_details: Optional[str]
     verification_status: str
@@ -201,6 +203,8 @@ class FuelDeliveryFromProcurementCreate(BaseModel):
     tanker_registration: Optional[str] = None
     driver_details: Optional[str] = None
     notes: Optional[str] = None
+    # Optional override — normally resolved from the real PO line rate.
+    cost_per_litre: Optional[float] = Field(default=None, gt=0)
 
     @model_validator(mode="after")
     def readings_are_complete(self):
@@ -227,6 +231,7 @@ class FuelManualEmergencyDeliveryCreate(BaseModel):
     tanker_registration: Optional[str] = None
     driver_details: Optional[str] = None
     notes: Optional[str] = None
+    cost_per_litre: Optional[float] = Field(default=None, gt=0)
 
     @model_validator(mode="after")
     def readings_are_complete(self):
@@ -294,6 +299,8 @@ class FuelIssueRead(OrmModel):
     evidence: list[dict] = Field(default_factory=list)
     is_reversed: bool
     reversal_reason: Optional[str]
+    unit_cost: Optional[float] = None
+    total_cost: Optional[float] = None
     created_at: datetime
 
 

@@ -20,6 +20,7 @@ def _build_summary(db: Session, project_id: uuid.UUID) -> dict:
     from app.models.job_card import JobCard
     from app.models.work_done import SubcontractorWorkDone
     from app.models.fuel import FuelLog
+    from app.models.fuel_management import FuelIssue
     from app.models.vehicle import VehicleCost
     from app.models.material_request import MaterialRequest, MaterialRequestItem
     from app.models.enums import JobCardStatus, WorkDoneStatus
@@ -30,7 +31,7 @@ def _build_summary(db: Session, project_id: uuid.UUID) -> dict:
 
     # ── BOQ Budget ──────────────────────────────────────────────────────────────
     boq_budget = db.query(
-        func.coalesce(func.sum(BOQItem.rate * BOQItem.quantity), 0)
+        func.coalesce(func.sum(BOQItem.planned_total), 0)
     ).filter(BOQItem.project_id == project_id).scalar() or 0
 
     # ── Procurement Spend (actual payments made) ────────────────────────────────
@@ -63,13 +64,23 @@ def _build_summary(db: Session, project_id: uuid.UUID) -> dict:
     ).scalar() or 0
 
     # ── Fuel costs ─────────────────────────────────────────────────────────────
-    fuel_cost = db.query(
+    # Combined at this reporting layer only (never in stock calculations):
+    # FuelLog covers historical fills, FuelIssue covers everything recorded
+    # after a project cuts over to Fuel Management. A project never double
+    # counts — FuelLog writes freeze the moment Fuel Management goes live.
+    fuel_cost = float(db.query(
         func.coalesce(func.sum(FuelLog.total_cost), 0)
-    ).filter(FuelLog.project_id == project_id).scalar() or 0
+    ).filter(FuelLog.project_id == project_id).scalar() or 0)
+    fuel_cost += float(db.query(
+        func.coalesce(func.sum(FuelIssue.total_cost), 0)
+    ).filter(FuelIssue.project_id == project_id, FuelIssue.is_reversed.is_(False)).scalar() or 0)
 
-    fuel_litres = db.query(
+    fuel_litres = float(db.query(
         func.coalesce(func.sum(FuelLog.litres), 0)
-    ).filter(FuelLog.project_id == project_id).scalar() or 0
+    ).filter(FuelLog.project_id == project_id).scalar() or 0)
+    fuel_litres += float(db.query(
+        func.coalesce(func.sum(FuelIssue.litres), 0)
+    ).filter(FuelIssue.project_id == project_id, FuelIssue.is_reversed.is_(False)).scalar() or 0)
 
     # ── Vehicle repair costs ────────────────────────────────────────────────────
     vehicle_repair_cost = db.query(

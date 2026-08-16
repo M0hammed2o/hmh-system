@@ -174,6 +174,11 @@ class FuelIssue(TimestampMixin, Base):
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     reversal_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Phase 10: weighted-average cost_per_litre across this storage's VERIFIED
+    # deliveries, locked in at issue time — NULL when no delivery into this
+    # storage has a recorded cost, never fabricated.
+    unit_cost: Mapped[Optional[float]] = mapped_column(Numeric(10, 4), nullable=True)
+    total_cost: Mapped[Optional[float]] = mapped_column(Numeric(12, 2), nullable=True)
 
 
 class FuelStockAdjustment(Base):

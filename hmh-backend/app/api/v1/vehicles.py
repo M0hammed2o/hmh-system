@@ -21,7 +21,7 @@ from app.schemas.vehicle import (
     VehicleRead,
     VehicleUpdate,
 )
-from app.services import vehicle_service
+from app.services import fuel_service, vehicle_service
 
 router = APIRouter(prefix="/vehicles", tags=["vehicles"])
 
@@ -500,6 +500,13 @@ def create_fuel_delivery(
     """Record a new bulk diesel delivery to a site."""
     from app.models.vehicle import FuelDelivery
 
+    if project_id and fuel_service._fuel_management_is_live(db, project_id):
+        raise HTTPException(
+            422,
+            "This project has moved to Fuel Management for fuel tracking. "
+            "Record deliveries via Fuel Management instead of the legacy vehicle fuel delivery flow.",
+        )
+
     d = FuelDelivery(
         site_id=site_id,
         project_id=project_id,
@@ -550,6 +557,12 @@ def fill_vehicle_from_delivery(
     project_id = delivery.project_id or vehicle.assigned_project_id
     if not project_id:
         raise HTTPException(400, "Vehicle must be assigned to a project before logging fuel.")
+    if fuel_service._fuel_management_is_live(db, project_id):
+        raise HTTPException(
+            422,
+            "This project has moved to Fuel Management for fuel tracking. "
+            "Record new fuel fills via Fuel Management > Issue Fuel instead of the legacy vehicle fuel delivery flow.",
+        )
 
     # Check remaining balance
     from sqlalchemy import func as sqlfunc

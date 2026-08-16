@@ -10,6 +10,7 @@ from app.models.alert import SystemAlert
 from app.models.delivery import Delivery
 from app.models.enums import AlertStatus, LotStatus, PaymentStatus, ProjectStatus, RecordStatus, StageStatus
 from app.models.fuel import FuelLog
+from app.models.fuel_management import FuelIssue
 from app.models.invoice import Invoice
 from app.models.lot import Lot
 from app.models.material_request import MaterialRequest
@@ -77,17 +78,25 @@ def get_stats(db: Session, project_id: Optional[uuid.UUID] = None) -> dict:
         alert_q = alert_q.filter(SystemAlert.project_id == project_id)
     open_alert_count = alert_q.filter(SystemAlert.status == AlertStatus.OPEN).scalar() or 0
 
-    # Fuel — total cost across all logs (NULL total_cost rows excluded via coalesce)
+    # Fuel — total cost across legacy logs + canonical Fuel Management issues
+    # (combined at this reporting layer only — never in stock calculations;
+    # NULL total_cost rows excluded via coalesce, reversed issues excluded)
     fuel_q = db.query(func.coalesce(func.sum(FuelLog.total_cost), 0))
     if project_id:
         fuel_q = fuel_q.filter(FuelLog.project_id == project_id)
-    fuel_total_cost = float(fuel_q.scalar() or 0)
+    fuel_issue_q = db.query(func.coalesce(func.sum(FuelIssue.total_cost), 0)).filter(FuelIssue.is_reversed.is_(False))
+    if project_id:
+        fuel_issue_q = fuel_issue_q.filter(FuelIssue.project_id == project_id)
+    fuel_total_cost = float(fuel_q.scalar() or 0) + float(fuel_issue_q.scalar() or 0)
 
-    # Fuel — total litres
+    # Fuel — total litres across both sources
     fuel_litres_q = db.query(func.coalesce(func.sum(FuelLog.litres), 0))
     if project_id:
         fuel_litres_q = fuel_litres_q.filter(FuelLog.project_id == project_id)
-    fuel_total_litres = float(fuel_litres_q.scalar() or 0)
+    fuel_issue_litres_q = db.query(func.coalesce(func.sum(FuelIssue.litres), 0)).filter(FuelIssue.is_reversed.is_(False))
+    if project_id:
+        fuel_issue_litres_q = fuel_issue_litres_q.filter(FuelIssue.project_id == project_id)
+    fuel_total_litres = float(fuel_litres_q.scalar() or 0) + float(fuel_issue_litres_q.scalar() or 0)
 
     return {
         "active_projects": active_project_count,
@@ -360,8 +369,20 @@ def get_ops_summary(db: Session, project_id: Optional[uuid.UUID] = None) -> dict
         .filter(FuelLog.fuel_date >= str(first_of_month))
         .scalar() or 0
     )
-    # Flagged: notes contain "⚠" (set by fuel service when l_per_100km > threshold)
+    fuel_cost_month += float(
+        db.query(func.coalesce(func.sum(FuelIssue.total_cost), 0))
+        .filter(*([FuelIssue.project_id == project_id] if project_id else []))
+        .filter(FuelIssue.is_reversed.is_(False))
+        .filter(FuelIssue.issued_at >= str(first_of_month))
+        .scalar() or 0
+    )
+    # Flagged: legacy notes contain "⚠" (set by fuel service when l_per_100km
+    # > threshold); FuelIssue uses the structured anomaly_flag equivalent.
     flagged_fuel = fuel_q.filter(FuelLog.notes.like("%⚠%")).count()
+    flagged_fuel_issue_q = db.query(FuelIssue).filter(FuelIssue.anomaly_flag.is_(True), FuelIssue.is_reversed.is_(False))
+    if project_id:
+        flagged_fuel_issue_q = flagged_fuel_issue_q.filter(FuelIssue.project_id == project_id)
+    flagged_fuel += flagged_fuel_issue_q.count()
 
     return {
         "financial": {

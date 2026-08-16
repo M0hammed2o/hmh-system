@@ -665,6 +665,25 @@ def ensure_tables():
             END $$;
         """))
 
+    # migration 0075: Fuel cost reporting (fuel_issues.unit_cost/.total_cost)
+    with engine.begin() as conn:
+        conn.execute(_t("""
+            DO $$ BEGIN
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                    WHERE table_name='fuel_issues' AND column_name='unit_cost')
+                THEN ALTER TABLE fuel_issues ADD COLUMN unit_cost NUMERIC(10, 4) NULL;
+                END IF;
+            END $$;
+        """))
+        conn.execute(_t("""
+            DO $$ BEGIN
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                    WHERE table_name='fuel_issues' AND column_name='total_cost')
+                THEN ALTER TABLE fuel_issues ADD COLUMN total_cost NUMERIC(12, 2) NULL;
+                END IF;
+            END $$;
+        """))
+
     yield
 
 

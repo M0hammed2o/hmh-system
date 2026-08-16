@@ -3,7 +3,7 @@
 import uuid
 import base64
 import json
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 import pytest
 from pydantic import ValidationError as PydanticValidationError
@@ -461,6 +461,76 @@ def test_reports_and_legacy_delete_protection(client, db, fuel_ctx):
     db.add(legacy); db.commit()
     deleted = client.delete(f"/api/v1/fuel/{legacy.id}", headers=c["headers"]["owner"])
     assert deleted.status_code == 409
+
+
+def test_fuel_issue_computes_weighted_average_delivery_cost(client, db, fuel_ctx):
+    """Phase 10: FuelIssue carries its own cost, derived from the real
+    delivery price (never fabricated) — fuel_ctx's opening 1000L balance has
+    no recorded cost (a plain OPENING adjustment), so only the costed
+    delivery below should feed the weighted average."""
+    c = fuel_ctx; oid = order_to_ordered(client, c, 500)
+    body = {
+        "delivered_at": datetime.now(timezone.utc).isoformat(), "delivered_litres": 500,
+        "confirmed_litres": 500, "delivery_note_number": "DN-COST",
+        "storage_location_id": c["storage_id"], "cost_per_litre": 22.5,
+    }
+    r = client.post(f"/api/v1/fuel-management/orders/{oid}/deliveries", json=body, headers=c["headers"]["site"])
+    assert r.status_code == 201, r.text
+    fd = r.json()["data"]
+    assert fd["cost_per_litre"] == 22.5
+    assert client.post(f"/api/v1/fuel-management/deliveries/{fd['id']}/verify", headers=c["headers"]["site"]).status_code == 200
+
+    issue_body = {"storage_location_id": c["storage_id"], "fuel_type_id": c["diesel_id"],
+                  "destination_type": "GENERATOR", "equipment_reference": "GEN-COST", "litres": 100}
+    r2 = issue_with_evidence(client, c, issue_body)
+    assert r2.status_code == 201, r2.text
+    issue = r2.json()["data"]
+    assert issue["unit_cost"] == 22.5
+    assert issue["total_cost"] == 2250.0
+
+
+def test_cost_summary_and_dashboard_combine_fuel_log_and_fuel_issue(client, db, fuel_ctx):
+    """Phase 10: project cost reporting must not silently under-report once
+    a project moves to Fuel Management — fuel_ctx already has cutover, so
+    all its fuel cost/litres now come from FuelIssue, not the frozen
+    FuelLog. Combined only at this reporting layer, never in stock calcs."""
+    c = fuel_ctx; oid = order_to_ordered(client, c, 500)
+    body = {
+        "delivered_at": datetime.now(timezone.utc).isoformat(), "delivered_litres": 500,
+        "confirmed_litres": 500, "delivery_note_number": "DN-COST2",
+        "storage_location_id": c["storage_id"], "cost_per_litre": 20.0,
+    }
+    r = client.post(f"/api/v1/fuel-management/orders/{oid}/deliveries", json=body, headers=c["headers"]["site"])
+    fd = r.json()["data"]
+    client.post(f"/api/v1/fuel-management/deliveries/{fd['id']}/verify", headers=c["headers"]["site"])
+
+    issue_body = {"storage_location_id": c["storage_id"], "fuel_type_id": c["diesel_id"],
+                  "destination_type": "GENERATOR", "equipment_reference": "GEN-COST2", "litres": 50}
+    r2 = issue_with_evidence(client, c, issue_body)
+    assert r2.status_code == 201, r2.text
+
+    summary = client.get(f"/api/v1/projects/{c['project']['id']}/cost-summary", headers=c["headers"]["owner"])
+    assert summary.status_code == 200, summary.text
+    data = summary.json()["data"]
+    assert data["fuel_cost"] == 1000.0  # 50L * 20.0, entirely from FuelIssue — FuelLog is frozen here
+    assert data["fuel_litres"] == 50.0
+
+    dash = client.get(f"/api/v1/projects/{c['project']['id']}/fuel-management/dashboard", headers=c["headers"]["owner"])
+    assert dash.status_code == 200
+
+
+def test_legacy_vehicle_fuel_delivery_flow_frozen_after_cutover(client, fuel_ctx):
+    """Phase 10: vehicles.py's own bulk fuel-delivery/fill flow writes
+    FuelLog directly, bypassing fuel_service.create_fuel_log() — it must be
+    frozen independently once Fuel Management is live for the project, or
+    Phase 9's freeze could be silently bypassed through this second path."""
+    c = fuel_ctx
+    r = client.post("/api/v1/vehicles/fuel-deliveries/", data={
+        "site_id": c["site"]["id"], "project_id": c["project"]["id"],
+        "delivery_date": date.today().isoformat(), "fuel_type": "DIESEL", "litres_delivered": "100",
+    }, headers=c["headers"]["owner"])
+    assert r.status_code == 422, r.text
+    assert "Fuel Management" in r.text
 
 
 def test_legacy_fuel_log_still_works_before_fuel_management_cutover(client, db):
