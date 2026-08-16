@@ -175,6 +175,8 @@ class FuelDeliveryRead(OrmModel):
     variance_litres: Optional[float]
     supplier_variance_litres: Optional[float] = None
     meter_variance_litres: Optional[float] = None
+    is_manual_emergency: bool = False
+    emergency_reason: Optional[str] = None
     tanker_registration: Optional[str]
     driver_details: Optional[str]
     verification_status: str
@@ -192,6 +194,32 @@ class FuelDeliveryFromProcurementCreate(BaseModel):
     storage_location_id: uuid.UUID
     confirmed_litres: float = Field(gt=0)
     delivered_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    opening_reading: Optional[float] = Field(default=None, ge=0)
+    closing_reading: Optional[float] = Field(default=None, ge=0)
+    tanker_registration: Optional[str] = None
+    driver_details: Optional[str] = None
+    notes: Optional[str] = None
+
+    @model_validator(mode="after")
+    def readings_are_complete(self):
+        if (self.opening_reading is None) != (self.closing_reading is None):
+            raise ValueError("opening and closing readings must be supplied together")
+        if self.opening_reading is not None and self.closing_reading < self.opening_reading:
+            raise ValueError("closing reading cannot be lower than opening reading")
+        return self
+
+
+class FuelManualEmergencyDeliveryCreate(BaseModel):
+    """Emergency receipt with no procurement chain behind it at all (e.g. a
+    cash fuel purchase before a Material Request could be raised). Gated on
+    fuel.admin at the API layer; reason is mandatory, not optional notes."""
+    storage_location_id: uuid.UUID
+    delivered_litres: float = Field(gt=0)
+    confirmed_litres: Optional[float] = Field(default=None, gt=0)
+    reason: str = Field(min_length=3)
+    delivered_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    delivery_note_number: Optional[str] = None
+    supplier_id: Optional[uuid.UUID] = None
     opening_reading: Optional[float] = Field(default=None, ge=0)
     closing_reading: Optional[float] = Field(default=None, ge=0)
     tanker_registration: Optional[str] = None

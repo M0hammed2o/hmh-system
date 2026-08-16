@@ -20,7 +20,8 @@ from app.schemas.fuel_management import (
     FuelAdjustmentCreate, FuelAdjustmentRead, FuelDeliveryCreate, FuelDeliveryFromProcurementCreate,
     FuelDeliveryRead, FuelEmailLogRead,
     FuelEquipmentProfileCreate, FuelEquipmentProfileRead,
-    FuelIssueCreate, FuelIssueRead, FuelOrderCreate, FuelOrderHistoryRead, FuelOrderRead, FuelOrderUpdate,
+    FuelIssueCreate, FuelIssueRead, FuelManualEmergencyDeliveryCreate,
+    FuelOrderCreate, FuelOrderHistoryRead, FuelOrderRead, FuelOrderUpdate,
     FuelReconciliationCreate, FuelReconciliationRead, FuelStorageCreate, FuelStorageRead,
     FuelTransition, FuelTypeRead,
 )
@@ -202,6 +203,18 @@ def receive_delivery_from_procurement(project_id: uuid.UUID, body: FuelDeliveryF
     _access(db, current_user, project_id)
     obj = service.receive_delivery_from_procurement(db, body, current_user.id)
     return ApiSuccess(data=FuelDeliveryRead.model_validate(obj), message="Fuel delivery confirmed and stock updated.")
+
+
+@project_router.post("/deliveries/manual-emergency", response_model=ApiSuccess[FuelDeliveryRead], status_code=201,
+                     dependencies=[require_fuel_permission("fuel.admin")])
+def record_manual_emergency_delivery(project_id: uuid.UUID, body: FuelManualEmergencyDeliveryCreate,
+                                      db: DbSession, current_user: CurrentUser):
+    """Emergency receipt with no procurement chain behind it (Phase 7) —
+    fuel.admin only, reason mandatory, always audited. Routine stock
+    corrections belong in /adjustments, not here."""
+    _access(db, current_user, project_id)
+    obj = service.record_manual_emergency_delivery(db, project_id, body, current_user.id)
+    return ApiSuccess(data=FuelDeliveryRead.model_validate(obj), message="Manual emergency delivery recorded and audited.")
 
 
 @project_router.get("/deliveries", response_model=ApiSuccess[list[FuelDeliveryRead]],

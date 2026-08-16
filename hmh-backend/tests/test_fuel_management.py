@@ -257,6 +257,38 @@ def test_wrong_fuel_storage_rejected(client, fuel_ctx):
     assert client.post(f"/api/v1/fuel-management/orders/{oid}/deliveries", json=body, headers=c["headers"]["site"]).status_code == 422
 
 
+def test_manual_emergency_delivery_requires_fuel_admin_and_reason(client, db, fuel_ctx):
+    """Phase 7: emergency receipts bypass the procurement chain entirely, so
+    they must be locked to fuel.admin, always carry a mandatory reason, and
+    leave an explicit, structurally-distinct audit trail."""
+    c = fuel_ctx
+    url = f"/api/v1/projects/{c['project']['id']}/fuel-management/deliveries/manual-emergency"
+    body = {"storage_location_id": c["storage_id"], "delivered_litres": 50, "reason": "Emergency cash purchase — site ran dry, no time to raise an MR"}
+
+    # SITE_STAFF has fuel.receive but not fuel.admin — must be rejected.
+    assert client.post(url, json=body, headers=c["headers"]["site"]).status_code == 403
+
+    # Missing reason — rejected before touching the DB.
+    bad = dict(body); del bad["reason"]
+    assert client.post(url, json=bad, headers=c["headers"]["admin"]).status_code == 422
+
+    r = client.post(url, json=body, headers=c["headers"]["admin"])
+    assert r.status_code == 201, r.text
+    fd = r.json()["data"]
+    assert fd["is_manual_emergency"] is True
+    assert fd["emergency_reason"] == body["reason"]
+    assert fd["order_id"] is None
+    assert fd["procurement_delivery_item_id"] is None
+    assert fd["verification_status"] == "VERIFIED"
+
+    dash = client.get(f"/api/v1/projects/{c['project']['id']}/fuel-management/dashboard", headers=c["headers"]["owner"]).json()["data"]
+    assert dash["current_calculated_stock"] == 1050.0
+
+    event = assert_audit(db, actor_id=c["admin"]["id"], entity_type="FUEL_DELIVERY",
+                         entity_id=fd["id"], action="CREATE", reason=body["reason"])
+    assert event.after_value["manual_emergency"] is True
+
+
 def test_legacy_order_delivery_supplier_and_meter_variance_are_independent(client, fuel_ctx):
     """Phase 6: the legacy FuelOrder-based delivery path must use the same
     corrected variance model as the procurement hand-off — two independent

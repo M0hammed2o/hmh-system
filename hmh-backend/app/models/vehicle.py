@@ -268,6 +268,12 @@ class FuelDelivery(TimestampMixin, Base):
     # supplier quantity silently.
     supplier_variance_litres: Mapped[Optional[float]] = mapped_column(Numeric(12, 2), nullable=True)
     meter_variance_litres: Mapped[Optional[float]] = mapped_column(Numeric(12, 2), nullable=True)
+    # Emergency manual receipt (Phase 7) — bypasses the procurement chain
+    # entirely, gated on fuel.admin with a mandatory reason. Structurally
+    # distinct from both the procurement hand-off and the legacy FuelOrder
+    # delivery path so it can never be mistaken for either in reports/UI.
+    is_manual_emergency: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    emergency_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     tanker_registration: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     driver_details: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
     received_by: Mapped[Optional[uuid.UUID]] = mapped_column(

@@ -26,7 +26,8 @@ from app.models.site import Site
 from app.models.supplier import Supplier
 from app.models.vehicle import FuelDelivery, Vehicle
 from app.schemas.fuel_management import (
-    FuelAdjustmentCreate, FuelDeliveryCreate, FuelDeliveryFromProcurementCreate, FuelIssueCreate,
+    FuelAdjustmentCreate, FuelDeliveryCreate, FuelDeliveryFromProcurementCreate,
+    FuelManualEmergencyDeliveryCreate, FuelIssueCreate,
     FuelOrderCreate, FuelOrderUpdate, FuelReconciliationCreate, FuelStorageCreate, FuelTransition,
 )
 from app.services import audit_service, fuel_email_service, notification_service
@@ -541,6 +542,61 @@ def receive_delivery_from_procurement(
 
     db.commit(); db.refresh(fuel_delivery)
     return fuel_delivery
+
+
+def record_manual_emergency_delivery(
+    db: Session, project_id: uuid.UUID, data: FuelManualEmergencyDeliveryCreate, actor_id: uuid.UUID,
+):
+    """Emergency Fuel receipt with no procurement chain behind it at all
+    (Phase 7) — e.g. a cash purchase made before a Material Request could be
+    raised. This is deliberately NOT the normal path: routine stock
+    corrections must use FuelStockAdjustment (OPENING/CORRECTION/LOSS/GAIN/
+    REVERSAL), and routine deliveries must go through the real procurement
+    chain (Phase 5) or the legacy FuelOrder path. This function is only
+    reachable behind the fuel.admin permission at the API layer, and always
+    requires a mandatory reason and leaves an explicit audit trail."""
+    storage = _get(db, FuelStorageLocation, data.storage_location_id, "Fuel storage")
+    _get(db, Project, project_id, "Project")
+    if storage.project_id != project_id:
+        raise ValidationError("Storage location does not belong to this project.")
+    site_id = storage.site_id
+    if not site_id:
+        raise ValidationError("The storage location must be associated with a site.")
+    ft = _get(db, FuelTypeDefinition, storage.fuel_type_id, "Fuel type")
+    if data.supplier_id:
+        supplier = _get(db, Supplier, data.supplier_id, "Supplier")
+        if not supplier.is_active:
+            raise ValidationError("Supplier is inactive.")
+
+    confirmed = data.confirmed_litres or data.delivered_litres
+    calculated = None
+    if data.opening_reading is not None:
+        calculated = data.closing_reading - data.opening_reading
+    supplier_variance = round(confirmed - data.delivered_litres, 2)
+    meter_variance = round(confirmed - calculated, 2) if calculated is not None else None
+
+    delivery = FuelDelivery(
+        order_id=None, procurement_delivery_item_id=None,
+        project_id=project_id, site_id=site_id, supplier_id=data.supplier_id,
+        fuel_type_id=storage.fuel_type_id, storage_location_id=storage.id,
+        delivery_date=data.delivered_at.date(), delivered_at=data.delivered_at,
+        delivery_note_number=data.delivery_note_number, fuel_type=ft.code[:20],
+        litres_delivered=data.delivered_litres, opening_reading=data.opening_reading,
+        closing_reading=data.closing_reading, calculated_received_litres=calculated,
+        confirmed_litres=confirmed, variance_litres=supplier_variance,
+        supplier_variance_litres=supplier_variance, meter_variance_litres=meter_variance,
+        tanker_registration=data.tanker_registration, driver_details=data.driver_details,
+        received_by=actor_id, recorded_by=actor_id, verification_status="VERIFIED",
+        verified_by=actor_id, verified_at=_now(), notes=data.notes,
+        is_manual_emergency=True, emergency_reason=data.reason,
+    )
+    db.add(delivery); db.flush()
+    _audit(db, actor_id, AuditAction.CREATE, "FUEL_DELIVERY", delivery.id,
+           after={"manual_emergency": True, "confirmed_litres": confirmed,
+                  "storage_location_id": str(storage.id)},
+           notes=data.reason)
+    db.commit(); db.refresh(delivery)
+    return delivery
 
 
 def list_deliveries(db: Session, project_id: uuid.UUID):

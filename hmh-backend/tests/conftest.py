@@ -627,6 +627,25 @@ def ensure_tables():
             END $$;
         """))
 
+    # migration 0073: manual emergency receipt distinction on fuel_deliveries
+    with engine.begin() as conn:
+        conn.execute(_t("""
+            DO $$ BEGIN
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                    WHERE table_name='fuel_deliveries' AND column_name='is_manual_emergency')
+                THEN ALTER TABLE fuel_deliveries ADD COLUMN is_manual_emergency BOOLEAN NOT NULL DEFAULT FALSE;
+                END IF;
+            END $$;
+        """))
+        conn.execute(_t("""
+            DO $$ BEGIN
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                    WHERE table_name='fuel_deliveries' AND column_name='emergency_reason')
+                THEN ALTER TABLE fuel_deliveries ADD COLUMN emergency_reason TEXT NULL;
+                END IF;
+            END $$;
+        """))
+
     yield
 
 
