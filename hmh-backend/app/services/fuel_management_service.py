@@ -406,7 +406,9 @@ def record_delivery(db: Session, order_id: uuid.UUID, data: FuelDeliveryCreate,
     calculated = None
     if data.opening_reading is not None:
         calculated = data.closing_reading - data.opening_reading
-    variance = confirmed - (calculated if calculated is not None else data.delivered_litres)
+    # Two independent variances (Phase 6) — never a silent fallback between them.
+    supplier_variance = round(confirmed - data.delivered_litres, 2)
+    meter_variance = round(confirmed - calculated, 2) if calculated is not None else None
     ft = _get(db, FuelTypeDefinition, order.fuel_type_id, "Fuel type")
     delivery = FuelDelivery(
         order_id=order.id, project_id=order.project_id, site_id=site_id,
@@ -415,7 +417,8 @@ def record_delivery(db: Session, order_id: uuid.UUID, data: FuelDeliveryCreate,
         delivery_note_number=data.delivery_note_number, fuel_type=ft.code[:20],
         litres_delivered=data.delivered_litres, opening_reading=data.opening_reading,
         closing_reading=data.closing_reading, calculated_received_litres=calculated,
-        confirmed_litres=confirmed, variance_litres=variance,
+        confirmed_litres=confirmed, variance_litres=supplier_variance,
+        supplier_variance_litres=supplier_variance, meter_variance_litres=meter_variance,
         tanker_registration=data.tanker_registration, driver_details=data.driver_details,
         received_by=actor_id, recorded_by=actor_id, verification_status="PENDING",
         excess_override=excess, excess_override_reason=data.excess_reason if excess else None,
@@ -423,7 +426,8 @@ def record_delivery(db: Session, order_id: uuid.UUID, data: FuelDeliveryCreate,
     )
     db.add(delivery); db.flush()
     _audit(db, actor_id, AuditAction.CREATE, "FUEL_DELIVERY", delivery.id,
-           after={"order_id": str(order.id), "confirmed_litres": confirmed})
+           after={"order_id": str(order.id), "confirmed_litres": confirmed,
+                  "supplier_variance_litres": supplier_variance, "meter_variance_litres": meter_variance})
     if excess:
         _audit(db, actor_id, AuditAction.OVERRUN_ACCEPTED, "FUEL_DELIVERY", delivery.id,
                before={"recorded_litres": after_total - confirmed,
@@ -432,9 +436,16 @@ def record_delivery(db: Session, order_id: uuid.UUID, data: FuelDeliveryCreate,
                       "ordered_litres": float(order.requested_litres),
                       "excess_litres": round(after_total - float(order.requested_litres), 2)},
                notes=data.excess_reason)
-    if abs(variance) > max(20, confirmed * .02):
+    threshold = max(20, confirmed * .02)
+    if abs(supplier_variance) > threshold:
         _notify(db, alert_type=AlertType.DELIVERY_DISCREPANCY, severity=AlertSeverity.HIGH,
-                title="Fuel delivery variance", message=f"Delivery {data.delivery_note_number} variance is {variance:.2f} L.",
+                title="Fuel delivery supplier-quantity variance",
+                message=f"Delivery {data.delivery_note_number}: confirmed litres differ from the supplier-documented quantity by {supplier_variance:.2f} L.",
+                project_id=order.project_id, entity_type="FUEL_DELIVERY", entity_id=delivery.id)
+    if meter_variance is not None and abs(meter_variance) > threshold:
+        _notify(db, alert_type=AlertType.DELIVERY_DISCREPANCY, severity=AlertSeverity.HIGH,
+                title="Fuel delivery meter-reading variance",
+                message=f"Delivery {data.delivery_note_number}: confirmed litres differ from the tank meter reading by {meter_variance:.2f} L.",
                 project_id=order.project_id, entity_type="FUEL_DELIVERY", entity_id=delivery.id)
     db.commit(); db.refresh(delivery)
     return delivery

@@ -257,6 +257,33 @@ def test_wrong_fuel_storage_rejected(client, fuel_ctx):
     assert client.post(f"/api/v1/fuel-management/orders/{oid}/deliveries", json=body, headers=c["headers"]["site"]).status_code == 422
 
 
+def test_legacy_order_delivery_supplier_and_meter_variance_are_independent(client, fuel_ctx):
+    """Phase 6: the legacy FuelOrder-based delivery path must use the same
+    corrected variance model as the procurement hand-off — two independent
+    figures, never a silent fallback from meter to supplier quantity."""
+    c = fuel_ctx; oid = order_to_ordered(client, c, 500)
+    body = {
+        "delivered_at": datetime.now(timezone.utc).isoformat(), "delivered_litres": 400,
+        "confirmed_litres": 395, "delivery_note_number": "DN-VAR",
+        "storage_location_id": c["storage_id"], "opening_reading": 1000, "closing_reading": 1390,
+    }
+    r = client.post(f"/api/v1/fuel-management/orders/{oid}/deliveries", json=body, headers=c["headers"]["site"])
+    assert r.status_code == 201, r.text
+    fd = r.json()["data"]
+    assert fd["calculated_received_litres"] == 390.0
+    assert fd["supplier_variance_litres"] == -5.0
+    assert fd["meter_variance_litres"] == 5.0
+
+    # No readings captured at all — meter variance must be NULL, never fall back to supplier variance.
+    body2 = {"delivered_at": datetime.now(timezone.utc).isoformat(), "delivered_litres": 90,
+             "confirmed_litres": 85, "delivery_note_number": "DN-NOREAD", "storage_location_id": c["storage_id"]}
+    r2 = client.post(f"/api/v1/fuel-management/orders/{oid}/deliveries", json=body2, headers=c["headers"]["site"])
+    assert r2.status_code == 201, r2.text
+    fd2 = r2.json()["data"]
+    assert fd2["supplier_variance_litres"] == -5.0
+    assert fd2["meter_variance_litres"] is None
+
+
 def test_vehicle_issue_reduces_stock_and_reverse_restores(client, db, fuel_ctx):
     c = fuel_ctx
     vehicle = Vehicle(registration=f"TEST-{uuid.uuid4().hex[:5]}", name="Test Bakkie",
