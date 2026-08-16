@@ -41,6 +41,8 @@ class FuelStorageRead(OrmModel):
     is_active: bool
     notes: Optional[str]
     calculated_balance_litres: float = 0
+    cutover_confirmed_at: Optional[datetime] = None
+    cutover_confirmed_by: Optional[uuid.UUID] = None
 
 
 class FuelOrderCreate(BaseModel):

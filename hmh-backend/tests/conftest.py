@@ -646,6 +646,25 @@ def ensure_tables():
             END $$;
         """))
 
+    # migration 0074: trustworthy stock cutover on fuel_storage_locations
+    with engine.begin() as conn:
+        conn.execute(_t("""
+            DO $$ BEGIN
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                    WHERE table_name='fuel_storage_locations' AND column_name='cutover_confirmed_at')
+                THEN ALTER TABLE fuel_storage_locations ADD COLUMN cutover_confirmed_at TIMESTAMPTZ NULL;
+                END IF;
+            END $$;
+        """))
+        conn.execute(_t("""
+            DO $$ BEGIN
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                    WHERE table_name='fuel_storage_locations' AND column_name='cutover_confirmed_by')
+                THEN ALTER TABLE fuel_storage_locations ADD COLUMN cutover_confirmed_by UUID NULL;
+                END IF;
+            END $$;
+        """))
+
     yield
 
 

@@ -100,6 +100,16 @@ def _validate_scope(db: Session, project_id: uuid.UUID, site_id: Optional[uuid.U
             raise ValidationError("Site does not belong to the selected project.")
 
 
+def _confirm_cutover_if_needed(db: Session, storage: FuelStorageLocation, actor_id: uuid.UUID):
+    """Phase 8: mark a storage location's stock as trustworthy the first
+    time real evidence backs it — a VERIFIED delivery or a controlled
+    OPENING adjustment. Idempotent; never overwrites an existing timestamp."""
+    if storage.cutover_confirmed_at is None:
+        storage.cutover_confirmed_at = _now()
+        storage.cutover_confirmed_by = actor_id
+        db.flush()
+
+
 def create_storage(db: Session, project_id: uuid.UUID, data: FuelStorageCreate, actor_id: uuid.UUID):
     _validate_scope(db, project_id, data.site_id)
     fuel_type = _get(db, FuelTypeDefinition, data.fuel_type_id, "Fuel type")
@@ -121,6 +131,7 @@ def create_storage(db: Session, project_id: uuid.UUID, data: FuelStorageCreate, 
             litres_delta=data.opening_stock_litres, reason="Opening stock on storage creation",
             authorised_by=actor_id, created_at=_now(),
         ))
+        _confirm_cutover_if_needed(db, storage, actor_id)
     _audit(db, actor_id, AuditAction.CREATE, "FUEL_STORAGE", storage.id,
            after={"name": storage.name, "opening_stock_litres": data.opening_stock_litres})
     db.commit(); db.refresh(storage)
@@ -515,6 +526,7 @@ def receive_delivery_from_procurement(
     db.add(fuel_delivery)
     try:
         db.flush()
+        _confirm_cutover_if_needed(db, storage, actor_id)
     except IntegrityError:
         db.rollback()
         existing = db.query(FuelDelivery).filter(
@@ -591,6 +603,7 @@ def record_manual_emergency_delivery(
         is_manual_emergency=True, emergency_reason=data.reason,
     )
     db.add(delivery); db.flush()
+    _confirm_cutover_if_needed(db, storage, actor_id)
     _audit(db, actor_id, AuditAction.CREATE, "FUEL_DELIVERY", delivery.id,
            after={"manual_emergency": True, "confirmed_litres": confirmed,
                   "storage_location_id": str(storage.id)},
@@ -611,6 +624,8 @@ def verify_delivery(db: Session, delivery_id: uuid.UUID, actor_id: uuid.UUID, ap
         raise InvalidStateError("Only a pending fuel delivery can be verified or rejected.")
     delivery.verification_status = "VERIFIED" if approve else "REJECTED"
     delivery.verified_by, delivery.verified_at = actor_id, _now()
+    if approve and delivery.storage_location_id:
+        _confirm_cutover_if_needed(db, _get(db, FuelStorageLocation, delivery.storage_location_id, "Fuel storage"), actor_id)
     order = _get(db, FuelOrder, delivery.order_id, "Fuel order") if delivery.order_id else None
     if order and approve:
         db.flush()
@@ -667,6 +682,11 @@ def create_issue(db: Session, project_id: uuid.UUID, data: FuelIssueCreate, acto
     storage = _get(db, FuelStorageLocation, data.storage_location_id, "Fuel storage")
     if storage.project_id != project_id or storage.fuel_type_id != data.fuel_type_id:
         raise ValidationError("Issue storage does not match the project and fuel type.")
+    if storage.cutover_confirmed_at is None:
+        raise ValidationError(
+            "This storage location has not completed Fuel stock cutover. "
+            "Record a verified delivery or a controlled opening balance before issuing fuel from it."
+        )
     destination = data.destination_type.upper()
     allowed = {"VEHICLE", "PLANT", "GENERATOR", "STORAGE_TANK", "OTHER_EQUIPMENT"}
     if destination not in allowed:
@@ -862,6 +882,8 @@ def create_adjustment(db: Session, project_id: uuid.UUID, data: FuelAdjustmentCr
         reference_reconciliation_id=data.reference_reconciliation_id, created_at=_now(),
     )
     db.add(adjustment); db.flush()
+    if adjustment_type == "OPENING":
+        _confirm_cutover_if_needed(db, storage, actor_id)
     _audit(db, actor_id, AuditAction.UPDATE, "FUEL_ADJUSTMENT", adjustment.id,
            before={"calculated_balance_litres": balance_before},
            after={"calculated_balance_litres": round(balance_before + data.litres_delta, 2),

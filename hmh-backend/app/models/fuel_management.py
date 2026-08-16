@@ -43,6 +43,13 @@ class FuelStorageLocation(TimestampMixin, Base):
     low_stock_threshold_litres: Mapped[Optional[float]] = mapped_column(Numeric(12, 2), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Phase 8: set automatically the first time this storage location has
+    # trustworthy evidence behind its stock — a VERIFIED delivery or a
+    # controlled OPENING adjustment. Never a bare manual toggle.
+    cutover_confirmed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    cutover_confirmed_by: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
 
 
 class FuelOrder(TimestampMixin, Base):

@@ -257,6 +257,41 @@ def test_wrong_fuel_storage_rejected(client, fuel_ctx):
     assert client.post(f"/api/v1/fuel-management/orders/{oid}/deliveries", json=body, headers=c["headers"]["site"]).status_code == 422
 
 
+def test_uncut_over_storage_blocks_issues_until_opening_balance_or_delivery(client, db, fuel_ctx):
+    """Phase 8: a freshly-created storage location with no evidence behind
+    its stock (no opening balance, no verified delivery) must refuse
+    FuelIssue — the calculated balance is untrustworthy zero, not a real
+    empty tank. Cutover is set automatically by real evidence, not a
+    manual toggle."""
+    c = fuel_ctx
+    r = client.post(f"/api/v1/projects/{c['project']['id']}/fuel-management/storage", json={
+        "site_id": c["site"]["id"], "fuel_type_id": c["diesel_id"], "name": "New Uncut-Over Tank",
+    }, headers=c["headers"]["owner"])
+    assert r.status_code == 201, r.text
+    storage = r.json()["data"]
+    assert storage["cutover_confirmed_at"] is None
+
+    body = {"storage_location_id": storage["id"], "fuel_type_id": c["diesel_id"],
+            "destination_type": "GENERATOR", "equipment_reference": "GEN-CUTOVER", "litres": 5}
+    r = client.post(f"/api/v1/projects/{c['project']['id']}/fuel-management/issues", json=body, headers=c["headers"]["site"])
+    assert r.status_code == 422, r.text
+    assert "cutover" in r.text.lower()
+
+    # A controlled opening-balance adjustment is real evidence — cutover confirms automatically.
+    adj = client.post(f"/api/v1/projects/{c['project']['id']}/fuel-management/adjustments", json={
+        "storage_location_id": storage["id"], "adjustment_type": "OPENING",
+        "litres_delta": 200, "reason": "Physical dip count at cutover",
+    }, headers=c["headers"]["owner"])
+    assert adj.status_code == 201, adj.text
+
+    storages = client.get(f"/api/v1/projects/{c['project']['id']}/fuel-management/storage", headers=c["headers"]["owner"]).json()["data"]
+    confirmed = next(s for s in storages if s["id"] == storage["id"])
+    assert confirmed["cutover_confirmed_at"] is not None
+
+    r2 = client.post(f"/api/v1/projects/{c['project']['id']}/fuel-management/issues", json=body, headers=c["headers"]["site"])
+    assert r2.status_code == 422 and "Mandatory fuel evidence" in r2.text  # cutover no longer the blocker
+
+
 def test_manual_emergency_delivery_requires_fuel_admin_and_reason(client, db, fuel_ctx):
     """Phase 7: emergency receipts bypass the procurement chain entirely, so
     they must be locked to fuel.admin, always carry a mandatory reason, and
