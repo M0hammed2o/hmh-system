@@ -305,6 +305,104 @@ def test_convert_mr_to_po(db: Session, client: TestClient, setup: dict):
     assert r2.json()["data"]["status"] == "CONVERTED_TO_PO"
 
 
+def test_fuel_mr_converts_to_real_po_and_invoice(db: Session, client: TestClient, setup: dict):
+    """
+    Phase 4: a FUEL-category MR must travel through the exact same
+    submit -> approve -> convert-to-po -> invoice pipeline as a MATERIAL
+    request, using the real PurchaseOrder/PurchaseOrderItem/Invoice models
+    and the real supplier FK. No Fuel-specific procurement engine (FuelQuote,
+    Fuel PO table, Fuel invoice table) is involved anywhere in this flow.
+    """
+    tok = login(client, setup["office"]["email"], setup["office"]["password"])
+    project_id = setup["project"]["id"]
+    supplier_id = setup["supplier"]["id"]
+
+    # Create a FUEL MR (no BOQ linkage) — mirrors the site-clerk "Request Materials" Fuel tab
+    r = client.post(
+        f"/api/v1/projects/{project_id}/material-requests/",
+        json={
+            "site_id": setup["site"]["id"],
+            "procurement_category": "FUEL",
+            "items": [{"description": "Diesel", "requested_quantity": 1000.0, "unit": "L"}],
+        },
+        headers=auth(tok),
+    )
+    assert r.status_code == 201, r.text
+    mr_id = r.json()["data"]["id"]
+    assert r.json()["data"]["procurement_category"] == "FUEL"
+
+    # Submit + approve — identical endpoints to the MATERIAL path
+    r = client.post(f"/api/v1/material-requests/{mr_id}/submit", headers=auth(tok))
+    assert r.status_code == 200, r.text
+    assert r.json()["data"]["status"] == "SUBMITTED"
+    r = client.post(f"/api/v1/material-requests/{mr_id}/approve", json={}, headers=auth(tok))
+    assert r.status_code == 200, r.text
+    assert r.json()["data"]["status"] == "APPROVED"
+
+    # Convert to PO — office selects the Fuel supplier here (the real Supplier FK)
+    r = client.post(
+        f"/api/v1/material-requests/{mr_id}/convert-to-po",
+        json={
+            "supplier_id": supplier_id,
+            "items": [{
+                "description": "Diesel",
+                "quantity": 1000,
+                "unit": "L",
+                "rate": 25.0,
+            }],
+        },
+        headers=auth(tok),
+    )
+    assert r.status_code == 201, r.text
+    po_data = r.json()["data"]
+    assert po_data["po_number"].startswith("PO-")
+    po_id = po_data["po_id"]
+
+    # Verify PO/PurchaseOrderItem are the real, unmodified models — no Fuel-specific table
+    from app.models.purchase_order import PurchaseOrder, PurchaseOrderItem
+    from app.models.supplier import Supplier
+    po = db.query(PurchaseOrder).filter(PurchaseOrder.id == po_id).first()
+    assert po is not None
+    assert str(po.supplier_id) == supplier_id
+    items = db.query(PurchaseOrderItem).filter(PurchaseOrderItem.purchase_order_id == po.id).all()
+    assert len(items) == 1
+    poi = items[0]
+    assert abs(float(poi.quantity_ordered) - 1000.0) < 0.001
+    assert abs(float(poi.rate) - 25.0) < 0.01
+    assert abs(float(poi.line_total) - 25000.0) < 0.01
+
+    # MR reaches CONVERTED_TO_PO and keeps its FUEL category — no separate Fuel PO status machine
+    r2 = client.get(f"/api/v1/material-requests/{mr_id}", headers=auth(tok))
+    assert r2.json()["data"]["status"] == "CONVERTED_TO_PO"
+    assert r2.json()["data"]["procurement_category"] == "FUEL"
+
+    # The real supplier FK naturally surfaces this PO — no parallel Fuel supplier-history engine
+    supplier_pos = db.query(PurchaseOrder).filter(PurchaseOrder.supplier_id == po.supplier_id).all()
+    assert po.id in [p.id for p in supplier_pos]
+    supplier = db.query(Supplier).filter(Supplier.id == po.supplier_id).first()
+    assert supplier is not None
+
+    # Invoice against this PO — the real Invoice model, unmodified, same as MATERIAL POs
+    r_inv = client.post(
+        f"/api/v1/projects/{project_id}/invoices/",
+        json={
+            "invoice_number": f"INV-FUEL-{uuid.uuid4().hex[:6].upper()}",
+            "supplier_id": supplier_id,
+            "purchase_order_id": po_id,
+            "total_amount": 25000.0,
+        },
+        headers=auth(tok),
+    )
+    assert r_inv.status_code == 201, r_inv.text
+    inv_id = r_inv.json()["data"]["id"]
+
+    r_proof = client.get(f"/api/v1/invoices/{inv_id}/proof", headers=auth(tok))
+    assert r_proof.status_code == 200, r_proof.text
+    proof = r_proof.json()["data"]
+    assert proof["po_number"] == po_data["po_number"]
+    assert proof["total_amount"] == 25000.0
+
+
 def test_convert_mr_to_po_validates_quantity_and_rate(db: Session, client: TestClient, setup: dict):
     """convert-to-po returns 422 when quantity or rate is missing/zero."""
     tok = login(client, setup["office"]["email"], setup["office"]["password"])
