@@ -403,6 +403,58 @@ def test_fuel_mr_converts_to_real_po_and_invoice(db: Session, client: TestClient
     assert proof["total_amount"] == 25000.0
 
 
+def test_fuel_po_appears_naturally_in_supplier_procurement_history(db: Session, client: TestClient, setup: dict):
+    """Phase 13: the existing supplier procurement-history endpoint has no
+    procurement_category filter at all — a Fuel PO must show up in it
+    exactly like a MATERIAL PO, with its MR/delivery/invoice chain intact,
+    proving no parallel Fuel supplier-history engine is needed."""
+    tok = login(client, setup["office"]["email"], setup["office"]["password"])
+    project_id = setup["project"]["id"]
+    supplier_id = setup["supplier"]["id"]
+
+    r = client.post(
+        f"/api/v1/projects/{project_id}/material-requests/",
+        json={
+            "site_id": setup["site"]["id"], "procurement_category": "FUEL",
+            "items": [{"description": "Diesel", "requested_quantity": 200.0, "unit": "L"}],
+        },
+        headers=auth(tok),
+    )
+    assert r.status_code == 201, r.text
+    mr_id = r.json()["data"]["id"]
+    client.post(f"/api/v1/material-requests/{mr_id}/submit", headers=auth(tok))
+    client.post(f"/api/v1/material-requests/{mr_id}/approve", json={}, headers=auth(tok))
+    r = client.post(
+        f"/api/v1/material-requests/{mr_id}/convert-to-po",
+        json={"supplier_id": supplier_id,
+              "items": [{"description": "Diesel", "quantity": 200, "unit": "L", "rate": 25.0}]},
+        headers=auth(tok),
+    )
+    assert r.status_code == 201, r.text
+    po_id = r.json()["data"]["po_id"]
+    po_number = r.json()["data"]["po_number"]
+
+    r_inv = client.post(
+        f"/api/v1/projects/{project_id}/invoices/",
+        json={"invoice_number": f"INV-FUEL-HIST-{uuid.uuid4().hex[:6].upper()}",
+              "supplier_id": supplier_id, "purchase_order_id": po_id, "total_amount": 5000.0},
+        headers=auth(tok),
+    )
+    assert r_inv.status_code == 201, r_inv.text
+
+    history = client.get(f"/api/v1/suppliers/{supplier_id}/procurement-history", headers=auth(tok))
+    assert history.status_code == 200, history.text
+    data = history.json()["data"]
+    assert data["po_count"] >= 1
+    chain = next((p for p in data["purchase_orders"] if p["po_id"] == po_id), None)
+    assert chain is not None, "Fuel PO not found in supplier procurement history"
+    assert chain["po_number"] == po_number
+    assert chain["source_mr"] == {"mr_id": mr_id}
+    assert chain["chain_status"]["has_invoice"] is True
+    assert len(chain["invoices"]) == 1
+    assert chain["invoices"][0]["total_amount"] == 5000.0
+
+
 def test_convert_mr_to_po_validates_quantity_and_rate(db: Session, client: TestClient, setup: dict):
     """convert-to-po returns 422 when quantity or rate is missing/zero."""
     tok = login(client, setup["office"]["email"], setup["office"]["password"])
