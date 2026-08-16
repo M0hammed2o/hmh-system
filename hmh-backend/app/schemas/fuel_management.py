@@ -242,6 +242,23 @@ class FuelManualEmergencyDeliveryCreate(BaseModel):
         return self
 
 
+class FuelPendingConfirmationRead(BaseModel):
+    """A real procurement DeliveryItem (FUEL-category MR -> PO -> Delivery)
+    not yet confirmed into Fuel stock — surfaces the Phase 5 hand-off in
+    the office UI."""
+    delivery_item_id: uuid.UUID
+    description: str
+    quantity_received: float
+    unit: Optional[str] = None
+    delivery_id: uuid.UUID
+    delivery_number: Optional[str] = None
+    delivery_date: datetime
+    supplier_delivery_note_number: Optional[str] = None
+    po_id: uuid.UUID
+    po_number: str
+    supplier_id: uuid.UUID
+
+
 class FuelIssueCreate(BaseModel):
     site_id: Optional[uuid.UUID] = None
     storage_location_id: uuid.UUID

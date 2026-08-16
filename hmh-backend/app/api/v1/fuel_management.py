@@ -22,6 +22,7 @@ from app.schemas.fuel_management import (
     FuelEquipmentProfileCreate, FuelEquipmentProfileRead,
     FuelIssueCreate, FuelIssueRead, FuelManualEmergencyDeliveryCreate,
     FuelOrderCreate, FuelOrderHistoryRead, FuelOrderRead, FuelOrderUpdate,
+    FuelPendingConfirmationRead,
     FuelReconciliationCreate, FuelReconciliationRead, FuelStorageCreate, FuelStorageRead,
     FuelTransition, FuelTypeRead,
 )
@@ -215,6 +216,16 @@ def record_manual_emergency_delivery(project_id: uuid.UUID, body: FuelManualEmer
     _access(db, current_user, project_id)
     obj = service.record_manual_emergency_delivery(db, project_id, body, current_user.id)
     return ApiSuccess(data=FuelDeliveryRead.model_validate(obj), message="Manual emergency delivery recorded and audited.")
+
+
+@project_router.get("/deliveries/pending-confirmation", response_model=ApiSuccess[list[FuelPendingConfirmationRead]],
+                    dependencies=[require_fuel_permission("fuel.receive")])
+def list_pending_procurement_confirmations(project_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
+    """Real procurement DeliveryItems (FUEL-category MR -> PO -> Delivery)
+    not yet confirmed into Fuel stock — the Phase 5 hand-off queue."""
+    _access(db, current_user, project_id)
+    return ApiSuccess(data=[FuelPendingConfirmationRead.model_validate(x)
+                            for x in service.list_pending_procurement_confirmations(db, project_id)])
 
 
 @project_router.get("/deliveries", response_model=ApiSuccess[list[FuelDeliveryRead]],

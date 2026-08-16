@@ -1169,6 +1169,34 @@ def _create_fuel_delivery_item(client, c, litres=600.0, rate=25.0):
     return r.json()["data"]["items"][0]["id"], po_id
 
 
+def test_pending_procurement_confirmations_lists_and_clears_on_confirm(client, fuel_ctx):
+    """The office Fuel Deliveries screen needs to know which real
+    procurement DeliveryItems (FUEL MR -> PO -> Delivery) are still
+    waiting to be confirmed into stock — and stop listing one the moment
+    it's confirmed."""
+    c = fuel_ctx
+    pending_url = f"/api/v1/projects/{c['project']['id']}/fuel-management/deliveries/pending-confirmation"
+    assert client.get(pending_url, headers=c["headers"]["admin"]).json()["data"] == []
+
+    delivery_item_id, po_id = _create_fuel_delivery_item(client, c, litres=300.0)
+    r = client.get(pending_url, headers=c["headers"]["admin"])
+    assert r.status_code == 200, r.text
+    pending = r.json()["data"]
+    assert len(pending) == 1
+    assert pending[0]["delivery_item_id"] == delivery_item_id
+    assert pending[0]["quantity_received"] == 300.0
+    assert pending[0]["po_id"] == po_id
+
+    hand_off = client.post(
+        f"/api/v1/projects/{c['project']['id']}/fuel-management/deliveries/from-procurement",
+        json={"delivery_item_id": delivery_item_id, "storage_location_id": c["storage_id"], "confirmed_litres": 298.0},
+        headers=c["headers"]["admin"],
+    )
+    assert hand_off.status_code == 201, hand_off.text
+
+    assert client.get(pending_url, headers=c["headers"]["admin"]).json()["data"] == []
+
+
 def test_procurement_delivery_item_hand_off_confirms_stock_and_is_idempotent(client, db, fuel_ctx):
     c = fuel_ctx
     delivery_item_id, _po_id = _create_fuel_delivery_item(client, c, litres=600.0)

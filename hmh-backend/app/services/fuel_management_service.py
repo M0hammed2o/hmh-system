@@ -651,6 +651,39 @@ def record_manual_emergency_delivery(
     return delivery
 
 
+def list_pending_procurement_confirmations(db: Session, project_id: uuid.UUID):
+    """DeliveryItems from FUEL-category procurement (real MR -> PO -> Delivery)
+    that have not yet been confirmed into Fuel stock via
+    receive_delivery_from_procurement (Phase 5) — what office staff need to
+    action next on the Fuel Deliveries screen."""
+    confirmed_item_ids = db.query(FuelDelivery.procurement_delivery_item_id).filter(
+        FuelDelivery.procurement_delivery_item_id.isnot(None)
+    )
+    rows = (
+        db.query(DeliveryItem, Delivery, PurchaseOrder)
+        .join(Delivery, DeliveryItem.delivery_id == Delivery.id)
+        .join(PurchaseOrder, Delivery.purchase_order_id == PurchaseOrder.id)
+        .join(MaterialRequest, PurchaseOrder.material_request_id == MaterialRequest.id)
+        .filter(
+            Delivery.project_id == project_id,
+            MaterialRequest.procurement_category == "FUEL",
+            DeliveryItem.id.notin_(confirmed_item_ids),
+        )
+        .order_by(Delivery.delivery_date.desc())
+        .all()
+    )
+    return [
+        {
+            "delivery_item_id": di.id, "description": di.description,
+            "quantity_received": float(di.quantity_received), "unit": di.unit,
+            "delivery_id": d.id, "delivery_number": d.delivery_number,
+            "delivery_date": d.delivery_date, "supplier_delivery_note_number": d.supplier_delivery_note_number,
+            "po_id": po.id, "po_number": po.po_number, "supplier_id": po.supplier_id,
+        }
+        for di, d, po in rows
+    ]
+
+
 def list_deliveries(db: Session, project_id: uuid.UUID):
     return db.query(FuelDelivery).filter(FuelDelivery.project_id == project_id).order_by(
         FuelDelivery.delivered_at.desc().nullslast(), FuelDelivery.created_at.desc()

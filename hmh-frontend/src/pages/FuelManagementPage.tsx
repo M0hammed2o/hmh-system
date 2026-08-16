@@ -6,7 +6,7 @@ import { projectsApi, type Project } from "@/api/projects";
 import { vehiclesApi, type Vehicle } from "@/api/vehicles";
 import {
   fuelManagementApi, type FuelDashboard, type FuelDelivery, type FuelIssue,
-  type FuelOrder, type FuelReconciliation, type FuelStorage, type FuelTypeDefinition,
+  type FuelOrder, type FuelPendingConfirmation, type FuelReconciliation, type FuelStorage, type FuelTypeDefinition,
 } from "@/api/fuelManagement";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -41,6 +41,7 @@ export default function FuelManagementPage({ section = "dashboard" }: { section?
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [orders, setOrders] = useState<FuelOrder[]>([]);
   const [deliveries, setDeliveries] = useState<FuelDelivery[]>([]);
+  const [pendingConfirmations, setPendingConfirmations] = useState<FuelPendingConfirmation[]>([]);
   const [issues, setIssues] = useState<FuelIssue[]>([]);
   const [reconciliations, setReconciliations] = useState<FuelReconciliation[]>([]);
   const [dashboard, setDashboard] = useState<FuelDashboard | null>(null);
@@ -70,7 +71,12 @@ export default function FuelManagementPage({ section = "dashboard" }: { section?
       ]);
       setStorage(stores); setOrders(allOrders);
       if (section === "dashboard") setDashboard(await fuelManagementApi.dashboard(projectId));
-      if (section === "deliveries") setDeliveries(await fuelManagementApi.deliveries(projectId));
+      if (section === "deliveries") {
+        const [rows, pending] = await Promise.all([
+          fuelManagementApi.deliveries(projectId), fuelManagementApi.pendingConfirmations(projectId),
+        ]);
+        setDeliveries(rows); setPendingConfirmations(pending);
+      }
       if (section === "issues") {
         const [rows, fleet] = await Promise.all([fuelManagementApi.issues(projectId), vehiclesApi.list(projectId)]);
         setIssues(rows); setVehicles(fleet);
@@ -110,8 +116,8 @@ export default function FuelManagementPage({ section = "dashboard" }: { section?
 
       {error && <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</div>}
       {!projectId ? <Empty text="Choose a project to view fuel records." /> : section === "dashboard" ? <Dashboard data={dashboard} />
-        : section === "orders" ? <Orders orders={orders} linkedOrderId={linkedOrderId} fuelName={fuelName} showForm={showForm} setShowForm={setShowForm} projectId={projectId} storage={storage} fuelTypes={fuelTypes} run={run} />
-        : section === "deliveries" ? <Deliveries rows={deliveries} ordered={ordered} storage={storage} showForm={showForm} setShowForm={setShowForm} run={run} />
+        : section === "orders" ? <Orders orders={orders} linkedOrderId={linkedOrderId} fuelName={fuelName} run={run} />
+        : section === "deliveries" ? <Deliveries rows={deliveries} pending={pendingConfirmations} ordered={ordered} storage={storage} showForm={showForm} setShowForm={setShowForm} projectId={projectId} run={run} />
         : section === "issues" ? <Issues rows={issues} storage={storage} vehicles={vehicles} showForm={showForm} setShowForm={setShowForm} projectId={projectId} run={run} />
         : section === "stock" ? <Stock storage={storage} fuelTypes={fuelTypes} rows={reconciliations} showForm={showForm} setShowForm={setShowForm} projectId={projectId} run={run} />
         : <Reports projectId={projectId} run={run} />}
@@ -130,9 +136,11 @@ function Dashboard({ data }: { data: FuelDashboard | null }) {
     <div className="grid sm:grid-cols-2 gap-3"><div className="rounded-xl border p-4"><p className="font-semibold">Outstanding orders</p><p className="text-3xl font-bold mt-2">{data.outstanding_orders}</p></div><div className="rounded-xl border p-4"><p className="font-semibold">Overdue deliveries</p><p className="text-3xl font-bold mt-2 text-amber-600">{data.overdue_deliveries}</p></div></div></>;
 }
 
-function Orders({ orders, linkedOrderId, fuelName, showForm, setShowForm, projectId, storage, fuelTypes, run }: any) {
-  const [form, setForm] = useState({ fuel_type_id: "", storage_location_id: "", requested_litres: "", delivery_location: "", expected_delivery_date: "", purpose: "" });
-  useEffect(() => { if (!form.fuel_type_id && fuelTypes[0]) setForm((x) => ({ ...x, fuel_type_id: fuelTypes[0].id })); }, [fuelTypes, form.fuel_type_id]);
+function Orders({ orders, linkedOrderId, fuelName, run }: any) {
+  // Phase 12/15: new fuel requests are made via Request Materials (procurement_category=FUEL)
+  // on the site dashboard, which travels through the real MR -> Quote -> PO -> Delivery chain.
+  // This tab no longer creates new FuelOrders — it exists to view/action any already-in-flight
+  // legacy orders so nothing in progress is stranded, and to keep historical rows readable.
   const transition = (order: FuelOrder, action: any) => {
     const reason = ["reject", "cancel"].includes(action) ? window.prompt("Reason") : undefined;
     const override_reason = action === "approve" && order.feasibility_status === "OVERRIDE_REQUIRED" ? window.prompt("Authorised feasibility override reason") : undefined;
@@ -140,25 +148,62 @@ function Orders({ orders, linkedOrderId, fuelName, showForm, setShowForm, projec
     if (["reject", "cancel"].includes(action) && !reason || action === "mark-ordered" && !supplier_reference || action === "approve" && order.feasibility_status === "OVERRIDE_REQUIRED" && !override_reason) return;
     void run(() => fuelManagementApi.transitionOrder(order.id, action, { reason, override_reason, supplier_reference }));
   };
-  return <Section title="Fuel Orders" action={<Button onClick={() => setShowForm(!showForm)}><Plus className="w-4 h-4" />New request</Button>}>
-    {showForm && <FormCard><div className="grid sm:grid-cols-2 gap-3"><Field label="Fuel type"><select value={form.fuel_type_id} onChange={(e) => setForm({ ...form, fuel_type_id: e.target.value })} className="input"><option value="">Choose</option>{fuelTypes.map((x: FuelTypeDefinition) => <option key={x.id} value={x.id}>{x.name}</option>)}</select></Field>
-      <Field label="Destination storage"><select value={form.storage_location_id} onChange={(e) => setForm({ ...form, storage_location_id: e.target.value })} className="input"><option value="">Choose</option>{storage.filter((x: FuelStorage) => x.fuel_type_id === form.fuel_type_id).map((x: FuelStorage) => <option key={x.id} value={x.id}>{x.name}</option>)}</select></Field>
-      <Field label="Requested litres"><Input type="number" min="0.01" value={form.requested_litres} onChange={(e) => setForm({ ...form, requested_litres: e.target.value })} /></Field><Field label="Expected delivery"><Input type="date" value={form.expected_delivery_date} onChange={(e) => setForm({ ...form, expected_delivery_date: e.target.value })} /></Field>
-      <Field label="Delivery location"><Input value={form.delivery_location} onChange={(e) => setForm({ ...form, delivery_location: e.target.value })} /></Field><Field label="Purpose / notes"><Input value={form.purpose} onChange={(e) => setForm({ ...form, purpose: e.target.value })} /></Field></div>
-      <Button onClick={() => void run(() => fuelManagementApi.createOrder(projectId, { ...form, requested_litres: Number(form.requested_litres), expected_delivery_date: form.expected_delivery_date || null, storage_location_id: form.storage_location_id || null }))}>Save draft</Button></FormCard>}
-    <CardList empty="No fuel orders yet.">{orders.map((o: FuelOrder) => <article key={o.id} data-testid={`fuel-order-${o.id}`} className={`rounded-xl border p-4 space-y-3 ${linkedOrderId === o.id ? "ring-2 ring-primary" : ""}`}><div className="flex flex-wrap justify-between gap-2"><div><p className="font-semibold">{o.order_number}</p><p className="text-sm text-muted-foreground">{fuelName(o.fuel_type_id)} · {fmt(o.requested_litres)} · delivered {fmt(o.delivered_litres)}</p><p className="text-xs text-muted-foreground">Requested by {o.requester_name || "User"} · next: {o.next_approver || "complete"}</p>{o.feasibility_message && <p className="mt-1 text-sm text-amber-700">Review flag: {o.feasibility_message}</p>}</div><Badge className={statusClass(o.status)}>{o.status.replaceAll("_", " ")}</Badge></div>
+  return <Section title="Fuel Orders (legacy)" action={<p className="text-xs text-muted-foreground max-w-xs sm:text-right">New fuel requests are made via <strong>Request Materials</strong> on the site dashboard. This list covers historical and any still in-flight legacy orders only.</p>}>
+    <CardList empty="No fuel orders — new requests go through Request Materials instead.">{orders.map((o: FuelOrder) => <article key={o.id} data-testid={`fuel-order-${o.id}`} className={`rounded-xl border p-4 space-y-3 ${linkedOrderId === o.id ? "ring-2 ring-primary" : ""}`}><div className="flex flex-wrap justify-between gap-2"><div><p className="font-semibold">{o.order_number}</p><p className="text-sm text-muted-foreground">{fuelName(o.fuel_type_id)} · {fmt(o.requested_litres)} · delivered {fmt(o.delivered_litres)}</p><p className="text-xs text-muted-foreground">Requested by {o.requester_name || "User"} · next: {o.next_approver || "complete"}</p>{o.feasibility_message && <p className="mt-1 text-sm text-amber-700">Review flag: {o.feasibility_message}</p>}</div><Badge className={statusClass(o.status)}>{o.status.replaceAll("_", " ")}</Badge></div>
       <details className="text-sm" open={linkedOrderId === o.id || undefined}><summary className="cursor-pointer text-primary">Details and approval history</summary><div className="mt-2 space-y-1"><p>Intended use: {o.intended_use || o.purpose || "—"}</p><p>Destination: {o.destination_type?.replaceAll("_", " ") || "—"} {o.equipment_reference || ""}</p><ol className="border-l pl-3">{o.history?.map(h => <li key={h.id}>{new Date(h.created_at).toLocaleString()} — {h.to_status} by {h.actor_name || "User"}{h.reason ? `: ${h.reason}` : ""}</li>)}</ol></div></details>
       <div className="flex flex-wrap gap-2">{o.status === "DRAFT" && <Button size="sm" onClick={() => transition(o, "submit")}>Submit</Button>}{o.status === "SUBMITTED" && <><Button size="sm" onClick={() => transition(o, "approve")}>Approve</Button><Button size="sm" variant="outline" onClick={() => transition(o, "reject")}>Reject</Button></>}{o.status === "APPROVED" && <Button size="sm" onClick={() => transition(o, "mark-ordered")}>Mark ordered</Button>}{o.status === "DELIVERED" && <Button size="sm" onClick={() => transition(o, "close")}>Close</Button>}</div></article>)}</CardList>
   </Section>;
 }
 
-function Deliveries({ rows, ordered, storage, showForm, setShowForm, run }: any) {
+function Deliveries({ rows, pending, ordered, storage, showForm, setShowForm, projectId, run }: any) {
   const [form, setForm] = useState({ order_id: "", storage_location_id: "", delivered_litres: "", delivery_note_number: "", opening_reading: "", closing_reading: "", tanker_registration: "", driver_details: "" });
-  return <Section title="Fuel Deliveries" action={<Button onClick={() => setShowForm(!showForm)}><Plus className="w-4 h-4" />Record delivery</Button>}>
+  const [confirming, setConfirming] = useState<FuelPendingConfirmation | null>(null);
+  const [confirmForm, setConfirmForm] = useState({ storage_location_id: "", confirmed_litres: "", opening_reading: "", closing_reading: "" });
+  const openConfirm = (item: FuelPendingConfirmation) => {
+    setConfirming(item);
+    setConfirmForm({ storage_location_id: "", confirmed_litres: String(item.quantity_received), opening_reading: "", closing_reading: "" });
+  };
+  return <Section title="Fuel Deliveries" action={<Button onClick={() => setShowForm(!showForm)}><Plus className="w-4 h-4" />Record legacy delivery</Button>}>
+    {/* Phase 5/12: the real procurement hand-off — confirm a DeliveryItem from a
+        FUEL material request's real PO/Delivery into Fuel stock. This is the
+        primary path; the button above is legacy/manual (see below). */}
+    <div className="space-y-3">
+      <h3 className="text-sm font-semibold text-muted-foreground">Awaiting confirmation into Fuel stock ({pending.length})</h3>
+      {pending.length === 0 ? <Empty text="No procurement deliveries are waiting to be confirmed." /> : <CardList empty="">
+        {pending.map((p: FuelPendingConfirmation) => <article key={p.delivery_item_id} className="rounded-xl border p-4">
+          <div className="flex flex-wrap justify-between gap-2">
+            <div><p className="font-semibold">{p.description} · {p.quantity_received.toLocaleString()} {p.unit || "L"}</p>
+              <p className="text-sm text-muted-foreground">PO {p.po_number} · {p.delivery_number || p.supplier_delivery_note_number || "Delivery"} · {new Date(p.delivery_date).toLocaleDateString("en-ZA")}</p></div>
+            <Button size="sm" onClick={() => openConfirm(p)}>Confirm into stock</Button>
+          </div>
+          {confirming?.delivery_item_id === p.delivery_item_id && <FormCard>
+            <div className="grid sm:grid-cols-2 gap-3">
+              <Field label="Destination tank"><select className="input" value={confirmForm.storage_location_id} onChange={(e) => setConfirmForm({ ...confirmForm, storage_location_id: e.target.value })}><option value="">Choose</option>{storage.map((x: FuelStorage) => <option key={x.id} value={x.id}>{x.name}</option>)}</select></Field>
+              <Field label="Confirmed litres (physically verified)"><Input type="number" value={confirmForm.confirmed_litres} onChange={(e) => setConfirmForm({ ...confirmForm, confirmed_litres: e.target.value })} /></Field>
+              <Field label="Opening meter (optional)"><Input type="number" value={confirmForm.opening_reading} onChange={(e) => setConfirmForm({ ...confirmForm, opening_reading: e.target.value })} /></Field>
+              <Field label="Closing meter (optional)"><Input type="number" value={confirmForm.closing_reading} onChange={(e) => setConfirmForm({ ...confirmForm, closing_reading: e.target.value })} /></Field>
+            </div>
+            <p className="text-xs text-muted-foreground">Documented (supplier) quantity is {p.quantity_received.toLocaleString()} {p.unit || "L"} — any difference from the confirmed litres is recorded as an auditable variance, never silently overwritten.</p>
+            <div className="flex gap-2">
+              <Button size="sm" disabled={!confirmForm.storage_location_id || !confirmForm.confirmed_litres} onClick={() => void run(() => fuelManagementApi.receiveFromProcurement(projectId, {
+                delivery_item_id: p.delivery_item_id, storage_location_id: confirmForm.storage_location_id,
+                confirmed_litres: Number(confirmForm.confirmed_litres),
+                opening_reading: confirmForm.opening_reading ? Number(confirmForm.opening_reading) : null,
+                closing_reading: confirmForm.closing_reading ? Number(confirmForm.closing_reading) : null,
+              })).then(() => setConfirming(null))}>Confirm and update stock</Button>
+              <Button size="sm" variant="outline" onClick={() => setConfirming(null)}>Cancel</Button>
+            </div>
+          </FormCard>}
+        </article>)}
+      </CardList>}
+    </div>
+
+    {/* Legacy path: manual delivery recording against an old FuelOrder — kept for
+        office-initiated/manual receiving, not the primary flow (see above). */}
     {showForm && <FormCard><div className="grid sm:grid-cols-2 gap-3"><Field label="Ordered request"><select className="input" value={form.order_id} onChange={(e) => { const order = ordered.find((x: FuelOrder) => x.id === e.target.value); setForm({ ...form, order_id: e.target.value, storage_location_id: order?.storage_location_id || "" }); }}><option value="">Choose</option>{ordered.map((x: FuelOrder) => <option key={x.id} value={x.id}>{x.order_number} · outstanding {fmt(x.requested_litres - x.delivered_litres)}</option>)}</select></Field>
       <Field label="Destination tank"><select className="input" value={form.storage_location_id} onChange={(e) => setForm({ ...form, storage_location_id: e.target.value })}><option value="">Choose</option>{storage.map((x: FuelStorage) => <option key={x.id} value={x.id}>{x.name}</option>)}</select></Field><Field label="Delivered litres"><Input type="number" value={form.delivered_litres} onChange={(e) => setForm({ ...form, delivered_litres: e.target.value })} /></Field><Field label="Delivery note number"><Input value={form.delivery_note_number} onChange={(e) => setForm({ ...form, delivery_note_number: e.target.value })} /></Field><Field label="Opening meter"><Input type="number" value={form.opening_reading} onChange={(e) => setForm({ ...form, opening_reading: e.target.value })} /></Field><Field label="Closing meter"><Input type="number" value={form.closing_reading} onChange={(e) => setForm({ ...form, closing_reading: e.target.value })} /></Field><Field label="Tanker registration"><Input value={form.tanker_registration} onChange={(e) => setForm({ ...form, tanker_registration: e.target.value })} /></Field><Field label="Driver details"><Input value={form.driver_details} onChange={(e) => setForm({ ...form, driver_details: e.target.value })} /></Field></div>
       <Button onClick={() => void run(() => fuelManagementApi.recordDelivery(form.order_id, { ...form, delivered_at: new Date().toISOString(), delivered_litres: Number(form.delivered_litres), storage_location_id: form.storage_location_id, opening_reading: form.opening_reading ? Number(form.opening_reading) : null, closing_reading: form.closing_reading ? Number(form.closing_reading) : null }))}>Record pending delivery</Button></FormCard>}
-    <CardList empty="No deliveries recorded.">{rows.map((d: FuelDelivery) => <article key={d.id} className="rounded-xl border p-4"><div className="flex flex-wrap justify-between gap-2"><div><p className="font-semibold">{d.delivery_note_number || "Delivery"}</p><p className="text-sm text-muted-foreground">{fmt(d.confirmed_litres || d.litres_delivered)} · {storage.find((s: FuelStorage) => s.id === d.storage_location_id)?.name || "Storage"} · variance {fmt(d.variance_litres)}</p></div><Badge className={statusClass(d.verification_status)}>{d.verification_status}</Badge></div>{d.verification_status === "PENDING" && <div className="flex gap-2 mt-3"><Button size="sm" onClick={() => void run(() => fuelManagementApi.verifyDelivery(d.id))}>Verify</Button><Button size="sm" variant="outline" onClick={() => void run(() => fuelManagementApi.verifyDelivery(d.id, false))}>Reject</Button></div>}</article>)}</CardList>
+    <CardList empty="No deliveries recorded.">{rows.map((d: FuelDelivery) => <article key={d.id} className="rounded-xl border p-4"><div className="flex flex-wrap justify-between gap-2"><div><p className="font-semibold">{d.delivery_note_number || "Delivery"}{d.is_manual_emergency && <Badge variant="outline" className="ml-2 text-[10px]">Emergency</Badge>}</p><p className="text-sm text-muted-foreground">{fmt(d.confirmed_litres || d.litres_delivered)} · {storage.find((s: FuelStorage) => s.id === d.storage_location_id)?.name || "Storage"} · supplier variance {fmt(d.supplier_variance_litres)}{d.meter_variance_litres != null && <> · meter variance {fmt(d.meter_variance_litres)}</>}</p></div><Badge className={statusClass(d.verification_status)}>{d.verification_status}</Badge></div>{d.verification_status === "PENDING" && <div className="flex gap-2 mt-3"><Button size="sm" onClick={() => void run(() => fuelManagementApi.verifyDelivery(d.id))}>Verify</Button><Button size="sm" variant="outline" onClick={() => void run(() => fuelManagementApi.verifyDelivery(d.id, false))}>Reject</Button></div>}</article>)}</CardList>
   </Section>;
 }
 
