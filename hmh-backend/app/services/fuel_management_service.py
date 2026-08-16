@@ -8,6 +8,7 @@ from datetime import date, datetime, timezone
 from typing import Optional
 
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import ConflictError, InvalidStateError, NotFoundError, ValidationError
@@ -17,13 +18,16 @@ from app.models.fuel_management import (
     FuelEquipmentProfile, FuelIssue, FuelOrder, FuelOrderHistory, FuelReconciliation,
     FuelStockAdjustment, FuelStorageLocation, FuelTypeDefinition,
 )
+from app.models.delivery import Delivery, DeliveryItem
+from app.models.material_request import MaterialRequest
 from app.models.project import Project
+from app.models.purchase_order import PurchaseOrder
 from app.models.site import Site
 from app.models.supplier import Supplier
 from app.models.vehicle import FuelDelivery, Vehicle
 from app.schemas.fuel_management import (
-    FuelAdjustmentCreate, FuelDeliveryCreate, FuelIssueCreate, FuelOrderCreate,
-    FuelOrderUpdate, FuelReconciliationCreate, FuelStorageCreate, FuelTransition,
+    FuelAdjustmentCreate, FuelDeliveryCreate, FuelDeliveryFromProcurementCreate, FuelIssueCreate,
+    FuelOrderCreate, FuelOrderUpdate, FuelReconciliationCreate, FuelStorageCreate, FuelTransition,
 )
 from app.services import audit_service, fuel_email_service, notification_service
 
@@ -434,6 +438,98 @@ def record_delivery(db: Session, order_id: uuid.UUID, data: FuelDeliveryCreate,
                 project_id=order.project_id, entity_type="FUEL_DELIVERY", entity_id=delivery.id)
     db.commit(); db.refresh(delivery)
     return delivery
+
+
+def receive_delivery_from_procurement(
+    db: Session, data: FuelDeliveryFromProcurementCreate, actor_id: uuid.UUID,
+):
+    """Hand-off from a real procurement DeliveryItem into the Fuel Control
+    layer (Phase 5). The item must trace back to a Delivery whose Purchase
+    Order originated from a FUEL-category MaterialRequest — this is what
+    keeps Fuel out of the BOQ/general-materials procurement pipeline while
+    still using the exact same MR -> Quote -> PO -> Delivery machinery.
+
+    Idempotent: the DB-level UNIQUE constraint on
+    fuel_deliveries.procurement_delivery_item_id guarantees the same
+    DeliveryItem can never be confirmed into stock twice. A retry or
+    double-click after a first successful confirmation returns the
+    existing FuelDelivery unchanged rather than erroring or double-counting.
+    """
+    existing = db.query(FuelDelivery).filter(
+        FuelDelivery.procurement_delivery_item_id == data.delivery_item_id
+    ).first()
+    if existing:
+        return existing
+
+    delivery_item = _get(db, DeliveryItem, data.delivery_item_id, "Delivery item")
+    delivery = _get(db, Delivery, delivery_item.delivery_id, "Delivery")
+    if not delivery.purchase_order_id:
+        raise ValidationError("This delivery is not linked to a purchase order and cannot be confirmed into Fuel stock.")
+    po = _get(db, PurchaseOrder, delivery.purchase_order_id, "Purchase order")
+    if not po.material_request_id:
+        raise ValidationError("This delivery's purchase order is not linked to a material request.")
+    mr = _get(db, MaterialRequest, po.material_request_id, "Material request")
+    if mr.procurement_category != "FUEL":
+        raise ValidationError("This delivery item did not originate from a Fuel material request.")
+
+    storage = _get(db, FuelStorageLocation, data.storage_location_id, "Fuel storage")
+    if storage.project_id != delivery.project_id:
+        raise ValidationError("Storage location does not belong to the delivery's project.")
+    ft = _get(db, FuelTypeDefinition, storage.fuel_type_id, "Fuel type")
+
+    litres_delivered = float(delivery_item.quantity_received)
+    calculated = None
+    if data.opening_reading is not None:
+        calculated = data.closing_reading - data.opening_reading
+    confirmed = data.confirmed_litres
+    supplier_variance = round(confirmed - litres_delivered, 2)
+    meter_variance = round(confirmed - calculated, 2) if calculated is not None else None
+
+    fuel_delivery = FuelDelivery(
+        order_id=None, procurement_delivery_item_id=delivery_item.id,
+        project_id=delivery.project_id, site_id=delivery.site_id,
+        supplier_id=delivery.supplier_id, fuel_type_id=storage.fuel_type_id,
+        storage_location_id=storage.id,
+        delivery_date=data.delivered_at.date(), delivered_at=data.delivered_at,
+        delivery_note_number=delivery.supplier_delivery_note_number, fuel_type=ft.code[:20],
+        litres_delivered=litres_delivered, opening_reading=data.opening_reading,
+        closing_reading=data.closing_reading, calculated_received_litres=calculated,
+        confirmed_litres=confirmed, variance_litres=supplier_variance,
+        supplier_variance_litres=supplier_variance, meter_variance_litres=meter_variance,
+        tanker_registration=data.tanker_registration, driver_details=data.driver_details,
+        received_by=actor_id, recorded_by=actor_id, verification_status="VERIFIED",
+        verified_by=actor_id, verified_at=_now(), notes=data.notes,
+    )
+    db.add(fuel_delivery)
+    try:
+        db.flush()
+    except IntegrityError:
+        db.rollback()
+        existing = db.query(FuelDelivery).filter(
+            FuelDelivery.procurement_delivery_item_id == data.delivery_item_id
+        ).first()
+        if existing:
+            return existing
+        raise
+
+    _audit(db, actor_id, AuditAction.CREATE, "FUEL_DELIVERY", fuel_delivery.id,
+           after={"delivery_item_id": str(delivery_item.id), "confirmed_litres": confirmed,
+                  "supplier_variance_litres": supplier_variance, "meter_variance_litres": meter_variance})
+
+    threshold = max(20, confirmed * .02)
+    if abs(supplier_variance) > threshold:
+        _notify(db, alert_type=AlertType.DELIVERY_DISCREPANCY, severity=AlertSeverity.HIGH,
+                title="Fuel delivery supplier-quantity variance",
+                message=f"Confirmed litres differ from the supplier-documented quantity by {supplier_variance:.2f} L.",
+                project_id=delivery.project_id, entity_type="FUEL_DELIVERY", entity_id=fuel_delivery.id)
+    if meter_variance is not None and abs(meter_variance) > threshold:
+        _notify(db, alert_type=AlertType.DELIVERY_DISCREPANCY, severity=AlertSeverity.HIGH,
+                title="Fuel delivery meter-reading variance",
+                message=f"Confirmed litres differ from the tank meter reading by {meter_variance:.2f} L.",
+                project_id=delivery.project_id, entity_type="FUEL_DELIVERY", entity_id=fuel_delivery.id)
+
+    db.commit(); db.refresh(fuel_delivery)
+    return fuel_delivery
 
 
 def list_deliveries(db: Session, project_id: uuid.UUID):

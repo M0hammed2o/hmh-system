@@ -160,6 +160,7 @@ class FuelDeliveryCreate(BaseModel):
 class FuelDeliveryRead(OrmModel):
     id: uuid.UUID
     order_id: Optional[uuid.UUID]
+    procurement_delivery_item_id: Optional[uuid.UUID] = None
     project_id: Optional[uuid.UUID]
     site_id: uuid.UUID
     supplier_id: Optional[uuid.UUID]
@@ -172,12 +173,38 @@ class FuelDeliveryRead(OrmModel):
     calculated_received_litres: Optional[float]
     confirmed_litres: Optional[float]
     variance_litres: Optional[float]
+    supplier_variance_litres: Optional[float] = None
+    meter_variance_litres: Optional[float] = None
     tanker_registration: Optional[str]
     driver_details: Optional[str]
     verification_status: str
     excess_override: bool
     notes: Optional[str]
     created_at: datetime
+
+
+class FuelDeliveryFromProcurementCreate(BaseModel):
+    """Hand-off from a real procurement DeliveryItem into the Fuel Control
+    layer (Phase 5). litres_delivered is taken from the DeliveryItem itself
+    (the office's documented/supplier quantity) — only the Fuel-side
+    confirmation and optional meter readings are captured here."""
+    delivery_item_id: uuid.UUID
+    storage_location_id: uuid.UUID
+    confirmed_litres: float = Field(gt=0)
+    delivered_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    opening_reading: Optional[float] = Field(default=None, ge=0)
+    closing_reading: Optional[float] = Field(default=None, ge=0)
+    tanker_registration: Optional[str] = None
+    driver_details: Optional[str] = None
+    notes: Optional[str] = None
+
+    @model_validator(mode="after")
+    def readings_are_complete(self):
+        if (self.opening_reading is None) != (self.closing_reading is None):
+            raise ValueError("opening and closing readings must be supplied together")
+        if self.opening_reading is not None and self.closing_reading < self.opening_reading:
+            raise ValueError("closing reading cannot be lower than opening reading")
+        return self
 
 
 class FuelIssueCreate(BaseModel):

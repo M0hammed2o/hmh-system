@@ -582,6 +582,51 @@ def ensure_tables():
             END $$;
         """))
 
+    # migration 0072: procurement hand-off + corrected variance model on fuel_deliveries
+    with engine.begin() as conn:
+        conn.execute(_t("""
+            DO $$ BEGIN
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                    WHERE table_name='fuel_deliveries' AND column_name='procurement_delivery_item_id')
+                THEN ALTER TABLE fuel_deliveries ADD COLUMN procurement_delivery_item_id UUID NULL;
+                END IF;
+            END $$;
+        """))
+        conn.execute(_t("""
+            DO $$ BEGIN
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                    WHERE table_name='fuel_deliveries' AND column_name='supplier_variance_litres')
+                THEN ALTER TABLE fuel_deliveries ADD COLUMN supplier_variance_litres NUMERIC(12, 2) NULL;
+                END IF;
+            END $$;
+        """))
+        conn.execute(_t("""
+            DO $$ BEGIN
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                    WHERE table_name='fuel_deliveries' AND column_name='meter_variance_litres')
+                THEN ALTER TABLE fuel_deliveries ADD COLUMN meter_variance_litres NUMERIC(12, 2) NULL;
+                END IF;
+            END $$;
+        """))
+        conn.execute(_t("""
+            DO $$ BEGIN
+                IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                    WHERE conname = 'fk_fuel_deliveries_procurement_delivery_item')
+                THEN ALTER TABLE fuel_deliveries ADD CONSTRAINT fk_fuel_deliveries_procurement_delivery_item
+                    FOREIGN KEY (procurement_delivery_item_id) REFERENCES delivery_items(id) ON DELETE SET NULL;
+                END IF;
+            END $$;
+        """))
+        conn.execute(_t("""
+            DO $$ BEGIN
+                IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                    WHERE conname = 'uq_fuel_deliveries_procurement_delivery_item')
+                THEN ALTER TABLE fuel_deliveries ADD CONSTRAINT uq_fuel_deliveries_procurement_delivery_item
+                    UNIQUE (procurement_delivery_item_id);
+                END IF;
+            END $$;
+        """))
+
     yield
 
 

@@ -17,7 +17,8 @@ from app.models.user import User
 from app.models.vehicle import FuelDelivery
 from app.schemas.common import ApiSuccess
 from app.schemas.fuel_management import (
-    FuelAdjustmentCreate, FuelAdjustmentRead, FuelDeliveryCreate, FuelDeliveryRead, FuelEmailLogRead,
+    FuelAdjustmentCreate, FuelAdjustmentRead, FuelDeliveryCreate, FuelDeliveryFromProcurementCreate,
+    FuelDeliveryRead, FuelEmailLogRead,
     FuelEquipmentProfileCreate, FuelEquipmentProfileRead,
     FuelIssueCreate, FuelIssueRead, FuelOrderCreate, FuelOrderHistoryRead, FuelOrderRead, FuelOrderUpdate,
     FuelReconciliationCreate, FuelReconciliationRead, FuelStorageCreate, FuelStorageRead,
@@ -189,6 +190,18 @@ def record_delivery(order_id: uuid.UUID, body: FuelDeliveryCreate, db: DbSession
     can_override = has_fuel_permission(current_user.role, "fuel.admin")
     obj = service.record_delivery(db, order_id, body, current_user.id, can_override)
     return ApiSuccess(data=FuelDeliveryRead.model_validate(obj), message="Fuel delivery recorded pending verification.")
+
+
+@project_router.post("/deliveries/from-procurement", response_model=ApiSuccess[FuelDeliveryRead], status_code=201,
+                     dependencies=[require_fuel_permission("fuel.receive")])
+def receive_delivery_from_procurement(project_id: uuid.UUID, body: FuelDeliveryFromProcurementCreate,
+                                       db: DbSession, current_user: CurrentUser):
+    """Confirm a real procurement DeliveryItem (from a FUEL-category
+    MaterialRequest's PO/Delivery) into Fuel stock. This is the Phase 5
+    hand-off point — no separate Fuel procurement engine is involved."""
+    _access(db, current_user, project_id)
+    obj = service.receive_delivery_from_procurement(db, body, current_user.id)
+    return ApiSuccess(data=FuelDeliveryRead.model_validate(obj), message="Fuel delivery confirmed and stock updated.")
 
 
 @project_router.get("/deliveries", response_model=ApiSuccess[list[FuelDeliveryRead]],

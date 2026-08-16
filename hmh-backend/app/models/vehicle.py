@@ -252,6 +252,22 @@ class FuelDelivery(TimestampMixin, Base):
     calculated_received_litres: Mapped[Optional[float]] = mapped_column(Numeric(12, 2), nullable=True)
     confirmed_litres: Mapped[Optional[float]] = mapped_column(Numeric(12, 2), nullable=True)
     variance_litres: Mapped[Optional[float]] = mapped_column(Numeric(12, 2), nullable=True)
+    # Hand-off from the real procurement Delivery/DeliveryItem chain (Phase 5).
+    # UNIQUE — the same procurement DeliveryItem can never be confirmed into
+    # Fuel stock twice, even under concurrent retries/double-clicks.
+    procurement_delivery_item_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("delivery_items.id", ondelete="SET NULL"),
+        unique=True,
+        nullable=True,
+        index=True,
+    )
+    # supplier_variance_litres = confirmed - litres_delivered (documented/supplier quantity).
+    # meter_variance_litres = confirmed - calculated_received_litres (tank dip/meter quantity),
+    # NULL when no opening/closing readings were captured — never falls back to the
+    # supplier quantity silently.
+    supplier_variance_litres: Mapped[Optional[float]] = mapped_column(Numeric(12, 2), nullable=True)
+    meter_variance_litres: Mapped[Optional[float]] = mapped_column(Numeric(12, 2), nullable=True)
     tanker_registration: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     driver_details: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
     received_by: Mapped[Optional[uuid.UUID]] = mapped_column(

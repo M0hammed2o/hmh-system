@@ -756,3 +756,147 @@ def test_notification_deep_link_access_and_read_history(client, db, fuel_ctx):
     assert not_found.status_code == 404 and "Referenced Fuel request not found" in not_found.text
     denied = client.get(f"/api/v1/alerts/{cross_project.id}/open", headers=c["headers"]["admin"])
     assert denied.status_code == 403 and "different projects" in denied.text
+
+
+# ── Phase 5: procurement DeliveryItem -> FuelDelivery hand-off ────────────────
+
+def _create_fuel_delivery_item(client, c, litres=600.0, rate=25.0):
+    """Real MR (FUEL) -> submit -> approve -> convert-to-po -> Delivery/DeliveryItem.
+    Returns (delivery_item_id, po_id) using the exact same procurement
+    endpoints as a MATERIAL request — no Fuel-specific procurement engine."""
+    pid, hdr = c["project"]["id"], c["headers"]["owner"]
+    r = client.post(f"/api/v1/projects/{pid}/material-requests/", json={
+        "site_id": c["site"]["id"], "procurement_category": "FUEL",
+        "items": [{"description": "Diesel", "requested_quantity": litres, "unit": "L"}],
+    }, headers=hdr)
+    assert r.status_code == 201, r.text
+    mr_id = r.json()["data"]["id"]
+    assert client.post(f"/api/v1/material-requests/{mr_id}/submit", headers=hdr).status_code == 200
+    assert client.post(f"/api/v1/material-requests/{mr_id}/approve", json={}, headers=hdr).status_code == 200
+    r = client.post(f"/api/v1/material-requests/{mr_id}/convert-to-po", json={
+        "supplier_id": c["supplier"]["id"],
+        "items": [{"description": "Diesel", "quantity": litres, "unit": "L", "rate": rate}],
+    }, headers=hdr)
+    assert r.status_code == 201, r.text
+    po_id = r.json()["data"]["po_id"]
+    r = client.post(f"/api/v1/projects/{pid}/deliveries/", json={
+        "supplier_id": c["supplier"]["id"], "site_id": c["site"]["id"], "purchase_order_id": po_id,
+        "supplier_delivery_note_number": f"DN-{uuid.uuid4().hex[:6]}",
+        "items": [{"description": "Diesel", "quantity_received": litres, "unit": "L"}],
+    }, headers=hdr)
+    assert r.status_code == 201, r.text
+    return r.json()["data"]["items"][0]["id"], po_id
+
+
+def test_procurement_delivery_item_hand_off_confirms_stock_and_is_idempotent(client, db, fuel_ctx):
+    c = fuel_ctx
+    delivery_item_id, _po_id = _create_fuel_delivery_item(client, c, litres=600.0)
+    body = {"delivery_item_id": delivery_item_id, "storage_location_id": c["storage_id"], "confirmed_litres": 595.0}
+    url = f"/api/v1/projects/{c['project']['id']}/fuel-management/deliveries/from-procurement"
+
+    r = client.post(url, json=body, headers=c["headers"]["admin"])
+    assert r.status_code == 201, r.text
+    fd = r.json()["data"]
+    assert fd["verification_status"] == "VERIFIED"
+    assert fd["litres_delivered"] == 600.0
+    assert fd["confirmed_litres"] == 595.0
+    assert fd["supplier_variance_litres"] == -5.0
+    assert fd["meter_variance_litres"] is None
+    assert fd["procurement_delivery_item_id"] == delivery_item_id
+    assert fd["order_id"] is None
+
+    dash = client.get(f"/api/v1/projects/{c['project']['id']}/fuel-management/dashboard", headers=c["headers"]["owner"]).json()["data"]
+    assert dash["current_calculated_stock"] == 1000 + 595.0
+
+    # Retry / double-click on the exact same delivery_item_id — idempotent, no double stock.
+    r2 = client.post(url, json=body, headers=c["headers"]["admin"])
+    assert r2.status_code == 201, r2.text
+    assert r2.json()["data"]["id"] == fd["id"]
+    dash2 = client.get(f"/api/v1/projects/{c['project']['id']}/fuel-management/dashboard", headers=c["headers"]["owner"]).json()["data"]
+    assert dash2["current_calculated_stock"] == 1000 + 595.0
+    assert db.query(FuelDelivery).filter(
+        FuelDelivery.procurement_delivery_item_id == uuid.UUID(delivery_item_id)
+    ).count() == 1
+
+
+def test_procurement_delivery_item_meter_variance_is_independent_of_supplier_variance(client, fuel_ctx):
+    c = fuel_ctx
+    delivery_item_id, _ = _create_fuel_delivery_item(client, c, litres=400.0)
+    body = {
+        "delivery_item_id": delivery_item_id, "storage_location_id": c["storage_id"],
+        "confirmed_litres": 400.0, "opening_reading": 1000, "closing_reading": 1390,
+    }
+    r = client.post(f"/api/v1/projects/{c['project']['id']}/fuel-management/deliveries/from-procurement",
+                     json=body, headers=c["headers"]["admin"])
+    assert r.status_code == 201, r.text
+    fd = r.json()["data"]
+    assert fd["calculated_received_litres"] == 390.0
+    assert fd["supplier_variance_litres"] == 0.0
+    assert fd["meter_variance_litres"] == 10.0
+
+
+def test_partial_fuel_deliveries_accumulate_without_duplication(client, fuel_ctx):
+    """Business-example partial-delivery pattern: 600L + 400L confirmed as
+    595L + 400L = 995L total, each DeliveryItem confirmed exactly once."""
+    c = fuel_ctx
+    url = f"/api/v1/projects/{c['project']['id']}/fuel-management/deliveries/from-procurement"
+    item_1, _ = _create_fuel_delivery_item(client, c, litres=600.0)
+    r1 = client.post(url, json={"delivery_item_id": item_1, "storage_location_id": c["storage_id"],
+                                 "confirmed_litres": 595.0}, headers=c["headers"]["admin"])
+    assert r1.status_code == 201, r1.text
+
+    item_2, _ = _create_fuel_delivery_item(client, c, litres=400.0)
+    r2 = client.post(url, json={"delivery_item_id": item_2, "storage_location_id": c["storage_id"],
+                                 "confirmed_litres": 400.0}, headers=c["headers"]["admin"])
+    assert r2.status_code == 201, r2.text
+
+    dash = client.get(f"/api/v1/projects/{c['project']['id']}/fuel-management/dashboard", headers=c["headers"]["owner"]).json()["data"]
+    assert dash["current_calculated_stock"] == 1000 + 595.0 + 400.0
+
+
+def test_delivery_item_without_purchase_order_is_rejected(client, fuel_ctx):
+    c = fuel_ctx
+    pid, hdr = c["project"]["id"], c["headers"]["owner"]
+    r = client.post(f"/api/v1/projects/{pid}/deliveries/", json={
+        "supplier_id": c["supplier"]["id"], "site_id": c["site"]["id"],
+        "items": [{"description": "Diesel", "quantity_received": 100, "unit": "L"}],
+    }, headers=hdr)
+    assert r.status_code == 201, r.text
+    delivery_item_id = r.json()["data"]["items"][0]["id"]
+
+    body = {"delivery_item_id": delivery_item_id, "storage_location_id": c["storage_id"], "confirmed_litres": 100}
+    r = client.post(f"/api/v1/projects/{pid}/fuel-management/deliveries/from-procurement", json=body, headers=c["headers"]["admin"])
+    assert r.status_code == 422, r.text
+    assert "purchase order" in r.text
+
+
+def test_delivery_item_not_from_fuel_material_request_is_rejected(client, fuel_ctx):
+    """A DeliveryItem sourced from an ordinary MATERIAL MR/PO must never be
+    confirmable into Fuel stock — Fuel stays isolated from general
+    materials procurement even though both share the same pipeline."""
+    c = fuel_ctx
+    pid, hdr = c["project"]["id"], c["headers"]["owner"]
+    r = client.post(f"/api/v1/projects/{pid}/material-requests/", json={
+        "site_id": c["site"]["id"],
+        "items": [{"description": "Cement", "requested_quantity": 10.0, "unit": "bag"}],
+    }, headers=hdr)
+    mr_id = r.json()["data"]["id"]
+    client.post(f"/api/v1/material-requests/{mr_id}/submit", headers=hdr)
+    client.post(f"/api/v1/material-requests/{mr_id}/approve", json={}, headers=hdr)
+    r = client.post(f"/api/v1/material-requests/{mr_id}/convert-to-po", json={
+        "supplier_id": c["supplier"]["id"],
+        "items": [{"description": "Cement", "quantity": 10, "unit": "bag", "rate": 100.0}],
+    }, headers=hdr)
+    assert r.status_code == 201, r.text
+    po_id = r.json()["data"]["po_id"]
+    r = client.post(f"/api/v1/projects/{pid}/deliveries/", json={
+        "supplier_id": c["supplier"]["id"], "site_id": c["site"]["id"], "purchase_order_id": po_id,
+        "items": [{"description": "Cement", "quantity_received": 10, "unit": "bag"}],
+    }, headers=hdr)
+    assert r.status_code == 201, r.text
+    delivery_item_id = r.json()["data"]["items"][0]["id"]
+
+    body = {"delivery_item_id": delivery_item_id, "storage_location_id": c["storage_id"], "confirmed_litres": 10}
+    r = client.post(f"/api/v1/projects/{pid}/fuel-management/deliveries/from-procurement", json=body, headers=c["headers"]["admin"])
+    assert r.status_code == 422, r.text
+    assert "Fuel material request" in r.text
