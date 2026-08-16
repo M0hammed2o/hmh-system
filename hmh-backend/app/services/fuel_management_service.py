@@ -468,6 +468,35 @@ def verify_delivery(db: Session, delivery_id: uuid.UUID, actor_id: uuid.UUID, ap
     return delivery
 
 
+def _hour_based_issue_metrics(
+    litres: float, hour_meter_reading: Optional[float], prev: Optional[FuelIssue],
+    expected_lph: float, tolerance_pct: float, tank_capacity: Optional[float],
+    minimum_issue_interval_hours: float, issued_at: datetime, no_reading_message: str,
+) -> tuple[Optional[float], Optional[float], Optional[float], list[str]]:
+    """Shared L/hour anomaly check for any hour-metered destination — a Vehicle
+    with uses_hours=True, or a non-Vehicle FuelEquipmentProfile. Returns
+    (hours_delta, litres_per_hour, estimated_remaining, anomaly_reasons)."""
+    reasons: list[str] = []
+    hours_delta = lph = estimated_remaining = None
+    if hour_meter_reading is None:
+        reasons.append(no_reading_message)
+    elif prev and prev.hour_meter_reading is not None:
+        hours_delta = float(hour_meter_reading) - float(prev.hour_meter_reading)
+        if hours_delta <= 0:
+            raise ValidationError("Hour-meter reading must be greater than the previous reading.")
+        lph = round(litres / hours_delta, 3)
+        tolerance = float(tolerance_pct or 0) / 100
+        estimated_remaining = max(float(prev.litres) - hours_delta * expected_lph, 0) if expected_lph else None
+        if expected_lph and lph > expected_lph * (1 + tolerance):
+            reasons.append(f"High consumption for review ({lph:.2f} L/hour)")
+        if tank_capacity and estimated_remaining is not None and litres > (float(tank_capacity) - estimated_remaining) * (1 + tolerance):
+            reasons.append("Refill exceeds configured estimated tank space")
+        elapsed = (issued_at - prev.issued_at).total_seconds() / 3600
+        if elapsed < float(minimum_issue_interval_hours or 0):
+            reasons.append("Refill is sooner than the configured minimum interval")
+    return hours_delta, lph, estimated_remaining, reasons
+
+
 def create_issue(db: Session, project_id: uuid.UUID, data: FuelIssueCreate, actor_id: uuid.UUID,
                  *, evidence_types: Optional[set[str]] = None, can_override: bool = False,
                  commit: bool = True):
@@ -483,9 +512,28 @@ def create_issue(db: Session, project_id: uuid.UUID, data: FuelIssueCreate, acto
         raise ValidationError("A vehicle is required for a vehicle fuel issue.")
     if destination != "VEHICLE" and not data.equipment_reference:
         raise ValidationError("An equipment reference is required for this destination.")
+
+    # Resolve the vehicle early (if any) so both the evidence requirements below
+    # and the consumption-calculation branch further down can key off
+    # vehicle.uses_hours — a Vehicle flagged uses_hours=True (TLB, excavator,
+    # crane, ...) must be tracked by hour meter / L-per-hour, not odometer /
+    # L-per-100km, even though it's issued through destination_type=VEHICLE
+    # like any other vehicle. FuelEquipmentProfile remains for destinations
+    # with no Vehicle record at all (generators, rented plant, ...).
+    vehicle = None
+    if data.vehicle_id:
+        vehicle = _get(db, Vehicle, data.vehicle_id, "Vehicle")
+        if vehicle.assigned_project_id and vehicle.assigned_project_id != project_id:
+            raise ValidationError("Vehicle is assigned to a different project.")
+    vehicle_uses_hours = bool(vehicle and vehicle.uses_hours)
+
     required_evidence = {"ASSET_PHOTO", "PUMP_PHOTO"}
     if destination == "VEHICLE":
-        required_evidence.add("ODOMETER_PHOTO")
+        if vehicle_uses_hours:
+            if vehicle.hour_meter_required:
+                required_evidence.add("HOUR_METER_PHOTO")
+        else:
+            required_evidence.add("ODOMETER_PHOTO")
     profile = None
     if destination != "VEHICLE":
         profile = db.query(FuelEquipmentProfile).filter(
@@ -505,11 +553,7 @@ def create_issue(db: Session, project_id: uuid.UUID, data: FuelIssueCreate, acto
     feasibility_status = "OK"
     estimated_remaining = None
     distance = l100 = hours_delta = lph = None
-    vehicle = None
-    if data.vehicle_id:
-        vehicle = _get(db, Vehicle, data.vehicle_id, "Vehicle")
-        if vehicle.assigned_project_id and vehicle.assigned_project_id != project_id:
-            raise ValidationError("Vehicle is assigned to a different project.")
+    if data.vehicle_id and not vehicle_uses_hours:
         prev = db.query(FuelIssue).filter(
             FuelIssue.vehicle_id == data.vehicle_id,
             FuelIssue.is_reversed.is_(False), FuelIssue.issued_at < data.issued_at,
@@ -531,6 +575,19 @@ def create_issue(db: Session, project_id: uuid.UUID, data: FuelIssueCreate, acto
             elapsed = (data.issued_at - prev.issued_at).total_seconds() / 3600
             if elapsed < float(vehicle.fuel_minimum_issue_interval_hours or 0):
                 anomaly_reasons.append("Refill is sooner than the configured minimum interval")
+    elif data.vehicle_id and vehicle_uses_hours:
+        prev = db.query(FuelIssue).filter(
+            FuelIssue.vehicle_id == data.vehicle_id,
+            FuelIssue.is_reversed.is_(False), FuelIssue.issued_at < data.issued_at,
+        ).order_by(FuelIssue.issued_at.desc()).first()
+        hours_delta, lph, estimated_remaining, hour_reasons = _hour_based_issue_metrics(
+            data.litres, data.hour_meter_reading, prev,
+            float(vehicle.fuel_consumption_per_hour or 0), float(vehicle.fuel_tolerance_pct or 0),
+            float(vehicle.tank_capacity_l) if vehicle.tank_capacity_l else None,
+            float(vehicle.fuel_minimum_issue_interval_hours or 0), data.issued_at,
+            "Vehicle issue has no hour-meter reading",
+        )
+        anomaly_reasons.extend(hour_reasons)
     else:
         prev = db.query(FuelIssue).filter(
             FuelIssue.project_id == project_id,
@@ -538,23 +595,15 @@ def create_issue(db: Session, project_id: uuid.UUID, data: FuelIssueCreate, acto
             FuelIssue.equipment_reference == data.equipment_reference,
             FuelIssue.is_reversed.is_(False), FuelIssue.issued_at < data.issued_at,
         ).order_by(FuelIssue.issued_at.desc()).first()
-        if data.hour_meter_reading is None:
-            anomaly_reasons.append("Equipment issue has no hour-meter reading")
-        elif prev and prev.hour_meter_reading is not None:
-            hours_delta = float(data.hour_meter_reading) - float(prev.hour_meter_reading)
-            if hours_delta <= 0:
-                raise ValidationError("Hour-meter reading must be greater than the previous reading.")
-            lph = round(data.litres / hours_delta, 3)
-            expected = float(profile.expected_litres_per_hour or 0) if profile else 0
-            tolerance = float(profile.tolerance_pct or 0) / 100 if profile else 0
-            estimated_remaining = max(float(prev.litres) - hours_delta * expected, 0) if expected else None
-            if expected and lph > expected * (1 + tolerance):
-                anomaly_reasons.append(f"High consumption for review ({lph:.2f} L/hour)")
-            if profile and profile.tank_capacity_litres and estimated_remaining is not None and data.litres > (float(profile.tank_capacity_litres) - estimated_remaining) * (1 + tolerance):
-                anomaly_reasons.append("Refill exceeds configured estimated tank space")
-            elapsed = (data.issued_at - prev.issued_at).total_seconds() / 3600
-            if profile and elapsed < float(profile.minimum_issue_interval_hours):
-                anomaly_reasons.append("Refill is sooner than the configured minimum interval")
+        hours_delta, lph, estimated_remaining, hour_reasons = _hour_based_issue_metrics(
+            data.litres, data.hour_meter_reading, prev,
+            float(profile.expected_litres_per_hour or 0) if profile else 0,
+            float(profile.tolerance_pct or 0) if profile else 0,
+            float(profile.tank_capacity_litres) if profile and profile.tank_capacity_litres else None,
+            float(profile.minimum_issue_interval_hours) if profile else 0, data.issued_at,
+            "Equipment issue has no hour-meter reading",
+        )
+        anomaly_reasons.extend(hour_reasons)
 
     override_required = bool(anomaly_reasons) and bool(
         (vehicle and vehicle.fuel_override_required) or (profile and profile.override_required))

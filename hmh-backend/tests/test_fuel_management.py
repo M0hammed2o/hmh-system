@@ -511,6 +511,62 @@ def test_equipment_profile_drives_feasibility_override(client, db, fuel_ctx):
     assert event.after_value == {"feasibility_status": "OVERRIDDEN"}
 
 
+def test_hour_based_vehicle_uses_hour_meter_not_odometer(client, db, fuel_ctx):
+    """A Vehicle (TLB/excavator/crane) flagged uses_hours=True must be tracked
+    by hour meter / L-per-hour even though it's issued via destination_type=
+    VEHICLE — not forced through the odometer / L-per-100km path, and without
+    needing a separate FuelEquipmentProfile."""
+    c = fuel_ctx
+    vehicle = Vehicle(
+        registration=f"HRS-{uuid.uuid4().hex[:5]}", name="Hour-Based TLB",
+        vehicle_type=VehicleType.TLB, status=VehicleStatus.ACTIVE,
+        assigned_project_id=uuid.UUID(c["project"]["id"]),
+        uses_hours=True, hour_meter_required=True,
+        fuel_consumption_per_hour=5, fuel_tolerance_pct=20, tank_capacity_l=100,
+    )
+    db.add(vehicle); db.commit()
+    base = {"storage_location_id": c["storage_id"], "fuel_type_id": c["diesel_id"],
+            "vehicle_id": str(vehicle.id), "destination_type": "VEHICLE",
+            "litres": 20, "hour_meter_reading": 100}
+
+    first = issue_with_evidence(client, c, base, hour=True)
+    assert first.status_code == 201, first.text
+    data = first.json()["data"]
+    assert data["litres_per_hour"] is None  # no previous reading yet — nothing to compare
+    assert data["litres_per_100km"] is None
+    assert data["feasibility_status"] == "OK"
+
+    # Second fill: 20 L over 2 hours -> 10 L/hour, exceeds 5 * 1.2 = 6 tolerance -> anomaly.
+    base.update({"litres": 20, "hour_meter_reading": 102})
+    second = issue_with_evidence(client, c, base, hour=True)
+    assert second.status_code == 201, second.text
+    data2 = second.json()["data"]
+    assert data2["litres_per_hour"] == 10.0
+    assert data2["litres_per_100km"] is None
+    assert data2["operating_hours_since_previous"] == 2.0
+    assert data2["feasibility_status"] == "REVIEW"
+    assert "L/hour" in (data2.get("anomaly_reason") or "")
+
+
+def test_hour_based_vehicle_rejects_non_increasing_hour_meter(client, db, fuel_ctx):
+    c = fuel_ctx
+    vehicle = Vehicle(
+        registration=f"HRS-{uuid.uuid4().hex[:5]}", name="Excavator",
+        vehicle_type=VehicleType.EXCAVATOR, status=VehicleStatus.ACTIVE,
+        assigned_project_id=uuid.UUID(c["project"]["id"]),
+        uses_hours=True, hour_meter_required=True, fuel_consumption_per_hour=5,
+    )
+    db.add(vehicle); db.commit()
+    base = {"storage_location_id": c["storage_id"], "fuel_type_id": c["diesel_id"],
+            "vehicle_id": str(vehicle.id), "destination_type": "VEHICLE",
+            "litres": 10, "hour_meter_reading": 50}
+    assert issue_with_evidence(client, c, base, hour=True).status_code == 201
+
+    base.update({"litres": 10, "hour_meter_reading": 50})  # same reading — must be rejected
+    stuck = issue_with_evidence(client, c, base, hour=True)
+    assert stuck.status_code == 422 and "greater than the previous reading" in stuck.text
+
+
 def test_evidence_upload_failure_rolls_back_issue_metadata_and_stock_then_retry_succeeds(
     client, db, fuel_ctx, monkeypatch,
 ):
