@@ -85,7 +85,6 @@ def get_payment_activity(payment_id: uuid.UUID, db: DbSession, current_user: Cur
     from app.models.audit import AuditEvent
     from app.models.attachment import Attachment
     from app.models.enums import AttachmentEntity
-    from app.core.storage import public_url as _pub
 
     get_and_check_project_resource(db, current_user, Payment, payment_id, "Payment not found.")
 
@@ -127,7 +126,7 @@ def get_payment_activity(payment_id: uuid.UUID, db: DbSession, current_user: Cur
         activity.append({
             "type": "document", "timestamp": att.uploaded_at.isoformat(),
             "actor": None, "description": f"Proof uploaded: {att.file_name}",
-            "url": _pub(att.stored_path), "is_image": att.mime_type.startswith("image/") if att.mime_type else False,
+            "url": f"/api/v1/attachments/{att.id}/download", "is_image": att.mime_type.startswith("image/") if att.mime_type else False,
         })
 
     activity.sort(key=lambda x: x["timestamp"], reverse=True)

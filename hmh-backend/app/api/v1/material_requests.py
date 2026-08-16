@@ -457,7 +457,6 @@ def get_mr_activity(mr_id: uuid.UUID, db: DbSession, current_user: CurrentUser, 
     from app.models.audit import AuditEvent
     from app.models.attachment import Attachment
     from app.models.enums import AttachmentEntity
-    from app.core.storage import public_url as _pub
 
     mr = secure_project_lookup(mr_service.get_request(db, mr_id), db, current_user)
 
@@ -505,7 +504,7 @@ def get_mr_activity(mr_id: uuid.UUID, db: DbSession, current_user: CurrentUser, 
         activity.append({
             "type": "document", "timestamp": att.uploaded_at.isoformat(),
             "actor": None, "description": f"Document: {att.file_name}",
-            "url": _pub(att.stored_path), "attachment_id": str(att.id),
+            "url": f"/api/v1/attachments/{att.id}/download", "attachment_id": str(att.id),
             "is_image": att.mime_type.startswith("image/") if att.mime_type else False,
         })
 

@@ -365,7 +365,6 @@ def get_po_activity(po_id: uuid.UUID, db: DbSession, current_user: CurrentUser, 
     from app.models.audit import AuditEvent
     from app.models.attachment import Attachment
     from app.models.enums import AttachmentEntity
-    from app.core.storage import public_url as _pub
 
     get_and_check_project_resource(db, current_user, PurchaseOrder, po_id, "Purchase order not found.")
 
@@ -411,7 +410,7 @@ def get_po_activity(po_id: uuid.UUID, db: DbSession, current_user: CurrentUser, 
         activity.append({
             "type": "document", "timestamp": att.uploaded_at.isoformat(),
             "actor": None, "description": f"Document: {att.file_name}",
-            "url": _pub(att.stored_path), "attachment_id": str(att.id),
+            "url": f"/api/v1/attachments/{att.id}/download", "attachment_id": str(att.id),
             "is_image": att.mime_type.startswith("image/") if att.mime_type else False,
         })
 

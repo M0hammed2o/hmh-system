@@ -441,7 +441,6 @@ def get_milestone_activity(
         .all()
     )
 
-    from app.core.storage import public_url as _pub
     activity = []
 
     for a in audit_rows:
@@ -471,7 +470,7 @@ def get_milestone_activity(
             "timestamp":   p.uploaded_at.isoformat(),
             "actor":       actor_name,
             "description": f"Photo uploaded: {p.file_name}",
-            "url":         _pub(p.stored_path),
+            "url":         f"/api/v1/attachments/{p.id}/download",
             "photo_id":    str(p.id),
         })
 
@@ -555,10 +554,9 @@ def list_milestone_photos(
         .order_by(Attachment.uploaded_at.asc())
         .all()
     )
-    from app.core.storage import public_url as _pub
     return ApiSuccess(data=[{
         "id":          str(p.id),
-        "url":         _pub(p.stored_path),
+        "url":         f"/api/v1/attachments/{p.id}/download",
         "file_name":   p.file_name,
         "mime_type":   p.mime_type,
         "uploaded_at": p.uploaded_at.isoformat(),
@@ -612,10 +610,9 @@ async def upload_milestone_photo(
     db.commit()
     db.refresh(att)
 
-    from app.core.storage import public_url as _pub
     return ApiSuccess(data={
         "id":          str(att.id),
-        "url":         _pub(att.stored_path),
+        "url":         f"/api/v1/attachments/{att.id}/download",
         "file_name":   att.file_name,
         "uploaded_at": att.uploaded_at.isoformat(),
     }, message="Photo uploaded.")
