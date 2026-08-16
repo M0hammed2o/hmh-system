@@ -287,6 +287,7 @@ class FuelIssueRead(OrmModel):
     storage_location_id: uuid.UUID
     fuel_type_id: uuid.UUID
     vehicle_id: Optional[uuid.UUID]
+    vehicle_registration: Optional[str] = None
     destination_type: str
     equipment_reference: Optional[str]
     issued_at: datetime
@@ -294,6 +295,7 @@ class FuelIssueRead(OrmModel):
     odometer_reading: Optional[float]
     hour_meter_reading: Optional[float]
     received_by: Optional[str]
+    issued_by_name: Optional[str] = None
     purpose: Optional[str]
     evidence_url: Optional[str]
     distance_since_previous_km: Optional[float]

@@ -3,7 +3,7 @@ import {
   LayoutDashboard, Users, FolderKanban, FileSpreadsheet,
   ShoppingCart, Truck, Package, CreditCard, Bell, Settings, LogOut, HardHat,
   Droplet, Building2, Car, FileCheck2, Smartphone, Mail, Clock, Flag, Warehouse, BarChart2, ClipboardList, Receipt, GitMerge, Wrench,
-  FileText, GitBranch, CalendarCheck,
+  FileText, GitBranch, CalendarCheck, AlertTriangle,
 } from "lucide-react";
 import { HMHLogo } from "@/components/HMHLogo";
 import { TOKEN_KEY, REFRESH_TOKEN_KEY, ROLE_KEY } from "@/lib/constants";
@@ -74,6 +74,7 @@ const navGroups = [
       { title: "Fuel Orders",      path: "/fuel-management/orders",     icon: ShoppingCart },
       { title: "Fuel Deliveries",  path: "/fuel-management/deliveries", icon: Truck },
       { title: "Fuel Issues",      path: "/fuel-management/issues",     icon: ClipboardList },
+      { title: "Fuel Anomalies",   path: "/fuel-management/anomalies",  icon: AlertTriangle },
       { title: "Stock & Reconcile",path: "/fuel-management/stock",      icon: Warehouse },
       { title: "Fuel Reports",     path: "/fuel-management/reports",    icon: BarChart2 },
     ],

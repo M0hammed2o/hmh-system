@@ -14,7 +14,7 @@ from app.core.exceptions import HMHException
 from app.dependencies import CurrentUser, DbSession, check_project_access
 from app.models.fuel_management import FuelEmailLog, FuelIssue, FuelIssueEvidence, FuelOrderHistory, FuelReconciliation
 from app.models.user import User
-from app.models.vehicle import FuelDelivery
+from app.models.vehicle import FuelDelivery, Vehicle
 from app.schemas.common import ApiSuccess
 from app.schemas.fuel_management import (
     FuelAdjustmentCreate, FuelAdjustmentRead, FuelDeliveryCreate, FuelDeliveryFromProcurementCreate,
@@ -56,6 +56,11 @@ def _issue_read(db, obj):
     read = FuelIssueRead.model_validate(obj)
     evidence = db.query(FuelIssueEvidence).filter(FuelIssueEvidence.issue_id == obj.id).all()
     read.evidence = [{"type": e.evidence_type, "attachment_id": str(e.attachment_id)} for e in evidence]
+    issuer = db.get(User, obj.issued_by)
+    read.issued_by_name = issuer.full_name if issuer else None
+    if obj.vehicle_id:
+        vehicle = db.get(Vehicle, obj.vehicle_id)
+        read.vehicle_registration = vehicle.registration if vehicle else None
     return read
 
 

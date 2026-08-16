@@ -172,6 +172,7 @@ export function AppRouter() {
             <Route path="fuel-management/orders" element={<FuelManagementPage section="orders" />} />
             <Route path="fuel-management/deliveries" element={<FuelManagementPage section="deliveries" />} />
             <Route path="fuel-management/issues" element={<FuelManagementPage section="issues" />} />
+            <Route path="fuel-management/anomalies" element={<FuelManagementPage section="anomalies" />} />
             <Route path="fuel-management/stock" element={<FuelManagementPage section="stock" />} />
             <Route path="fuel-management/reports" element={<FuelManagementPage section="reports" />} />
             <Route path="suppliers" element={<SuppliersPage />} />

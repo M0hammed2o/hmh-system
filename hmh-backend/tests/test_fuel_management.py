@@ -364,6 +364,10 @@ def test_vehicle_issue_reduces_stock_and_reverse_restores(client, db, fuel_ctx):
     r = issue_with_evidence(client, c, body, vehicle=True)
     assert r.status_code == 201, r.text
     issue = r.json()["data"]
+    # Phase 14: the anomaly-review drill-down needs to resolve "who issued this"
+    # and "which vehicle" without a separate lookup.
+    assert issue["vehicle_registration"] == vehicle.registration
+    assert issue["issued_by_name"] == "Test User"
     dash = client.get(f"/api/v1/projects/{c['project']['id']}/fuel-management/dashboard", headers=c["headers"]["owner"]).json()["data"]
     assert dash["current_calculated_stock"] == 950
     assert client.post(f"/api/v1/fuel-management/issues/{issue['id']}/reverse", json={"reason": "Entry duplicated"}, headers=c["headers"]["owner"]).status_code == 200

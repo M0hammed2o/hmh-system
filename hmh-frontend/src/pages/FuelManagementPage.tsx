@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { NavLink, useSearchParams } from "react-router-dom";
+import { Link, NavLink, useSearchParams } from "react-router-dom";
 import { AlertTriangle, CheckCircle2, Download, Droplets, Gauge, Plus, RefreshCw, Truck } from "lucide-react";
 
 import { projectsApi, type Project } from "@/api/projects";
 import { vehiclesApi, type Vehicle } from "@/api/vehicles";
 import {
-  fuelManagementApi, type FuelDashboard, type FuelDelivery, type FuelIssue,
+  fuelManagementApi, type FuelDashboard, type FuelDelivery, type FuelEquipmentProfile, type FuelIssue,
   type FuelOrder, type FuelPendingConfirmation, type FuelReconciliation, type FuelStorage, type FuelTypeDefinition,
 } from "@/api/fuelManagement";
 import { Button } from "@/components/ui/button";
@@ -14,13 +14,14 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { compressImage } from "@/lib/compressImage";
 
-export type FuelSection = "dashboard" | "orders" | "deliveries" | "issues" | "stock" | "reports";
+export type FuelSection = "dashboard" | "orders" | "deliveries" | "issues" | "anomalies" | "stock" | "reports";
 
 const tabs: { section: FuelSection; label: string; path: string }[] = [
   { section: "dashboard", label: "Dashboard", path: "/fuel-management" },
   { section: "orders", label: "Orders", path: "/fuel-management/orders" },
   { section: "deliveries", label: "Deliveries", path: "/fuel-management/deliveries" },
   { section: "issues", label: "Issues", path: "/fuel-management/issues" },
+  { section: "anomalies", label: "Anomalies", path: "/fuel-management/anomalies" },
   { section: "stock", label: "Stock & Reconciliation", path: "/fuel-management/stock" },
   { section: "reports", label: "Reports", path: "/fuel-management/reports" },
 ];
@@ -43,6 +44,8 @@ export default function FuelManagementPage({ section = "dashboard" }: { section?
   const [deliveries, setDeliveries] = useState<FuelDelivery[]>([]);
   const [pendingConfirmations, setPendingConfirmations] = useState<FuelPendingConfirmation[]>([]);
   const [issues, setIssues] = useState<FuelIssue[]>([]);
+  const [anomalies, setAnomalies] = useState<FuelIssue[]>([]);
+  const [equipmentProfiles, setEquipmentProfiles] = useState<FuelEquipmentProfile[]>([]);
   const [reconciliations, setReconciliations] = useState<FuelReconciliation[]>([]);
   const [dashboard, setDashboard] = useState<FuelDashboard | null>(null);
   const [loading, setLoading] = useState(false);
@@ -80,6 +83,13 @@ export default function FuelManagementPage({ section = "dashboard" }: { section?
       if (section === "issues") {
         const [rows, fleet] = await Promise.all([fuelManagementApi.issues(projectId), vehiclesApi.list(projectId)]);
         setIssues(rows); setVehicles(fleet);
+      }
+      if (section === "anomalies") {
+        const [rows, fleet, profiles] = await Promise.all([
+          fuelManagementApi.issues(projectId, { anomaly_only: true }),
+          vehiclesApi.list(projectId), fuelManagementApi.equipmentProfiles(projectId),
+        ]);
+        setAnomalies(rows); setVehicles(fleet); setEquipmentProfiles(profiles);
       }
       if (section === "stock") setReconciliations(await fuelManagementApi.reconciliations(projectId));
     } catch (e: any) {
@@ -119,6 +129,7 @@ export default function FuelManagementPage({ section = "dashboard" }: { section?
         : section === "orders" ? <Orders orders={orders} linkedOrderId={linkedOrderId} fuelName={fuelName} run={run} />
         : section === "deliveries" ? <Deliveries rows={deliveries} pending={pendingConfirmations} ordered={ordered} storage={storage} showForm={showForm} setShowForm={setShowForm} projectId={projectId} run={run} />
         : section === "issues" ? <Issues rows={issues} storage={storage} vehicles={vehicles} showForm={showForm} setShowForm={setShowForm} projectId={projectId} run={run} />
+        : section === "anomalies" ? <Anomalies rows={anomalies} vehicles={vehicles} equipmentProfiles={equipmentProfiles} run={run} />
         : section === "stock" ? <Stock storage={storage} fuelTypes={fuelTypes} rows={reconciliations} showForm={showForm} setShowForm={setShowForm} projectId={projectId} run={run} />
         : <Reports projectId={projectId} run={run} />}
     </div>
@@ -128,11 +139,17 @@ export default function FuelManagementPage({ section = "dashboard" }: { section?
 function Dashboard({ data }: { data: FuelDashboard | null }) {
   if (!data) return <Empty text="Loading fuel dashboard…" />;
   const cards = [
-    ["Requested", fmt(data.litres_requested), Droplets], ["Approved", fmt(data.litres_approved), CheckCircle2],
-    ["Delivered", fmt(data.litres_delivered), Truck], ["Issued", fmt(data.litres_issued), Gauge],
-    ["Calculated stock", fmt(data.current_calculated_stock), Droplets], ["Anomalies for review", data.anomalies_for_review, AlertTriangle],
+    ["Requested", fmt(data.litres_requested), Droplets, null], ["Approved", fmt(data.litres_approved), CheckCircle2, null],
+    ["Delivered", fmt(data.litres_delivered), Truck, null], ["Issued", fmt(data.litres_issued), Gauge, null],
+    ["Calculated stock", fmt(data.current_calculated_stock), Droplets, null],
+    ["Anomalies for review", data.anomalies_for_review, AlertTriangle, "/fuel-management/anomalies"],
   ] as const;
-  return <><div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">{cards.map(([label, value, Icon]) => <div key={label} className="rounded-xl border bg-card p-4"><Icon className="w-5 h-5 text-blue-600" /><p className="text-xs text-muted-foreground mt-3">{label}</p><p className="text-2xl font-bold mt-1">{value}</p></div>)}</div>
+  return <><div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">{cards.map(([label, value, Icon, link]) => {
+    const card = <><Icon className="w-5 h-5 text-blue-600" /><p className="text-xs text-muted-foreground mt-3">{label}</p><p className="text-2xl font-bold mt-1">{value}</p></>;
+    return link
+      ? <Link key={label} to={link} className="rounded-xl border bg-card p-4 hover:border-primary/50 transition-colors">{card}</Link>
+      : <div key={label} className="rounded-xl border bg-card p-4">{card}</div>;
+  })}</div>
     <div className="grid sm:grid-cols-2 gap-3"><div className="rounded-xl border p-4"><p className="font-semibold">Outstanding orders</p><p className="text-3xl font-bold mt-2">{data.outstanding_orders}</p></div><div className="rounded-xl border p-4"><p className="font-semibold">Overdue deliveries</p><p className="text-3xl font-bold mt-2 text-amber-600">{data.overdue_deliveries}</p></div></div></>;
 }
 
@@ -242,6 +259,72 @@ function Issues({ rows, storage, vehicles, showForm, setShowForm, projectId, run
       {uploading && <div className="space-y-1"><div className="h-2 rounded bg-muted overflow-hidden"><div className="h-full bg-primary" style={{ width: `${progress}%` }} /></div><p className="text-xs text-muted-foreground">Uploading {progress}% — keep this page open.</p></div>}
       <Button disabled={uploading} onClick={() => void submit()}>{uploading ? "Uploading evidence…" : progress > 0 ? "Retry fuel issue" : "Record fuel issue"}</Button></FormCard>}
     <CardList empty="No fuel issues recorded.">{rows.map((i: FuelIssue) => <article key={i.id} className={`rounded-xl border p-4 ${i.anomaly_flag ? "border-amber-300 bg-amber-50/50" : ""}`}><div className="flex flex-wrap justify-between gap-2"><div><p className="font-semibold">{i.issue_number}</p><p className="text-sm text-muted-foreground">{i.destination_type.replaceAll("_", " ")} · {i.vehicle_id ? vehicles.find((v: Vehicle) => v.id === i.vehicle_id)?.registration : i.equipment_reference} · {fmt(i.litres)}</p>{i.anomaly_reason && <p className="text-sm text-amber-700 mt-1">Review flag: {i.anomaly_reason}</p>}</div>{i.is_reversed ? <Badge variant="outline">REVERSED</Badge> : <Badge className={i.anomaly_flag ? "bg-amber-100 text-amber-700" : "bg-green-100 text-green-700"}>{i.anomaly_flag ? "REVIEW" : "RECORDED"}</Badge>}</div></article>)}</CardList>
+  </Section>;
+}
+
+// Phase 14: drill-down for "Anomalies for review" — neutral governance
+// terminology only (review required / unexplained variance), never an
+// automatic theft/misuse accusation. Shows everything a reviewer needs to
+// make that judgement themselves: who issued/received it, what the actual
+// vs expected consumption was, the reading it was based on, evidence and
+// any override already recorded.
+function Anomalies({ rows, vehicles, equipmentProfiles, run }: any) {
+  const expectedFor = (issue: FuelIssue): { value: number; unit: string } | null => {
+    if (issue.vehicle_id) {
+      const v = vehicles.find((x: Vehicle) => x.id === issue.vehicle_id);
+      if (!v) return null;
+      if (v.uses_hours) return v.fuel_consumption_per_hour != null ? { value: v.fuel_consumption_per_hour, unit: "L/hour" } : null;
+      return v.fuel_consumption_per_100km != null ? { value: v.fuel_consumption_per_100km, unit: "L/100km" } : null;
+    }
+    const profile = equipmentProfiles.find((p: FuelEquipmentProfile) => p.equipment_reference === issue.equipment_reference);
+    return profile?.expected_litres_per_hour != null ? { value: profile.expected_litres_per_hour, unit: "L/hour" } : null;
+  };
+  const actualFor = (issue: FuelIssue): { value: number; unit: string } | null => {
+    if (issue.litres_per_100km != null) return { value: issue.litres_per_100km, unit: "L/100km" };
+    if (issue.litres_per_hour != null) return { value: issue.litres_per_hour, unit: "L/hour" };
+    return null;
+  };
+  return <Section title="Fuel Anomalies" action={<p className="text-xs text-muted-foreground max-w-sm sm:text-right">Flagged for review — high consumption, refill sooner than the configured interval, or a reading that exceeds estimated tank space. Not an accusation; confirm or override with a reason.</p>}>
+    <CardList empty="No fuel issues are currently flagged for review.">
+      {rows.map((i: FuelIssue) => {
+        const expected = expectedFor(i);
+        const actual = actualFor(i);
+        const overRun = expected && actual ? Math.round((actual.value / expected.value - 1) * 100) : null;
+        return <article key={i.id} className="rounded-xl border border-amber-300 bg-amber-50/40 p-4 space-y-3">
+          <div className="flex flex-wrap justify-between gap-2">
+            <div>
+              <p className="font-semibold">{i.issue_number} · {i.vehicle_registration || i.equipment_reference || i.destination_type.replaceAll("_", " ")}</p>
+              <p className="text-sm text-muted-foreground">{new Date(i.issued_at).toLocaleString("en-ZA")} · {fmt(i.litres)}</p>
+            </div>
+            {i.is_reversed ? <Badge variant="outline">REVERSED</Badge> : <Badge className="bg-amber-100 text-amber-700">Review required</Badge>}
+          </div>
+          <p className="text-sm text-amber-800">{i.anomaly_reason}</p>
+          <div className="grid sm:grid-cols-2 gap-x-4 gap-y-1 text-sm">
+            <p>Actual consumption: <strong>{actual ? `${actual.value.toFixed(2)} ${actual.unit}` : "—"}</strong></p>
+            <p>Expected consumption: <strong>{expected ? `${expected.value.toFixed(2)} ${expected.unit}` : "not configured"}</strong></p>
+            {overRun != null && <p className="sm:col-span-2">Variance: <strong className={overRun > 0 ? "text-amber-700" : ""}>{overRun > 0 ? "+" : ""}{overRun}% vs expected</strong></p>}
+            <p>{i.odometer_reading != null ? `Odometer: ${i.odometer_reading.toLocaleString()} km` : i.hour_meter_reading != null ? `Hour meter: ${i.hour_meter_reading.toLocaleString()} hrs` : "No reading captured"}</p>
+            <p>Feasibility status: <strong>{i.feasibility_status.replaceAll("_", " ")}</strong></p>
+            <p>Issued by: {i.issued_by_name || "—"}</p>
+            <p>Received by: {i.received_by || "—"}</p>
+            <p>Evidence: {i.evidence.length > 0 ? `${i.evidence.length} file(s) attached` : "none attached"}</p>
+          </div>
+          {(i.evidence_override_reason || i.feasibility_override_reason) && (
+            <div className="rounded-lg border border-amber-300 bg-amber-100/50 p-3 text-sm">
+              <p className="font-medium">Override on record</p>
+              {i.evidence_override_reason && <p>Evidence override: {i.evidence_override_reason}</p>}
+              {i.feasibility_override_reason && <p>Feasibility override: {i.feasibility_override_reason}</p>}
+            </div>
+          )}
+          {!i.is_reversed && <div className="flex gap-2">
+            <Button size="sm" variant="outline" onClick={() => {
+              const reason = window.prompt("Reason for reversing this fuel issue (e.g. entry error, duplicate)");
+              if (reason) void run(() => fuelManagementApi.reverseIssue(i.id, reason));
+            }}>Reverse entry</Button>
+          </div>}
+        </article>;
+      })}
+    </CardList>
   </Section>;
 }
 

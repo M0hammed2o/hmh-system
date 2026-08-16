@@ -5,7 +5,7 @@ import {
   LayoutDashboard, Users, FolderKanban, FileSpreadsheet,
   ShoppingCart, Truck, Package, CreditCard, Bell, Settings,
   Copy, Building2, Mail, FileCheck2, Car, Droplet,
-  Smartphone, Clock, User, Flag, Warehouse,
+  Smartphone, Clock, User, Flag, Warehouse, AlertTriangle,
 } from "lucide-react";
 import { TOKEN_KEY, REFRESH_TOKEN_KEY, ROLE_KEY, DUAL_ACCESS_ROLE_SET } from "@/lib/constants";
 import { useAuthContext } from "@/context/AuthContext";
@@ -103,6 +103,7 @@ const navGroups = [
       { title: "Fuel Orders",     path: "/fuel-management/orders",     icon: ShoppingCart },
       { title: "Fuel Deliveries", path: "/fuel-management/deliveries", icon: Truck },
       { title: "Fuel Issues",     path: "/fuel-management/issues",     icon: Droplet },
+      { title: "Fuel Anomalies",  path: "/fuel-management/anomalies",  icon: AlertTriangle },
       { title: "Stock & Reconcile", path: "/fuel-management/stock",    icon: Warehouse },
       { title: "Fuel Reports",    path: "/fuel-management/reports",    icon: FileCheck2 },
     ],
