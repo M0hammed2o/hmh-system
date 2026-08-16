@@ -94,6 +94,14 @@ Site clerk submits WarehouseTransferRequest (from_project → to_project, item, 
 
 ---
 
+## Fuel Management
+
+Fuel is a separate transaction ledger, not a BOQ item. `FuelOrder` controls request/approval/order state; verified `FuelDelivery` rows increase storage; `FuelIssue` rows decrease it; `FuelStockAdjustment` records authorised corrections; and `FuelReconciliation` compares calculated and physical stock. Balance is derived as opening + verified deliveries - non-reversed issues + adjustments. All routes combine an explicit `fuel.*` permission with `check_project_access()`.
+
+See `docs/implementation/Fuel_Management_Design.md`.
+
+---
+
 ## Notification System
 
 ```
@@ -142,10 +150,11 @@ Daily cron (POST /api/v1/internal/scan-payment-due)
 ## Frontend Architecture
 
 **SPA:** React 18, React Router v6, lazy-loaded pages, Radix UI primitives, Tailwind CSS.
-**Auth:** `AuthContext` stores JWT in memory (not localStorage); `ProtectedRoute` redirects to `/login` if unauthenticated; `SiteRoute` redirects to `/site-login` for site portal.
+**Auth:** Access/refresh tokens persist in localStorage for installed-app reopen. `AuthContext` revalidates `/users/me`; guards do not trust the stored role alone. `/login` is universal and `/site-login` remains a deliberate phone/PIN-compatible site entry. Protected redirects retain a safe internal `returnTo`.
 **Service block:** `config/serviceBlock.ts` — `SERVICE_BLOCKED=true` renders a hard block screen instead of the app (used for maintenance or access control).
 **API layer:** One file per backend domain in `src/api/`. All return typed responses. `client.ts` sets the base URL from `VITE_API_BASE_URL` env var and attaches the Bearer token.
 **Site portal:** `SiteDashboardPage` at `/site` — restricted view for site-level users (lots, stock, vehicles, workshop tab).
+**PWA:** `public/sw.js` uses network-first HTML, cached hashed assets and an offline document. It never intercepts API, cross-origin or non-GET traffic. New workers wait for an explicit in-app update action.
 
 ---
 
@@ -175,6 +184,7 @@ Daily cron (POST /api/v1/internal/scan-payment-due)
 | BOQ | `BOQHeader`, `BOQSection`, `BOQItem` (with `planned_total` GENERATED ALWAYS col) |
 | Notifications | `SystemAlert`, `AlertRecipient`, `NotificationQueue` |
 | Fleet/Workshop | `Vehicle`, `FuelLog`, `RepairJob`, `JobCard` |
+| Fuel Management | `FuelTypeDefinition`, `FuelStorageLocation`, `FuelOrder`, `FuelDelivery`, `FuelIssue`, `FuelStockAdjustment`, `FuelReconciliation` |
 | Documents | `Attachment`, `IncomingEmail`, `DocumentExtraction` |
 | Finance | `Company`, `Supplier`, `MunicipalityInvoice`, `Expense` |
 | Audit | `AuditLog` |

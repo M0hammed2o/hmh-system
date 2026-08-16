@@ -86,6 +86,7 @@ from app.api.v1.payments import project_payment_router, payment_router
 from app.api.v1.alerts import router as alerts_router
 from app.api.v1.dashboard import router as dashboard_router
 from app.api.v1.fuel import project_fuel_router, fuel_router
+from app.api.v1.fuel_management import router as fuel_management_router, project_router as project_fuel_management_router
 from app.api.v1.attachments import router as attachments_router
 from app.api.v1.vehicles import router as vehicles_router
 from app.api.v1.allocation import router as allocation_router
@@ -313,6 +314,8 @@ app.include_router(alerts_router, prefix="/api/v1")
 app.include_router(dashboard_router, prefix="/api/v1")
 app.include_router(project_fuel_router, prefix="/api/v1")
 app.include_router(fuel_router, prefix="/api/v1")
+app.include_router(fuel_management_router, prefix="/api/v1")
+app.include_router(project_fuel_management_router, prefix="/api/v1")
 app.include_router(attachments_router, prefix="/api/v1")
 app.include_router(vehicles_router, prefix="/api/v1")
 app.include_router(allocation_router, prefix="/api/v1")
@@ -391,14 +394,25 @@ from app.api.v1.weekly_plans import weekly_plan_project_router, weekly_plan_rout
 app.include_router(weekly_plan_project_router, prefix="/api/v1")
 app.include_router(weekly_plan_router, prefix="/api/v1")
 
-# ── Static file serving for uploaded documents ────────────────────────────────
+# ── Static file serving for uploaded documents (development/test only) ────────
 # Use settings.UPLOAD_DIR (absolute path from env) so the static mount and all
 # file-save calls (stages, deliveries, usage, gmail) reference the SAME directory.
 # Previously this used os.path.dirname(__file__) + "/uploads" which resolved to
 # hmh-backend/uploads, while files were saved to UPLOAD_DIR one level higher.
+#
+# This mount serves every file in UPLOAD_DIR with NO authentication or project
+# check — the permission-checked GET /attachments/{id}/download endpoint is the
+# only route that should ever be relied on. Outside development/test, config.py's
+# validate_production_storage requires Supabase (private-bucket) storage, so
+# nothing new is written under UPLOAD_DIR in production; this mount is disabled
+# there as defense-in-depth against a future regression.
 _uploads_dir = os.path.abspath(settings.UPLOAD_DIR)
 os.makedirs(_uploads_dir, exist_ok=True)
-app.mount("/uploads", StaticFiles(directory=_uploads_dir), name="uploads")
+_dev_like_envs = {"development", "dev", "test", "testing", "local"}
+if settings.APP_ENV.strip().lower() in _dev_like_envs:
+    app.mount("/uploads", StaticFiles(directory=_uploads_dir), name="uploads")
+else:
+    _log.warning("startup uploads_mount=SKIPPED app_env=%s — use /attachments/{id}/download instead", settings.APP_ENV)
 
 
 # ── Internal cron endpoint ───────────────────────────────────────────────────
@@ -700,20 +714,11 @@ async def _start_background_queue_drain() -> None:
     _log.info("startup queue_drain_task=started interval=30s_or_immediate")
 
 
-# ── Auto-apply Alembic migrations on startup ──────────────────────────────────
-@app.on_event("startup")
-def run_db_migrations() -> None:
-    """Run `alembic upgrade head` at startup so pending migrations are applied automatically."""
-    import os as _os
-    try:
-        from alembic.config import Config as _AlembicConfig
-        from alembic import command as _alembic_cmd
-        _ini = _os.path.join(_os.path.dirname(__file__), "alembic.ini")
-        _cfg = _AlembicConfig(_ini)
-        _alembic_cmd.upgrade(_cfg, "head")
-        _log.info("startup db_migrations=applied")
-    except Exception as _exc:
-        _log.error("startup db_migrations=FAILED error=%s", _exc)
+# Migrations are applied by the release/start command (`alembic upgrade head &&
+# uvicorn ...`, see RUNBOOK.md), not by an in-process startup hook. Running
+# `alembic upgrade head` here would swallow migration failures into a log line
+# and let the app serve traffic against a stale schema, and would race against
+# itself if the service ever scales to multiple instances/workers.
 
 
 # ── Startup logging ────────────────────────────────────────────────────────────

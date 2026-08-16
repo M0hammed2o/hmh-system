@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#0b1f33" />
+    <title>HMH is offline</title>
+    <style>
+      body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px; box-sizing: border-box; background: #0b1f33; color: #fff; font: 16px/1.5 system-ui, sans-serif; }
+      main { max-width: 420px; text-align: center; }
+      img { width: 112px; height: 112px; border-radius: 24px; }
+      h1 { margin: 24px 0 8px; font-size: 1.5rem; }
+      p { color: #cbd5e1; }
+      button { margin-top: 16px; border: 0; border-radius: 10px; padding: 12px 18px; background: #f95e01; color: #fff; font-weight: 700; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <img src="/icon-192.png" alt="HMH" />
+      <h1>You are offline</h1>
+      <p>HMH could not reach the server. Reconnect and retry; saved sign-in details remain on this device.</p>
+      <button type="button" onclick="location.reload()">Try again</button>
+    </main>
+  </body>
+</html>

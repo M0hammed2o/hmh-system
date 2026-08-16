@@ -63,3 +63,9 @@ class AlreadyPostedError(HMHException):
     """Raised when attempting to re-post an already-posted opening balance."""
     status_code = 422
     error_code = "ALREADY_POSTED"
+
+
+class StorageError(HMHException):
+    """Raised when persistent object storage fails and no safe fallback exists."""
+    status_code = 503
+    error_code = "STORAGE_ERROR"

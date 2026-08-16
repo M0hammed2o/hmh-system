@@ -1,9 +1,10 @@
-import { useState } from "react";
-import { useNavigate, Link } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { useLocation, useNavigate, Link } from "react-router-dom";
 import { ArrowRight } from "lucide-react";
 import { authApi } from "@/api/auth";
-import { usersApi } from "@/api/users";
-import { TOKEN_KEY, REFRESH_TOKEN_KEY, ROLE_KEY, SITE_ROLE_SET } from "@/lib/constants";
+import { TOKEN_KEY, REFRESH_TOKEN_KEY, ROLE_KEY, SITE_ROLE_SET, DUAL_ACCESS_ROLE_SET } from "@/lib/constants";
+import { useAuthContext } from "@/context/AuthContext";
+import { landingForRole, safeReturnTo } from "@/routes/authNavigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -11,6 +12,9 @@ import { HMHLogo } from "@/components/HMHLogo";
 
 export default function SiteLoginPage() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const { user: currentUser, loading: sessionLoading, refresh } = useAuthContext();
+  const requestedPath = safeReturnTo(location.search);
   const [loginMode, setLoginMode]       = useState<"email" | "phone">("email");
   const [email, setEmail]               = useState("");
   const [password, setPassword]         = useState("");
@@ -19,6 +23,15 @@ export default function SiteLoginPage() {
   const [error, setError]               = useState("");
   const [accessDenied, setAccessDenied] = useState(false);
   const [loading, setLoading]           = useState(false);
+
+  useEffect(() => {
+    if (sessionLoading || !currentUser) return;
+    if (SITE_ROLE_SET.has(currentUser.role) || DUAL_ACCESS_ROLE_SET.has(currentUser.role)) {
+      navigate(landingForRole(currentUser.role, requestedPath), { replace: true });
+    } else {
+      setAccessDenied(true);
+    }
+  }, [currentUser, navigate, requestedPath, sessionLoading]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -34,17 +47,18 @@ export default function SiteLoginPage() {
       localStorage.setItem(REFRESH_TOKEN_KEY, tokens.refresh_token);
 
       if (tokens.must_reset_password) {
-        navigate("/set-password", { replace: true });
+        const query = requestedPath ? `?returnTo=${encodeURIComponent(requestedPath)}` : "";
+        navigate(`/set-password${query}`, { replace: true });
         return;
       }
 
-      const user = await usersApi.me();
-      localStorage.setItem(ROLE_KEY, user.role);
+      const user = await refresh();
+      if (!user) throw new Error("Authenticated session could not be verified.");
 
-      if (SITE_ROLE_SET.has(user.role)) {
-        navigate("/site", { replace: true });
+      if (SITE_ROLE_SET.has(user.role) || DUAL_ACCESS_ROLE_SET.has(user.role)) {
+        navigate(landingForRole(user.role, requestedPath), { replace: true });
       } else {
-        // Office/owner tried the site portal — keep their valid token but show the message
+        // Office role without site-portal access — keep their valid token but show the message
         setAccessDenied(true);
       }
     } catch {

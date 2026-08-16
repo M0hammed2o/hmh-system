@@ -8,6 +8,8 @@ env/
 node_modules/
 dist/
 build/
+test-results/
+playwright-report/
 
 # Env files
 .env

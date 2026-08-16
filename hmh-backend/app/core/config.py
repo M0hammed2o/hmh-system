@@ -12,9 +12,16 @@ SMTP field aliases (all equivalent):
 import os
 from functools import lru_cache
 from typing import List
+from urllib.parse import urlsplit
 
 from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_DEV_LIKE_ENVS = {"development", "dev", "test", "testing", "local"}
+
+
+def _is_development_like(app_env: str) -> bool:
+    return app_env.strip().lower() in _DEV_LIKE_ENVS
 
 
 class Settings(BaseSettings):
@@ -49,11 +56,20 @@ class Settings(BaseSettings):
     UPLOAD_DIR: str = "./uploads"
     MAX_UPLOAD_SIZE_MB: int = 20
 
-    # Supabase Storage (optional — set these env vars to enable persistent cloud storage)
+    # Supabase Storage (required outside development/test — see validate_production_storage below)
     # If set, uploaded files are stored in Supabase Storage instead of the local disk.
-    # Create a public bucket named "hmh-uploads" in your Supabase project.
     SUPABASE_URL:         str = ""   # e.g. https://xyz.supabase.co
     SUPABASE_SERVICE_KEY: str = ""   # service_role key (never ANON key for uploads)
+    # Legacy public bucket "hmh-uploads" (create with public: true) is used for uploads
+    # that predate the 2026-08-03 evidence-privacy hardening (delivery notes/signatures,
+    # stock usage evidence, milestone stage photos, generated MR/PO PDFs).
+    # Fuel evidence and generic Attachment-table uploads (/attachments/upload) go to this
+    # PRIVATE bucket instead — create it with public: FALSE. Access is only ever granted
+    # via short-lived signed URLs through the permission-checked /attachments/{id}/download
+    # endpoint; the bucket name/key is never returned to the frontend directly.
+    SUPABASE_PRIVATE_BUCKET: str = "hmh-evidence-private"
+    # How long a signed evidence-access URL stays valid before it must be re-requested.
+    EVIDENCE_SIGNED_URL_EXPIRY_SECONDS: int = 300
 
     # AI / LLM
     ANTHROPIC_API_KEY: str = ""   # Anthropic Claude API key for AI OCR field extraction (Phase 6A)
@@ -77,6 +93,8 @@ class Settings(BaseSettings):
     # CORS — comma-separated allowed origins
     # Render env var should set the production domain(s)
     CORS_ORIGINS: str = "http://localhost:3000,http://localhost:5173,https://app.hmhgroup.co.za"
+    # Public browser URL used for absolute links in notification emails.
+    FRONTEND_BASE_URL: str = ""
 
     # Rate limiting
     RATE_LIMIT_PER_MINUTE: int = 100
@@ -195,6 +213,42 @@ class Settings(BaseSettings):
                 self.WHATSAPP_DAILY_SUMMARY_TEMPLATE_NAME = parts[0]
             self.WHATSAPP_ALERT_TEMPLATE_NAME = parts[1]
 
+        return self
+
+    @model_validator(mode="after")
+    def validate_production_storage(self) -> "Settings":
+        """Outside development/test, Fuel evidence and attachment uploads must use
+        private, persistent storage (Supabase) — never the local disk fallback,
+        which is ephemeral on most hosts and served unauthenticated via /uploads."""
+        if not _is_development_like(self.APP_ENV) and not (self.SUPABASE_URL and self.SUPABASE_SERVICE_KEY):
+            raise ValueError(
+                "SUPABASE_URL and SUPABASE_SERVICE_KEY must both be configured outside development/test "
+                "environments — production must not silently fall back to local disk storage for Fuel "
+                "evidence and other attachments."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def validate_frontend_base_url(self) -> "Settings":
+        """Normalize an origin-only frontend URL and reject unsafe deployment values."""
+        development_like = _is_development_like(self.APP_ENV)
+        raw = self.FRONTEND_BASE_URL.strip()
+        if not raw:
+            if not development_like:
+                raise ValueError("FRONTEND_BASE_URL must be configured outside development/test environments")
+            raw = "http://localhost:5173"
+        parsed = urlsplit(raw)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("FRONTEND_BASE_URL must be an absolute http(s) origin")
+        if parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path not in {"", "/"}:
+            raise ValueError("FRONTEND_BASE_URL must contain only the public origin, without credentials, path, query or fragment")
+        hostname = (parsed.hostname or "").lower()
+        if not development_like:
+            if hostname in {"localhost", "127.0.0.1", "::1"}:
+                raise ValueError("FRONTEND_BASE_URL cannot point to localhost outside development/test environments")
+            if parsed.scheme != "https":
+                raise ValueError("FRONTEND_BASE_URL must use https outside development/test environments")
+        self.FRONTEND_BASE_URL = f"{parsed.scheme.lower()}://{parsed.netloc.rstrip('/')}"
         return self
 
     @property

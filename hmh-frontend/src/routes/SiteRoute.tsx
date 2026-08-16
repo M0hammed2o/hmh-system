@@ -1,45 +1,20 @@
-import { useEffect, useState } from "react";
-import { Navigate } from "react-router-dom";
-import { TOKEN_KEY, ROLE_KEY, SITE_ROLE_SET } from "@/lib/constants";
-import { usersApi, type UserRole } from "@/api/users";
+import { Navigate, useLocation } from "react-router-dom";
+import { TOKEN_KEY, SITE_ROLE_SET, DUAL_ACCESS_ROLE_SET } from "@/lib/constants";
+import { type UserRole } from "@/api/users";
+import { useAuthContext } from "@/context/AuthContext";
+import { loginUrlFor } from "./authNavigation";
 
 /** Typed list kept for use in login pages that import from here. */
-export const SITE_ROLES: UserRole[] = ["SITE_MANAGER", "SITE_STAFF"];
+export const SITE_ROLES: UserRole[] = ["SITE_MANAGER", "SITE_MANAGER_VIEW", "SITE_STAFF"];
 
-type Status = "loading" | "site" | "office" | "unauthenticated";
-
-/**
- * Guards /site.
- * - No token                  → /site-login
- * - Stored role is a site role → render immediately (no API call)
- * - Stored role is office role → /  (wrong portal)
- * - No stored role             → verify via API, then cache it
- */
+/** Guards the site portal with a server-verified current user. */
 export function SiteRoute({ children }: { children: React.ReactNode }) {
-  const [status, setStatus] = useState<Status>(() => {
-    const token = localStorage.getItem(TOKEN_KEY);
-    if (!token) return "unauthenticated";
+  const location = useLocation();
+  const { user, loading } = useAuthContext();
+  const token = localStorage.getItem(TOKEN_KEY);
+  const loginUrl = loginUrlFor(location.pathname, location.search);
 
-    const role = localStorage.getItem(ROLE_KEY);
-    if (role) {
-      return SITE_ROLE_SET.has(role) ? "site" : "office";
-    }
-    return "loading";
-  });
-
-  useEffect(() => {
-    if (status !== "loading") return;
-
-    usersApi
-      .me()
-      .then((user) => {
-        localStorage.setItem(ROLE_KEY, user.role);
-        setStatus(SITE_ROLE_SET.has(user.role) ? "site" : "office");
-      })
-      .catch(() => setStatus("unauthenticated"));
-  }, [status]);
-
-  if (status === "loading") {
+  if (token && loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
         <div className="flex flex-col items-center gap-3 text-muted-foreground">
@@ -50,7 +25,7 @@ export function SiteRoute({ children }: { children: React.ReactNode }) {
     );
   }
 
-  if (status === "unauthenticated") return <Navigate to="/site-login" replace />;
-  if (status === "office")         return <Navigate to="/" replace />;
+  if (!token || !user) return <Navigate to={loginUrl} replace />;
+  if (!SITE_ROLE_SET.has(user.role) && !DUAL_ACCESS_ROLE_SET.has(user.role)) return <Navigate to="/" replace />;
   return <>{children}</>;
 }

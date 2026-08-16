@@ -1,5 +1,5 @@
 import axios from "axios";
-import { TOKEN_KEY, REFRESH_TOKEN_KEY, ROLE_KEY, API_BASE, SITE_ROLE_SET } from "@/lib/constants";
+import { TOKEN_KEY, REFRESH_TOKEN_KEY, ROLE_KEY, API_BASE } from "@/lib/constants";
 
 const client = axios.create({
   baseURL: API_BASE,
@@ -22,14 +22,21 @@ client.interceptors.request.use((config) => {
 client.interceptors.response.use(
   (res) => res,
   (err) => {
-    if (err.response?.status === 401) {
+    const requestUrl = String(err.config?.url ?? "");
+    const isLoginRequest = requestUrl.includes("/auth/login");
+    const isLoginPage = window.location.pathname === "/login" || window.location.pathname === "/site-login";
+
+    if (err.response?.status === 401 && !isLoginRequest) {
       localStorage.removeItem(TOKEN_KEY);
       localStorage.removeItem(REFRESH_TOKEN_KEY);
       localStorage.removeItem(ROLE_KEY);
 
-      // Redirect to site-login if the user was on a site route, else admin login
-      const isSiteRoute = window.location.pathname.startsWith("/site");
-      window.location.href = isSiteRoute ? "/site-login" : "/login";
+      if (!isLoginPage) {
+        const isSiteRoute = window.location.pathname === "/site" || window.location.pathname.startsWith("/site/");
+        const loginPath = isSiteRoute ? "/site-login" : "/login";
+        const returnTo = `${window.location.pathname}${window.location.search}`;
+        window.location.replace(`${loginPath}?returnTo=${encodeURIComponent(returnTo)}`);
+      }
     }
     return Promise.reject(err);
   }

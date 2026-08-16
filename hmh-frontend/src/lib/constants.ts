@@ -14,7 +14,12 @@ export const ROLE_KEY          = "hmh_user_role";
  * 3. Local development default.
  */
 const PRODUCTION_BACKEND = "https://hmh-backend-uhzu.onrender.com/api/v1";
-const PRODUCTION_HOSTS   = ["app.hmhgroup.co.za", "www.app.hmhgroup.co.za"];
+const PRODUCTION_HOSTS   = [
+  "hmhgroup.co.za",
+  "www.hmhgroup.co.za",
+  "app.hmhgroup.co.za",
+  "www.app.hmhgroup.co.za",
+];
 
 function resolveApiBase(): string {
   // Tier 1: explicit env var always wins
@@ -32,4 +37,13 @@ function resolveApiBase(): string {
 export const API_BASE = resolveApiBase();
 
 /** Roles that belong to the site portal. All other roles use the office portal. */
-export const SITE_ROLE_SET = new Set(["SITE_MANAGER", "SITE_STAFF"]);
+export const SITE_ROLE_SET = new Set(["SITE_MANAGER", "SITE_MANAGER_VIEW", "SITE_STAFF"]);
+
+/**
+ * Office-side roles that also have read/write access to the site portal
+ * (mirrors the company-wide _PROJECT_ACCESS_BYPASS role set on the backend —
+ * app/dependencies.py — since these roles already bypass project isolation
+ * everywhere else in the app). Used to show the "Go to Site Dashboard" link
+ * on the main dashboard and to let SiteRoute admit them into /site.
+ */
+export const DUAL_ACCESS_ROLE_SET = new Set(["OWNER", "OFFICE_ADMIN"]);

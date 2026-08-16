@@ -12,6 +12,7 @@ import SetPasswordPage from "@/pages/SetPasswordPage";
 
 // All operational pages — lazy loaded per route
 const SiteDashboardPage       = lazy(() => import("@/pages/SiteDashboardPage"));
+const SiteFuelRequestPage     = lazy(() => import("@/pages/SiteFuelRequestPage"));
 const DashboardPage           = lazy(() => import("@/pages/DashboardPage"));
 const OwnerDashboardPage      = lazy(() => import("@/pages/OwnerDashboardPage"));
 const UsersPage               = lazy(() => import("@/pages/UsersPage"));
@@ -32,6 +33,7 @@ const AlertsPage              = lazy(() => import("@/pages/AlertsPage"));
 const LabourPage              = lazy(() => import("@/pages/LabourPage"));
 const GmailInboxPage          = lazy(() => import("@/pages/GmailInboxPage"));
 const FuelPage                = lazy(() => import("@/pages/FuelPage"));
+const FuelManagementPage      = lazy(() => import("@/pages/FuelManagementPage"));
 const SuppliersPage           = lazy(() => import("@/pages/SuppliersPage"));
 const CompaniesPage             = lazy(() => import("@/pages/CompaniesPage"));
 const ProjectCostSummaryPage    = lazy(() => import("@/pages/ProjectCostSummaryPage"));
@@ -52,6 +54,8 @@ const ProgressClaimsPage              = lazy(() => import("@/pages/ProgressClaim
 const ProgressClaimDetailPage         = lazy(() => import("@/pages/ProgressClaimDetailPage"));
 const ProgrammePlanPage               = lazy(() => import("@/pages/ProgrammePlanPage"));
 const WeeklyPlanPage                  = lazy(() => import("@/pages/WeeklyPlanPage"));
+const NotificationDeepLinkPage        = lazy(() => import("@/pages/NotificationDeepLinkPage"));
+const FuelOrderDeepLinkPage           = lazy(() => import("@/pages/FuelOrderDeepLinkPage"));
 
 function PageLoader() {
   return (
@@ -125,6 +129,7 @@ export function AppRouter() {
               </SiteRoute>
             }
           />
+          <Route path="/site/fuel-request" element={<SiteRoute><SiteFuelRequestPage /></SiteRoute>} />
 
           {/* ── Office / owner portal ── */}
           <Route
@@ -135,6 +140,7 @@ export function AppRouter() {
             }
           >
             <Route index element={<DashboardPage />} />
+            <Route path="dashboard" element={<Navigate to="/" replace />} />
             <Route path="owner" element={<OwnerDashboardPage />} />
             <Route path="users" element={<UsersPage />} />
             <Route path="projects" element={<ProjectsPage />} />
@@ -155,10 +161,19 @@ export function AppRouter() {
             <Route path="reconciliation" element={<ReconciliationPage />} />
             <Route path="reconciliation/proof-packs" element={<InvoiceReconciliationPage />} />
             <Route path="alerts" element={<AlertsPage />} />
+            <Route path="notifications/:notificationId" element={<NotificationDeepLinkPage />} />
+            <Route path="notifications/fuel-order/:orderId" element={<FuelOrderDeepLinkPage />} />
             <Route path="whatsapp-queue" element={<Navigate to="/alerts" replace />} />
             <Route path="labour" element={<LabourPage />} />
             <Route path="gmail-inbox" element={<GmailInboxPage />} />
-            <Route path="fuel" element={<FuelPage />} />
+            <Route path="fuel" element={<Navigate to="/fuel-management" replace />} />
+            <Route path="fuel-legacy" element={<FuelPage />} />
+            <Route path="fuel-management" element={<FuelManagementPage section="dashboard" />} />
+            <Route path="fuel-management/orders" element={<FuelManagementPage section="orders" />} />
+            <Route path="fuel-management/deliveries" element={<FuelManagementPage section="deliveries" />} />
+            <Route path="fuel-management/issues" element={<FuelManagementPage section="issues" />} />
+            <Route path="fuel-management/stock" element={<FuelManagementPage section="stock" />} />
+            <Route path="fuel-management/reports" element={<FuelManagementPage section="reports" />} />
             <Route path="suppliers" element={<SuppliersPage />} />
             <Route path="suppliers/:supplierId" element={<SupplierProfilePage />} />
             <Route path="companies" element={<CompaniesPage />} />
@@ -177,7 +192,9 @@ export function AppRouter() {
             <Route path="progress-claims" element={<ProgressClaimsPage />} />
             <Route path="progress-claims/:claimId" element={<ProgressClaimDetailPage />} />
             <Route path="programme" element={<ProgrammePlanPage />} />
+            <Route path="programme-plan" element={<Navigate to="/programme" replace />} />
             <Route path="weekly-plans" element={<WeeklyPlanPage />} />
+            <Route path="weekly-plan" element={<Navigate to="/weekly-plans" replace />} />
           </Route>
 
           <Route path="*" element={<Navigate to="/" replace />} />

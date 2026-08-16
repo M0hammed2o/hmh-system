@@ -30,6 +30,7 @@ export interface Alert {
   // Enriched at API layer
   project_name?: string | null;
   site_name?: string | null;
+  action_url?: string | null;
 }
 
 export interface AlertRecordContext {
@@ -156,6 +157,16 @@ export const alertsApi = {
 
   acknowledge: async (alertId: string): Promise<Alert> => {
     const res = await client.post<{ data: Alert }>(`/alerts/${alertId}/acknowledge`);
+    return res.data.data;
+  },
+
+  open: async (alertId: string): Promise<Alert> => {
+    const res = await client.get<{ data: Alert }>(`/alerts/${alertId}/open`);
+    return res.data.data;
+  },
+
+  markRead: async (alertId: string): Promise<Alert> => {
+    const res = await client.post<{ data: Alert }>(`/alerts/${alertId}/read`);
     return res.data.data;
   },
 

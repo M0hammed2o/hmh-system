@@ -2,6 +2,7 @@
 <!-- Hard cap 200 lines. Update this file whenever structure, stack, or commands change. -->
 
 ## Purpose
+Current scope includes standalone Fuel Management and an installable mobile PWA. Fuel transactions are intentionally separate from BOQ quantities and procurement calculations.
 Full-stack construction management platform for HMH Group and Minerat Construction & Civils.
 Covers project hierarchy (project → site → lot), full procurement pipeline (MR → Quote → PO → Delivery → Invoice → Payment), warehouse and stock management, workshop/fleet management with repair workflow, municipality progress claims (physical evidence only — no pricing), programme planning (Gantt-style with baseline), weekly work planning with progress propagation, WhatsApp-based alert system, Gmail OCR pipeline for automated invoice ingestion, and reporting. Two portal modes: office (full) and site (restricted tablet view).
 
@@ -129,6 +130,9 @@ npm ci
 npm run dev         # dev server on :5173
 npm run build       # production build → dist/
 npm run lint        # ESLint
+
+# Browser/PWA checks
+npm run test:pwa
 ```
 
 ## Must Not Break
@@ -138,4 +142,6 @@ npm run lint        # ESLint
 - WhatsApp webhook HMAC verification (when `WHATSAPP_APP_SECRET` is set)
 - `ApiSuccess[T]` response wrapper on all API responses
 - Alembic migration chain (never drop or re-number existing migrations)
+- Fuel ledger is separate from BOQ; completed fuel movements use reversals/adjustments, never hard delete
+- Service worker must never cache API/auth/private responses
 - Cron secret comparison via `secrets.compare_digest()` (timing-safe)

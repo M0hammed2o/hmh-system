@@ -2,9 +2,18 @@
 
 Priority: **P0** = production blocker · **P1** = high · **P2** = medium · **P3** = low / nice-to-have
 
+## Fuel production follow-up
+
+- [ ] Perform one controlled SMTP delivery for every Fuel event.
+- [ ] Validate installed-PWA camera capture on supported physical devices and constrained site networks.
+- [ ] Implement a tracker adapter only after a real provider is selected; do not add a fake integration.
+
 ---
 
 ## P0 — Production Blockers (must resolve before live)
+
+- [ ] **Map the public apex/www domain to the Vercel frontend**
+  On 2026-08-02, `hmhgroup.co.za` and `www.hmhgroup.co.za` returned HTTP 404 while `app.hmhgroup.co.za` served the SPA. Add the apex and www custom domains in Vercel/DNS, or permanently redirect them to `https://app.hmhgroup.co.za`. Then verify `/login`, `/site-login`, manifest, icons and `sw.js`.
 
 - [ ] **Set production env vars in Render**
   `WHATSAPP_APP_SECRET`, `CRON_SECRET`, `WHATSAPP_VERIFY_TOKEN` (change from default), `SECRET_KEY` (64+ chars).
@@ -17,6 +26,12 @@ Priority: **P0** = production blocker · **P1** = high · **P2** = medium · **P
 ---
 
 ## P1 — High Priority
+
+- [ ] **Complete deployed mobile PWA release UAT**
+  Install the HTTPS production build on Android and iOS; verify close/reopen, session expiry, Add to Home Screen, offline state and the update prompt after a second deployment. Automated local Playwright coverage passes, but real-device/deployment behaviour must be signed off.
+
+- [ ] **Triage the current full backend-suite baseline**
+  The 2026-08-02 run collected 873 tests and reached 86% before the 900-second limit, with failures beyond the older 26-failure register. Re-run in CI or in shards and reconcile the expanded list in `KNOWN_BUGS.md`.
 
 - [ ] **Automate Gmail inbox polling**
   Add a Render cron job: `POST /api/v1/gmail/fetch` every 10 min.

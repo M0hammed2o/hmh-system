@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useLocation, NavLink } from "react-router-dom";
+import { useLocation, NavLink, Link } from "react-router-dom";
 import {
   Menu, X, Moon, Sun, LogOut, HardHat,
   LayoutDashboard, Users, FolderKanban, FileSpreadsheet,
@@ -7,7 +7,7 @@ import {
   Copy, Building2, Mail, FileCheck2, Car, Droplet,
   Smartphone, Clock, User, Flag, Warehouse,
 } from "lucide-react";
-import { TOKEN_KEY, REFRESH_TOKEN_KEY, ROLE_KEY } from "@/lib/constants";
+import { TOKEN_KEY, REFRESH_TOKEN_KEY, ROLE_KEY, DUAL_ACCESS_ROLE_SET } from "@/lib/constants";
 import { useAuthContext } from "@/context/AuthContext";
 import { cn } from "@/lib/utils";
 
@@ -29,7 +29,8 @@ const pageTitles: Record<string, string> = {
   "/payment-reports":  "Payment Reports",
   "/reconciliation":   "Reconciliation",
   "/vehicles":        "Vehicles",
-  "/fuel":            "Fuel",
+  "/fuel":            "Fuel Management",
+  "/fuel-management": "Fuel Management",
   "/milestones":      "Milestones",
   "/warehouse":         "Main Warehouse",
   "/project-warehouse": "Project Warehouse",
@@ -93,7 +94,17 @@ const navGroups = [
     label: "Fleet",
     items: [
       { title: "Vehicles",        path: "/vehicles",        icon: Car },
-      { title: "Fuel",            path: "/fuel",            icon: Droplet },
+    ],
+  },
+  {
+    label: "Fuel Management",
+    items: [
+      { title: "Fuel Dashboard",  path: "/fuel-management",            icon: Droplet },
+      { title: "Fuel Orders",     path: "/fuel-management/orders",     icon: ShoppingCart },
+      { title: "Fuel Deliveries", path: "/fuel-management/deliveries", icon: Truck },
+      { title: "Fuel Issues",     path: "/fuel-management/issues",     icon: Droplet },
+      { title: "Stock & Reconcile", path: "/fuel-management/stock",    icon: Warehouse },
+      { title: "Fuel Reports",    path: "/fuel-management/reports",    icon: FileCheck2 },
     ],
   },
   {
@@ -114,7 +125,8 @@ const navGroups = [
 
 export function AppTopbar() {
   const location = useLocation();
-  const { isReadOnly } = useAuthContext();
+  const { isReadOnly, role } = useAuthContext();
+  const canReachSitePortal = !!role && DUAL_ACCESS_ROLE_SET.has(role);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [dark, setDark] = useState(() =>
     typeof window !== "undefined" && localStorage.getItem("theme") === "dark"
@@ -143,7 +155,10 @@ export function AppTopbar() {
           <span>👁 View-Only Mode — you can browse everything but cannot make changes.</span>
         </div>
       )}
-      <header className={`${isReadOnly ? "" : "sticky top-0"} z-30 flex items-center justify-between h-14 px-4 lg:px-6 border-b border-border bg-card/80 backdrop-blur-sm`}>
+      <header
+        className={`${isReadOnly ? "" : "sticky top-0"} z-30 flex items-center justify-between min-h-14 px-4 lg:px-6 border-b border-border bg-card/80 backdrop-blur-sm`}
+        style={{ paddingTop: "max(0px, env(safe-area-inset-top))" }}
+      >
         <div className="flex items-center gap-3">
           <button
             className="lg:hidden p-1.5 rounded-md hover:bg-muted"
@@ -155,6 +170,16 @@ export function AppTopbar() {
           <h1 className="text-base font-semibold">{title}</h1>
         </div>
         <div className="flex items-center gap-2">
+          {canReachSitePortal && (
+            <Link
+              to="/site"
+              className="hidden sm:flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-primary transition-colors"
+              title="Go to Site Dashboard"
+            >
+              <HardHat className="w-3.5 h-3.5" />
+              Go to Site Dashboard
+            </Link>
+          )}
           <button
             onClick={() => setDark(!dark)}
             className="p-1.5 rounded-md hover:bg-muted transition-colors text-muted-foreground"
@@ -198,6 +223,16 @@ export function AppTopbar() {
 
             {/* Scrollable nav */}
             <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-4">
+              {canReachSitePortal && (
+                <Link
+                  to="/site"
+                  onClick={() => setMobileOpen(false)}
+                  className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground transition-colors"
+                >
+                  <HardHat className="w-4 h-4 shrink-0" />
+                  Go to Site Dashboard
+                </Link>
+              )}
               {navGroups.map((group) => (
                 <div key={group.label}>
                   <p className="px-3 mb-1 text-[10px] font-semibold uppercase tracking-widest text-sidebar-foreground/40">
@@ -207,6 +242,8 @@ export function AppTopbar() {
                     {group.items.map((item) => {
                       const isActive = item.path === "/"
                         ? location.pathname === "/"
+                        : item.path === "/fuel-management"
+                        ? location.pathname === "/fuel-management"
                         : location.pathname.startsWith(item.path);
                       return (
                         <NavLink

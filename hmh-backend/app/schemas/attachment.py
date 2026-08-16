@@ -31,9 +31,10 @@ class AttachmentRead(BaseModel):
     @computed_field  # type: ignore[misc]
     @property
     def download_url(self) -> str:
-        """Direct URL for Supabase files; backend proxy for local files."""
-        if self.stored_path.startswith("http"):
-            return self.stored_path
+        """Always the permission-checked backend endpoint — never a raw storage
+        URL. The endpoint redirects to a short-lived signed URL (private
+        Supabase objects), streams the file (local disk), or redirects to the
+        legacy public bucket URL (pre-2026-08-03 records only)."""
         return f"/api/v1/attachments/{self.id}/download"
 
     @computed_field  # type: ignore[misc]

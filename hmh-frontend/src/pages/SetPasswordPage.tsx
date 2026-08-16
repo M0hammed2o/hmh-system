@@ -1,16 +1,19 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { HardHat, KeyRound } from "lucide-react";
 import { authApi } from "@/api/auth";
-import { usersApi } from "@/api/users";
-import { TOKEN_KEY, REFRESH_TOKEN_KEY } from "@/lib/constants";
+import { TOKEN_KEY, REFRESH_TOKEN_KEY, ROLE_KEY } from "@/lib/constants";
+import { useAuthContext } from "@/context/AuthContext";
+import { landingForRole, safeReturnTo } from "@/routes/authNavigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { SITE_ROLES } from "@/routes/SiteRoute";
 
 export default function SetPasswordPage() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const { refresh } = useAuthContext();
+  const requestedPath = safeReturnTo(location.search);
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -35,12 +38,9 @@ export default function SetPasswordPage() {
       await authApi.changePassword(currentPassword, newPassword);
 
       // Determine where to redirect based on role
-      const user = await usersApi.me();
-      if (SITE_ROLES.includes(user.role)) {
-        navigate("/site", { replace: true });
-      } else {
-        navigate("/", { replace: true });
-      }
+      const user = await refresh();
+      if (!user) throw new Error("Updated session could not be verified.");
+      navigate(landingForRole(user.role, requestedPath), { replace: true });
     } catch (err: unknown) {
       const msg =
         (err as { response?: { data?: { message?: string } } })?.response?.data?.message ||
@@ -54,6 +54,7 @@ export default function SetPasswordPage() {
   const handleLogout = () => {
     localStorage.removeItem(TOKEN_KEY);
     localStorage.removeItem(REFRESH_TOKEN_KEY);
+    localStorage.removeItem(ROLE_KEY);
     window.location.href = "/login";
   };
 

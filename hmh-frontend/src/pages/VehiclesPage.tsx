@@ -106,6 +106,17 @@ function VehicleFormFields({
           <Input type="number" min="1990" max="2099" value={form.year ?? ""} onChange={(e) => onChange({ year: e.target.value ? parseInt(e.target.value) : undefined })} placeholder="2022" />
         </div>
       </div>
+      <div className="grid grid-cols-2 gap-3">
+        <div className="space-y-2"><Label>L/hour (machines)</Label><Input type="number" min="0" step="0.1" value={form.fuel_consumption_per_hour ?? ""} onChange={(e) => onChange({ fuel_consumption_per_hour: e.target.value ? Number(e.target.value) : undefined })} /></div>
+        <div className="space-y-2"><Label>Allowed variance (%)</Label><Input type="number" min="0" step="1" value={form.fuel_tolerance_pct ?? 20} onChange={(e) => onChange({ fuel_tolerance_pct: Number(e.target.value) })} /></div>
+        <div className="space-y-2"><Label>Minimum refill interval (hours)</Label><Input type="number" min="0" step="0.5" value={form.fuel_minimum_issue_interval_hours ?? 0} onChange={(e) => onChange({ fuel_minimum_issue_interval_hours: Number(e.target.value) })} /></div>
+        <div className="space-y-2"><Label>Tracker provider</Label><Input value={form.tracker_provider ?? ""} onChange={(e) => onChange({ tracker_provider: e.target.value || undefined })} /></div>
+        <div className="space-y-2"><Label>Tracker external ID</Label><Input value={form.tracker_external_id ?? ""} onChange={(e) => onChange({ tracker_external_id: e.target.value || undefined })} /></div>
+        <div className="flex flex-col justify-end gap-2 pb-2">
+          <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={form.hour_meter_required ?? false} onChange={(e) => onChange({ hour_meter_required: e.target.checked })} /> Hour meter required</label>
+          <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={form.fuel_override_required ?? false} onChange={(e) => onChange({ fuel_override_required: e.target.checked })} /> Manager override outside limits</label>
+        </div>
+      </div>
       <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide pt-1">Fuel &amp; Consumption</p>
       <div className="grid grid-cols-3 gap-3">
         <div className="space-y-2">
@@ -192,6 +203,13 @@ function EditVehicleModal({ vehicle, onClose, onSaved }: { vehicle: Vehicle; onC
     fuel_type: vehicle.fuel_type ?? undefined,
     tank_capacity_l: vehicle.tank_capacity_l ?? undefined,
     fuel_consumption_per_100km: vehicle.fuel_consumption_per_100km ?? undefined,
+    fuel_consumption_per_hour: vehicle.fuel_consumption_per_hour ?? undefined,
+    fuel_tolerance_pct: vehicle.fuel_tolerance_pct,
+    fuel_minimum_issue_interval_hours: vehicle.fuel_minimum_issue_interval_hours,
+    fuel_override_required: vehicle.fuel_override_required,
+    hour_meter_required: vehicle.hour_meter_required,
+    tracker_provider: vehicle.tracker_provider ?? undefined,
+    tracker_external_id: vehicle.tracker_external_id ?? undefined,
     current_odometer_km: vehicle.current_odometer_km ?? undefined,
     service_interval_km: vehicle.service_interval_km ?? undefined,
     last_service_date: vehicle.last_service_date ?? undefined,

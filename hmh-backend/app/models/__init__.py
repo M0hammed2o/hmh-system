@@ -26,7 +26,12 @@ from app.models.payment import Payment
 from app.models.attachment import Attachment, UsageRemainingProof
 from app.models.alert import SystemAlert
 from app.models.fuel import FuelLog
-from app.models.vehicle import Vehicle, VehicleCost
+from app.models.vehicle import Vehicle, VehicleCost, FuelDelivery
+from app.models.fuel_management import (
+    FuelTypeDefinition, FuelStorageLocation, FuelOrder, FuelIssue,
+    FuelStockAdjustment, FuelReconciliation, FuelEquipmentProfile,
+    FuelOrderHistory, FuelIssueEvidence, FuelEmailLog,
+)
 from app.models.audit import AuditEvent
 from app.models.alert_recipient import AlertRecipient
 from app.models.notification_queue import NotificationQueue
@@ -102,6 +107,17 @@ __all__ = [
     "FuelLog",
     "Vehicle",
     "VehicleCost",
+    "FuelDelivery",
+    "FuelTypeDefinition",
+    "FuelStorageLocation",
+    "FuelOrder",
+    "FuelIssue",
+    "FuelStockAdjustment",
+    "FuelReconciliation",
+    "FuelEquipmentProfile",
+    "FuelOrderHistory",
+    "FuelIssueEvidence",
+    "FuelEmailLog",
     "AuditEvent",
     "AlertRecipient",
     "NotificationQueue",

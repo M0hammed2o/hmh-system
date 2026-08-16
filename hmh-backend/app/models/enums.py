@@ -228,6 +228,10 @@ class AttachmentEntity(str, enum.Enum):
     PROGRESS_CLAIM    = "PROGRESS_CLAIM"   # Progress claim documents
     PROGRAMME_ACTIVITY = "PROGRAMME_ACTIVITY"
     WEEKLY_PLAN       = "WEEKLY_PLAN"
+    FUEL_ORDER        = "FUEL_ORDER"
+    FUEL_DELIVERY     = "FUEL_DELIVERY"
+    FUEL_ISSUE        = "FUEL_ISSUE"
+    FUEL_RECONCILIATION = "FUEL_RECONCILIATION"
 
 
 class AttachmentType(str, enum.Enum):

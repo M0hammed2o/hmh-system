@@ -55,6 +55,13 @@ class Vehicle(TimestampMixin, Base):
     )
     tank_capacity_l: Mapped[Optional[float]] = mapped_column(Numeric(8, 1), nullable=True)
     fuel_consumption_per_100km: Mapped[Optional[float]] = mapped_column(Numeric(6, 2), nullable=True)
+    fuel_consumption_per_hour: Mapped[Optional[float]] = mapped_column(Numeric(8, 3), nullable=True)
+    fuel_tolerance_pct: Mapped[float] = mapped_column(Numeric(6, 2), nullable=False, default=20)
+    fuel_minimum_issue_interval_hours: Mapped[float] = mapped_column(Numeric(8, 2), nullable=False, default=0)
+    fuel_override_required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    hour_meter_required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    tracker_provider: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    tracker_external_id: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
 
     # Odometer / service
     current_odometer_km: Mapped[Optional[float]] = mapped_column(Numeric(10, 1), nullable=True)
@@ -223,9 +230,43 @@ class FuelDelivery(TimestampMixin, Base):
         ForeignKey("projects.id", ondelete="SET NULL"),
         nullable=True,
     )
+    order_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("fuel_orders.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    supplier_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("suppliers.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    fuel_type_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("fuel_types.id", ondelete="RESTRICT"), nullable=True, index=True
+    )
+    storage_location_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("fuel_storage_locations.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     delivery_date: Mapped[date] = mapped_column(Date, nullable=False)
+    delivered_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    delivery_note_number: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
     fuel_type: Mapped[str] = mapped_column(String(20), nullable=False, default="DIESEL")
     litres_delivered: Mapped[float] = mapped_column(Numeric(10, 2), nullable=False)
+    opening_reading: Mapped[Optional[float]] = mapped_column(Numeric(12, 2), nullable=True)
+    closing_reading: Mapped[Optional[float]] = mapped_column(Numeric(12, 2), nullable=True)
+    calculated_received_litres: Mapped[Optional[float]] = mapped_column(Numeric(12, 2), nullable=True)
+    confirmed_litres: Mapped[Optional[float]] = mapped_column(Numeric(12, 2), nullable=True)
+    variance_litres: Mapped[Optional[float]] = mapped_column(Numeric(12, 2), nullable=True)
+    tanker_registration: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    driver_details: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
+    received_by: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    verification_status: Mapped[str] = mapped_column(String(30), nullable=False, default="PENDING", index=True)
+    verified_by: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    verified_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    excess_override: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    excess_override_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    excess_override_by: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
     cost_per_litre: Mapped[Optional[float]] = mapped_column(Numeric(10, 4), nullable=True)
     supplier_name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
     invoice_number: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)

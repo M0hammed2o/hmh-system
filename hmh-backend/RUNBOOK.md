@@ -119,8 +119,12 @@ WHATSAPP_VERIFY_TOKEN=hmh_verify_token
 1. Set `DATABASE_URL` to Render PostgreSQL internal URL
 2. Set `SECRET_KEY` to 64-char random string
 3. Set `CORS_ORIGINS` to your Vercel frontend URL
-4. Set Start Command: `alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port $PORT`
+4. Start Command is fail-closed via `render.yaml`: `alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port $PORT`. If overriding it in the Render dashboard, keep this exact sequence — the app no longer runs migrations from an in-process startup hook, so a bare `uvicorn ...` command would serve traffic against an un-migrated schema.
 5. Set `RUN_STARTUP_SEED=true` for first deploy only (seeds owner account)
+6. Set `SUPABASE_URL` + `SUPABASE_SERVICE_KEY` — **required** outside development/test as of 2026-08-03; startup now fails without them (`Settings.validate_production_storage`). Two buckets are needed in the Supabase project:
+   - `hmh-uploads` — public: **true** (legacy: delivery notes/signatures, stock usage evidence, stage photos, generated MR/PO PDFs)
+   - `hmh-evidence-private` (or your `SUPABASE_PRIVATE_BUCKET` value) — public: **false** (Fuel evidence and generic `/attachments/upload` records; served only via signed URLs through `GET /attachments/{id}/download`)
+   Confirm both are correctly configured after deploy with `GET /admin/storage-status` (OWNER only) before relying on Fuel evidence capture.
 
 ---
 

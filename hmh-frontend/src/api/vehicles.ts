@@ -21,6 +21,13 @@ export interface Vehicle {
   fuel_type: FuelType | null;
   tank_capacity_l: number | null;
   fuel_consumption_per_100km: number | null;
+  fuel_consumption_per_hour: number | null;
+  fuel_tolerance_pct: number;
+  fuel_minimum_issue_interval_hours: number;
+  fuel_override_required: boolean;
+  hour_meter_required: boolean;
+  tracker_provider: string | null;
+  tracker_external_id: string | null;
   current_odometer_km: number | null;
   service_interval_km: number | null;
   uses_hours: boolean;
@@ -46,6 +53,13 @@ export interface VehicleCreate {
   fuel_type?: FuelType;
   tank_capacity_l?: number;
   fuel_consumption_per_100km?: number;
+  fuel_consumption_per_hour?: number;
+  fuel_tolerance_pct?: number;
+  fuel_minimum_issue_interval_hours?: number;
+  fuel_override_required?: boolean;
+  hour_meter_required?: boolean;
+  tracker_provider?: string;
+  tracker_external_id?: string;
   current_odometer_km?: number;
   service_interval_km?: number;
   uses_hours?: boolean;

@@ -12,6 +12,7 @@ from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, RedirectResponse
 
 from app.core.exceptions import NotFoundError
+from app.core.storage import create_signed_url
 from app.dependencies import ALL_ROLES, CurrentUser, DbSession, WRITE_ROLES, check_project_access
 from app.models.enums import UserRole
 from app.schemas.attachment import AttachmentRead
@@ -70,6 +71,22 @@ def _entity_project_id(db, entity_type: str, entity_id: uuid.UUID):
         from app.models.fuel import FuelLog
         obj = db.get(FuelLog, entity_id)
         return obj.project_id if obj else None
+    if t == "FUEL_ORDER":
+        from app.models.fuel_management import FuelOrder
+        obj = db.get(FuelOrder, entity_id)
+        return obj.project_id if obj else None
+    if t == "FUEL_DELIVERY":
+        from app.models.vehicle import FuelDelivery
+        obj = db.get(FuelDelivery, entity_id)
+        return obj.project_id if obj else None
+    if t == "FUEL_ISSUE":
+        from app.models.fuel_management import FuelIssue
+        obj = db.get(FuelIssue, entity_id)
+        return obj.project_id if obj else None
+    if t == "FUEL_RECONCILIATION":
+        from app.models.fuel_management import FuelReconciliation
+        obj = db.get(FuelReconciliation, entity_id)
+        return obj.project_id if obj else None
     if t == "USAGE_LOG":
         from app.models.stock import UsageLog
         obj = db.get(UsageLog, entity_id)
@@ -78,7 +95,19 @@ def _entity_project_id(db, entity_type: str, entity_id: uuid.UUID):
         from app.models.work_done import SubcontractorWorkDone
         obj = db.get(SubcontractorWorkDone, entity_id)
         return obj.project_id if obj else None
-    # SUPPLIER, CERTIFICATION, BOQ_HEADER — not project-scoped; any authed user may access
+    if t == "PROGRESS_CLAIM":
+        from app.models.progress_claim import MunicipalityProgressClaim
+        obj = db.get(MunicipalityProgressClaim, entity_id)
+        return obj.project_id if obj else None
+    if t == "PROGRAMME_ACTIVITY":
+        from app.models.programme import ProgrammeActivity
+        obj = db.get(ProgrammeActivity, entity_id)
+        return obj.project_id if obj else None
+    if t == "WEEKLY_PLAN":
+        from app.models.weekly_plan import WeeklyPlan
+        obj = db.get(WeeklyPlan, entity_id)
+        return obj.project_id if obj else None
+    # SUPPLIER, CERTIFICATION — not project-scoped; any authed user may access
     return None
 
 
@@ -176,7 +205,15 @@ def list_attachments(
     dependencies=[ALL_ROLES],
 )
 def download_attachment(attachment_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
-    """Stream local files; redirect to Supabase for cloud-stored files."""
+    """The sole access path for attachment content — every branch re-verifies
+    the caller's project/entity access before disclosing anything.
+
+    - "supabase://..." (private bucket, e.g. Fuel evidence): redirect to a
+      short-lived signed URL, generated fresh on every call.
+    - "http..." (legacy public bucket, pre-2026-08-03 records): redirect to
+      the existing public URL — unchanged, not newly exposed by this route.
+    - "/uploads/..." (local disk, development/test only): stream the file.
+    """
     try:
         record = attachment_service.get_attachment(db, attachment_id)
     except NotFoundError:
@@ -188,6 +225,10 @@ def download_attachment(attachment_id: uuid.UUID, db: DbSession, current_user: C
     project_id = _entity_project_id(db, record.entity_type.value, record.entity_id)
     if project_id:
         check_project_access(db, current_user, project_id)
+
+    if record.stored_path.startswith("supabase://"):
+        signed = create_signed_url(record.stored_path)
+        return RedirectResponse(signed, status_code=302)
 
     if record.stored_path.startswith("http"):
         return RedirectResponse(record.stored_path, status_code=302)

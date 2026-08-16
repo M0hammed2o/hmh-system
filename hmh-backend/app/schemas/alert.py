@@ -36,6 +36,7 @@ class AlertRead(BaseModel):
     # Enriched at API layer — not ORM columns
     project_name: Optional[str] = None
     site_name: Optional[str] = None
+    action_url: Optional[str] = None
 
 
 class AlertUpdate(BaseModel):

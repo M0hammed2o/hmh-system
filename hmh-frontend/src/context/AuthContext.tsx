@@ -1,6 +1,6 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
 import { usersApi, type User, type UserRole } from "@/api/users";
-import { TOKEN_KEY } from "@/lib/constants";
+import { ROLE_KEY, TOKEN_KEY } from "@/lib/constants";
 
 interface AuthContextValue {
   user: User | null;
@@ -9,7 +9,7 @@ interface AuthContextValue {
   /** True when logged in with the READ_ONLY role — can view but not write */
   isReadOnly: boolean;
   /** Re-fetch the current user (e.g. after role change) */
-  refresh: () => void;
+  refresh: () => Promise<User | null>;
 }
 
 const AuthContext = createContext<AuthContextValue>({
@@ -17,31 +17,38 @@ const AuthContext = createContext<AuthContextValue>({
   loading: true,
   role: null,
   isReadOnly: false,
-  refresh: () => {},
+  refresh: async () => null,
 });
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const fetchMe = () => {
+  const fetchMe = useCallback(async (): Promise<User | null> => {
     const token = localStorage.getItem(TOKEN_KEY);
     if (!token) {
       setUser(null);
       setLoading(false);
-      return;
+      return null;
     }
     setLoading(true);
-    usersApi
-      .me()
-      .then(setUser)
-      .catch(() => setUser(null))
-      .finally(() => setLoading(false));
-  };
+    try {
+      const currentUser = await usersApi.me();
+      localStorage.setItem(ROLE_KEY, currentUser.role);
+      setUser(currentUser);
+      return currentUser;
+    } catch {
+      localStorage.removeItem(ROLE_KEY);
+      setUser(null);
+      return null;
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
-    fetchMe();
-  }, []);
+    void fetchMe();
+  }, [fetchMe]);
 
   return (
     <AuthContext.Provider

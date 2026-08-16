@@ -3,6 +3,18 @@
 
 ## Architecture decisions
 
+**2026-08-03 — A second private Supabase bucket for evidence, not a flipped shared bucket.**
+Fuel evidence and generic `/attachments/upload` records now go to a new private bucket (`SUPABASE_PRIVATE_BUCKET`) instead of making the existing `hmh-uploads` bucket private. Five other call sites (delivery notes/signatures, stock usage evidence, stage milestone photos, generated MR/PO PDFs) still write directly into the shared `attachments` table using the old public bucket and would have broken if it were flipped private. `stored_path` for a private upload is an internal `supabase://<key>` reference, never a fetchable URL; access is exclusively through `GET /attachments/{id}/download`, which redirects to a fresh signed URL. Outside development/test, `SUPABASE_URL`/`SUPABASE_SERVICE_KEY` are required at startup for this reason — see `KNOWN_BUGS.md`.
+
+**2026-08-02 — Fuel feasibility is profile-driven, explainable and advisory by default.**
+The ledger estimates remaining fuel from the prior issue and distance/hours/elapsed time. A profile may require a manager override, but warnings never make fraud/theft assertions. Vehicle identity remains in `vehicles`; named non-vehicle assets use a small project-scoped consumption profile.
+
+**2026-08-02 — Notification read state is independent of workflow acknowledgement.**
+Opening a notification sets `read_at` only. Canonical server action URLs are resolved from the referenced entity after target-user/role/project authorization, preventing Fuel alerts from being misrouted by a shared alert type.
+
+**2026-08-02 — Fuel email delivery is durable and cannot own the business transaction.**
+Recipient attempts are committed to `fuel_email_logs`, then delivered best-effort with bounded retry. A provider/configuration failure records `FAILED` and does not roll back submission, approval, rejection, ordering or delivery.
+
 **2026-04 — Python/FastAPI chosen over Node/Express.**
 Prior Node+TS backend exists in `hmh-backend-archive-node/` (archived). Python was chosen for SQLAlchemy 2.0 ORM ergonomics, Alembic migration tooling, and the Anthropic + Google Vision Python SDKs being first-class. Node backend is archived for reference only — never merge it back.
 
@@ -47,6 +59,15 @@ Workshop repair requests go through a vote-gated approval (3 OFFICE_AND_ABOVE vo
 
 **2026-07-19 — Claim line uniqueness enforced via DB constraint, not application logic.**
 `UniqueConstraint("claim_id", "lot_id", "stage_status_id", "source_type")` on `progress_claim_lines` prevents double-counting at the DB level. Application `_exists()` check is a performance optimisation only.
+
+**2026-08-02 — Fuel Management is structurally separate from BOQ and uses a derived ledger balance.**
+Fuel tables have no BOQ dependency. Opening stock, verified deliveries, non-reversed issues and authorised adjustments derive the balance. Completed movements are immutable; corrections are explicit reversals/adjustments. This prevents fuel from changing BOQ quantities or hiding losses through edits.
+
+**2026-08-02 — PWA navigation is network-first; private API responses are never cached.**
+Only the public app shell, offline document, icons and hashed frontend assets are cached. API, auth, cross-origin and non-GET requests bypass the worker. New workers wait for user acceptance before activation, avoiding mid-session asset mismatches.
+
+**2026-08-02 — Keep `/site-login` as a supported site workflow, with `/login` as universal entry.**
+The site route is not removed because it contains phone/PIN access and may be bookmarked. Both routes use the same verified AuthContext and safe return-destination rules; role checks prevent cross-portal navigation.
 
 ---
 

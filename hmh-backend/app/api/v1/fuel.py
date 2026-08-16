@@ -9,12 +9,12 @@ import os
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, File, Form, Query, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 
 from app.core.resource_access import get_resource_or_404
 from app.core.storage import save_upload
 from app.core.upload_validation import PHOTO_MIMES, validate_upload
-from app.dependencies import ALL_ROLES, CurrentUser, DbSession, OFFICE_AND_ABOVE
+from app.dependencies import ALL_ROLES, CurrentUser, DbSession, OFFICE_AND_ABOVE, WRITE_ROLES, check_project_access
 from app.models.fuel import FuelLog
 from app.schemas.common import ApiSuccess
 from app.schemas.fuel import FuelLogCreate, FuelLogRead, FuelLogUpdate
@@ -45,9 +45,11 @@ fuel_router = APIRouter(prefix="/fuel", tags=["fuel"])
 def list_fuel_logs(
     project_id: uuid.UUID,
     db: DbSession,
+    current_user: CurrentUser,
     site_id: Optional[uuid.UUID] = Query(default=None),
     limit: int = Query(default=200, le=500),
 ):
+    check_project_access(db, current_user, project_id)
     logs = fuel_service.list_fuel_logs(db, project_id, site_id=site_id, limit=limit)
     return ApiSuccess(data=[FuelLogRead.model_validate(l) for l in logs])
 
@@ -56,7 +58,7 @@ def list_fuel_logs(
     "/",
     response_model=ApiSuccess[FuelLogRead],
     status_code=201,
-    dependencies=[ALL_ROLES],
+    dependencies=[WRITE_ROLES],
 )
 def create_fuel_log(
     project_id: uuid.UUID,
@@ -64,6 +66,7 @@ def create_fuel_log(
     db: DbSession,
     current_user: CurrentUser,
 ):
+    check_project_access(db, current_user, project_id)
     log = fuel_service.create_fuel_log(db, project_id, body, current_user.id)
     return ApiSuccess(data=FuelLogRead.model_validate(log), message="Fuel log recorded.")
 
@@ -72,7 +75,7 @@ def create_fuel_log(
     "/with-evidence",
     response_model=ApiSuccess[FuelLogRead],
     status_code=201,
-    dependencies=[ALL_ROLES],
+    dependencies=[WRITE_ROLES],
 )
 async def create_fuel_log_with_evidence(
     project_id: uuid.UUID,
@@ -98,6 +101,7 @@ async def create_fuel_log_with_evidence(
     """Create a fuel log with optional evidence photos (multipart form)."""
     from datetime import datetime, timezone
     from app.models.enums import FuelType, FuelUsageType
+    check_project_access(db, current_user, project_id)
 
     body = FuelLogCreate(
         fuel_type        = FuelType(fuel_type),
@@ -136,8 +140,9 @@ async def create_fuel_log_with_evidence(
     response_model=ApiSuccess[list[FuelLogRead]],
     dependencies=[ALL_ROLES],
 )
-def list_fuel_logs_for_vehicle(project_id: uuid.UUID, vehicle_id: uuid.UUID, db: DbSession):
+def list_fuel_logs_for_vehicle(project_id: uuid.UUID, vehicle_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
     """List all fuel logs for a specific vehicle within a project."""
+    check_project_access(db, current_user, project_id)
     logs = (
         db.query(FuelLog)
         .filter(FuelLog.project_id == project_id, FuelLog.vehicle_id == vehicle_id)
@@ -152,8 +157,9 @@ def list_fuel_logs_for_vehicle(project_id: uuid.UUID, vehicle_id: uuid.UUID, db:
     response_model=ApiSuccess[FuelLogRead],
     dependencies=[ALL_ROLES],
 )
-def get_fuel_log(log_id: uuid.UUID, db: DbSession):
+def get_fuel_log(log_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
     log = fuel_service.get_fuel_log(db, log_id)
+    check_project_access(db, current_user, log.project_id)
     return ApiSuccess(data=FuelLogRead.model_validate(log))
 
 
@@ -162,15 +168,16 @@ def get_fuel_log(log_id: uuid.UUID, db: DbSession):
     response_model=ApiSuccess[FuelLogRead],
     dependencies=[OFFICE_AND_ABOVE],
 )
-def update_fuel_log(log_id: uuid.UUID, body: FuelLogUpdate, db: DbSession):
+def update_fuel_log(log_id: uuid.UUID, body: FuelLogUpdate, db: DbSession, current_user: CurrentUser):
+    existing = fuel_service.get_fuel_log(db, log_id)
+    check_project_access(db, current_user, existing.project_id)
     log = fuel_service.update_fuel_log(db, log_id, body)
     return ApiSuccess(data=FuelLogRead.model_validate(log), message="Fuel log updated.")
 
 
 @fuel_router.delete("/{log_id}", response_model=ApiSuccess[dict], dependencies=[OFFICE_AND_ABOVE])
-def delete_fuel_log(log_id: uuid.UUID, db: DbSession):
-    """Hard-delete a fuel log entry."""
+def delete_fuel_log(log_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
+    """Legacy fuel transactions are immutable; corrections use Fuel Management reversals."""
     log = get_resource_or_404(db, FuelLog, log_id, "Fuel log not found.")
-    db.delete(log)
-    db.commit()
-    return ApiSuccess(data={"log_id": str(log_id)}, message="Fuel log deleted.")
+    check_project_access(db, current_user, log.project_id)
+    raise HTTPException(409, "Fuel transactions cannot be deleted. Record a reversal or adjustment in Fuel Management.")

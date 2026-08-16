@@ -104,15 +104,17 @@ function alertDestination(alert: Alert): string {
 
 // ── Alert card ────────────────────────────────────────────────────────────────
 
-function AlertCard({ alert, onAcknowledged }: { alert: Alert; onAcknowledged: (id: string) => void }) {
-  const dest = alertDestination(alert);
+function AlertCard({ alert, onRead }: { alert: Alert; onRead: (id: string, readAt: string) => void }) {
+  const dest = alert.action_url || alertDestination(alert);
   const navigate = useNavigate();
   const typeLabel = alert.alert_type.replace(/_/g, " ");
 
-  const handleClick = () => {
-    if (alert.status === "OPEN") {
-      alertsApi.acknowledge(alert.id).catch(() => {});
-      onAcknowledged(alert.id);
+  const handleClick = async () => {
+    if (!alert.read_at) {
+      try {
+        const updated = await alertsApi.markRead(alert.id);
+        onRead(alert.id, updated.read_at || new Date().toISOString());
+      } catch { return; }
     }
     navigate(dest);
   };
@@ -309,8 +311,8 @@ export default function AlertsPage() {
   };
 
   const filteredAlerts = useMemo(() => {
-    if (tab === "active")   return alerts.filter((a) => a.status === "OPEN");
-    if (tab === "history")  return alerts.filter((a) => a.status === "ACKNOWLEDGED" || a.status === "RESOLVED");
+    if (tab === "active")   return alerts.filter((a) => a.status === "OPEN" && !a.read_at);
+    if (tab === "history")  return alerts.filter((a) => Boolean(a.read_at) || a.status !== "OPEN");
     if (tab === "critical") return alerts.filter((a) => a.severity === "CRITICAL" || a.severity === "HIGH");
     const types = TAB_TYPE_FILTER[tab];
     if (types) return alerts.filter((a) => types.includes(a.alert_type));
@@ -453,9 +455,9 @@ export default function AlertsPage() {
                   <AlertCard
                     key={a.id}
                     alert={a}
-                    onAcknowledged={(id) =>
+                    onRead={(id, readAt) =>
                       setAlerts((prev) =>
-                        prev.map((x) => x.id === id ? { ...x, status: "ACKNOWLEDGED" } : x)
+                        prev.map((x) => x.id === id ? { ...x, read_at: readAt } : x)
                       )
                     }
                   />

@@ -1,8 +1,9 @@
-import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { authApi } from "@/api/auth";
-import { usersApi } from "@/api/users";
-import { TOKEN_KEY, REFRESH_TOKEN_KEY, ROLE_KEY, SITE_ROLE_SET } from "@/lib/constants";
+import { TOKEN_KEY, REFRESH_TOKEN_KEY, ROLE_KEY } from "@/lib/constants";
+import { useAuthContext } from "@/context/AuthContext";
+import { landingForRole, safeReturnTo } from "@/routes/authNavigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -10,10 +11,19 @@ import { HMHLogo } from "@/components/HMHLogo";
 
 export default function LoginPage() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const { user: currentUser, loading: sessionLoading, refresh } = useAuthContext();
+  const requestedPath = safeReturnTo(location.search);
   const [email, setEmail]       = useState("");
   const [password, setPassword] = useState("");
   const [error, setError]       = useState("");
   const [loading, setLoading]   = useState(false);
+
+  useEffect(() => {
+    if (!sessionLoading && currentUser) {
+      navigate(landingForRole(currentUser.role, requestedPath), { replace: true });
+    }
+  }, [currentUser, navigate, requestedPath, sessionLoading]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -25,20 +35,14 @@ export default function LoginPage() {
       localStorage.setItem(REFRESH_TOKEN_KEY, res.refresh_token);
 
       if (res.must_reset_password) {
-        navigate("/set-password", { replace: true });
+        const query = requestedPath ? `?returnTo=${encodeURIComponent(requestedPath)}` : "";
+        navigate(`/set-password${query}`, { replace: true });
         return;
       }
 
-      // Fetch role to route correctly and store for future guard checks
-      const user = await usersApi.me();
-      localStorage.setItem(ROLE_KEY, user.role);
-
-      if (SITE_ROLE_SET.has(user.role)) {
-        // Site user logged in via the wrong portal — send them where they belong
-        navigate("/site", { replace: true });
-      } else {
-        navigate("/", { replace: true });
-      }
+      const user = await refresh();
+      if (!user) throw new Error("Authenticated session could not be verified.");
+      navigate(landingForRole(user.role, requestedPath), { replace: true });
     } catch {
       localStorage.removeItem(TOKEN_KEY);
       localStorage.removeItem(REFRESH_TOKEN_KEY);
@@ -94,6 +98,12 @@ export default function LoginPage() {
             {loading ? "Signing in…" : "Sign in"}
           </Button>
         </form>
+
+        <div className="mt-6 text-center">
+          <Link to="/site-login" className="text-sm text-muted-foreground hover:text-primary underline underline-offset-2">
+            Go to Site Dashboard →
+          </Link>
+        </div>
       </div>
     </div>
   );

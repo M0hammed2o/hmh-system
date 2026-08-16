@@ -13,7 +13,7 @@ import { siteDashboardApi, type MaterialSummaryItem, type ActivityItem } from "@
 import { BOQAllocationTable } from "@/components/site/BOQAllocationTable";
 import { ProjectWarehouse } from "@/components/site/ProjectWarehouse";
 import { HMHLogo } from "@/components/HMHLogo";
-import { TOKEN_KEY, REFRESH_TOKEN_KEY, ROLE_KEY, SITE_ROLE_SET } from "@/lib/constants";
+import { TOKEN_KEY, REFRESH_TOKEN_KEY, ROLE_KEY, SITE_ROLE_SET, DUAL_ACCESS_ROLE_SET } from "@/lib/constants";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -197,6 +197,10 @@ export default function SiteDashboardPage() {
   const userRole   = localStorage.getItem(ROLE_KEY) ?? "";
   const isViewOnly = userRole === "SITE_MANAGER_VIEW";
   const isSiteUser = userRole === "SITE_STAFF" || userRole === "SITE_MANAGER" || userRole === "SITE_MANAGER_VIEW";
+  // Dual-access office roles (OWNER, OFFICE_ADMIN) can view this portal too
+  // (see SiteRoute.tsx) and need a way back to the main dashboard — pure
+  // site roles have no main-dashboard access, so they only ever see Logout.
+  const canReturnToMain = DUAL_ACCESS_ROLE_SET.has(userRole);
 
   // ── Selection (persisted) ──
   const [projectId, setProjectId] = useState(localStorage.getItem(SK_PROJECT) || "");
@@ -488,8 +492,9 @@ export default function SiteDashboardPage() {
     <div className="min-h-screen bg-background pb-10">
 
       {/* Header */}
-      <header className="sticky top-0 z-30 bg-card/90 backdrop-blur border-b border-border px-4 py-3
-                          flex items-center justify-between gap-2">
+      <header className="sticky top-0 z-30 bg-card/90 backdrop-blur border-b border-border px-4 pb-3
+                          flex items-center justify-between gap-2 min-h-14"
+              style={{ paddingTop: "max(0.75rem, env(safe-area-inset-top))" }}>
         <div className="flex items-center gap-2 min-w-0">
           <HMHLogo size="sm" />
           {isViewOnly && (
@@ -501,6 +506,8 @@ export default function SiteDashboardPage() {
           )}
         </div>
         <div className="flex items-center gap-1 shrink-0">
+          {canReturnToMain && <button onClick={() => window.location.assign("/")} className="rounded-md px-2 py-1.5 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground" title="Back to main dashboard">← Main dashboard</button>}
+          {!isViewOnly && <button onClick={() => window.location.assign("/site/fuel-request")} className="rounded-md px-2 py-1.5 text-xs font-medium text-primary hover:bg-muted" title="Request fuel">Fuel request</button>}
           <button
             onClick={loadData}
             disabled={loading}

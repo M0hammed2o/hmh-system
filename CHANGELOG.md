@@ -1,4 +1,51 @@
 # CHANGELOG — HMH Construction OS
+
+## [2026-08-04] — Site-clerk Fuel balance, PWA mobile layout, dual-access Site Dashboard entry points
+
+- Site Fuel request page now shows "Estimated fuel remaining" with the fuel type and storage location for the selected project/site, or a clear message when no storage location has been configured — this was previously invisible to the site clerk.
+- Fixed a dead `pb-safe` Tailwind class (referenced by the bottom mobile nav but never defined) and added real `env(safe-area-inset-*)` handling to sticky headers and the mobile nav, plus defensive `overflow-x: hidden`.
+- Rescaled the maskable PWA icon — measured content extended past the W3C maskable safe-zone radius (257px vs a 204.8px limit on a 512px icon); corrected via image scaling, no AI regeneration.
+- Added a "Go to Site Dashboard" link on the universal login page, and on the main dashboard for OWNER/OFFICE_ADMIN (new dual-access role concept, mirroring the backend's company-wide role bypass). Fixed three places (`SiteRoute`, `landingForRole`, `SiteLoginPage`) that would otherwise have produced a login loop for these roles.
+- Added Playwright coverage at 360×640, 390×844 and 412×915 for `/site/fuel-request` and `/site` (no horizontal overflow, no clipped header/submit controls), plus dual-access routing and Fuel-balance display tests. 19/19 in `pwa-login.spec.mjs`.
+
+## [2026-08-03] — Fix: three attachment entity types bypassed project isolation
+
+- `PROGRESS_CLAIM`, `PROGRAMME_ACTIVITY`, and `WEEKLY_PLAN` attachments (list/upload/delete/download) were reachable by any authenticated user regardless of project membership — `_entity_project_id()` didn't resolve them to a project, so the project-access check was silently skipped. Fixed by adding the missing resolution.
+- Separately corrected a test (`test_stage_status_attachment_requires_project_access`) that used a company-wide office role as its "unauthorised outsider" — that role is intentionally company-wide everywhere in the app, so the test's premise was wrong, not the access-control code. No production code changed for that item.
+- `test_attachments.py`: 48/48 passing (was 44/45).
+
+## [2026-08-03] — Release-prep hardening: private Fuel evidence and attachment storage
+
+- Fuel evidence and generic attachment uploads (`/attachments/upload`) now go to a private Supabase bucket, never a permanent public URL. `stored_path` is an internal `supabase://<key>` reference; access is only through `GET /attachments/{id}/download`, which re-checks project/entity permission and redirects to a fresh short-lived signed URL.
+- The `/uploads` static file mount no longer serves files outside development/test — it previously exposed every local-disk upload with no authentication.
+- Outside development/test, missing `SUPABASE_URL`/`SUPABASE_SERVICE_KEY` now fails application startup; a failed private upload raises a controlled error instead of silently falling back to local (ephemeral, unauthenticated) disk.
+- Five upload flows that write directly into the shared attachments table outside the Fuel/attachment_service path (delivery notes/signatures, stock usage evidence, stage milestone photos, generated MR/PO PDFs) are unchanged and documented as a residual gap in `KNOWN_BUGS.md`.
+- 22 new backend tests added; no production database or Supabase account accessed.
+
+## [2026-08-03] — Release-prep hardening: fail-closed migrations, safer enum DDL
+
+- Backend no longer runs `alembic upgrade head` from a FastAPI startup hook; a migration failure previously logged an error and let the process start anyway, serving traffic against a stale schema. The release/start command is now the sole migration path: `alembic upgrade head && uvicorn ...`.
+- Migration `0069`'s `attachment_entity_enum` additions no longer swallow every exception; each value is checked against `pg_enum` first and added only if missing, so a genuine DDL failure now aborts the migration instead of being hidden.
+- No deployment performed; verified against disposable local databases only.
+
+## [2026-08-02] — Fuel targeted gap closure (migration 0070)
+
+- Added site-clerk one-step Fuel requests with “my requests”, approval history and next approver.
+- Added destination-specific mandatory evidence, audited admin override, configurable vehicle/equipment feasibility and reading provenance.
+- Added access-checked notification deep links with independent read state, safe 401 return and clear 403 behavior.
+- Added durable non-blocking Fuel workflow emails with recipient resolution, failure logs and bounded retry.
+- Added mobile capture compression/progress/retry and verified private evidence is absent from PWA caches.
+- No deployment performed.
+
+## [2026-08-02] — Fuel Management, installable PWA and reliable login routing (migration 0069)
+
+- Added independent configurable fuel types, storage, order workflow, partial/verified deliveries, issues/reversals, calculated stock, thresholded reconciliation, adjustments, monitoring and CSV reports.
+- Added explicit `fuel.*` permissions, project isolation, audit/notification integration, attachment entities and immutable legacy transaction protection.
+- Added six responsive Fuel routes and a dedicated navigation group; legacy page remains at `/fuel-legacy`.
+- Added valid branded icons, manifest scope/start URL, service worker, offline fallback, safe update prompt and no-cache deployment headers.
+- Hardened `/login`, retained `/site-login` phone/PIN compatibility, server-verified guards, role-safe return destinations, session-expiry handling and production hostname resolution.
+- Added 14 backend integration tests and 4 Playwright PWA/login browser tests.
+- Migration cycle, 51-test focused backend regression, TypeScript and production Vite build pass.
 <!-- Newest first. Dates and commits verified from `git log --format="%h %ad %s" --date=short`. -->
 
 ## [2026-07-19] — Municipality Progress Claim + Programme Planning + Weekly Plans (migration 0068)

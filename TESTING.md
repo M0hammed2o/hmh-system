@@ -1,5 +1,13 @@
 # TESTING — HMH Construction OS
 
+Fuel Management gap-closure coverage, its requirement matrix, dedicated PostgreSQL setup and Playwright commands are documented in [docs/fuel-management-gap-closure.md](docs/fuel-management-gap-closure.md).
+
+**2026-08-03 — Attachment/evidence storage privacy:** `hmh-backend/tests/test_attachments.py` covers signed-URL generation and expiry, permission/project-isolation on `GET /attachments/{id}/download` for local/private/legacy-public stored paths, fail-closed `save_upload(private=True)` behaviour outside development/test, and private-object cleanup — all via mocked `httpx` calls, no real Supabase network access. `hmh-backend/tests/test_fuel_management.py::test_production_storage_validation` covers the new `Settings.validate_production_storage` startup check.
+
+**2026-08-04 — Site-clerk Fuel balance, PWA mobile layout, dual-access routing:** `hmh-frontend/tests/pwa-login.spec.mjs` gained: 6 mobile-viewport tests (360×640, 390×844, 412×915) for `/site/fuel-request` and `/site`, asserting no horizontal document overflow and that key controls' bounding boxes stay within the viewport; 2 tests for the new "Estimated fuel remaining" balance section (populated and empty-storage states); 5 tests for dual-access Site Dashboard entry points (login-page link, topbar link + `/site` reachability for OWNER, absence of the link and 403-equivalent redirect for a non-dual-access role, and the expired-session/re-login path that previously would have looped through `SiteLoginPage`'s "Site portal access only" screen). 19/19 passing. Playwright's `webServer` serves the built `dist/` (via `npm run preview`), not live source — `npm run build` must be re-run before `npm run test:pwa`/`test:notifications` after any frontend source change, or tests silently run against a stale build.
+
+**2026-08-03 — Attachment project-isolation audit:** every `AttachmentEntity` value was checked against `_entity_project_id()`'s resolution table. Found and fixed a genuine gap — `PROGRESS_CLAIM`, `PROGRAMME_ACTIVITY`, `WEEKLY_PLAN` fell through to unrestricted access — covered by the parametrized `test_previously_unresolved_entity_types_now_enforce_project_isolation` (list/upload/delete, 3 entity types × cross-project denial). Separately, `test_stage_status_attachment_requires_project_access` was failing for an unrelated reason (its "outsider" fixture used a company-wide office role, not a project-scoped site role) — corrected in the test, no production code change for that item. See `KNOWN_BUGS.md` for the full writeup. `test_attachments.py`: 48/48 passing.
+
 ## Backend Test Suite
 
 **Location:** `hmh-backend/tests/`
@@ -85,6 +93,7 @@ pytest tests/ -x -v
 | `test_audit_fixes.py` | Audit log integrity |
 | `test_whatsapp.py` | WhatsApp notification send/receive |
 | `test_progress_claims.py` | Municipality progress claims: generation, transitions, PDF, no-pricing, propagation (38 tests — Phase 6) |
+| `test_fuel_management.py` | Fuel lifecycle, permissions, delivery, stock, issues, reconciliation, exports and BOQ separation (14 tests) |
 | `test_stage_tracking.py` | Stage milestone tracking, seed, progress and alert workflows |
 
 ### Notable Gaps (see KNOWN_BUGS.md)
@@ -95,16 +104,31 @@ pytest tests/ -x -v
 
 ## Frontend
 
-**No frontend test suite exists** (no Vitest, Jest, or Playwright config found).
-Type checking is the only automated frontend validation: `cd hmh-frontend && npx tsc --noEmit`.
-All frontend behaviour is manually verified.
+Playwright browser coverage is configured in `hmh-frontend`:
+
+```bash
+npm run test:pwa
+```
+
+`hmh-frontend/tests/pwa-login.spec.mjs` covers direct/refreshed login routes, role routing, retained destinations, manifest metadata and offline service-worker navigation. Type check with `cd hmh-frontend && node_modules/.bin/tsc --noEmit`; build with `npm run build`.
 
 ---
 
 ## Test Architecture Notes
 
-- Tests connect to a live PostgreSQL database (not mocked). Default: `hmh-backend/pytest.ini` or `DATABASE_URL` env var.
+- Tests connect to a live PostgreSQL database (not mocked). `TEST_DATABASE_URL` must point to a dedicated non-production database; `tests/conftest.py` refuses the main local database.
 - `conftest.py` in `tests/` provides shared fixtures (DB session, user factory, project factory).
 - Tests are integration-level: they hit the actual service layer and database; no mocking of DB operations.
 - WhatsApp sends are intercepted in test environments via `WHATSAPP_ENABLED=false` — sends are `MOCK_SENT`.
 - Gmail/SMTP sends are intercepted via `SMTP_ENABLED=false` in test environments.
+
+## 2026-08-02 verification
+
+- Migration 0069: upgrade, downgrade to 0068 and re-upgrade all passed in isolated PostgreSQL.
+- Fuel: 14/14 passed.
+- Fuel + progress/programme/weekly: 51/51 passed.
+- Frontend TypeScript: zero errors.
+- Vite production build: passed (1,770 modules).
+- Playwright PWA/login: 4/4 passed.
+- Full backend suite: 873 collected; timed out at 900 seconds at 86% with legacy failures. See `KNOWN_BUGS.md`; do not label the full suite green.
+- Live deployment audit: app-subdomain login routes returned 200, but apex/www returned 404; the currently deployed worker/icon URLs returned HTML. A new deployment plus domain mapping is still required.

@@ -5,7 +5,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Query
 
-from app.dependencies import ALL_ROLES, CurrentUser, DbSession, OFFICE_AND_ABOVE
+from app.dependencies import ALL_ROLES, CurrentUser, DbSession, OFFICE_AND_ABOVE, check_project_access
 from app.models.enums import AlertStatus, NotificationStatus
 from app.schemas.alert import AlertRead, AlertUpdate
 from app.schemas.common import ApiSuccess
@@ -17,6 +17,7 @@ from app.schemas.notification import (
     QueueStats,
 )
 from app.core.config import settings
+from app.core.fuel_permissions import has_fuel_permission
 from app.core.logging_config import get_logger
 from app.services import alert_service, notification_service, recipient_service
 
@@ -25,11 +26,50 @@ logger = get_logger(__name__)
 router = APIRouter(prefix="/alerts", tags=["alerts"])
 
 
+def _authorise_alert(db, alert, user):
+    from fastapi import HTTPException
+    if alert.target_user_id and alert.target_user_id != user.id:
+        raise HTTPException(403, "This notification is addressed to another user.")
+    if alert.target_role and alert.target_role != user.role and user.role.value not in {"OWNER", "OFFICE_ADMIN"}:
+        raise HTTPException(403, "Your current role cannot open this notification.")
+    if alert.project_id:
+        check_project_access(db, user, alert.project_id)
+    if (alert.reference_type or "").upper() == "FUEL_ORDER":
+        from app.models.fuel_management import FuelOrder
+        if not alert.reference_id:
+            raise HTTPException(404, "Referenced Fuel request not found.")
+        order = db.get(FuelOrder, alert.reference_id)
+        if not order:
+            raise HTTPException(404, "Referenced Fuel request not found.")
+        if alert.project_id and alert.project_id != order.project_id:
+            raise HTTPException(403, "Notification and Fuel request belong to different projects.")
+        check_project_access(db, user, order.project_id)
+        if not has_fuel_permission(user.role, "fuel.view"):
+            raise HTTPException(403, "Fuel Management view permission is required.")
+
+
+def _action_url(alert):
+    ref = (alert.reference_type or "").upper()
+    rid = str(alert.reference_id) if alert.reference_id else ""
+    routes = {
+        "FUEL_ORDER": f"/fuel-management/orders?order={rid}",
+        "FUEL_ISSUE": f"/fuel-management/issues?issue={rid}",
+        "FUEL_DELIVERY": f"/fuel-management/deliveries?delivery={rid}",
+        "MATERIAL_REQUEST": f"/procurement?mr={rid}",
+        "PURCHASE_ORDER": f"/procurement?po={rid}",
+        "WAREHOUSE_TRANSFER": f"/project-warehouse?transfer={rid}",
+        "INVOICE": f"/invoices?invoice={rid}",
+        "DELIVERY": f"/deliveries?delivery={rid}",
+    }
+    return routes.get(ref, "/alerts")
+
+
 # ── Alert list + update ───────────────────────────────────────────────────────
 
 @router.get("/", response_model=ApiSuccess[list[AlertRead]], dependencies=[ALL_ROLES])
 def list_alerts(
     db: DbSession,
+    current_user: CurrentUser,
     project_id: Optional[uuid.UUID] = Query(None),
     status: Optional[AlertStatus] = Query(None),
     alert_type: Optional[str] = Query(None),
@@ -38,7 +78,13 @@ def list_alerts(
     from app.models.project import Project
     from app.models.site import Site
 
-    alerts = alert_service.list_alerts(db, project_id, status, limit, alert_type)
+    candidates = alert_service.list_alerts(db, project_id, status, limit, alert_type)
+    alerts = []
+    for alert in candidates:
+        try:
+            _authorise_alert(db, alert, current_user); alerts.append(alert)
+        except Exception:
+            continue
 
     # Batch-enrich with project/site names (avoids N+1 queries)
     pids = {a.project_id for a in alerts if a.project_id}
@@ -51,13 +97,14 @@ def list_alerts(
         read = AlertRead.model_validate(a)
         read.project_name = pmap.get(a.project_id)
         read.site_name = smap.get(a.site_id)
+        read.action_url = _action_url(a)
         result.append(read)
 
     return ApiSuccess(data=result)
 
 
 @router.get("/{alert_id}/context", response_model=ApiSuccess[dict], dependencies=[ALL_ROLES])
-def get_alert_context(alert_id: uuid.UUID, db: DbSession):
+def get_alert_context(alert_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
     """Returns the alert plus enriched context fetched from the referenced record."""
     from fastapi import HTTPException
     from app.models.alert import SystemAlert
@@ -67,6 +114,7 @@ def get_alert_context(alert_id: uuid.UUID, db: DbSession):
     alert = db.get(SystemAlert, alert_id)
     if not alert:
         raise HTTPException(status_code=404, detail="Alert not found.")
+    _authorise_alert(db, alert, current_user)
 
     base = AlertRead.model_validate(alert).model_dump()
 
@@ -132,7 +180,37 @@ def get_alert_context(alert_id: uuid.UUID, db: DbSession):
         pass  # context is best-effort — never crash the alert endpoint
 
     base["context"] = context
+    base["action_url"] = _action_url(alert)
     return ApiSuccess(data=base)
+
+
+@router.get("/{alert_id}/open", response_model=ApiSuccess[AlertRead], dependencies=[ALL_ROLES])
+def open_alert(alert_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
+    from fastapi import HTTPException
+    from app.models.alert import SystemAlert
+    alert = db.get(SystemAlert, alert_id)
+    if not alert: raise HTTPException(404, "Notification not found.")
+    _authorise_alert(db, alert, current_user)
+    if alert.read_at is None:
+        from datetime import datetime, timezone
+        alert.read_at = datetime.now(timezone.utc)
+        db.commit(); db.refresh(alert)
+    read = AlertRead.model_validate(alert); read.action_url = _action_url(alert)
+    return ApiSuccess(data=read)
+
+
+@router.post("/{alert_id}/read", response_model=ApiSuccess[AlertRead], dependencies=[ALL_ROLES])
+def mark_alert_read(alert_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
+    from fastapi import HTTPException
+    from datetime import datetime, timezone
+    from app.models.alert import SystemAlert
+    alert = db.get(SystemAlert, alert_id)
+    if not alert: raise HTTPException(404, "Notification not found.")
+    _authorise_alert(db, alert, current_user)
+    if alert.read_at is None:
+        alert.read_at = datetime.now(timezone.utc); db.commit(); db.refresh(alert)
+    read = AlertRead.model_validate(alert); read.action_url = _action_url(alert)
+    return ApiSuccess(data=read, message="Notification marked read.")
 
 
 @router.patch("/{alert_id}", response_model=ApiSuccess[AlertRead], dependencies=[ALL_ROLES])

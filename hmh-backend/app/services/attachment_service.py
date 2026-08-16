@@ -1,10 +1,14 @@
 """Attachment service.
 
-Files are saved via save_upload() which routes to:
-  - Supabase Storage when SUPABASE_URL + SUPABASE_SERVICE_KEY are configured
-  - Local disk (UPLOAD_DIR) otherwise
+Files are saved via save_upload(..., private=True), which routes to:
+  - The private Supabase Storage bucket when SUPABASE_URL + SUPABASE_SERVICE_KEY
+    are configured (required outside development/test)
+  - Local disk (UPLOAD_DIR) otherwise — development/test only
 
-stored_path is always the public-accessible URL (Supabase) or /uploads/... path (local).
+stored_path is never a directly fetchable URL: it is "supabase://<key>" (private
+bucket) or "/uploads/..." (local, dev/test). Access always goes through the
+permission-checked GET /attachments/{id}/download endpoint, which redirects to
+a short-lived signed URL (Supabase) or streams the file (local).
 """
 
 import os
@@ -18,7 +22,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings  # used by resolve_abs_path
 from app.core.exceptions import NotFoundError
-from app.core.storage import save_upload
+from app.core.storage import delete_upload, save_upload
 from app.core.upload_validation import validate_upload, DOCUMENT_MIMES, SPREADSHEET_MIMES
 from app.models.attachment import Attachment
 from app.models.enums import AttachmentEntity, AttachmentType
@@ -42,7 +46,7 @@ def _save_via_storage(file: UploadFile, entity_type: str, entity_id: str) -> tup
     ext = os.path.splitext(file.filename or "upload")[1].lower() or ".bin"
     unique_name = f"{uuid.uuid4().hex}{ext}"
     relative = f"attachments/{entity_type}/{entity_id}/{unique_name}"
-    stored = save_upload(content, relative)
+    stored = save_upload(content, relative, private=True)
     return stored, len(content)
 
 
@@ -81,6 +85,8 @@ def save_attachment(
     uploaded_by_id: uuid.UUID,
     caption: Optional[str] = None,
     uploaded_role: Optional[str] = None,
+    commit: bool = True,
+    staged_paths: Optional[list[str]] = None,
 ) -> Attachment:
     # Validate enum values
     try:
@@ -102,6 +108,8 @@ def save_attachment(
     validate_upload(file, allowed=_ATTACHMENT_MIMES)
 
     stored_path, file_size = _save_via_storage(file, entity_type, str(entity_id))
+    if staged_paths is not None:
+        staged_paths.append(stored_path)
 
     # Sanitize filename: strip path traversal, truncate to column length
     safe_name = os.path.basename(file.filename or "upload")
@@ -135,9 +143,16 @@ def save_attachment(
         f"Uploaded {record.file_name} ({attachment_type})",
     )
 
-    db.commit()
-    db.refresh(record)
+    if commit:
+        db.commit()
+        db.refresh(record)
     return record
+
+
+def cleanup_staged_uploads(stored_paths: list[str]) -> bool:
+    """Compensate external file writes when the enclosing DB transaction fails."""
+    results = [delete_upload(path) for path in reversed(stored_paths)]
+    return all(results)
 
 
 def list_attachments(

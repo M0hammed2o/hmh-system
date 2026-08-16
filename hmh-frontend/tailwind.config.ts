@@ -63,6 +63,13 @@ export default {
         md: "calc(var(--radius) - 2px)",
         sm: "calc(var(--radius) - 4px)",
       },
+      spacing: {
+        // Installed-PWA safe-area insets (notch / status bar / home indicator).
+        // `pb-safe` was already referenced by MobileNav.tsx but was never
+        // defined here, so it silently produced no CSS.
+        safe: "env(safe-area-inset-bottom)",
+        "safe-top": "env(safe-area-inset-top)",
+      },
       keyframes: {
         "fade-in": {
           from: { opacity: "0", transform: "translateY(4px)" },

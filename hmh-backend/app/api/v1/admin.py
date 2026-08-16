@@ -13,19 +13,34 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 
 @router.get("/storage-status", response_model=ApiSuccess[dict], dependencies=[OWNER_ONLY])
 def storage_status():
-    """Check whether Supabase Storage is configured and reachable."""
-    from app.core.storage import verify_supabase_connection, storage_mode
-    result = verify_supabase_connection()
-    result["mode"] = storage_mode()
-    result["instruction"] = (
-        "Photos are permanently stored in Supabase Storage."
-        if result["ok"]
-        else (
-            "Photos are on Render local disk and WILL BE LOST on restart. "
-            "Fix: add SUPABASE_URL + SUPABASE_SERVICE_KEY in Render env vars, "
-            "then create a public bucket named 'hmh-uploads' in Supabase Dashboard → Storage."
-        )
-    )
+    """Check whether Supabase Storage (both the legacy public bucket and the
+    private evidence/attachment bucket) is configured and reachable."""
+    from app.core.storage import verify_supabase_connection, verify_private_storage, storage_mode
+    legacy = verify_supabase_connection()
+    private = verify_private_storage()
+    result = {
+        "mode": storage_mode(),
+        "legacy_public_bucket": legacy,
+        "private_evidence_bucket": private,
+        "instruction": (
+            "Photos are permanently stored in Supabase Storage."
+            if legacy["ok"]
+            else (
+                "Legacy-path photos are on Render local disk and WILL BE LOST on restart. "
+                "Fix: add SUPABASE_URL + SUPABASE_SERVICE_KEY in Render env vars, "
+                "then create a public bucket named 'hmh-uploads' in Supabase Dashboard → Storage."
+            )
+        ),
+        "private_instruction": (
+            "Fuel evidence and generic attachments are stored privately and served via signed URLs."
+            if private["ok"]
+            else (
+                private["error"]
+                or "Private evidence bucket is not confirmed. Fuel evidence uploads will fail "
+                   "outside development/test."
+            )
+        ),
+    }
     return ApiSuccess(data=result, message=f"Storage mode: {result['mode']}")
 
 

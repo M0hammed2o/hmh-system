@@ -64,8 +64,18 @@ const navGroups = [
     label: "Fleet",
     items: [
       { title: "Vehicles",        path: "/vehicles",       icon: Car    },
-      { title: "Fuel",            path: "/fuel",           icon: Droplet },
       { title: "Workshop",        path: "/workshop",       icon: Wrench  },
+    ],
+  },
+  {
+    label: "Fuel Management",
+    items: [
+      { title: "Fuel Dashboard",   path: "/fuel-management",            icon: Droplet },
+      { title: "Fuel Orders",      path: "/fuel-management/orders",     icon: ShoppingCart },
+      { title: "Fuel Deliveries",  path: "/fuel-management/deliveries", icon: Truck },
+      { title: "Fuel Issues",      path: "/fuel-management/issues",     icon: ClipboardList },
+      { title: "Stock & Reconcile",path: "/fuel-management/stock",      icon: Warehouse },
+      { title: "Fuel Reports",     path: "/fuel-management/reports",    icon: BarChart2 },
     ],
   },
   {
@@ -115,6 +125,8 @@ export function AppSidebar() {
               {group.items.map((item) => {
                 const isActive = item.path === "/"
                   ? location.pathname === "/"
+                  : item.path === "/fuel-management"
+                  ? location.pathname === "/fuel-management"
                   : location.pathname.startsWith(item.path);
                 return (
                   <NavLink
