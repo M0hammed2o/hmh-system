@@ -16,9 +16,10 @@ from app.models.fuel_management import (
     FuelStockAdjustment, FuelStorageLocation, FuelTypeDefinition,
 )
 from app.models.vehicle import FuelDelivery, Vehicle
+from app.models.fuel import FuelLog
 from app.models.enums import VehicleStatus, VehicleType
 from app.models.alert import SystemAlert
-from app.models.enums import AlertSeverity, AlertStatus, AlertType
+from app.models.enums import AlertSeverity, AlertStatus, AlertType, FuelType, FuelUsageType
 from tests.conftest import (
     auth, login, make_project, make_site, make_supplier, make_user,
     make_user_project_access,
@@ -431,21 +432,52 @@ def test_adjustment_permissions_and_immutable_history(client, db, fuel_ctx):
     assert dash["current_calculated_stock"] == 990
 
 
-def test_reports_and_legacy_delete_protection(client, fuel_ctx):
+def test_reports_and_legacy_delete_protection(client, db, fuel_ctx):
     c = fuel_ctx; create_order(client, c)
     r = client.get(f"/api/v1/projects/{c['project']['id']}/fuel-management/reports/orders.csv", headers=c["headers"]["owner"])
     assert r.status_code == 200 and "Order number" in r.text
     usage = client.get(f"/api/v1/projects/{c['project']['id']}/fuel-management/reports/usage.csv", headers=c["headers"]["owner"])
     assert usage.status_code == 200 and "Issue number" in usage.text
     assert client.get(f"/api/v1/projects/{c['project']['id']}/fuel-management/reports/orders.csv", headers=c["headers"]["site"]).status_code == 403
-    legacy = client.post(
+
+    # Phase 9: fuel_ctx's storage already completed cutover (opening stock at creation) —
+    # the legacy Fuel Log must refuse new writes once Fuel Management is live for the project.
+    frozen = client.post(
         f"/api/v1/projects/{c['project']['id']}/fuel/",
-        json={"fuel_type": "DIESEL", "usage_type": "EQUIPMENT", "equipment_ref": "GEN-OLD", "litres": 5},
+        json={"fuel_type": "DIESEL", "usage_type": "EQUIPMENT", "equipment_ref": "GEN-NEW", "litres": 5},
         headers=c["headers"]["owner"],
     )
-    assert legacy.status_code == 201, legacy.text
-    deleted = client.delete(f"/api/v1/fuel/{legacy.json()['data']['id']}", headers=c["headers"]["owner"])
+    assert frozen.status_code == 422, frozen.text
+    assert "Fuel Management" in frozen.text
+
+    # A pre-existing historical FuelLog row (as if written before cutover) stays
+    # intact and readable, but is still immutable — corrections go through
+    # Fuel Management reversals/adjustments, never a delete.
+    legacy = FuelLog(
+        project_id=uuid.UUID(c["project"]["id"]), fuel_type=FuelType.DIESEL, usage_type=FuelUsageType.EQUIPMENT,
+        equipment_ref="GEN-OLD", litres=5, recorded_by=uuid.UUID(c["owner"]["id"]),
+        fuel_date=datetime.now(timezone.utc), log_date=datetime.now(timezone.utc).date(),
+    )
+    db.add(legacy); db.commit()
+    deleted = client.delete(f"/api/v1/fuel/{legacy.id}", headers=c["headers"]["owner"])
     assert deleted.status_code == 409
+
+
+def test_legacy_fuel_log_still_works_before_fuel_management_cutover(client, db):
+    """Phase 9: the freeze is scoped to projects where Fuel Management has
+    actually gone live. A project with no cut-over storage location at all
+    must be completely unaffected — legacy FuelLog keeps working exactly as
+    before for teams who haven't adopted Fuel Management yet."""
+    owner = make_user(db, role="OWNER")
+    project = make_project(db, owner["id"])
+    db.commit()
+    tok = auth(login(client, owner["email"], owner["password"]))
+    r = client.post(
+        f"/api/v1/projects/{project['id']}/fuel/",
+        json={"fuel_type": "DIESEL", "usage_type": "EQUIPMENT", "equipment_ref": "GEN-01", "litres": 5},
+        headers=tok,
+    )
+    assert r.status_code == 201, r.text
 
 
 def test_fuel_schema_has_no_boq_dependency():

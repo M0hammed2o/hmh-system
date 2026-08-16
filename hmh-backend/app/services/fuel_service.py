@@ -6,8 +6,9 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
-from app.core.exceptions import NotFoundError
+from app.core.exceptions import NotFoundError, ValidationError
 from app.models.fuel import FuelLog
+from app.models.fuel_management import FuelStorageLocation
 from app.models.project import Project
 from app.schemas.fuel import FuelLogCreate, FuelLogUpdate
 
@@ -17,6 +18,20 @@ def _get_or_404(db: Session, log_id: uuid.UUID) -> FuelLog:
     if not log:
         raise NotFoundError(f"Fuel log {log_id} not found.")
     return log
+
+
+def _fuel_management_is_live(db: Session, project_id: uuid.UUID) -> bool:
+    """True once any Fuel Management storage location in this project has
+    completed a trustworthy stock cutover (Phase 8). From that point on,
+    FuelIssue is the canonical vehicle/equipment fuel ledger — the legacy
+    FuelLog must freeze for NEW writes so stock, consumption, and anomaly
+    calculations are never split across two disagreeing systems. Historical
+    FuelLog rows stay intact and readable; they are simply never added to
+    again once Fuel Management is live for the project."""
+    return db.query(FuelStorageLocation).filter(
+        FuelStorageLocation.project_id == project_id,
+        FuelStorageLocation.cutover_confirmed_at.isnot(None),
+    ).first() is not None
 
 
 def list_fuel_logs(
@@ -48,6 +63,11 @@ def create_fuel_log(
     project = db.get(Project, project_id)
     if not project:
         raise NotFoundError(f"Project {project_id} not found.")
+    if _fuel_management_is_live(db, project_id):
+        raise ValidationError(
+            "This project has moved to Fuel Management for fuel tracking. "
+            "Record new fuel fills via Fuel Management > Issue Fuel — the legacy Fuel Log no longer accepts new entries."
+        )
 
     _fuel_date = data.fuel_date or datetime.now(timezone.utc)
     log = FuelLog(
