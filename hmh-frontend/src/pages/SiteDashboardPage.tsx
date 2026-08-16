@@ -187,7 +187,7 @@ function ModalShell({ title, onClose, children }: {
 }
 
 // ── Main page ─────────────────────────────────────────────────────────────────
-type ModalType = "request" | "delivery" | "usage" | "stage" | "jobcard" | "add_warehouse" | "warehouse_transfer" | null;
+type ModalType = "request" | "request-fuel" | "delivery" | "usage" | "stage" | "jobcard" | "add_warehouse" | "warehouse_transfer" | null;
 
 // Virtual sentinel used for the view-only Global Main Warehouse option
 const MAIN_WAREHOUSE_SENTINEL = "__main_warehouse__";
@@ -508,7 +508,11 @@ export default function SiteDashboardPage() {
         </div>
         <div className="flex items-center gap-1 shrink-0">
           {canReturnToMain && <button onClick={() => window.location.assign("/")} className="rounded-md px-2 py-1.5 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground" title="Back to main dashboard">← Main dashboard</button>}
-          {!isViewOnly && <button onClick={() => window.location.assign("/site/fuel-request")} className="rounded-md px-2 py-1.5 text-xs font-medium text-primary hover:bg-muted" title="Request fuel">Fuel request</button>}
+          {/* Phase 15: the old FuelOrder-based /site/fuel-request page is retired as a
+              site-clerk entry point — this now opens the same Request Materials modal
+              used for BOQ items, pre-selected to its Fuel tab (procurement_category=FUEL),
+              so there is exactly one fuel-requesting path instead of two. */}
+          {!isViewOnly && <button onClick={() => setModal("request-fuel")} className="rounded-md px-2 py-1.5 text-xs font-medium text-primary hover:bg-muted" title="Request fuel">Fuel request</button>}
           <button
             onClick={loadData}
             disabled={loading}
@@ -1118,9 +1122,10 @@ export default function SiteDashboardPage() {
       </div>
 
       {/* ── Modals ── */}
-      {modal === "request"  && (
+      {(modal === "request" || modal === "request-fuel") && (
         <RequestMaterialModal
           projectId={projectId} siteId={siteId} lotId={lotId}
+          initialType={modal === "request-fuel" ? "FUEL" : "MATERIAL"}
           onClose={() => setModal(null)} onDone={() => { setModal(null); loadData(); }}
         />
       )}
@@ -1319,11 +1324,11 @@ interface CartItem {
   total_planned_qty?: number;
 }
 
-function RequestMaterialModal({ projectId, siteId, lotId, onClose, onDone }: {
-  projectId: string; siteId: string; lotId: string;
+function RequestMaterialModal({ projectId, siteId, lotId, initialType = "MATERIAL", onClose, onDone }: {
+  projectId: string; siteId: string; lotId: string; initialType?: "MATERIAL" | "FUEL";
   onClose: () => void; onDone: () => void;
 }) {
-  const [requestType,  setRequestType]  = useState<"MATERIAL" | "FUEL">("MATERIAL");
+  const [requestType,  setRequestType]  = useState<"MATERIAL" | "FUEL">(initialType);
   const [cart,         setCart]         = useState<CartItem[]>([]);
   const [search,       setSearch]       = useState("");
   const [results,      setResults]      = useState<BOQSearchResult[]>([]);
