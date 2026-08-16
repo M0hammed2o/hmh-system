@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Plus, Car, Wrench, Fuel, Trash2, Droplet, AlertTriangle, Pencil, ClipboardList, MapPin, History } from "lucide-react";
-import { fuelApi, fuelPhotoUrl, type FuelLog, FUEL_TYPE_LABELS } from "@/api/fuel";
+import { fuelApi, fuelPhotoUrl, type FuelLog } from "@/api/fuel";
+import { fuelManagementApi, type FuelIssue } from "@/api/fuelManagement";
 import { formatCurrency } from "@/lib/format";
 import {
   vehiclesApi,
@@ -43,6 +44,47 @@ const fuelTypeLabels: Record<FuelType, string> = {
 const costTypeOptions: VehicleCostType[] = ["FUEL", "TYRE", "REPAIR", "SERVICE", "LICENCE", "INSURANCE", "OTHER"];
 const vehicleTypeOptions: VehicleType[] = ["BAKKIE", "TRUCK", "TLB", "EXCAVATOR", "CRANE", "VAN", "OTHER"];
 const fuelTypeOptions: FuelType[] = ["DIESEL", "PETROL", "PARAFFIN", "OTHER"];
+
+// ── Fuel history: merge canonical FuelIssue (Fuel Management) with legacy
+// FuelLog into one timeline, clearly labelled by source. A road vehicle
+// shows L/100km; an hour-based vehicle (uses_hours) shows L/hour — never both.
+interface FuelTimelineEntry {
+  key: string;
+  source: "issue" | "legacy";
+  date: string;
+  litres: number;
+  odometer: number | null;
+  hours: number | null;
+  consumption: string | null;
+  anomaly: boolean;
+  anomalyReason: string | null;
+  cost: number | null;
+  photoUrl: string | null;
+  evidenceCount: number;
+  reversed: boolean;
+}
+
+function buildFuelTimeline(vehicle: Vehicle, logs: FuelLog[], issues: FuelIssue[]): FuelTimelineEntry[] {
+  const fromIssues: FuelTimelineEntry[] = issues.map(i => ({
+    key: `issue-${i.id}`, source: "issue", date: i.issued_at, litres: i.litres,
+    odometer: i.odometer_reading, hours: i.hour_meter_reading,
+    consumption: vehicle.uses_hours
+      ? (i.litres_per_hour != null ? `${i.litres_per_hour.toFixed(2)} L/hr` : null)
+      : (i.litres_per_100km != null ? `${i.litres_per_100km.toFixed(1)} L/100km` : null),
+    anomaly: i.anomaly_flag, anomalyReason: i.anomaly_reason, cost: i.total_cost,
+    photoUrl: null, evidenceCount: i.evidence?.length ?? 0, reversed: i.is_reversed,
+  }));
+  const fromLogs: FuelTimelineEntry[] = logs.map(l => ({
+    key: `log-${l.id}`, source: "legacy", date: l.fuel_date, litres: l.litres,
+    odometer: l.odometer_reading, hours: l.hours_reading,
+    consumption: vehicle.uses_hours
+      ? (l.fuel_per_hour != null ? `${l.fuel_per_hour.toFixed(2)} L/hr` : null)
+      : (l.l_per_100km != null ? `${l.l_per_100km.toFixed(1)} L/100km` : null),
+    anomaly: false, anomalyReason: null, cost: l.total_cost,
+    photoUrl: fuelPhotoUrl(l.photo_odometer), evidenceCount: 0, reversed: false,
+  }));
+  return [...fromIssues, ...fromLogs].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+}
 
 function VehicleFormFields({
   form,
@@ -604,6 +646,7 @@ export default function VehiclesPage() {
   const [expanded, setExpanded] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [fuelLogs, setFuelLogs] = useState<Record<string, FuelLog[]>>({});
+  const [fuelIssues, setFuelIssues] = useState<Record<string, FuelIssue[]>>({});
   const [partsHistory, setPartsHistory] = useState<Record<string, WorkshopIssuance[]>>({});
   const [activeTab, setActiveTab] = useState<Record<string, "costs" | "fuel" | "details" | "repairs" | "parts">>({});
   const [projectNames, setProjectNames] = useState<Record<string, string>>({});
@@ -656,6 +699,32 @@ export default function VehiclesPage() {
     setFuelLogs(prev => ({ ...prev, [vehicleId]: logs }));
   };
 
+  // Canonical fills (Fuel Management) — the FuelLog above is legacy/frozen
+  // once a project cuts over; both are shown together, clearly labelled,
+  // so fill history never appears to silently stop.
+  const loadFuelIssues = async (vehicleId: string) => {
+    const vehicle = vehicles.find(v => v.id === vehicleId);
+    const projId  = vehicle?.assigned_project_id;
+    if (!projId) {
+      try {
+        const projects = await projectsApi.list(1, 100).then(r => r.items);
+        const allIssues: FuelIssue[] = [];
+        await Promise.all(
+          projects.map(p =>
+            fuelManagementApi.issues(p.id, { vehicle_id: vehicleId })
+              .then(issues => allIssues.push(...issues))
+              .catch(() => {})
+          )
+        );
+        allIssues.sort((a, b) => new Date(b.issued_at).getTime() - new Date(a.issued_at).getTime());
+        setFuelIssues(prev => ({ ...prev, [vehicleId]: allIssues }));
+      } catch { setFuelIssues(prev => ({ ...prev, [vehicleId]: [] })); }
+      return;
+    }
+    const issues = await fuelManagementApi.issues(projId, { vehicle_id: vehicleId }).catch(() => []);
+    setFuelIssues(prev => ({ ...prev, [vehicleId]: issues }));
+  };
+
   const loadPartsHistory = async (vehicleId: string) => {
     const data = await workshopApi.listIssuances({ vehicle_id: vehicleId }).catch(() => []);
     setPartsHistory(prev => ({ ...prev, [vehicleId]: data.sort((a, b) => new Date(b.issued_at).getTime() - new Date(a.issued_at).getTime()) }));
@@ -666,6 +735,7 @@ export default function VehiclesPage() {
     setExpanded(id);
     loadCosts(id);
     loadFuelLogs(id);
+    loadFuelIssues(id);
     loadRepairs(id);
     loadPartsHistory(id);
     if (!activeTab[id]) setActiveTab(prev => ({ ...prev, [id]: "details" }));
@@ -793,7 +863,7 @@ export default function VehiclesPage() {
                          : <History className="w-3 h-3" />}
                         {tab === "details"  ? "Details"
                          : tab === "costs"  ? `Costs (${costs[v.id]?.length ?? 0})`
-                         : tab === "fuel"   ? `Fuel (${fuelLogs[v.id]?.length ?? 0})`
+                         : tab === "fuel"   ? `Fuel (${(fuelLogs[v.id]?.length ?? 0) + (fuelIssues[v.id]?.length ?? 0)})`
                          : tab === "repairs" ? `Repairs (${repairs[v.id]?.length ?? 0})`
                          : `Parts (${partsHistory[v.id]?.length ?? 0})`}
                       </button>
@@ -899,45 +969,67 @@ export default function VehiclesPage() {
                   {/* Fuel logs tab */}
                   {(activeTab[v.id] ?? "details") === "fuel" && (
                     <div className="px-4 py-3 space-y-2">
-                      {!fuelLogs[v.id] ? (
-                        <p className="text-xs text-muted-foreground">Loading fuel logs…</p>
-                      ) : fuelLogs[v.id].length === 0 ? (
-                        <p className="text-xs text-muted-foreground">No fuel logs for this vehicle.</p>
-                      ) : (
-                        <>
-                          <div className="flex gap-4 text-xs text-muted-foreground pb-1 border-b border-border/50">
-                            <span>Total: <strong className="text-foreground">{fuelLogs[v.id].reduce((s, l) => s + l.litres, 0).toFixed(1)} L</strong></span>
-                            <span>Cost: <strong className="text-foreground">{formatCurrency(fuelLogs[v.id].reduce((s, l) => s + (l.total_cost ?? (l.cost_per_litre ? l.litres * l.cost_per_litre : 0)), 0))}</strong></span>
-                            <span>{fuelLogs[v.id].length} entries</span>
-                          </div>
-                          {fuelLogs[v.id].slice(0, 10).map(log => {
-                            const flagged = log.notes?.includes("⚠") ?? false;
-                            const odoUrl  = fuelPhotoUrl(log.photo_odometer);
-                            return (
-                              <div key={log.id} className={`flex items-start justify-between text-xs rounded-lg px-2 py-1.5 ${flagged ? "bg-destructive/5" : ""}`}>
+                      {!fuelLogs[v.id] || !fuelIssues[v.id] ? (
+                        <p className="text-xs text-muted-foreground">Loading fuel history…</p>
+                      ) : (() => {
+                        const timeline = buildFuelTimeline(v, fuelLogs[v.id], fuelIssues[v.id]);
+                        if (timeline.length === 0) {
+                          return <p className="text-xs text-muted-foreground">No fuel fills recorded for this vehicle.</p>;
+                        }
+                        const totalLitres = timeline.reduce((s, e) => s + e.litres, 0);
+                        const totalCost = timeline.reduce((s, e) => s + (e.cost ?? 0), 0);
+                        const latestIssue = fuelIssues[v.id].find(i => !i.is_reversed);
+                        return (
+                          <>
+                            <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground pb-1 border-b border-border/50">
+                              <span>Total: <strong className="text-foreground">{totalLitres.toFixed(1)} L</strong></span>
+                              <span>Cost: <strong className="text-foreground">{formatCurrency(totalCost)}</strong></span>
+                              <span>{timeline.length} entries</span>
+                              {latestIssue?.estimated_remaining_litres != null && (
+                                <span>Est. remaining: <strong className="text-foreground">{latestIssue.estimated_remaining_litres.toFixed(1)} L</strong></span>
+                              )}
+                            </div>
+                            {timeline.slice(0, 10).map(entry => (
+                              <div key={entry.key} className={cn(
+                                "flex items-start justify-between text-xs rounded-lg px-2 py-1.5",
+                                entry.anomaly && "bg-destructive/5",
+                                entry.reversed && "opacity-50",
+                              )}>
                                 <div className="space-y-0.5">
-                                  <div className="flex items-center gap-2">
+                                  <div className="flex items-center gap-2 flex-wrap">
                                     <Droplet className="w-3 h-3 text-muted-foreground" />
-                                    <span className="font-medium">{log.litres.toFixed(1)} L {FUEL_TYPE_LABELS[log.fuel_type]}</span>
-                                    {flagged && <AlertTriangle className="w-3 h-3 text-destructive" title="Unusual consumption" />}
+                                    <span className="font-medium">{entry.litres.toFixed(1)} L</span>
+                                    {entry.source === "legacy" && (
+                                      <Badge variant="secondary" className="text-[10px] px-1.5 py-0">Legacy</Badge>
+                                    )}
+                                    {entry.reversed && (
+                                      <Badge variant="secondary" className="text-[10px] px-1.5 py-0">Reversed</Badge>
+                                    )}
+                                    {entry.anomaly && <AlertTriangle className="w-3 h-3 text-destructive" title="Review required" />}
                                   </div>
                                   <div className="text-muted-foreground pl-5 flex flex-wrap gap-2">
-                                    {log.odometer_reading != null && <span>📍 {log.odometer_reading.toLocaleString()} km</span>}
-                                    {log.distance_km      != null && <span>↔ {log.distance_km.toFixed(0)} km</span>}
-                                    {log.efficiency_kpl   != null && <span>⛽ {log.efficiency_kpl.toFixed(1)} km/L</span>}
-                                    {log.l_per_100km      != null && <span className={log.l_per_100km > 30 ? "text-destructive font-medium" : ""}>{log.l_per_100km.toFixed(1)} L/100km</span>}
-                                    {odoUrl && <a href={odoUrl} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">📷 Odo photo</a>}
+                                    {v.uses_hours
+                                      ? entry.hours != null && <span>⏱ {entry.hours.toLocaleString()} hrs</span>
+                                      : entry.odometer != null && <span>📍 {entry.odometer.toLocaleString()} km</span>}
+                                    {entry.consumption && (
+                                      <span className={entry.anomaly ? "text-destructive font-medium" : ""}>{entry.consumption}</span>
+                                    )}
+                                    {entry.evidenceCount > 0 && <span>📎 {entry.evidenceCount} evidence file(s)</span>}
+                                    {entry.photoUrl && <a href={entry.photoUrl} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">📷 Photo</a>}
                                   </div>
+                                  {entry.anomaly && entry.anomalyReason && (
+                                    <p className="text-destructive pl-5">{entry.anomalyReason}</p>
+                                  )}
                                 </div>
                                 <div className="text-right shrink-0 ml-3">
-                                  <p className="font-medium">{log.total_cost != null ? formatCurrency(log.total_cost) : "—"}</p>
-                                  <p className="text-muted-foreground">{new Date(log.fuel_date).toLocaleDateString("en-ZA")}</p>
+                                  <p className="font-medium">{entry.cost != null ? formatCurrency(entry.cost) : "—"}</p>
+                                  <p className="text-muted-foreground">{new Date(entry.date).toLocaleDateString("en-ZA")}</p>
                                 </div>
                               </div>
-                            );
-                          })}
-                        </>
-                      )}
+                            ))}
+                          </>
+                        );
+                      })()}
                     </div>
                   )}
 

@@ -22,7 +22,8 @@ import {
   type RepairJob,
   type RepairJobCreate,
 } from "@/api/vehicles";
-import { fuelApi, fuelPhotoUrl, type FuelLog, FUEL_TYPE_LABELS } from "@/api/fuel";
+import { fuelApi, fuelPhotoUrl, type FuelLog } from "@/api/fuel";
+import { fuelManagementApi, type FuelIssue } from "@/api/fuelManagement";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -59,6 +60,47 @@ const REPAIR_STATUS_LABELS: Record<string, { label: string; color: string }> = {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 const today = () => new Date().toISOString().split("T")[0];
+
+// ── Fuel history: merge canonical FuelIssue (Fuel Management) with legacy
+// FuelLog into one timeline, clearly labelled by source. A road vehicle
+// shows L/100km; an hour-based vehicle (uses_hours) shows L/hour — never both.
+interface FuelTimelineEntry {
+  key: string;
+  source: "issue" | "legacy";
+  date: string;
+  litres: number;
+  odometer: number | null;
+  hours: number | null;
+  consumption: string | null;
+  anomaly: boolean;
+  anomalyReason: string | null;
+  cost: number | null;
+  photoUrl: string | null;
+  evidenceCount: number;
+  reversed: boolean;
+}
+
+function buildFuelTimeline(vehicle: Vehicle, logs: FuelLog[], issues: FuelIssue[]): FuelTimelineEntry[] {
+  const fromIssues: FuelTimelineEntry[] = issues.map(i => ({
+    key: `issue-${i.id}`, source: "issue", date: i.issued_at, litres: i.litres,
+    odometer: i.odometer_reading, hours: i.hour_meter_reading,
+    consumption: vehicle.uses_hours
+      ? (i.litres_per_hour != null ? `${i.litres_per_hour.toFixed(2)} L/hr` : null)
+      : (i.litres_per_100km != null ? `${i.litres_per_100km.toFixed(1)} L/100km` : null),
+    anomaly: i.anomaly_flag, anomalyReason: i.anomaly_reason, cost: i.total_cost,
+    photoUrl: null, evidenceCount: i.evidence?.length ?? 0, reversed: i.is_reversed,
+  }));
+  const fromLogs: FuelTimelineEntry[] = logs.map(l => ({
+    key: `log-${l.id}`, source: "legacy", date: l.fuel_date, litres: l.litres,
+    odometer: l.odometer_reading, hours: l.hours_reading,
+    consumption: vehicle.uses_hours
+      ? (l.fuel_per_hour != null ? `${l.fuel_per_hour.toFixed(2)} L/hr` : null)
+      : (l.l_per_100km != null ? `${l.l_per_100km.toFixed(1)} L/100km` : null),
+    anomaly: false, anomalyReason: null, cost: l.total_cost,
+    photoUrl: fuelPhotoUrl(l.photo_odometer), evidenceCount: 0, reversed: false,
+  }));
+  return [...fromIssues, ...fromLogs].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+}
 
 
 // ── Repair workflow modals ────────────────────────────────────────────────────
@@ -391,6 +433,7 @@ export function SiteVehicles({ siteId, projectId, sites, isViewOnly = false }: S
   const [costs, setCosts] = useState<Record<string, VehicleCost[]>>({});
   const [repairs, setRepairs] = useState<Record<string, RepairJob[]>>({});
   const [fuelLogs, setFuelLogs] = useState<Record<string, FuelLog[]>>({});
+  const [fuelIssues, setFuelIssues] = useState<Record<string, FuelIssue[]>>({});
   const [expanded, setExpanded] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<Record<string, "details" | "costs" | "fuel" | "repairs">>({});
   const [error, setError] = useState("");
@@ -422,12 +465,22 @@ export function SiteVehicles({ siteId, projectId, sites, isViewOnly = false }: S
     setFuelLogs(prev => ({ ...prev, [vehicleId]: vLogs }));
   };
 
+  // Canonical fills (Fuel Management) — the FuelLog above is legacy/frozen
+  // once a project cuts over; both are shown together, clearly labelled,
+  // so fill history never appears to silently stop.
+  const loadFuelIssues = async (vehicleId: string) => {
+    if (!projectId) { setFuelIssues(prev => ({ ...prev, [vehicleId]: [] })); return; }
+    const issues = await fuelManagementApi.issues(projectId, { vehicle_id: vehicleId }).catch(() => []);
+    setFuelIssues(prev => ({ ...prev, [vehicleId]: issues }));
+  };
+
   const toggleExpand = (id: string) => {
     if (expanded === id) { setExpanded(null); return; }
     setExpanded(id);
     loadCosts(id);
     loadRepairs(id);
     loadFuelLogs(id);
+    loadFuelIssues(id);
     if (!activeTab[id]) setActiveTab(prev => ({ ...prev, [id]: "details" }));
   };
 
@@ -524,7 +577,7 @@ export function SiteVehicles({ siteId, projectId, sites, isViewOnly = false }: S
                           : <ClipboardList className="w-3 h-3" />}
                         {tab === "details" ? "Details"
                           : tab === "costs" ? `Costs (${costs[v.id]?.length ?? 0})`
-                          : tab === "fuel" ? `Fuel (${fuelLogs[v.id]?.length ?? 0})`
+                          : tab === "fuel" ? `Fuel (${(fuelLogs[v.id]?.length ?? 0) + (fuelIssues[v.id]?.length ?? 0)})`
                           : `Repairs (${repairs[v.id]?.length ?? 0})`}
                       </button>
                     ))}
@@ -598,39 +651,67 @@ export function SiteVehicles({ siteId, projectId, sites, isViewOnly = false }: S
                   {/* Fuel tab */}
                   {(activeTab[v.id] ?? "details") === "fuel" && (
                     <div className="px-4 py-3 space-y-2">
-                      {!fuelLogs[v.id] ? (
+                      {!fuelLogs[v.id] || !fuelIssues[v.id] ? (
                         <p className="text-xs text-muted-foreground">Loading…</p>
-                      ) : fuelLogs[v.id].length === 0 ? (
-                        <p className="text-xs text-muted-foreground">No fuel logs for this vehicle at this site.</p>
-                      ) : (
-                        <>
-                          <div className="flex gap-4 text-xs text-muted-foreground pb-1 border-b border-border/50">
-                            <span>Total: <strong className="text-foreground">{fuelLogs[v.id].reduce((s, l) => s + l.litres, 0).toFixed(1)} L</strong></span>
-                            <span>{fuelLogs[v.id].length} entries</span>
-                          </div>
-                          {fuelLogs[v.id].slice(0, 10).map(log => {
-                            const odoUrl = fuelPhotoUrl(log.photo_odometer);
-                            return (
-                              <div key={log.id} className="flex items-start justify-between text-xs rounded-lg px-2 py-1.5">
+                      ) : (() => {
+                        const timeline = buildFuelTimeline(v, fuelLogs[v.id], fuelIssues[v.id]);
+                        if (timeline.length === 0) {
+                          return <p className="text-xs text-muted-foreground">No fuel fills recorded for this vehicle at this site.</p>;
+                        }
+                        const totalLitres = timeline.reduce((s, e) => s + e.litres, 0);
+                        const latest = timeline[0];
+                        const latestIssue = fuelIssues[v.id].find(i => !i.is_reversed);
+                        return (
+                          <>
+                            <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground pb-1 border-b border-border/50">
+                              <span>Total: <strong className="text-foreground">{totalLitres.toFixed(1)} L</strong></span>
+                              <span>{timeline.length} entries</span>
+                              <span>Latest: <strong className="text-foreground">{new Date(latest.date).toLocaleDateString("en-ZA")}</strong></span>
+                              {latestIssue?.estimated_remaining_litres != null && (
+                                <span>Est. remaining: <strong className="text-foreground">{latestIssue.estimated_remaining_litres.toFixed(1)} L</strong></span>
+                              )}
+                            </div>
+                            {timeline.slice(0, 10).map(entry => (
+                              <div key={entry.key} className={cn(
+                                "flex items-start justify-between text-xs rounded-lg px-2 py-1.5",
+                                entry.anomaly && "bg-amber-500/5",
+                                entry.reversed && "opacity-50",
+                              )}>
                                 <div className="space-y-0.5">
-                                  <div className="flex items-center gap-2">
+                                  <div className="flex items-center gap-2 flex-wrap">
                                     <Droplet className="w-3 h-3 text-muted-foreground" />
-                                    <span className="font-medium">{log.litres.toFixed(1)} L {FUEL_TYPE_LABELS[log.fuel_type]}</span>
+                                    <span className="font-medium">{entry.litres.toFixed(1)} L</span>
+                                    {entry.source === "legacy" && (
+                                      <Badge variant="secondary" className="text-[10px] px-1.5 py-0">Legacy</Badge>
+                                    )}
+                                    {entry.reversed && (
+                                      <Badge variant="secondary" className="text-[10px] px-1.5 py-0">Reversed</Badge>
+                                    )}
+                                    {entry.anomaly && (
+                                      <Badge className="text-[10px] px-1.5 py-0 bg-amber-500/15 text-amber-700 border-amber-500/30">Review required</Badge>
+                                    )}
                                   </div>
                                   <div className="text-muted-foreground pl-5 flex flex-wrap gap-2">
-                                    {log.odometer_reading != null && <span>📍 {log.odometer_reading.toLocaleString()} km</span>}
-                                    {odoUrl && <a href={odoUrl} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">📷 Photo</a>}
+                                    {v.uses_hours
+                                      ? entry.hours != null && <span>⏱ {entry.hours.toLocaleString()} hrs</span>
+                                      : entry.odometer != null && <span>📍 {entry.odometer.toLocaleString()} km</span>}
+                                    {entry.consumption && <span>{entry.consumption}</span>}
+                                    {entry.evidenceCount > 0 && <span>📎 {entry.evidenceCount} evidence file(s)</span>}
+                                    {entry.photoUrl && <a href={entry.photoUrl} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">📷 Photo</a>}
                                   </div>
+                                  {entry.anomaly && entry.anomalyReason && (
+                                    <p className="text-amber-700 pl-5">{entry.anomalyReason}</p>
+                                  )}
                                 </div>
                                 <div className="text-right shrink-0 ml-3">
-                                  <p className="font-medium">{log.total_cost != null ? formatCurrency(log.total_cost) : "—"}</p>
-                                  <p className="text-muted-foreground">{new Date(log.fuel_date).toLocaleDateString("en-ZA")}</p>
+                                  <p className="font-medium">{entry.cost != null ? formatCurrency(entry.cost) : "—"}</p>
+                                  <p className="text-muted-foreground">{new Date(entry.date).toLocaleDateString("en-ZA")}</p>
                                 </div>
                               </div>
-                            );
-                          })}
-                        </>
-                      )}
+                            ))}
+                          </>
+                        );
+                      })()}
                     </div>
                   )}
 
