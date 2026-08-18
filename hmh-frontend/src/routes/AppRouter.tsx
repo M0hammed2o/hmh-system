@@ -4,6 +4,7 @@ import { AppLayout } from "@/components/layout/AppLayout";
 import { ProtectedRoute } from "./ProtectedRoute";
 import { SiteRoute } from "./SiteRoute";
 import { SERVICE_BLOCKED } from "@/config/serviceBlock";
+import { EnvironmentBadge } from "@/components/EnvironmentBadge";
 
 // Auth pages — always needed at startup, keep static
 import LoginPage from "@/pages/LoginPage";
@@ -113,6 +114,7 @@ export function AppRouter() {
 
   return (
     <BrowserRouter>
+      <EnvironmentBadge />
       <Suspense fallback={<PageLoader />}>
         <Routes>
           {/* ── Public routes ── */}

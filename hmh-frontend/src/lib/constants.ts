@@ -14,17 +14,23 @@ export const ROLE_KEY          = "hmh_user_role";
  * 3. Local development default.
  */
 const PRODUCTION_BACKEND = "https://hmh-backend-uhzu.onrender.com/api/v1";
+const TEST_BACKEND       = "https://hmh-test-backend.onrender.com/api/v1";
 const PRODUCTION_HOSTS   = [
   "hmhgroup.co.za",
   "www.hmhgroup.co.za",
   "app.hmhgroup.co.za",
   "www.app.hmhgroup.co.za",
 ];
+const TEST_HOSTS = ["test.hmhgroup.co.za", "www.test.hmhgroup.co.za"];
 
 function resolveApiBase(): string {
   // Tier 1: explicit env var always wins
   if (import.meta.env.VITE_API_BASE_URL) {
     return import.meta.env.VITE_API_BASE_URL as string;
+  }
+  // A TEST hostname must never fall back to localhost or the production API.
+  if (typeof window !== "undefined" && TEST_HOSTS.includes(window.location.hostname)) {
+    return TEST_BACKEND;
   }
   // Tier 2: running on the production domain → use the Render backend
   if (typeof window !== "undefined" && PRODUCTION_HOSTS.includes(window.location.hostname)) {
