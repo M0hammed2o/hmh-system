@@ -23,8 +23,12 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# Override the placeholder URL in alembic.ini with the real one from settings
-config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
+# Override the placeholder URL in alembic.ini with the real one from settings.
+# ConfigParser (which backs alembic's Config) uses "%" for interpolation, so a
+# literal "%" in the URL — e.g. from a percent-encoded password like "%40" —
+# must be escaped as "%%" or set_main_option raises ValueError: invalid
+# interpolation syntax. This is a no-op for URLs with no "%" character.
+config.set_main_option("sqlalchemy.url", settings.DATABASE_URL.replace("%", "%%"))
 
 # Metadata target for autogenerate
 target_metadata = Base.metadata
