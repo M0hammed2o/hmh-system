@@ -853,14 +853,13 @@ export default function MilestonesPage() {
       const sts = await stagesApi.listProjectStatuses(projectId, params);
       setStatuses(sts);
 
-      // Load photos for every status that exists
-      const photoMap: Record<string, MilestonePhoto[]> = {};
-      await Promise.all(sts.map(async s => {
-        try {
-          photoMap[s.id] = await stagesApi.listPhotos(projectId, s.id);
-        } catch { photoMap[s.id] = []; }
-      }));
-      setPhotos(photoMap);
+      // Photos for every status in one batch call (not one request per
+      // status — a project can have well over a thousand of them).
+      try {
+        setPhotos(await stagesApi.listPhotosBatch(projectId, params));
+      } catch {
+        setPhotos({});
+      }
 
       // Material summary — uses new project-lot endpoint (works for freestanding lots too)
       if (projectId && lotId) {

@@ -527,6 +527,66 @@ def _audit_description(action: str, after: dict) -> str:
 # ── Milestone photos ──────────────────────────────────────────────────────────
 
 @project_stages_router.get(
+    "/photos",
+    response_model=ApiSuccess[dict[str, list[dict]]],
+    dependencies=[ALL_ROLES],
+)
+def list_stage_photos_batch(
+    project_id: uuid.UUID,
+    db: DbSession,
+    current_user: CurrentUser,
+    site_id: Optional[uuid.UUID] = Query(None),
+    lot_id:  Optional[uuid.UUID] = Query(None),
+):
+    """
+    Batch-fetch photos for every stage status matching the given project/site/lot
+    filter, in a single query keyed by status_id.
+
+    Replaces the pattern of calling GET .../{status_id}/photos once per stage
+    status — a project can have well over a thousand stage-status rows, and
+    firing that many concurrent requests (each needing its own DB connection
+    for auth + queries) can exhaust the connection pool. Use this endpoint
+    whenever photos for a whole list of stage statuses are needed at once.
+    """
+    check_project_access(db, current_user, project_id)
+
+    # ID-only query (no joinedload, no full ORM hydration) — the batch
+    # endpoint only needs the IDs to scope the attachments lookup below,
+    # unlike list_project_stage_statuses's normal callers which need the
+    # full enriched rows.
+    from app.models.stage import ProjectStageStatus
+    id_query = db.query(ProjectStageStatus.id).filter(ProjectStageStatus.project_id == project_id)
+    if site_id:
+        id_query = id_query.filter(ProjectStageStatus.site_id == site_id)
+    if lot_id:
+        id_query = id_query.filter(ProjectStageStatus.lot_id == lot_id)
+    status_ids = [row[0] for row in id_query.all()]
+    if not status_ids:
+        return ApiSuccess(data={})
+
+    photos = (
+        db.query(Attachment)
+        .filter(
+            Attachment.entity_type == AttachmentEntity.STAGE_STATUS,
+            Attachment.entity_id.in_(status_ids),
+            Attachment.is_active == True,
+        )
+        .order_by(Attachment.uploaded_at.asc())
+        .all()
+    )
+    result: dict[str, list[dict]] = {}
+    for p in photos:
+        result.setdefault(str(p.entity_id), []).append({
+            "id":          str(p.id),
+            "url":         f"/api/v1/attachments/{p.id}/download",
+            "file_name":   p.file_name,
+            "mime_type":   p.mime_type,
+            "uploaded_at": p.uploaded_at.isoformat(),
+        })
+    return ApiSuccess(data=result)
+
+
+@project_stages_router.get(
     "/{status_id}/photos",
     response_model=ApiSuccess[list[dict]],
     dependencies=[ALL_ROLES],

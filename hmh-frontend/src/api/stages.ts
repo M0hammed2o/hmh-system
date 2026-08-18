@@ -171,6 +171,24 @@ export const stagesApi = {
     return res.data.data;
   },
 
+  /**
+   * Batch-fetch photos for every stage status matching the given site/lot
+   * filter in a single request, keyed by status_id. Use this instead of
+   * calling listPhotos() once per status in a loop — a project can have
+   * well over a thousand stage-status rows, and firing that many concurrent
+   * requests can exhaust the backend's DB connection pool.
+   */
+  listPhotosBatch: async (
+    projectId: string,
+    params?: { site_id?: string; lot_id?: string }
+  ): Promise<Record<string, MilestonePhoto[]>> => {
+    const res = await client.get<{ data: Record<string, MilestonePhoto[]> }>(
+      `/projects/${projectId}/stage-statuses/photos`,
+      { params }
+    );
+    return res.data.data;
+  },
+
   uploadPhoto: async (projectId: string, statusId: string, file: File): Promise<MilestonePhoto> => {
     const fd = new FormData();
     fd.append("photo", file);

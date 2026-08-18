@@ -400,13 +400,15 @@ export default function SiteDashboardPage() {
 
   useEffect(() => { loadData(); }, [loadData]);
 
-  // ── Load stage photos whenever stages change ──
+  // ── Load stage photos whenever stages change (single batch call — see
+  //     stagesApi.listPhotosBatch for why this must not loop per status) ──
   useEffect(() => {
     if (!projectId || stages.length === 0) { setStagePhotos([]); return; }
-    Promise.all(stages.map(s => stagesApi.listPhotos(projectId, s.id).catch(() => [])))
-      .then(results => setStagePhotos(results.flat()))
+    const params = lotId ? { lot_id: lotId } : siteId ? { site_id: siteId } : {};
+    stagesApi.listPhotosBatch(projectId, params)
+      .then(byStatus => setStagePhotos(Object.values(byStatus).flat()))
       .catch(() => setStagePhotos([]));
-  }, [stages, projectId]);
+  }, [stages, projectId, siteId, lotId]);
 
   // ── Sync offline drafts ──
   const syncDrafts = async () => {

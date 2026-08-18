@@ -22,8 +22,11 @@ backend has SMTP, IMAP, WhatsApp, OCR/AI calls and cron endpoints disabled.
      5432. Render is IPv4-only; do not use the direct IPv6 database hostname.
    - `SECRET_KEY`: a new random 64+ character TEST-only value.
    - `SUPABASE_SERVICE_KEY`: the TEST project's secret/service key.
-3. Deploy the backend and confirm `GET /health` reports `db=connected` and
-   `env=test`.
+3. Deploy the backend and confirm `GET /health` reports `status=ok` and
+   `env=test`, then confirm `GET /health/db` reports `db=connected` (the two
+   are separate on purpose — `/health` is a pure liveness check with no DB
+   call, so it can't be taken down by DB load; `/health/db` is the readiness
+   check).
 4. Deploy the frontend. Map `test.hmhgroup.co.za` to the TEST frontend in
    Render and at the DNS provider, then wait for managed TLS to become active.
 5. Never add production email, WhatsApp, Google, Anthropic or webhook secrets
