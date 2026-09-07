@@ -569,13 +569,15 @@ export default function BOQPage() {
                   {canSeeTotals ? <><span className="text-right">Unit Total</span><span className="text-right">Total</span><span className="text-right">Variance</span></> : <><span /><span /><span /></>}
                   <span />
                 </div>
-                {masterSummary.sites.map((site: { site_id: string | null; site_name: string; lot_count: number; has_boq: boolean; unit_total: number; site_total: number; variance_pct: number | null; variance_amount: number | null; is_freestanding?: boolean }) => (
+                {masterSummary.sites.map((site: { site_id: string | null; site_name: string; lot_count: number; has_boq: boolean; unit_total: number; site_total: number; variance_pct: number | null; variance_amount: number | null; is_freestanding?: boolean; is_project_level?: boolean; boq_header_ids?: string[] }) => (
                   <div key={site.site_id ?? "__freestanding__"} className="grid grid-cols-[1fr_auto_auto_auto_auto_auto] gap-3 px-4 py-3 bg-card items-center hover:bg-muted/20">
                     <div>
                       <p className="text-sm font-medium flex items-center gap-1.5">
                         {site.site_name}
                         {site.is_freestanding && (
-                          <span className="text-xs text-muted-foreground font-normal italic">(freestanding)</span>
+                          <span className="text-xs text-muted-foreground font-normal italic">
+                            {site.is_project_level ? "(project-level)" : "(freestanding)"}
+                          </span>
                         )}
                       </p>
                       {!site.has_boq && <p className="text-xs text-amber-600 mt-0.5">No BOQ yet</p>}
@@ -584,7 +586,13 @@ export default function BOQPage() {
                     <span className="text-sm text-right tabular-nums">{canSeeTotals && site.has_boq ? fmt(site.unit_total) : "—"}</span>
                     <span className="text-sm text-right tabular-nums font-semibold text-primary">{canSeeTotals && site.has_boq ? fmt(site.site_total) : "—"}</span>
                     <div className="text-right">{canSeeTotals && <VariancePill pct={site.variance_pct} amount={site.variance_amount} />}</div>
-                    {site.is_freestanding || !site.site_id ? (
+                    {(site.is_freestanding || !site.site_id) && site.lot_count === 0 && site.boq_header_ids?.length ? (
+                      <Button size="sm" variant="outline" onClick={() =>
+                        navigate(`/boq/${selectedProjectId}/${site.boq_header_ids![0]}/build`)
+                      }>
+                        Open BOQ <ChevronRight className="w-3.5 h-3.5 ml-1" />
+                      </Button>
+                    ) : site.is_freestanding || !site.site_id ? (
                       <Button size="sm" variant="outline" onClick={() => {
                         setFreestandingMode(true);
                         setSelectedSiteId("");

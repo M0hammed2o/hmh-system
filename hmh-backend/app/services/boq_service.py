@@ -1115,11 +1115,21 @@ def get_project_master_summary(db: Session, project_id: uuid.UUID) -> dict:
             **var,
         })
 
-    # ── Freestanding lots (lot.site_id IS NULL) ──────────────────────────────
-    # These lots are not attached to any site and were silently excluded above.
-    freestanding_lots = lots_by_site.get(None, [])
-    if freestanding_lots:
-        fl_site_level_items = site_items_by_site.get(None, [])
+    # ── Project-level / freestanding row (site_id IS NULL) ───────────────────
+    # Covers two shapes the per-site loop above cannot represent:
+    #   * lots not attached to any site ("freestanding units"), and
+    #   * a project-level master BOQ whose items carry site_id = NULL and
+    #     lot_id = NULL. That is a legitimate shape (see copy_boq /
+    #     generate_lot_boqs, which derive site- and lot-level BOQs FROM it), so
+    #     it must stay visible even when the project has no lots at all and no
+    #     non-warehouse site. Gating this block on freestanding_lots alone made
+    #     such a BOQ vanish from the dashboard.
+    # fl_site_level_items has already been deduplicated to the latest header per
+    # site_id key by the _latest pass above, so multiple active project-level
+    # headers cannot double-count.
+    freestanding_lots   = lots_by_site.get(None, [])
+    fl_site_level_items = site_items_by_site.get(None, [])
+    if freestanding_lots or fl_site_level_items:
         fl_lot_items_all    = [
             item
             for lot in freestanding_lots
@@ -1137,11 +1147,15 @@ def get_project_master_summary(db: Session, project_id: uuid.UUID) -> dict:
         else:
             unit_total = 0.0
 
-        site_total = (
-            sum(_item_total_safe(i) for i in fl_lot_items_all)
-            if fl_lot_items_all
-            else unit_total * len(freestanding_lots)
-        )
+        if fl_lot_items_all:
+            site_total = sum(_item_total_safe(i) for i in fl_lot_items_all)
+        elif freestanding_lots:
+            site_total = unit_total * len(freestanding_lots)
+        else:
+            # No lots at all — the project-level BOQ is itself the total.
+            # (unit_total * len([]) would report 0 for a real BOQ.)
+            site_total = unit_total
+
         lot_count = len(freestanding_lots)
         type_b    = _type_breakdown(fl_site_level_items or fl_lot_items_all)
 
@@ -1160,12 +1174,17 @@ def get_project_master_summary(db: Session, project_id: uuid.UUID) -> dict:
 
         sites_out.append({
             "site_id":        None,
-            "site_name":      "Freestanding Units",
+            # A project-level BOQ with no lots is not a group of units, so do
+            # not label it as one.
+            "site_name":      "Freestanding Units" if freestanding_lots else "Project BOQ",
             "is_freestanding": True,
+            "is_project_level": not freestanding_lots,
             "unit_total":     round(unit_total, 2),
             "lot_count":      lot_count,
             "site_total":     round(site_total, 2),
             "item_count":     len(fl_site_level_items),
+            # Presence is decided by the items, never by the money: a BOQ with
+            # quantities but no rates totals 0.00 and must still be shown.
             "has_boq":        len(fl_site_level_items) > 0 or site_total > 0,
             "boq_header_ids": list(fl_header_ids),
             **type_b,
