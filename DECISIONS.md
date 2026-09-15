@@ -81,6 +81,18 @@ This matches the office Project Warehouse page, which already uses `warehouseTra
 **2026-09-15 — Transfer routes that don't take stock from anywhere are office-only.**
 `/stock/issue-to-lot` and `/stock/site-transfer` became `OFFICE_AND_ABOVE`: neither checks the source balance, and issue-to-lot writes no `TRANSFER_OUT`. The approach rejected was adding `check_project_access` alone, because that would still let a site role create stock within its own project. Site roles keep the balance-checked `/sites/{id}/warehouse/transfer`, `return-tools`, `main/transfer-to-site` (now destination-checked) and transfer requests.
 
+**2026-09-15 — Every id in a site-workflow payload must belong to the project the caller was authorised for.**
+- Routes that take ids in a form or JSON body now authorise the project with `check_project_access`, then confirm each referenced site, lot, PO, PO item or BOQ item is in that same project. They use `get_resource_in_project_or_404` in `core/resource_access.py` or an equivalent service check.
+- A missing record and a record in another project both return the same 404, so ids from other projects are not revealed.
+- Authorisation runs before any file is saved or row written.
+- Rejected: checking only the top-level `project_id`. Lot-level stock, BOQ usage and PO quantities are queried by those child ids alone, so a foreign id would still write into another project.
+
+**2026-09-15 — Delivery-note capture permissions by operation.**
+View stays `ALL_ROLES`, plus project access through the note's site, so `READ_ONLY` and `SITE_MANAGER_VIEW` can view. Upload, correct, verify and signature use `WRITE_ROLES`, plus the same project access. Rejected: office-only capture, because Site Clerk delivery-note receiving is a client requirement.
+
+**2026-09-15 — Warehouse transfer requesters may still vote on their own requests (unchanged).**
+This matches MR staff votes and quote votes (see the 2026-07-08 decision on keeping approval flows consistent). The number of production office voters is unknown, and Owner override already allows single-person execution. Changing it is a client governance decision covering all 3-person approval flows (see KNOWN_BUGS). Site roles cannot vote at all.
+
 ---
 
 ## Lessons (repeated-mistake register)

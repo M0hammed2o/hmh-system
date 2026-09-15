@@ -45,6 +45,33 @@ def _save_base64_to_file(b64_data: str, subfolder: str) -> Optional[str]:
         return None
 
 
+def _validate_delivery_references(db: Session, project_id: uuid.UUID, data) -> None:
+    """Every site / PO / PO item / BOQ item on a delivery must belong to the
+    delivery's project, which the route has already authorised. Stops a caller
+    from pointing ids at another project to change its PO quantities or BOQ usage."""
+    from app.models.boq import BOQItem
+    from app.models.site import Site
+
+    site = db.get(Site, data.site_id)
+    if not site or site.project_id != project_id:
+        raise NotFoundError("Site not found in this project.")
+    if data.purchase_order_id:
+        po = db.get(PurchaseOrder, data.purchase_order_id)
+        if not po or po.project_id != project_id:
+            raise NotFoundError("Purchase order not found in this project.")
+    for item_data in data.items:
+        po_item_id = getattr(item_data, "purchase_order_item_id", None)
+        if po_item_id:
+            poi = db.get(PurchaseOrderItem, po_item_id)
+            if not poi or not data.purchase_order_id or poi.purchase_order_id != data.purchase_order_id:
+                raise NotFoundError("Purchase order item not found on this purchase order.")
+        boq_item_id = getattr(item_data, "boq_item_id", None)
+        if boq_item_id:
+            boq_item = db.get(BOQItem, boq_item_id)
+            if not boq_item or boq_item.project_id != project_id:
+                raise NotFoundError("BOQ item not found in this project.")
+
+
 def _get_delivery_or_404(db: Session, delivery_id: uuid.UUID) -> Delivery:
     d = (
         db.query(Delivery)
@@ -102,6 +129,8 @@ def create_delivery(
     - Flags PARTIALLY_RECEIVED and raises a DELIVERY_DISCREPANCY alert
       when any item has quantity_received < quantity_expected.
     """
+    _validate_delivery_references(db, project_id, data)
+
     now = datetime.now(timezone.utc)
 
     # Save receiver signature as PNG file — never store raw Base64 in VARCHAR(500)
@@ -321,6 +350,13 @@ def receive_stock(
     """
     delivery = _get_delivery_or_404(db, delivery_id)
     now = datetime.now(timezone.utc)
+
+    # The lot receiving stock must be in the delivery's (authorised) project.
+    if lot_id:
+        from app.models.lot import Lot
+        lot = db.get(Lot, lot_id)
+        if not lot or lot.project_id != delivery.project_id:
+            raise NotFoundError("Lot not found in this project.")
 
     # Idempotency guard — prevent double stock write if receive_stock() is called twice.
     # Check for existing ledger entries with reference_id=delivery_id (written only by this fn).

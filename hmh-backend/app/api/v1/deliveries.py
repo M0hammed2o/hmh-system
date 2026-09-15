@@ -13,7 +13,9 @@ from pydantic import BaseModel
 from app.core.config import settings
 from app.core.logging_config import get_logger
 from app.core.upload_validation import DOCUMENT_MIMES, validate_upload
-from app.core.resource_access import get_and_check_project_resource, secure_project_lookup
+from app.core.resource_access import (
+    get_and_check_project_resource, get_resource_in_project_or_404, secure_project_lookup,
+)
 from app.dependencies import ALL_ROLES, CurrentUser, DbSession, OFFICE_AND_ABOVE, WRITE_ROLES, check_project_access
 from app.models.delivery import Delivery
 
@@ -250,6 +252,29 @@ async def receive_delivery_with_document(
     if destination == "LOT" and not lot_id:
         raise HTTPException(422, "lot_id is required when destination is LOT.")
 
+    # ── Authorise before any file is saved or record written ──────────────────
+    # The caller must have access to project_id, and every site / lot / PO /
+    # BOQ item referenced in the form must belong to that same project, so
+    # editing ids in the payload cannot write into another project.
+    from app.models.boq import BOQItem
+    from app.models.lot import Lot
+    from app.models.project import Project
+    from app.models.site import Site
+    try:
+        project_uuid = uuid.UUID(project_id)
+    except ValueError:
+        raise HTTPException(422, "Invalid project_id.")
+    if not db.get(Project, project_uuid):
+        raise HTTPException(404, "Project not found.")
+    check_project_access(db, current_user, project_uuid)
+    get_resource_in_project_or_404(db, Site, site_id, project_uuid, "Site not found in this project.")
+    if lot_id:
+        get_resource_in_project_or_404(db, Lot, lot_id, project_uuid, "Lot not found in this project.")
+    if purchase_order_id:
+        get_resource_in_project_or_404(
+            db, PurchaseOrder, purchase_order_id, project_uuid, "Purchase order not found in this project.",
+        )
+
     now = datetime.now(timezone.utc)
 
     # ── Parse items ───────────────────────────────────────────────────────────
@@ -257,6 +282,12 @@ async def receive_delivery_with_document(
         items_data: list[dict] = json.loads(items_json) if items_json.strip() else []
     except json.JSONDecodeError:
         items_data = []
+
+    for item_data in items_data:
+        if item_data.get("boq_item_id"):
+            get_resource_in_project_or_404(
+                db, BOQItem, item_data["boq_item_id"], project_uuid, "BOQ item not found in this project.",
+            )
 
     # ── Save delivery note file — always persist to disk even if OCR fails ────
     delivery_note_url: Optional[str] = None
@@ -379,8 +410,10 @@ async def receive_delivery_with_document(
             po_item_id_raw = item_data.get("purchase_order_item_id")
             _po_item = None
             if po_item_id_raw:
+                # Scoped to the validated PO so a foreign PO item id is ignored.
                 _po_item = db.query(PurchaseOrderItem).filter(
-                    PurchaseOrderItem.id == uuid.UUID(po_item_id_raw)
+                    PurchaseOrderItem.id == uuid.UUID(po_item_id_raw),
+                    PurchaseOrderItem.purchase_order_id == uuid.UUID(purchase_order_id),
                 ).first()
             if not _po_item:
                 # Fallback: match by description within the same PO

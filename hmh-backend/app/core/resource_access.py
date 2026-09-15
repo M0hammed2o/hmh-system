@@ -63,6 +63,34 @@ def get_resource_or_404(
     return obj  # type: ignore[return-value]
 
 
+def get_resource_in_project_or_404(
+    db: Session,
+    model_class: type[T],
+    resource_id: uuid.UUID | str,
+    project_id: uuid.UUID | str,
+    detail: str | None = None,
+) -> T:
+    """Fetch a child resource referenced by id in a request and confirm it belongs
+    to the project the caller was already authorised for.
+
+    Guards against payload tampering: a caller with access to project A must not
+    be able to point a site, lot, PO or BOQ item id at project B. A missing
+    resource and a resource in another project both return the same 404, so the
+    response does not reveal that the other project's record exists.
+    """
+    try:
+        rid = resource_id if isinstance(resource_id, uuid.UUID) else uuid.UUID(str(resource_id))
+    except ValueError:
+        raise HTTPException(status_code=422, detail=f"Invalid {model_class.__name__} id.")
+    obj = db.get(model_class, rid)
+    if obj is None or str(obj.project_id) != str(project_id):  # type: ignore[attr-defined]
+        raise HTTPException(
+            status_code=404,
+            detail=detail or f"{model_class.__name__} not found in this project.",
+        )
+    return obj  # type: ignore[return-value]
+
+
 def get_and_check_project_resource(
     db: Session,
     user: Any,

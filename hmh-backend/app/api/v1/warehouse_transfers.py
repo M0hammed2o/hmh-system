@@ -3,7 +3,7 @@
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.dependencies import ALL_ROLES, CurrentUser, DbSession, OFFICE_AND_ABOVE, OWNER_ONLY, WRITE_ROLES, check_project_access
@@ -123,8 +123,14 @@ def list_all_pending(db: DbSession):
 # ── Get single transfer request ──
 
 @router.get("/{transfer_id}", response_model=ApiSuccess[dict], dependencies=[ALL_ROLES])
-def get_transfer_request(transfer_id: uuid.UUID, db: DbSession):
+def get_transfer_request(transfer_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
     req = svc.get_transfer_request(db, transfer_id)
+    # Visible to anyone with access to either end of the transfer (office-level roles
+    # have company-wide access); otherwise 403, same as the per-project list route.
+    try:
+        check_project_access(db, current_user, req.from_project_id)
+    except HTTPException:
+        check_project_access(db, current_user, req.to_project_id)
     return ApiSuccess(data=_enrich(db, req))
 
 

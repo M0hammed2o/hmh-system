@@ -10,7 +10,7 @@ from pydantic import BaseModel
 
 from app.core.config import settings
 from app.core.upload_validation import PHOTO_MIMES, validate_upload
-from app.dependencies import ALL_ROLES, CurrentUser, DbSession, OFFICE_AND_ABOVE, WRITE_ROLES
+from app.dependencies import ALL_ROLES, CurrentUser, DbSession, OFFICE_AND_ABOVE, WRITE_ROLES, check_project_access
 from app.schemas.common import ApiSuccess
 from app.schemas.stock import StockBalanceRead, StockLedgerRead, UsageLogCreate, UsageLogRead
 from app.services import stock_service
@@ -25,9 +25,11 @@ router = APIRouter(prefix="/stock", tags=["stock"])
 )
 def get_stock_balances(
     db: DbSession,
+    current_user: CurrentUser,
     project_id: uuid.UUID = Query(...),
     site_id: Optional[uuid.UUID] = Query(None),
 ):
+    check_project_access(db, current_user, project_id)
     balances = stock_service.get_balances(db, project_id, site_id)
     return ApiSuccess(data=balances)
 
@@ -39,11 +41,13 @@ def get_stock_balances(
 )
 def get_ledger(
     db: DbSession,
+    current_user: CurrentUser,
     project_id: uuid.UUID = Query(...),
     site_id: Optional[uuid.UUID] = Query(None),
     item_id: Optional[uuid.UUID] = Query(None),
     limit: int = Query(200, le=500),
 ):
+    check_project_access(db, current_user, project_id)
     entries = stock_service.list_ledger(db, project_id, site_id, item_id, limit)
     return ApiSuccess(data=[StockLedgerRead.model_validate(e) for e in entries])
 
@@ -60,6 +64,7 @@ def record_usage(
     current_user: CurrentUser,
     project_id: uuid.UUID = Query(...),
 ):
+    check_project_access(db, current_user, project_id)
     usage = stock_service.record_usage(db, project_id, body, current_user.id, overrun_reason=body.overrun_reason)
     return ApiSuccess(data=UsageLogRead.model_validate(usage), message="Usage recorded.")
 
@@ -106,7 +111,15 @@ async def record_usage_with_evidence(
     evidence_file:   Optional[UploadFile] = File(None),
 ):
     """Record usage and optionally save an evidence photo."""
+    from fastapi import HTTPException
     from app.schemas.stock import UsageLogCreate
+
+    # Authorise before anything is written — including the evidence upload.
+    try:
+        project_uuid = uuid.UUID(project_id)
+    except ValueError:
+        raise HTTPException(422, "Invalid project_id.")
+    check_project_access(db, current_user, project_uuid)
 
     from app.core.storage import save_upload
     evidence_url:   Optional[str] = None
@@ -137,7 +150,7 @@ async def record_usage_with_evidence(
         overrun_reason      = overrun_reason,
     )
     usage = stock_service.record_usage(
-        db, uuid.UUID(project_id), body, current_user.id,
+        db, project_uuid, body, current_user.id,
         overrun_reason=overrun_reason,
     )
     if evidence_url:

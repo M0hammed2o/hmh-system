@@ -117,6 +117,20 @@ def record_usage(
     if not item:
         raise NotFoundError(f"Item {data.item_id} not found.")
 
+    # Lot and BOQ-item ids must belong to the same (authorised) project: lot-level
+    # usage and BOQ consumption are queried by those ids alone, so a foreign id
+    # would book this usage against another project's lot or BOQ line.
+    if data.lot_id:
+        from app.models.lot import Lot
+        lot = db.get(Lot, data.lot_id)
+        if not lot or lot.project_id != project_id:
+            raise NotFoundError(f"Lot {data.lot_id} not found in this project.")
+    if data.boq_item_id:
+        from app.models.boq import BOQItem
+        boq_item = db.get(BOQItem, data.boq_item_id)
+        if not boq_item or boq_item.project_id != project_id:
+            raise NotFoundError(f"BOQ item {data.boq_item_id} not found in this project.")
+
     now = datetime.now(timezone.utc)
     usage_date = data.usage_date or now
 

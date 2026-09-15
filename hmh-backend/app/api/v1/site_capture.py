@@ -20,7 +20,8 @@ from pydantic import BaseModel
 from app.core.config import settings
 from app.core.logging_config import get_logger
 from app.core.upload_validation import DOCUMENT_MIMES, validate_upload
-from app.dependencies import ALL_ROLES, CurrentUser, DbSession, OFFICE_AND_ABOVE
+from app.core.resource_access import get_resource_in_project_or_404
+from app.dependencies import ALL_ROLES, CurrentUser, DbSession, WRITE_ROLES, check_project_access
 from app.schemas.common import ApiSuccess
 
 logger = get_logger(__name__)
@@ -29,10 +30,31 @@ router = APIRouter(prefix="/site-capture", tags=["site-capture"])
 
 _DELIVERY_UPLOAD_DIR = os.path.join(settings.UPLOAD_DIR, "site_capture", "delivery_notes")
 
+# Authorization for this workflow:
+#   view (GET)                               — ALL_ROLES, plus project access via the note's site
+#   upload / correct / verify / signature    — WRITE_ROLES (no READ_ONLY or SITE_MANAGER_VIEW),
+#                                              plus project access via the note's site
+# Office-level roles keep company-wide access through check_project_access.
+
+
+def _get_verification_for_user(db, current_user, verification_id: uuid.UUID):
+    """Load a delivery verification and enforce access to its site's project (404, then 403)."""
+    from app.models.document_extraction import DeliveryVerification
+    from app.models.site import Site
+
+    v = db.query(DeliveryVerification).filter(DeliveryVerification.id == verification_id).first()
+    if not v:
+        raise HTTPException(404, "Delivery verification not found.")
+    site = db.get(Site, v.site_id)
+    if not site:
+        raise HTTPException(404, "Delivery verification not found.")
+    check_project_access(db, current_user, site.project_id)
+    return v
+
 
 # ── Upload ────────────────────────────────────────────────────────────────────
 
-@router.post("/delivery-note/upload", status_code=201, dependencies=[ALL_ROLES])
+@router.post("/delivery-note/upload", status_code=201, dependencies=[WRITE_ROLES])
 async def upload_delivery_note(
     db: DbSession,
     current_user: CurrentUser,
@@ -45,6 +67,26 @@ async def upload_delivery_note(
 ):
     """Upload a delivery note photo or PDF. Runs document AI extraction automatically."""
     from app.models.document_extraction import DeliveryVerification, DocumentExtraction
+    from app.models.lot import Lot
+    from app.models.purchase_order import PurchaseOrder
+    from app.models.site import Site
+
+    # Authorise before the file is written: the site decides the project, and any
+    # lot / PO referenced must belong to that same project.
+    try:
+        site_uuid = uuid.UUID(site_id)
+    except ValueError:
+        raise HTTPException(422, "Invalid site_id.")
+    site = db.get(Site, site_uuid)
+    if not site:
+        raise HTTPException(404, "Site not found.")
+    check_project_access(db, current_user, site.project_id)
+    if lot_id:
+        get_resource_in_project_or_404(db, Lot, lot_id, site.project_id, "Lot not found in this project.")
+    if purchase_order_id:
+        get_resource_in_project_or_404(
+            db, PurchaseOrder, purchase_order_id, site.project_id, "Purchase order not found in this project.",
+        )
 
     validate_upload(file, DOCUMENT_MIMES)
     os.makedirs(_DELIVERY_UPLOAD_DIR, exist_ok=True)
@@ -78,7 +120,7 @@ async def upload_delivery_note(
     fields = extraction_result.get("fields", {})
     verification = DeliveryVerification(
         extraction_id=extraction.id,
-        site_id=uuid.UUID(site_id),
+        site_id=site_uuid,
         lot_id=uuid.UUID(lot_id) if lot_id else None,
         purchase_order_id=uuid.UUID(purchase_order_id) if purchase_order_id else None,
         received_by=current_user.id,
@@ -110,18 +152,8 @@ async def upload_delivery_note(
 # ── Get ───────────────────────────────────────────────────────────────────────
 
 @router.get("/delivery-note/{verification_id}", dependencies=[ALL_ROLES])
-def get_delivery_verification(verification_id: uuid.UUID, db: DbSession):
-    from app.models.document_extraction import DeliveryVerification
-    from sqlalchemy.orm import joinedload
-
-    v = (
-        db.query(DeliveryVerification)
-        .options(joinedload(DeliveryVerification.items))
-        .filter(DeliveryVerification.id == verification_id)
-        .first()
-    )
-    if not v:
-        raise HTTPException(404, "Delivery verification not found.")
+def get_delivery_verification(verification_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
+    v = _get_verification_for_user(db, current_user, verification_id)
 
     extraction_data = None
     if v.extraction_id:
@@ -172,18 +204,16 @@ class CorrectionBody(BaseModel):
     corrected_fields: dict = {}  # free-form corrections to extracted fields
 
 
-@router.post("/delivery-note/{verification_id}/correct", dependencies=[ALL_ROLES])
+@router.post("/delivery-note/{verification_id}/correct", dependencies=[WRITE_ROLES])
 def correct_delivery_note(
     verification_id: uuid.UUID,
     body: CorrectionBody,
     db: DbSession,
     current_user: CurrentUser,
 ):
-    from app.models.document_extraction import DeliveryVerification, DeliveryVerificationItem, DocumentExtraction
+    from app.models.document_extraction import DeliveryVerificationItem, DocumentExtraction
 
-    v = db.query(DeliveryVerification).filter(DeliveryVerification.id == verification_id).first()
-    if not v:
-        raise HTTPException(404, "Delivery verification not found.")
+    v = _get_verification_for_user(db, current_user, verification_id)
 
     now = datetime.now(timezone.utc)
 
@@ -228,21 +258,13 @@ def correct_delivery_note(
 
 # ── Verify ────────────────────────────────────────────────────────────────────
 
-@router.post("/delivery-note/{verification_id}/verify", dependencies=[ALL_ROLES])
+@router.post("/delivery-note/{verification_id}/verify", dependencies=[WRITE_ROLES])
 def verify_delivery_note(verification_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
     """
-    Verify a delivery note — accessible by all authenticated roles including
-    site staff and site managers (previously restricted to OFFICE_AND_ABOVE).
+    Verify a delivery note — open to write-capable roles, including site staff and
+    site managers (previously restricted to OFFICE_AND_ABOVE), for projects they can access.
     """
-    from app.models.document_extraction import DeliveryVerification
-
-    v = (
-        db.query(DeliveryVerification)
-        .filter(DeliveryVerification.id == verification_id)
-        .first()
-    )
-    if not v:
-        raise HTTPException(404, "Delivery verification not found.")
+    v = _get_verification_for_user(db, current_user, verification_id)
 
     now = datetime.now(timezone.utc)
     has_mismatch = False
@@ -273,7 +295,7 @@ class SignatureBody(BaseModel):
     signed_by_name: Optional[str] = None
 
 
-@router.post("/delivery-note/{verification_id}/signature", dependencies=[ALL_ROLES])
+@router.post("/delivery-note/{verification_id}/signature", dependencies=[WRITE_ROLES])
 def save_signature(
     verification_id: uuid.UUID,
     body: SignatureBody,
@@ -282,11 +304,7 @@ def save_signature(
 ):
     import base64
 
-    from app.models.document_extraction import DeliveryVerification
-
-    v = db.query(DeliveryVerification).filter(DeliveryVerification.id == verification_id).first()
-    if not v:
-        raise HTTPException(404, "Delivery verification not found.")
+    v = _get_verification_for_user(db, current_user, verification_id)
 
     sig_dir  = os.path.join(settings.UPLOAD_DIR, "site_capture", "signatures")
     os.makedirs(sig_dir, exist_ok=True)

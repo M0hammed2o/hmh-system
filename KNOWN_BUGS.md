@@ -24,21 +24,49 @@ Status labels: **Open**, **Accepted risk**, **Deferred**, **Production blocker**
 **File:** `hmh-backend/app/services/warehouse_transfer_service.py` (`_execute_transfer`)
 **Fix:** The raw INSERT omitted `stock_ledger.created_at`. Migration 0001 gives that column `DEFAULT now()`, but the ORM model does not, so databases built from the models failed with NOT NULL on the approving vote or override. This was confirmed on `hmh_test`, and the local `hmh_system` DB (alembic 0075) also has no default. `created_at` is now written explicitly. **Production: Unknown** whether its column has the default. Check with: `SELECT column_default FROM information_schema.columns WHERE table_name='stock_ledger' AND column_name='created_at';`
 
-### Stock usage recording and delivery capture skip project-access checks
-**Files:** `hmh-backend/app/api/v1/stock.py` (`/stock/usage`, `/stock/usage-with-evidence`) · `app/api/v1/deliveries.py` (`receive-with-document`) · `app/api/v1/site_capture.py` (delivery-note routes, `ALL_ROLES`)
-**Status:** Open — pre-existing, found by source inspection 2026-09-15, not runtime-tested, not changed. These are legitimate site workflows the client said to preserve.
-**Impact:**
-- Usage and delivery routes check that a site belongs to its project, but not that the caller has access to that project. A site-role user could record usage or a delivery on another project.
-- Site-capture routes also admit `READ_ONLY` and `SITE_MANAGER_VIEW`.
-**Fix:** Add `check_project_access` on the resolved project in each route, and use `WRITE_ROLES` for the site-capture write routes. Add cross-project tests.
+### [FIXED 2026-09-15] Cross-project writes and reads in stock usage, delivery receiving and delivery-note capture
+**Files:** `hmh-backend/app/api/v1/stock.py` · `app/services/stock_service.py` · `app/api/v1/deliveries.py` · `app/services/delivery_service.py` · `app/api/v1/site_capture.py` · `app/core/resource_access.py`
+**Confirmed at runtime on the pre-fix code** (`test_project_isolation_site_workflows.py`, run with the fix stashed). A Site Clerk with access only to project A got:
+- success recording usage on project B, and success booking project-A usage against a project-B lot;
+- 200 reading `/stock/balances` for project B;
+- success from `receive-with-document` for project B, and with project A plus a project-B site;
+- 201 from JSON delivery create with a project-B site, and success from `receive-stock` into a project-B lot;
+- 201 uploading a delivery note for a project-B site, and 200 reading a project-B delivery note.
 
-### Warehouse transfer request read and self-vote gaps
-**File:** `hmh-backend/app/api/v1/warehouse_transfers.py`, `app/services/warehouse_transfer_service.py`
-**Status:** Open — pre-existing, source inspection 2026-09-15, not changed (voting rules kept as-is per client)
-**Impact:**
-- `GET /warehouse-transfers/{id}` (`ALL_ROLES`) does no project check, so any user can read any transfer request by id.
-- `cast_vote` does not stop an office user who submitted a request from voting on it. Site roles cannot vote at all.
-**Fix:** Business decision on requester self-votes. For the read route, check access to the source or destination project.
+`READ_ONLY` and `SITE_MANAGER_VIEW` got 201 uploading delivery notes.
+
+**Fix:**
+- **Stock:** usage, usage-with-evidence, ledger and balances call `check_project_access` before anything is written. `record_usage` also requires `lot_id` and `boq_item_id` to belong to the project.
+- **receive-with-document:** authorises the project and requires the site, lot, PO and each item's BOQ item to be in that project, all before any file is saved. PO-item lookups are scoped to the validated PO.
+- **JSON create and receive-stock:** create rejects another project's site, PO, PO item or BOQ item; receive-stock rejects another project's lot.
+- **Site capture:** upload, correct, verify and signature are `WRITE_ROLES`, plus project access via the note's site. View stays `ALL_ROLES`, plus project access. Upload validates the site, lot and PO before writing the file.
+
+### Pre-deploy data check for the new same-project validations
+**Status:** Open — production not checked (no production access this session). The local dev DB `hmh_system` showed 0 mismatches across 1,590 BOQ items.
+**Impact:** Deliveries and usage now return 404 when a BOQ item, lot or site belongs to a different project than the request. If legacy production rows disagree (for example a BOQ item whose `project_id` differs from its lot's project), genuine receipts for those rows would be refused.
+**Check (read-only):**
+`SELECT 'boq_vs_lot', count(*) FROM boq_items bi JOIN lots l ON l.id=bi.lot_id WHERE bi.project_id<>l.project_id UNION ALL SELECT 'boq_vs_site', count(*) FROM boq_items bi JOIN sites s ON s.id=bi.site_id WHERE bi.project_id<>s.project_id UNION ALL SELECT 'lot_vs_site', count(*) FROM lots l JOIN sites s ON s.id=l.site_id WHERE l.project_id<>s.project_id;`
+Every count should be 0.
+
+### [FIXED 2026-09-15] GET /warehouse-transfers/{id} readable by any authenticated user
+**File:** `hmh-backend/app/api/v1/warehouse_transfers.py`
+**Fix:** Readable only with access to the source or destination project; office-level roles keep company-wide access. On the pre-fix code, a Site Clerk with access to neither project got 200.
+
+### Requester self-vote on warehouse transfer requests — investigated, intentionally unchanged
+**File:** `hmh-backend/app/services/warehouse_transfer_service.py` (`cast_vote`, `override_approve`)
+**Status:** Accepted for now — needs a client governance decision
+**Current behaviour** (runtime-confirmed 2026-09-15):
+- **Submit:** `WRITE_ROLES`; site roles also need access to both projects.
+- **Vote:** `OFFICE_AND_ABOVE`, one vote per user, no check against the requester. An `OFFICE_USER` who submitted a request can vote on it, and that vote counts: the requester plus 2 other office users executes the transfer.
+- **Override:** `OWNER_ONLY`. It executes immediately, including on the Owner's own request, and the override vote is not counted.
+- **Site Clerk:** cannot vote, override or reject (403, tested).
+
+**Why unchanged:**
+1. MR staff votes and quote votes follow the same rule (duplicate votes blocked, requester not excluded), and DECISIONS 2026-07-08 keeps these approval flows consistent on purpose.
+2. The number of active office voters in production is unknown. Excluding the requester could leave office-created requests executable only by Owner override.
+3. Owner override already lets one person execute any transfer, so blocking self-votes alone would not give real separation of duties.
+
+**Fix if the client wants it:** exclude `requested_by` from voting on transfer requests (and decide the same for MR/quote votes and Owner override on own requests).
 
 ### Offline-saved material request drafts drop the BOQ link and requested supplier
 **File:** `hmh-frontend/src/pages/SiteDashboardPage.tsx` (`saveDraft` payload in `RequestMaterialModal`, `syncDrafts`)
