@@ -259,14 +259,17 @@ def _execute_transfer(
 
     transfer_ref = uuid.uuid4()
 
+    # created_at is passed explicitly: the ORM model declares it NOT NULL with no
+    # default, so databases built from the models (not migration 0001) have no
+    # server default and the insert would fail at execution time.
     # OUT from source project
     db.execute(text("""
         INSERT INTO stock_ledger
             (id, project_id, site_id, lot_id, item_id, movement_type, quantity_in, quantity_out,
-             unit, unit_cost, reference_type, reference_id, movement_date, notes)
+             unit, unit_cost, reference_type, reference_id, movement_date, notes, created_at)
         VALUES
             (gen_random_uuid(), :from_proj, NULL, NULL, :item_id, 'TRANSFER_OUT', 0, :qty,
-             :unit, 0, 'project_to_project_transfer', :ref_id, :now, :notes)
+             :unit, 0, 'project_to_project_transfer', :ref_id, :now, :notes, :now)
     """), {
         "from_proj": str(req.from_project_id),
         "item_id": str(req.item_id),
@@ -281,10 +284,10 @@ def _execute_transfer(
     db.execute(text("""
         INSERT INTO stock_ledger
             (id, project_id, site_id, lot_id, item_id, movement_type, quantity_in, quantity_out,
-             unit, unit_cost, reference_type, reference_id, movement_date, notes)
+             unit, unit_cost, reference_type, reference_id, movement_date, notes, created_at)
         VALUES
             (gen_random_uuid(), :to_proj, NULL, NULL, :item_id, 'TRANSFER_IN', :qty, 0,
-             :unit, 0, 'project_to_project_transfer', :ref_id, :now, :notes)
+             :unit, 0, 'project_to_project_transfer', :ref_id, :now, :notes, :now)
     """), {
         "to_proj": str(req.to_project_id),
         "item_id": str(req.item_id),

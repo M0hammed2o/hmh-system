@@ -155,6 +155,52 @@ test("Site Dashboard warehouse quick actions no longer offer Add to Warehouse", 
   await expect(page.getByText("Add to Warehouse")).toHaveCount(0);
 });
 
+test("Site Clerk Project Transfer submits a vote-based transfer request and never calls the direct transfer route", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const writes = [];
+  await page.addInitScript(() => {
+    localStorage.setItem("site_project_id", "p1");
+    localStorage.setItem("site_site_id", "s1");
+  });
+  await mockSiteDashboard(page, {
+    projects: [{ id: "p1", name: "Cornubia" }, { id: "p2", name: "Umhlanga" }],
+    sites: [WAREHOUSE_SITE], writes,
+  });
+  await page.route("**/api/v1/projects/p1/warehouse/", (route) => route.fulfill({ json: { data: [
+    { item_id: "i1", item_name: "Paving Blocks", unit: "ea", on_hand: 40, total_in: 40, total_out: 0, last_movement: null },
+  ] } }));
+  await page.route("**/api/v1/projects/p1/warehouse-transfers/", (route) => {
+    recordWrite(route, writes);
+    return route.fulfill({ json: { data: {
+      id: "wt-1", from_project_id: "p1", from_project_name: "Cornubia", to_project_id: "p2", to_project_name: "Umhlanga",
+      item_id: "i1", item_name: "Paving Blocks", quantity: 15, unit: "ea", reason: "Needed on Umhlanga", notes: null,
+      status: "PENDING", vote_count: 0, votes_required: 3, votes: [],
+    } } });
+  });
+  await page.goto("/site");
+
+  await page.getByRole("button", { name: "Project Transfer" }).click();
+  const modal = page.locator("div.fixed", { has: page.getByRole("heading", { name: "Request Project Transfer" }) });
+  await expect(modal.getByText(/office must approve it before any stock moves/)).toBeVisible();
+  await modal.locator("select").nth(0).selectOption("p2");
+  await modal.locator("select").nth(1).selectOption("i1");
+  await modal.getByLabel("Quantity to transfer").fill("15");
+  // Reason is required — an empty reason must not send a request.
+  await modal.getByRole("button", { name: "Submit Transfer Request" }).click();
+  await expect(modal.getByRole("heading", { name: "Request Project Transfer" })).toBeVisible();
+  expect(writes.filter((w) => w.path.includes("warehouse-transfers"))).toEqual([]);
+
+  await modal.getByLabel("Reason").fill("Needed on Umhlanga");
+  await modal.getByRole("button", { name: "Submit Transfer Request" }).click();
+
+  await expect(page.getByText("Pending office approval")).toBeVisible();
+  await expect(page.getByText(/Stock has not moved yet/)).toBeVisible();
+  const create = writes.find((w) => w.method === "POST" && w.path.endsWith("/projects/p1/warehouse-transfers/"));
+  expect(create.body).toEqual({ to_project_id: "p2", item_id: "i1", quantity: 15, reason: "Needed on Umhlanga" });
+  expect(writes.filter((w) => w.path.includes("transfer-to-project") || w.path.includes("/stock/"))).toEqual([]);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy();
+});
+
 const GLOBAL_STOCK = [{
   project_id: null, project_name: "Global", project_code: "GLOBAL", item_id: "i1", item_name: "Cement 42.5R",
   item_type: "MATERIAL", unit: "bag", on_hand: 40, total_in: 40, total_out: 0, last_movement: null,

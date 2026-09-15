@@ -27,6 +27,7 @@ import { alertsApi, type Alert } from "@/api/alerts";
 import { stockApi, type StockBalance, type StockLedgerEntry } from "@/api/stock";
 import { suppliersApi, type Supplier } from "@/api/suppliers";
 import { warehouseApi, type WarehouseStockItem } from "@/api/warehouse";
+import { warehouseTransfersApi, type WarehouseTransferRequest } from "@/api/warehouseTransfers";
 import { jobCardsApi, type JobCard } from "@/api/jobCards";
 import { getDrafts, removeDraft, type OfflineDraft } from "@/utils/offlineDrafts";
 import { procurementApi, type BOQSearchResult } from "@/api/procurement";
@@ -2956,7 +2957,9 @@ function RecordUsageModal({ projectId, siteId, lotId, balances, materialSummary,
   );
 }
 
-// ── Project-to-Project Transfer ───────────────────────────────────────────────
+// ── Project-to-Project Transfer Request ───────────────────────────────────────
+// Submits a vote-based warehouse transfer request. Submitting never moves stock:
+// it stays PENDING until the office approval threshold (or owner override) executes it.
 function ProjectToProjectTransferModal({ fromProjectId, projects, onClose, onDone }: {
   fromProjectId: string;
   projects: Project[];
@@ -2969,9 +2972,11 @@ function ProjectToProjectTransferModal({ fromProjectId, projects, onClose, onDon
   const [loadingStock, setLoadingStock] = useState(false);
   const [itemId,       setItemId]       = useState("");
   const [qty,          setQty]          = useState("");
+  const [reason,       setReason]       = useState("");
   const [notes,        setNotes]        = useState("");
   const [loading,      setLoading]      = useState(false);
   const [error,        setError]        = useState("");
+  const [submitted,    setSubmitted]    = useState<WarehouseTransferRequest | null>(null);
 
   // Load source warehouse stock
   useEffect(() => {
@@ -2993,24 +2998,51 @@ function ProjectToProjectTransferModal({ fromProjectId, projects, onClose, onDon
       setError(`Only ${selected.on_hand} ${selected.unit ?? ""} available.`);
       return;
     }
+    if (!reason.trim()) { setError("Provide a reason for the transfer."); return; }
 
     setLoading(true); setError("");
     try {
-      await warehouseApi.transferToProject(fromProjectId, toProjectId, itemId, quantity, notes || undefined);
-      onDone();
+      const req = await warehouseTransfersApi.submitRequest(fromProjectId, {
+        to_project_id: toProjectId,
+        item_id:       itemId,
+        quantity,
+        reason:        reason.trim(),
+        notes:         notes.trim() || undefined,
+      });
+      setSubmitted(req);
     } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
-      setError(msg ?? "Transfer failed. Try again.");
+      const d = (err as { response?: { data?: { detail?: string; message?: string } } })?.response?.data;
+      setError(d?.message ?? d?.detail ?? "Transfer request failed. Try again.");
     } finally { setLoading(false); }
   };
 
   const otherProjects = projects.filter(p => p.id !== fromProjectId);
 
+  if (submitted) {
+    return (
+      <ModalShell title="Transfer Request Submitted" onClose={onDone}>
+        <div className="space-y-3">
+          <div className="flex flex-col items-center gap-2 text-center py-2">
+            <Clock className="w-8 h-8 text-amber-500" />
+            <p className="font-semibold text-sm">Pending office approval</p>
+            <p className="text-xs text-muted-foreground">
+              {submitted.quantity} {submitted.unit ?? ""} of {submitted.item_name ?? "the item"} to{" "}
+              {submitted.to_project_name ?? "the destination project"}. Stock has not moved yet — it
+              moves only after {submitted.votes_required} office approvals (or an owner override).
+            </p>
+          </div>
+          <Button className="w-full" onClick={onDone}>Close</Button>
+        </div>
+      </ModalShell>
+    );
+  }
+
   return (
-    <ModalShell title="Project Warehouse Transfer" onClose={onClose}>
+    <ModalShell title="Request Project Transfer" onClose={onClose}>
       <form onSubmit={submit} className="space-y-3">
         <p className="text-xs text-muted-foreground">
-          Transfer stock from this project's warehouse to another project's warehouse.
+          Request a transfer of stock from this project's warehouse to another project's warehouse.
+          The office must approve it before any stock moves.
         </p>
 
         <div className="space-y-1">
@@ -3055,13 +3087,18 @@ function ProjectToProjectTransferModal({ fromProjectId, projects, onClose, onDon
                  value={qty} onChange={e => setQty(e.target.value)} required />
         </div>
         <div className="space-y-1">
+          <Label htmlFor="pt-reason">Reason</Label>
+          <Input id="pt-reason" value={reason} onChange={e => setReason(e.target.value)} required
+                 placeholder="e.g. Excess stock needed on the other project" />
+        </div>
+        <div className="space-y-1">
           <Label htmlFor="pt-notes">Notes (optional)</Label>
-          <Input id="pt-notes" value={notes} onChange={e => setNotes(e.target.value)} placeholder="Reason for transfer" />
+          <Input id="pt-notes" value={notes} onChange={e => setNotes(e.target.value)} placeholder="Any extra details" />
         </div>
 
         {error && <p className="text-xs text-destructive">{error}</p>}
         <Button type="submit" className="w-full" disabled={loading || stock.length === 0}>
-          {loading ? "Transferring…" : "Transfer Stock"}
+          {loading ? "Submitting…" : "Submit Transfer Request"}
         </Button>
       </form>
     </ModalShell>

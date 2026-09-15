@@ -174,11 +174,15 @@ class IssueToLotBody(BaseModel):
     unit_cost: Optional[float] = None
 
 
+# issue-to-lot and site-transfer are office-only: neither checks project access or
+# the source balance (issue-to-lot writes no TRANSFER_OUT at all), so for a site
+# role they would amount to manual stock creation. Site roles move stock through
+# the balance-checked /sites/{site_id}/warehouse/transfer and transfer requests.
 @router.post(
     "/issue-to-lot",
     response_model=ApiSuccess[dict],
     status_code=201,
-    dependencies=[WRITE_ROLES],
+    dependencies=[OFFICE_AND_ABOVE],
 )
 def issue_to_lot(body: IssueToLotBody, db: DbSession, current_user: CurrentUser):
     """
@@ -218,7 +222,7 @@ class SiteTransferBody(BaseModel):
     "/site-transfer",
     response_model=ApiSuccess[dict],
     status_code=201,
-    dependencies=[WRITE_ROLES],
+    dependencies=[OFFICE_AND_ABOVE],
 )
 def site_transfer(body: SiteTransferBody, db: DbSession, current_user: CurrentUser):
     """Transfer stock between two sites (e.g. main warehouse → site store)."""

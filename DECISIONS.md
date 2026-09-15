@@ -75,6 +75,12 @@ The site route is not removed because it contains phone/PIN access and may be bo
 **2026-09-15 — A per-request supplier is stored on `material_request_items.preferred_supplier_id` and never written back to `boq_items.supplier_id`.**
 The existing column was reused, with no new table. On create, the server checks that the supplier exists and is active. The one exception: a BOQ line's own default supplier stays requestable even after that supplier is deactivated, so a request that worked before still submits.
 
+**2026-09-15 — The Site Dashboard Project Transfer always submits a vote-based transfer request, for every role on the site portal.**
+This matches the office Project Warehouse page, which already uses `warehouseTransfersApi.submitRequest`. Rejected: branching by role so Owner/Office Admin keep an immediate direct transfer on the site portal. That would give one button two different stock semantics, and office roles can still approve or override from the office page. Submitting checks access to both source and destination projects, so moving off the direct route (which checked both) did not loosen authorization.
+
+**2026-09-15 — Transfer routes that don't take stock from anywhere are office-only.**
+`/stock/issue-to-lot` and `/stock/site-transfer` became `OFFICE_AND_ABOVE`: neither checks the source balance, and issue-to-lot writes no `TRANSFER_OUT`. The approach rejected was adding `check_project_access` alone, because that would still let a site role create stock within its own project. Site roles keep the balance-checked `/sites/{id}/warehouse/transfer`, `return-tools`, `main/transfer-to-site` (now destination-checked) and transfer requests.
+
 ---
 
 ## Lessons (repeated-mistake register)

@@ -6,6 +6,8 @@ Requirements covered (client review, 2026-09-15):
     (project add-material, main-warehouse receive, main-warehouse add-tool).
  2. Site Clerk cannot remove/write off stock through the API
     (project and main-warehouse adjustments), and cannot deactivate catalog items.
+    The unchecked /stock/issue-to-lot and /stock/site-transfer ledger writers are
+    refused too (neither verifies the source balance or project access).
  3. Rejected calls write no stock ledger rows.
  4. Office roles keep the manual main-warehouse routes.
  5. Site Clerk can still transfer stock (site → lot, tool return, project
@@ -70,6 +72,12 @@ def _manual_stock_calls(s):
          {"item_id": s["item_id"], "adjustment_type": "DAMAGED", "quantity": 5}),
         ("/api/v1/warehouse/main/add-tool",
          {"name": "Clerk Added Grinder", "quantity": 1}),
+        ("/api/v1/stock/issue-to-lot",
+         {"project_id": s["project_id"], "from_site_id": s["site_id"], "lot_id": s["lot_id"],
+          "item_id": s["item_id"], "quantity": 5, "overrun_reason": "clerk"}),
+        ("/api/v1/stock/site-transfer",
+         {"project_id": s["project_id"], "from_site_id": s["site_id"], "to_site_id": s["site_id"],
+          "item_id": s["item_id"], "quantity": 5}),
     ]
 
 

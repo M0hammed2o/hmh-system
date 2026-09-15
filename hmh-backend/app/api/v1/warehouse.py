@@ -1813,6 +1813,8 @@ def transfer_global_stock_to_site(
     site = db.get(Site, body.site_id)
     if not site:
         raise HTTPException(404, "Site not found.")
+    # Stock lands in the destination site's project, so the caller must have access to it.
+    check_project_access(db, current_user, site.project_id)
 
     item = db.get(Item, body.item_id)
     if not item:

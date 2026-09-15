@@ -81,7 +81,10 @@ def submit_transfer_request(
     db: DbSession,
     current_user: CurrentUser,
 ):
+    # Site roles need access to both ends, as on the direct transfer-to-project route.
+    # Submitting only records a PENDING request; stock moves on office approval.
     check_project_access(db, current_user, project_id)
+    check_project_access(db, current_user, body.to_project_id)
     req = svc.create_transfer_request(
         db,
         from_project_id=project_id,

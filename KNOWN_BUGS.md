@@ -8,17 +8,37 @@ Status labels: **Open**, **Accepted risk**, **Deferred**, **Production blocker**
 
 ## Open — Found During Client Review Changes (2026-09-15)
 
-### Site Dashboard "Project Transfer" button is office-only server-side, so Site Clerks get 403
-**File:** `hmh-frontend/src/pages/SiteDashboardPage.tsx` (`ProjectToProjectTransferModal` → `warehouseApi.transferToProject`) · `hmh-backend/app/api/v1/warehouse.py` (`transfer-to-project`, `OFFICE_AND_ABOVE`)
-**Status:** Open — pre-existing, not changed (client said not to change the transfer workflow)
-**Impact:** The button is shown to site roles on a Project Warehouse, but it calls the direct execute route, which only office roles may call. The vote-based route `POST /projects/{id}/warehouse-transfers/` (`WRITE_ROLES`, 3 office votes) is the one site roles are allowed to use, and it works for a Site Clerk (covered by `test_site_clerk_stock_permissions.py`).
-**Fix:** Business decision needed: point the site modal at the vote-based transfer request (reason field required) or hide the button for site roles.
+### [FIXED 2026-09-15] Site Dashboard "Project Transfer" called an office-only route, so Site Clerks got 403
+**File:** `hmh-frontend/src/pages/SiteDashboardPage.tsx` (`ProjectToProjectTransferModal`)
+**Fix:** The modal now submits the vote-based `POST /projects/{id}/warehouse-transfers/` request (reason required) and shows "Pending office approval". Stock moves only after 3 office votes or an owner override. Submitting now requires access to the destination project as well as the source, matching the direct route the modal used before. Covered by `test_warehouse_transfer_requests.py` and the Playwright `site-requests-warehouse-boq.spec.mjs`.
 
-### Global main-warehouse transfer-to-site skips project isolation
-**File:** `hmh-backend/app/api/v1/warehouse.py` (`transfer_global_stock_to_site`, `POST /warehouse/main/transfer-to-site`, `WRITE_ROLES`)
-**Status:** Open — pre-existing, found by source inspection on 2026-09-15, not runtime-tested, not changed
-**Impact:** The route loads the destination site but never calls `check_project_access`. A site-role user could therefore move company-wide (project-less) stock into a site on a project they have no access to. It is still a ledger-recorded transfer, not a deletion.
-**Fix:** Call `check_project_access(db, current_user, site.project_id)` after loading the site, and add a cross-project test.
+### [FIXED 2026-09-15] Global main-warehouse transfer-to-site skipped destination project isolation
+**File:** `hmh-backend/app/api/v1/warehouse.py` (`transfer_global_stock_to_site`)
+**Fix:** The route now calls `check_project_access` on the destination site's project. The 403 assertion in `test_warehouse_transfer_requests.py` failed on the pre-fix code and passes after the fix.
+
+### [FIXED 2026-09-15] Site roles could write stock via /stock/issue-to-lot and /stock/site-transfer
+**File:** `hmh-backend/app/api/v1/stock.py`
+**Fix:** Both routes are now `OFFICE_AND_ABOVE`. Neither checked project access or the source balance, and issue-to-lot writes a lot `TRANSFER_IN` with no `TRANSFER_OUT`. For a site role that amounted to manual stock creation, which breaks the client rule. No site UI called either route. The 403 assertions for `SITE_STAFF` and `SITE_MANAGER` failed on the pre-fix code and pass after the fix.
+
+### [FIXED 2026-09-15] Approved project-to-project transfers failed to execute on databases without a created_at default
+**File:** `hmh-backend/app/services/warehouse_transfer_service.py` (`_execute_transfer`)
+**Fix:** The raw INSERT omitted `stock_ledger.created_at`. Migration 0001 gives that column `DEFAULT now()`, but the ORM model does not, so databases built from the models failed with NOT NULL on the approving vote or override. This was confirmed on `hmh_test`, and the local `hmh_system` DB (alembic 0075) also has no default. `created_at` is now written explicitly. **Production: Unknown** whether its column has the default. Check with: `SELECT column_default FROM information_schema.columns WHERE table_name='stock_ledger' AND column_name='created_at';`
+
+### Stock usage recording and delivery capture skip project-access checks
+**Files:** `hmh-backend/app/api/v1/stock.py` (`/stock/usage`, `/stock/usage-with-evidence`) · `app/api/v1/deliveries.py` (`receive-with-document`) · `app/api/v1/site_capture.py` (delivery-note routes, `ALL_ROLES`)
+**Status:** Open — pre-existing, found by source inspection 2026-09-15, not runtime-tested, not changed. These are legitimate site workflows the client said to preserve.
+**Impact:**
+- Usage and delivery routes check that a site belongs to its project, but not that the caller has access to that project. A site-role user could record usage or a delivery on another project.
+- Site-capture routes also admit `READ_ONLY` and `SITE_MANAGER_VIEW`.
+**Fix:** Add `check_project_access` on the resolved project in each route, and use `WRITE_ROLES` for the site-capture write routes. Add cross-project tests.
+
+### Warehouse transfer request read and self-vote gaps
+**File:** `hmh-backend/app/api/v1/warehouse_transfers.py`, `app/services/warehouse_transfer_service.py`
+**Status:** Open — pre-existing, source inspection 2026-09-15, not changed (voting rules kept as-is per client)
+**Impact:**
+- `GET /warehouse-transfers/{id}` (`ALL_ROLES`) does no project check, so any user can read any transfer request by id.
+- `cast_vote` does not stop an office user who submitted a request from voting on it. Site roles cannot vote at all.
+**Fix:** Business decision on requester self-votes. For the read route, check access to the source or destination project.
 
 ### Offline-saved material request drafts drop the BOQ link and requested supplier
 **File:** `hmh-frontend/src/pages/SiteDashboardPage.tsx` (`saveDraft` payload in `RequestMaterialModal`, `syncDrafts`)
