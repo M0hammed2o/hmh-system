@@ -131,8 +131,10 @@ npm run dev         # dev server on :5173
 npm run build       # production build → dist/
 npm run lint        # ESLint
 
-# Browser/PWA checks
+# Browser/PWA checks (Playwright serves the built dist/ — run npm run build first)
 npm run test:pwa
+npm run test:notifications
+npm run test:site-boq   # site MR supplier picker, no Add to Warehouse, BOQ Add item supplier
 ```
 
 ## Must Not Break

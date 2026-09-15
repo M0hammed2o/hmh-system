@@ -187,7 +187,7 @@ function ModalShell({ title, onClose, children }: {
 }
 
 // ── Main page ─────────────────────────────────────────────────────────────────
-type ModalType = "request" | "request-fuel" | "delivery" | "usage" | "stage" | "jobcard" | "add_warehouse" | "warehouse_transfer" | null;
+type ModalType = "request" | "request-fuel" | "delivery" | "usage" | "stage" | "jobcard" | "warehouse_transfer" | null;
 
 // Virtual sentinel used for the view-only Global Main Warehouse option
 const MAIN_WAREHOUSE_SENTINEL = "__main_warehouse__";
@@ -765,10 +765,7 @@ export default function SiteDashboardPage() {
                     }}
                   />
                 )}
-                {/* Warehouse actions */}
-                {!isViewOnly && isWarehouse && (
-                  <ActionBtn icon={PackagePlus} label="Add to Warehouse" onClick={() => setModal("add_warehouse")} />
-                )}
+                {/* Warehouse actions — stock enters via Receive Delivery, never manual add */}
                 {!isViewOnly && isWarehouse && (
                   <ActionBtn icon={ArrowRightLeft} label="Project Transfer" onClick={() => setModal("warehouse_transfer")} />
                 )}
@@ -868,13 +865,16 @@ export default function SiteDashboardPage() {
                             <p className="text-xs text-muted-foreground">{row.project_name ?? "Global"} {row.unit ? `· ${row.unit}` : ""}</p>
                           </div>
                           <p className="text-sm text-right font-mono font-semibold tabular-nums">{row.on_hand}</p>
-                          <button
-                            onClick={() => { setDeleteStockTarget(row); setDeleteStockNotes(""); }}
-                            className="p-1.5 rounded-lg text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
-                            title="Remove stock"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
+                          {/* Stock write-offs are office-only (enforced server-side); site roles see stock read-only */}
+                          {!isSiteUser ? (
+                            <button
+                              onClick={() => { setDeleteStockTarget(row); setDeleteStockNotes(""); }}
+                              className="p-1.5 rounded-lg text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
+                              title="Remove stock"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          ) : <span />}
                         </div>
                       ))}
                     </div>
@@ -1127,6 +1127,7 @@ export default function SiteDashboardPage() {
       {(modal === "request" || modal === "request-fuel") && (
         <RequestMaterialModal
           projectId={projectId} siteId={siteId} lotId={lotId}
+          suppliers={suppliers}
           initialType={modal === "request-fuel" ? "FUEL" : "MATERIAL"}
           onClose={() => setModal(null)} onDone={() => { setModal(null); loadData(); }}
         />
@@ -1158,14 +1159,6 @@ export default function SiteDashboardPage() {
         <CreateJobCardModal
           projectId={projectId} siteId={siteId} lotId={lotId}
           onClose={() => setModal(null)} onDone={() => { setModal(null); loadData(); }}
-        />
-      )}
-      {modal === "add_warehouse" && (
-        <AddToWarehouseModal
-          projectId={projectId}
-          boqItems={pwMaterialSummary}
-          onClose={() => setModal(null)}
-          onDone={() => { setModal(null); loadData(); }}
         />
       )}
       {modal === "warehouse_transfer" && (
@@ -1320,14 +1313,17 @@ interface CartItem {
   description:       string;
   qty:               string;
   unit:              string;
+  // Supplier requested for this line — starts as the BOQ default, the clerk may change it.
   supplier_id?:      string;
-  supplier_name?:    string;
+  // The BOQ item's own supplier, kept for display only; never written back to the BOQ.
+  default_supplier_id?:   string;
+  default_supplier_name?: string;
   planned_qty?:      number;
   total_planned_qty?: number;
 }
 
-function RequestMaterialModal({ projectId, siteId, lotId, initialType = "MATERIAL", onClose, onDone }: {
-  projectId: string; siteId: string; lotId: string; initialType?: "MATERIAL" | "FUEL";
+function RequestMaterialModal({ projectId, siteId, lotId, suppliers, initialType = "MATERIAL", onClose, onDone }: {
+  projectId: string; siteId: string; lotId: string; suppliers: Supplier[]; initialType?: "MATERIAL" | "FUEL";
   onClose: () => void; onDone: () => void;
 }) {
   const [requestType,  setRequestType]  = useState<"MATERIAL" | "FUEL">(initialType);
@@ -1382,7 +1378,8 @@ function RequestMaterialModal({ projectId, siteId, lotId, initialType = "MATERIA
       qty:               "",
       unit:              item.unit ?? "",
       supplier_id:       item.preferred_supplier_id ?? undefined,
-      supplier_name:     item.supplier_name ?? undefined,
+      default_supplier_id:   item.preferred_supplier_id ?? undefined,
+      default_supplier_name: item.supplier_name ?? undefined,
       planned_qty:       item.planned_quantity ?? undefined,
       total_planned_qty: item.total_planned_quantity ?? undefined,
     }]);
@@ -1653,17 +1650,48 @@ function RequestMaterialModal({ projectId, siteId, lotId, initialType = "MATERIA
                           BOQ: {item.planned_qty} {item.unit}
                         </span>
                       )}
-                      {item.mode === "boq" && item.supplier_name && (
-                        <span className="text-[10px] text-blue-700 bg-blue-50 border border-blue-200 rounded px-1.5 py-0.5 truncate max-w-[100px]">
-                          {item.supplier_name}
-                        </span>
-                      )}
                       {item.mode === "custom" && (
                         <span className="text-[10px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5">
                           One-time
                         </span>
                       )}
                     </div>
+                    {item.mode === "boq" && (
+                      <div className="space-y-0.5">
+                        <p className="text-[10px] text-muted-foreground truncate">
+                          Default supplier:{" "}
+                          <span className="font-medium text-foreground">{item.default_supplier_name ?? "None set on BOQ"}</span>
+                        </p>
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-[10px] text-muted-foreground shrink-0">Supplier</span>
+                          <select
+                            aria-label={`Supplier for ${item.description}`}
+                            value={item.supplier_id ?? ""}
+                            onChange={e => updateCart(i, "supplier_id", e.target.value)}
+                            className="flex-1 min-w-0 w-full h-7 px-2 text-xs rounded-md border border-border bg-background
+                                       focus:outline-none focus:ring-1 focus:ring-primary"
+                          >
+                            <option value="">— No supplier —</option>
+                            {/* BOQ default that is no longer in the active supplier list stays selectable */}
+                            {item.default_supplier_id && !suppliers.some(s => s.id === item.default_supplier_id) && (
+                              <option value={item.default_supplier_id}>
+                                {item.default_supplier_name ?? "BOQ supplier"} (BOQ default)
+                              </option>
+                            )}
+                            {suppliers.map(s => (
+                              <option key={s.id} value={s.id}>
+                                {s.name}{s.id === item.default_supplier_id ? " (BOQ default)" : ""}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        {(item.supplier_id || "") !== (item.default_supplier_id || "") && (
+                          <p className="text-[10px] text-amber-700">
+                            Changed for this request only — the BOQ default supplier is not changed.
+                          </p>
+                        )}
+                      </div>
+                    )}
                   </div>
                   <button
                     type="button"
@@ -2922,132 +2950,6 @@ function RecordUsageModal({ projectId, siteId, lotId, balances, materialSummary,
         {error && <p className="text-xs text-destructive">{error}</p>}
         <Button type="submit" className="w-full" disabled={loading}>
           {loading ? "Recording…" : "Record Usage"}
-        </Button>
-      </form>
-    </ModalShell>
-  );
-}
-
-// ── Add to Warehouse (BOQ-linked) ────────────────────────────────────────────
-function AddToWarehouseModal({ projectId, boqItems, onClose, onDone }: {
-  projectId: string;
-  boqItems: MaterialSummaryItem[];
-  onClose: () => void;
-  onDone: () => void;
-}) {
-  const [mode,     setMode]     = useState<"boq" | "adhoc">("boq");
-  const [boqItemId, setBoqItemId] = useState("");
-  const [name,     setName]     = useState("");
-  const [qty,      setQty]      = useState("");
-  const [unit,     setUnit]     = useState("");
-  const [notes,    setNotes]    = useState("");
-  const [loading,  setLoading]  = useState(false);
-  const [error,    setError]    = useState("");
-
-  const selected = boqItems.find(i => i.boq_item_id === boqItemId);
-
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (mode === "boq" && !boqItemId) { setError("Select a BOQ item."); return; }
-    if (mode === "adhoc" && !name.trim()) { setError("Enter a material name."); return; }
-    const quantity = parseFloat(qty);
-    if (!qty || isNaN(quantity) || quantity <= 0) { setError("Enter a valid quantity."); return; }
-
-    setLoading(true); setError("");
-    try {
-      if (mode === "boq" && selected) {
-        await warehouseApi.addProjectMaterial(projectId, {
-          name:     selected.description,
-          quantity,
-          unit:     (selected.unit ?? unit) || undefined,
-          notes:    notes || undefined,
-        });
-      } else {
-        await warehouseApi.addProjectMaterial(projectId, {
-          name:     name.trim(),
-          quantity,
-          unit:     unit || undefined,
-          notes:    notes || undefined,
-        });
-      }
-      onDone();
-    } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
-      setError(msg ?? "Failed to add material. Try again.");
-    } finally { setLoading(false); }
-  };
-
-  return (
-    <ModalShell title="Add to Warehouse" onClose={onClose}>
-      <form onSubmit={submit} className="space-y-3">
-        {/* Mode toggle */}
-        <div className="flex gap-2">
-          <button type="button"
-            className={cn("flex-1 py-2 text-xs font-semibold rounded-lg border transition-colors",
-              mode === "boq" ? "bg-primary text-primary-foreground border-primary" : "bg-background border-border hover:bg-muted")}
-            onClick={() => setMode("boq")}>
-            From BOQ
-          </button>
-          <button type="button"
-            className={cn("flex-1 py-2 text-xs font-semibold rounded-lg border transition-colors",
-              mode === "adhoc" ? "bg-primary text-primary-foreground border-primary" : "bg-background border-border hover:bg-muted")}
-            onClick={() => setMode("adhoc")}>
-            Ad-hoc
-          </button>
-        </div>
-
-        {mode === "boq" ? (
-          <div className="space-y-1">
-            <Label>BOQ Item</Label>
-            <select value={boqItemId} onChange={e => {
-                setBoqItemId(e.target.value);
-                const it = boqItems.find(i => i.boq_item_id === e.target.value);
-                if (it) setUnit(it.unit ?? "");
-              }}
-              className="w-full h-10 px-3 text-sm rounded-md border border-border bg-background">
-              <option value="">— Select BOQ item —</option>
-              {boqItems.map(i => (
-                <option key={i.boq_item_id} value={i.boq_item_id ?? ""}>
-                  {i.description} · {i.boq_allocated_qty} {i.unit ?? ""}
-                </option>
-              ))}
-            </select>
-            {selected && (
-              <div className="bg-muted/40 rounded-lg px-3 py-2 text-xs space-y-0.5">
-                <div className="flex justify-between"><span className="text-muted-foreground">BOQ Allocated</span><span className="font-medium">{selected.boq_allocated_qty} {selected.unit ?? ""}</span></div>
-                <div className="flex justify-between"><span className="text-muted-foreground">Already Delivered</span><span className="font-medium">{selected.delivered_qty} {selected.unit ?? ""}</span></div>
-                <div className="flex justify-between"><span className="text-muted-foreground">Remaining</span>
-                  <span className={cn("font-semibold", selected.remaining_qty <= 0 ? "text-destructive" : "text-green-600")}>{selected.remaining_qty} {selected.unit ?? ""}</span>
-                </div>
-              </div>
-            )}
-          </div>
-        ) : (
-          <>
-            <div className="space-y-1">
-              <Label>Material Name</Label>
-              <Input value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Cement 32.5N" required />
-            </div>
-            <div className="space-y-1">
-              <Label>Unit</Label>
-              <Input value={unit} onChange={e => setUnit(e.target.value)} placeholder="e.g. bags, m³" />
-            </div>
-          </>
-        )}
-
-        <div className="space-y-1">
-          <Label htmlFor="aw-qty">Quantity received</Label>
-          <Input id="aw-qty" type="number" min="0.01" step="0.01"
-                 value={qty} onChange={e => setQty(e.target.value)} required />
-        </div>
-        <div className="space-y-1">
-          <Label htmlFor="aw-notes">Notes (optional)</Label>
-          <Input id="aw-notes" value={notes} onChange={e => setNotes(e.target.value)} placeholder="Supplier ref, batch no, etc." />
-        </div>
-
-        {error && <p className="text-xs text-destructive">{error}</p>}
-        <Button type="submit" className="w-full" disabled={loading}>
-          {loading ? "Adding…" : "Add to Warehouse"}
         </Button>
       </form>
     </ModalShell>

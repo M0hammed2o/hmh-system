@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "lint": "eslint .",
     "test:pwa": "playwright test tests/pwa-login.spec.mjs",
-    "test:notifications": "playwright test tests/notification-links.spec.mjs"
+    "test:notifications": "playwright test tests/notification-links.spec.mjs",
+    "test:site-boq": "playwright test tests/site-requests-warehouse-boq.spec.mjs"
   },
   "dependencies": {
     "@radix-ui/react-dialog": "^1.1.14",

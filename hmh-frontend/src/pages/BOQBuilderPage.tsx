@@ -126,6 +126,26 @@ function itemTotalDisplay(item: BOQItem): number | null {
 }
 // ─────────────────────────────────────────────────────────────────────────────
 
+// ── Supplier selector (shared by Add item and Edit item) ──────────────────────
+
+function SupplierSelect({ suppliers, value, onChange }: {
+  suppliers: Supplier[];
+  value: string;
+  onChange: (supplierId: string) => void;
+}) {
+  return (
+    <select
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      aria-label="Supplier"
+      className="h-8 w-full rounded-md border border-input bg-background px-2 text-sm"
+    >
+      <option value="">— No supplier —</option>
+      {suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+    </select>
+  );
+}
+
 // ── Inline item row ───────────────────────────────────────────────────────────
 
 interface ItemRowProps {
@@ -228,14 +248,11 @@ function ItemRow({ item, suppliers, onSave, onDelete, globalEdit, onDirty }: Ite
               </div>
             </div>
             <Input value={form.specification} onChange={(e) => updateForm({ specification: e.target.value })} placeholder="Specification (optional)" className="text-sm h-8" />
-            <select
+            <SupplierSelect
+              suppliers={suppliers}
               value={form.supplier_id}
-              onChange={(e) => updateForm({ supplier_id: e.target.value })}
-              className="h-8 w-full rounded-md border border-input bg-background px-2 text-sm"
-            >
-              <option value="">— No supplier —</option>
-              {suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-            </select>
+              onChange={(supplier_id) => updateForm({ supplier_id })}
+            />
             {/* Apply-to-all-lots checkbox — shown for both lot-level and site-level items */}
             {(item.lot_id || item.site_id) && (
               <label className="flex items-center gap-2 text-xs cursor-pointer select-none">
@@ -306,9 +323,14 @@ function ItemRow({ item, suppliers, onSave, onDelete, globalEdit, onDirty }: Ite
 
 // ── Add item row ──────────────────────────────────────────────────────────────
 
-function AddItemRow({ sectionId, onAdded }: { sectionId: string; onAdded: () => void }) {
+const EMPTY_ADD_FORM = {
+  raw_description: "", unit: "", planned_quantity: "", planned_rate: "",
+  item_type: "MATERIAL" as ItemType, specification: "", supplier_id: "",
+};
+
+function AddItemRow({ sectionId, suppliers, onAdded }: { sectionId: string; suppliers: Supplier[]; onAdded: () => void }) {
   const [open, setOpen] = useState(false);
-  const [form, setForm] = useState({ raw_description: "", unit: "", planned_quantity: "", planned_rate: "", item_type: "MATERIAL" as ItemType });
+  const [form, setForm] = useState(EMPTY_ADD_FORM);
   const [saving, setSaving] = useState(false);
 
   const handleAdd = async () => {
@@ -321,8 +343,10 @@ function AddItemRow({ sectionId, onAdded }: { sectionId: string; onAdded: () => 
         planned_quantity: form.planned_quantity ? parseFloat(form.planned_quantity) : null,
         planned_rate: form.planned_rate ? parseFloat(form.planned_rate) : null,
         item_type: form.item_type,
+        specification: form.specification || null,
+        supplier_id: form.supplier_id || null,
       });
-      setForm({ raw_description: "", unit: "", planned_quantity: "", planned_rate: "", item_type: "MATERIAL" });
+      setForm(EMPTY_ADD_FORM);
       setOpen(false);
       onAdded();
     } finally { setSaving(false); }
@@ -353,6 +377,14 @@ function AddItemRow({ sectionId, onAdded }: { sectionId: string; onAdded: () => 
           <Input value={form.unit} onChange={(e) => setForm({ ...form, unit: e.target.value })} placeholder="Unit" className="h-8 text-sm" />
           <Input type="number" value={form.planned_quantity} onChange={(e) => setForm({ ...form, planned_quantity: e.target.value })} placeholder="Qty" className="h-8 text-sm" />
           <Input type="number" value={form.planned_rate} onChange={(e) => setForm({ ...form, planned_rate: e.target.value })} placeholder="Rate" className="h-8 text-sm" />
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-2">
+          <Input value={form.specification} onChange={(e) => setForm({ ...form, specification: e.target.value })} placeholder="Specification (optional)" className="h-8 text-sm" />
+          <SupplierSelect
+            suppliers={suppliers}
+            value={form.supplier_id}
+            onChange={(supplier_id) => setForm({ ...form, supplier_id })}
+          />
         </div>
         <div className="flex gap-2 mt-2">
           <Button size="sm" onClick={handleAdd} disabled={saving || !form.raw_description.trim()} className="h-7 text-xs">
@@ -464,7 +496,7 @@ function SectionBlock({ section, items, sectionTotal, headerId, projectId, suppl
               {items.map((item) => (
                 <ItemRow key={item.id} item={item} suppliers={suppliers} onSave={handleSaveItem} onDelete={handleDeleteItem} globalEdit={globalEdit} onDirty={onDirty} />
               ))}
-              <AddItemRow sectionId={section.id} onAdded={onRefresh} />
+              <AddItemRow sectionId={section.id} suppliers={suppliers} onAdded={onRefresh} />
             </tbody>
           </table>
         </div>

@@ -6,6 +6,34 @@ Status labels: **Open**, **Accepted risk**, **Deferred**, **Production blocker**
 
 ---
 
+## Open — Found During Client Review Changes (2026-09-15)
+
+### Site Dashboard "Project Transfer" button is office-only server-side, so Site Clerks get 403
+**File:** `hmh-frontend/src/pages/SiteDashboardPage.tsx` (`ProjectToProjectTransferModal` → `warehouseApi.transferToProject`) · `hmh-backend/app/api/v1/warehouse.py` (`transfer-to-project`, `OFFICE_AND_ABOVE`)
+**Status:** Open — pre-existing, not changed (client said not to change the transfer workflow)
+**Impact:** The button is shown to site roles on a Project Warehouse, but it calls the direct execute route, which only office roles may call. The vote-based route `POST /projects/{id}/warehouse-transfers/` (`WRITE_ROLES`, 3 office votes) is the one site roles are allowed to use, and it works for a Site Clerk (covered by `test_site_clerk_stock_permissions.py`).
+**Fix:** Business decision needed: point the site modal at the vote-based transfer request (reason field required) or hide the button for site roles.
+
+### Global main-warehouse transfer-to-site skips project isolation
+**File:** `hmh-backend/app/api/v1/warehouse.py` (`transfer_global_stock_to_site`, `POST /warehouse/main/transfer-to-site`, `WRITE_ROLES`)
+**Status:** Open — pre-existing, found by source inspection on 2026-09-15, not runtime-tested, not changed
+**Impact:** The route loads the destination site but never calls `check_project_access`. A site-role user could therefore move company-wide (project-less) stock into a site on a project they have no access to. It is still a ledger-recorded transfer, not a deletion.
+**Fix:** Call `check_project_access(db, current_user, site.project_id)` after loading the site, and add a cross-project test.
+
+### Offline-saved material request drafts drop the BOQ link and requested supplier
+**File:** `hmh-frontend/src/pages/SiteDashboardPage.tsx` (`saveDraft` payload in `RequestMaterialModal`, `syncDrafts`)
+**Status:** Open — pre-existing for `boq_item_id`; now also affects the per-line supplier added 2026-09-15
+**Impact:** A request saved offline syncs later with description/qty/unit only, so office sees no BOQ link or requested supplier for that request.
+**Fix:** Include `boq_item_id` and `preferred_supplier_id` per item in the draft payload and pass them through in `syncDrafts`.
+
+### Quote approval / pipeline auto-close tests failing on unmodified code
+**Files:** `tests/test_procurement_pipeline.py::TestQuoteApprove` (5), `tests/test_e2e_procurement_pipeline.py` (8), `tests/test_mr_pipeline_close.py` (3)
+**Status:** Open — confirmed pre-existing on 2026-09-15 by running them with the session's app changes stashed
+**Impact:** `TestQuoteApprove` uses `OFFICE_USER`, but quote approval requires `OWNER`/`PROCUREMENT_LEAD` (403). The e2e/auto-close tests fail because quote approval returns no `po_id`, so the MR stays `CONVERTED_TO_PO` and never closes. Either the tests or the approval flow is stale; not investigated.
+**Fix:** Decide whether quote approval should still create a PO directly, then update the flow or the tests.
+
+---
+
 ## Unverified — Needs Investigation
 
 ### Possible transient re-render on the office dashboard immediately after login

@@ -69,6 +69,12 @@ Only the public app shell, offline document, icons and hashed frontend assets ar
 **2026-08-02 — Keep `/site-login` as a supported site workflow, with `/login` as universal entry.**
 The site route is not removed because it contains phone/PIN access and may be bookmarked. Both routes use the same verified AuthContext and safe return-destination rules; role checks prevent cross-portal navigation.
 
+**2026-09-15 — Manual stock creation/adjustment routes are office-only (`OFFICE_AND_ABOVE`), including for Site Managers.**
+`/warehouse/main/receive`, `/warehouse/main/adjust` and `/warehouse/main/add-tool` moved from `WRITE_ROLES` to match the project-level `add-material`/`adjust` routes. Site roles bring stock in only through delivery receiving (`receive-stock`, `receive-with-document`, site capture) and move it with transfers. Rejected: a new guard excluding only `SITE_STAFF`. That would leave company-wide main-warehouse write-offs open to site-level roles and add a second, inconsistent guard. Site Manager reachability was checked first: site roles are redirected away from the office `/warehouse` page, so no reachable Site Manager UI used these routes.
+
+**2026-09-15 — A per-request supplier is stored on `material_request_items.preferred_supplier_id` and never written back to `boq_items.supplier_id`.**
+The existing column was reused, with no new table. On create, the server checks that the supplier exists and is active. The one exception: a BOQ line's own default supplier stays requestable even after that supplier is deactivated, so a request that worked before still submits.
+
 ---
 
 ## Lessons (repeated-mistake register)

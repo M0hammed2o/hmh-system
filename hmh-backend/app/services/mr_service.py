@@ -92,6 +92,42 @@ def _attach_email_log(db: Session, mr: MaterialRequest) -> None:
         mr.email_log = None  # type: ignore[attr-defined]
 
 
+def _validate_requested_suppliers(db: Session, data: MaterialRequestCreate) -> None:
+    """
+    A supplier chosen on a request (header or line) must be an existing supplier
+    record, and active — except when it is the linked BOQ item's own default
+    supplier, which stays requestable even if that supplier was later
+    deactivated. The BOQ item is only read here: choosing a different supplier
+    for one request never changes the BOQ item's default supplier.
+    """
+    from app.models.boq import BOQItem
+    from app.models.supplier import Supplier
+
+    def _check(supplier_id: uuid.UUID, allow_inactive: bool) -> None:
+        supplier = db.get(Supplier, supplier_id)
+        if not supplier:
+            raise ValidationError("Selected supplier was not found.")
+        if not supplier.is_active and not allow_inactive:
+            raise ValidationError(f"Supplier '{supplier.name}' is inactive and cannot be selected.")
+
+    boq_defaults: set[uuid.UUID] = set()
+    for item_data in data.items:
+        boq_default = None
+        boq_item_id = getattr(item_data, "boq_item_id", None)
+        if boq_item_id:
+            boq_item = db.get(BOQItem, boq_item_id)
+            boq_default = boq_item.supplier_id if boq_item else None
+            if boq_default:
+                boq_defaults.add(boq_default)
+        supplier_id = getattr(item_data, "preferred_supplier_id", None)
+        if supplier_id:
+            _check(supplier_id, allow_inactive=supplier_id == boq_default)
+
+    header_supplier_id = getattr(data, "preferred_supplier_id", None)
+    if header_supplier_id:
+        _check(header_supplier_id, allow_inactive=header_supplier_id in boq_defaults)
+
+
 def create_request(
     db: Session,
     project_id: Optional[uuid.UUID],
@@ -117,6 +153,8 @@ def create_request(
         for item_data in data.items:
             if getattr(item_data, "boq_item_id", None):
                 raise ValidationError("A Fuel request item cannot be linked to a BOQ item.")
+
+    _validate_requested_suppliers(db, data)
 
     now = datetime.now(timezone.utc)
     mr = MaterialRequest(

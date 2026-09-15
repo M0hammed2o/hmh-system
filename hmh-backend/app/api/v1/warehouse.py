@@ -1501,11 +1501,14 @@ class ReceiveStockBody(BaseModel):
     notes:        Optional[str] = None
 
 
+# Manual stock creation/adjustment is office-only, matching the project-level
+# add-material and adjust routes. Site roles bring stock in through the
+# delivery-note/receiving workflow and move it through the transfer routes.
 @global_warehouse_router.post(
     "/main/receive",
     response_model=ApiSuccess[dict],
     status_code=201,
-    dependencies=[WRITE_ROLES],
+    dependencies=[OFFICE_AND_ABOVE],
 )
 def receive_main_warehouse_stock(
     body: ReceiveStockBody,
@@ -1596,7 +1599,7 @@ class AdjustStockBody(BaseModel):
     "/main/adjust",
     response_model=ApiSuccess[dict],
     status_code=201,
-    dependencies=[WRITE_ROLES],
+    dependencies=[OFFICE_AND_ABOVE],
 )
 def adjust_main_warehouse_stock(
     body: AdjustStockBody,
@@ -1676,7 +1679,7 @@ class AddToolBody(BaseModel):
     "/main/add-tool",
     response_model=ApiSuccess[dict],
     status_code=201,
-    dependencies=[WRITE_ROLES],
+    dependencies=[OFFICE_AND_ABOVE],
 )
 def add_main_warehouse_tool(
     body: AddToolBody,
