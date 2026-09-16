@@ -171,6 +171,8 @@ export interface PipelineStep {
   over_boq?: boolean;
   // step 3
   email_sent?: boolean;
+  /** Approver deliberately approved without emailing the supplier. Never "sent". */
+  email_skipped?: boolean;
   email_logs?: Array<{ sent_to: string; sent_at: string | null; status: string }>;
   sent_to?: string | null;
   sent_at?: string | null;
@@ -279,10 +281,15 @@ export const procurementApi = {
     return res.data.data;
   },
 
-  approveMR: async (mrId: string, overBoqReason?: string, issuingCompany?: string): Promise<MaterialRequest> => {
+  /** sendSupplierEmail=false approves normally but skips the automatic supplier email. */
+  approveMR: async (mrId: string, overBoqReason?: string, issuingCompany?: string, sendSupplierEmail = true): Promise<MaterialRequest> => {
     const res = await client.post<{ data: MaterialRequest }>(
       `/material-requests/${mrId}/approve`,
-      { over_boq_reason: overBoqReason ?? null, issuing_company: issuingCompany ?? "HMH_GROUP" }
+      {
+        over_boq_reason: overBoqReason ?? null,
+        issuing_company: issuingCompany ?? "HMH_GROUP",
+        send_supplier_email: sendSupplierEmail,
+      }
     );
     return res.data.data;
   },
@@ -300,10 +307,15 @@ export const procurementApi = {
     return res.data.data;
   },
 
-  procurementApproveMR: async (mrId: string, overBoqReason?: string, issuingCompany?: string): Promise<MaterialRequest> => {
+  /** sendSupplierEmail=false approves normally but skips the automatic supplier email. */
+  procurementApproveMR: async (mrId: string, overBoqReason?: string, issuingCompany?: string, sendSupplierEmail = true): Promise<MaterialRequest> => {
     const res = await client.post<{ data: MaterialRequest }>(
       `/material-requests/${mrId}/procurement-approve`,
-      { over_boq_reason: overBoqReason ?? null, issuing_company: issuingCompany ?? "HMH_GROUP" }
+      {
+        over_boq_reason: overBoqReason ?? null,
+        issuing_company: issuingCompany ?? "HMH_GROUP",
+        send_supplier_email: sendSupplierEmail,
+      }
     );
     return res.data.data;
   },

@@ -295,10 +295,45 @@ def _create_mr_submitted_alert(db: Session, mr: "MaterialRequest") -> None:
     logger.info("mr alert queued notifications=%d mr=%s", len(queued), mr.request_number)
 
 
+def _log_supplier_email_skipped(db: Session, mr: MaterialRequest, actor_id: uuid.UUID) -> None:
+    """Record that the approver deliberately approved without emailing the supplier.
+
+    Written as a real MREmailLog row with status SKIPPED — never a SENT/MOCK_SENT
+    row — so the pipeline and the UI can tell "intentionally skipped" apart from
+    "not sent yet", and the office can still send the email manually later.
+    """
+    from app.models.mr_email_log import MREmailLog
+    from app.models.supplier import Supplier
+
+    already_sent = (
+        db.query(MREmailLog)
+        .filter(
+            MREmailLog.material_request_id == mr.id,
+            MREmailLog.status.in_(("SENT", "MOCK_SENT")),
+        )
+        .first()
+    )
+    if already_sent:
+        return
+
+    supplier = db.get(Supplier, mr.preferred_supplier_id) if mr.preferred_supplier_id else None
+    db.add(MREmailLog(
+        material_request_id=mr.id,
+        supplier_id=mr.preferred_supplier_id,
+        sent_to_email=(supplier.email if supplier and supplier.email else ""),
+        email_subject="Supplier email skipped at approval",
+        status="SKIPPED",
+        sent_by=actor_id,
+        sent_at=None,
+        created_at=datetime.now(timezone.utc),
+    ))
+
+
 def approve_request(
     db: Session, mr_id: uuid.UUID, approver_id: uuid.UUID,
     over_boq_reason: Optional[str] = None,
     issuing_company: Optional[str] = "HMH_GROUP",
+    send_supplier_email: bool = True,
 ) -> MaterialRequest:
     mr = get_request(db, mr_id)
     if mr.status not in (RecordStatus.SUBMITTED, RecordStatus.PENDING_APPROVAL, RecordStatus.STAFF_APPROVED):
@@ -346,8 +381,19 @@ def approve_request(
     except Exception:
         pass
 
-    # Send approval email to preferred supplier (best-effort, never crashes approval)
-    if mr.preferred_supplier_id:
+    # Send approval email to preferred supplier (best-effort, never crashes approval).
+    # The approver may deliberately skip it; the skip is logged, never faked as sent.
+    if mr.preferred_supplier_id and not send_supplier_email:
+        try:
+            _log_supplier_email_skipped(db, mr, approver_id)
+            db.commit()
+        except Exception:
+            db.rollback()
+            logging.getLogger(__name__).exception(
+                "Recording skipped supplier email failed for %s — approval still stands.",
+                mr.request_number,
+            )
+    elif mr.preferred_supplier_id:
         try:
             from app.services.email_service import send_mr_approval_email
             send_mr_approval_email(db, mr, sent_by_id=approver_id, force_resend=False)
@@ -672,6 +718,7 @@ def procurement_lead_approve(
     approver_id: uuid.UUID,
     over_boq_reason: Optional[str] = None,
     issuing_company: Optional[str] = "HMH_GROUP",
+    send_supplier_email: bool = True,
 ) -> MaterialRequest:
     """Final procurement-lead approval — also works as an override when staff vote count is below threshold.
 
@@ -708,7 +755,10 @@ def procurement_lead_approve(
         ))
 
     # Delegate to the standard approval function for notifications/email/audit
-    return approve_request(db, mr_id, approver_id, over_boq_reason, issuing_company)
+    return approve_request(
+        db, mr_id, approver_id, over_boq_reason, issuing_company,
+        send_supplier_email=send_supplier_email,
+    )
 
 
 # ── Quotes ────────────────────────────────────────────────────────────────────

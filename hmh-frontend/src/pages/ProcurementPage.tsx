@@ -610,6 +610,33 @@ function CreateMRModal({ projectId: defaultProjectId, sites, isMainWarehouse = f
 
 // ── MR Detail Modal ───────────────────────────────────────────────────────────
 
+/** Compact opt-out for the automatic supplier email sent on MR approval. Checked by default. */
+function SendSupplierEmailToggle({ id, checked, onChange }: {
+  id: string; checked: boolean; onChange: (v: boolean) => void;
+}) {
+  return (
+    <div className="w-full">
+      <label htmlFor={id} className="flex items-center gap-1.5 text-xs cursor-pointer select-none">
+        <input
+          id={id}
+          type="checkbox"
+          checked={checked}
+          onChange={e => onChange(e.target.checked)}
+          className="rounded border-input"
+        />
+        <span className={checked ? "text-muted-foreground" : "text-amber-700 dark:text-amber-400 font-medium"}>
+          Send email to supplier after approval
+        </span>
+      </label>
+      {!checked && (
+        <p className="text-[10px] text-amber-700 dark:text-amber-400 mt-0.5">
+          Will approve without emailing the supplier — you can send it later from Supplier Email.
+        </p>
+      )}
+    </div>
+  );
+}
+
 function MRDetailModal({ mr, suppliers, defaultIssuingCompany, onClose, onUpdated }: {
   mr: MaterialRequest; suppliers: Supplier[]; defaultIssuingCompany?: string; onClose: () => void; onUpdated: () => void;
 }) {
@@ -620,6 +647,7 @@ function MRDetailModal({ mr, suppliers, defaultIssuingCompany, onClose, onUpdate
   const [result, setResult] = useState("");
   const [overBoqReason, setOverBoqReason] = useState("");
   const [issuingCompany, setIssuingCompany] = useState(defaultIssuingCompany ?? "HMH_GROUP");
+  const [sendSupplierEmail, setSendSupplierEmail] = useState(true);
   const [showReject, setShowReject] = useState(false);
   const [rejectReason, setRejectReason] = useState("");
   const [showConvert, setShowConvert] = useState(false);
@@ -805,9 +833,12 @@ function MRDetailModal({ mr, suppliers, defaultIssuingCompany, onClose, onUpdate
                   <span className={
                     mr.email_log.status === "SENT"      ? "text-green-600 font-medium" :
                     mr.email_log.status === "MOCK_SENT" ? "text-blue-600 font-medium"  :
+                    mr.email_log.status === "SKIPPED"   ? "text-amber-700 dark:text-amber-400 font-medium" :
                     "text-destructive font-medium"
                   }>
-                    {mr.email_log.status === "MOCK_SENT" ? "MOCK SENT" : mr.email_log.status}
+                    {mr.email_log.status === "MOCK_SENT" ? "MOCK SENT"
+                      : mr.email_log.status === "SKIPPED" ? "SKIPPED — not sent"
+                      : mr.email_log.status}
                   </span>
                   <span className="text-muted-foreground">→ {mr.email_log.sent_to_email}</span>
                   {mr.email_log.sent_at && (
@@ -1129,10 +1160,17 @@ function MRDetailModal({ mr, suppliers, defaultIssuingCompany, onClose, onUpdate
               )}
               {/* Procurement lead final / override approval */}
               {canFinalApprove && (
+                <SendSupplierEmailToggle
+                  id={`mr-send-email-${mr.id}`}
+                  checked={sendSupplierEmail}
+                  onChange={setSendSupplierEmail}
+                />
+              )}
+              {canFinalApprove && (
                 <Button
                   size="sm"
                   onClick={() => act(async () => {
-                    const updated = await procurementApi.procurementApproveMR(mr.id, overBoqReason || undefined, issuingCompany);
+                    const updated = await procurementApi.procurementApproveMR(mr.id, overBoqReason || undefined, issuingCompany, sendSupplierEmail);
                     return updated;
                   }, "approve")}
                   disabled={loading !== null || (mr.over_boq && !overBoqReason.trim())}
@@ -1337,6 +1375,7 @@ function PipelinePanelModal({ mrId, suppliers, defaultIssuingCompany, onClose, o
   const [actionError, setActionError] = useState("");
   const [overBoqReason, setOverBoqReason] = useState("");
   const [pipelineIssuingCompany, setPipelineIssuingCompany] = useState(defaultIssuingCompany ?? "HMH_GROUP");
+  const [sendSupplierEmail, setSendSupplierEmail] = useState(true);
   const [showRejectMR, setShowRejectMR] = useState(false);
   const [rejectMRReason, setRejectMRReason] = useState("");
   const [pipelineApprovals, setPipelineApprovals] = useState<MRApprovalVote[]>([]);
@@ -1556,10 +1595,17 @@ function PipelinePanelModal({ mrId, suppliers, defaultIssuingCompany, onClose, o
                                 </span>
                               )}
                               {pipelineIsProcurementLead && (
+                                <SendSupplierEmailToggle
+                                  id={`pipeline-send-email-${mrId}`}
+                                  checked={sendSupplierEmail}
+                                  onChange={setSendSupplierEmail}
+                                />
+                              )}
+                              {pipelineIsProcurementLead && (
                                 <Button size="sm" className={`h-8 text-xs flex-1 ${pipelineIsOverride ? "bg-amber-500 hover:bg-amber-600" : "bg-green-600 hover:bg-green-700"}`}
                                   disabled={!!actionLoading || (pipeline.over_boq && !overBoqReason.trim())}
                                   onClick={() => act(async () => {
-                                    await procurementApi.procurementApproveMR(mrId, overBoqReason || undefined, pipelineIssuingCompany);
+                                    await procurementApi.procurementApproveMR(mrId, overBoqReason || undefined, pipelineIssuingCompany, sendSupplierEmail);
                                   }, "approve_mr")}>
                                   <Check className="w-3 h-3 mr-1" />
                                   {actionLoading === "approve_mr" ? "Approving…" : pipelineIsOverride ? "Override & Approve" : "Final Approval"}
@@ -1586,6 +1632,14 @@ function PipelinePanelModal({ mrId, suppliers, defaultIssuingCompany, onClose, o
                         <MailCheck className="w-3.5 h-3.5 text-green-500" />
                         <span className="text-green-600 font-medium">Sent to {step.sent_to}</span>
                         {step.sent_at && <span className="text-muted-foreground">· {formatDate(step.sent_at)}</span>}
+                      </div>
+                    ) : step.email_skipped ? (
+                      <div className="flex items-center gap-2 text-xs">
+                        <AlertCircle className="w-3.5 h-3.5 text-amber-500" />
+                        <span className="text-amber-700 dark:text-amber-400 font-medium">
+                          Skipped at approval — not sent
+                        </span>
+                        <span className="text-muted-foreground">· use Send Email to send it now</span>
                       </div>
                     ) : step.missing_email ? (
                       /* ── BLOCKED: fix inline ── */

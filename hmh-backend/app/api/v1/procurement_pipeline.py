@@ -139,6 +139,10 @@ def get_pipeline(mr_id: uuid.UUID, db: DbSession):
     )
     email_log = email_logs_raw[-1] if email_logs_raw else None  # latest, kept for compat
     email_sent = any(l.status in ("SENT", "MOCK_SENT") for l in email_logs_raw)
+    # Approver deliberately approved without emailing the supplier. The step counts
+    # as done so the pipeline can still progress and close, but it is never reported
+    # as sent — the UI distinguishes sent / not sent yet / intentionally skipped.
+    email_skipped = (not email_sent) and any(l.status == "SKIPPED" for l in email_logs_raw)
     email_logs_list = [
         {
             "sent_to":  l.sent_to_email,
@@ -253,17 +257,18 @@ def get_pipeline(mr_id: uuid.UUID, db: DbSession):
               over_boq=mr.over_boq),
 
         _step(3, "SUPPLIER_EMAIL", "Email to Supplier",
-              _s(email_sent,
-                 is_approved and not email_sent,
-                 blocked=is_approved and not email_sent and not supplier_has_email),
+              _s(email_sent or email_skipped,
+                 is_approved and not email_sent and not email_skipped,
+                 blocked=is_approved and not email_sent and not email_skipped and not supplier_has_email),
               email_sent=email_sent,
+              email_skipped=email_skipped,
               email_logs=email_logs_list,
               sent_to=email_logs_list[0]["sent_to"] if email_logs_list else (email_log.sent_to_email if email_log else None),
               sent_at=email_logs_list[0]["sent_at"] if email_logs_list else (email_log.sent_at.isoformat() if email_log and email_log.sent_at else None),
               email_status=email_log.status if email_log else None,
               supplier_name=supplier_name,
               supplier_email=supplier_email,
-              missing_email=is_approved and not supplier_has_email),
+              missing_email=is_approved and not supplier_has_email and not email_skipped),
 
         _step(4, "QUOTATION", "Supplier Quotation",
               _s(bool(approved_quotes),

@@ -1,5 +1,12 @@
 # WORKLOG — append-only, newest first
 
+## 2026-09-16 — Optional supplier email on MR approval
+Changed: `hmh-backend/app/api/v1/material_requests.py` (`ApproveBody.send_supplier_email`, default true, on `/approve` and `/procurement-approve`); `app/services/mr_service.py` (`approve_request`/`procurement_lead_approve` flag, `_log_supplier_email_skipped`); `app/api/v1/procurement_pipeline.py` (step 3 `email_skipped`); `hmh-frontend/src/api/procurement.ts`; `hmh-frontend/src/pages/ProcurementPage.tsx` (compact "Send email to supplier after approval" checkbox, checked by default, on both approval actions; SKIPPED shown honestly); new `tests/test_mr_approval_email_optional.py`.
+Behaviour: unticking the box approves the MR exactly as before but sends/queues no supplier email and writes no fake SENT log — a `SKIPPED` log row records the choice. Pipeline step 3 completes so the workflow can still progress and auto-close, while reporting `email_sent: false`. The office can still send the email manually afterwards. No migration; no change to approval rules, vote thresholds, supplier selection, quote approval, PO creation, stock, delivery or permissions.
+Tests: new suite 8/8; procurement + MR suites 120 passed / 0 failed; frontend `tsc` clean, `vite build` passes, Playwright 32/32.
+Verdict: Self-verified; no independent verifier agent run.
+Unresolved: production pre-deploy checks and the earlier open items (KNOWN_BUGS) are unchanged.
+
 ## 2026-09-16 — Procurement stability: 16 stale-workflow test failures resolved (no product change)
 Changed: `hmh-backend/tests/test_procurement_pipeline.py` (`TestQuoteApprove` rewritten for the current flow), `tests/test_e2e_procurement_pipeline.py` (step 6 approve → finalize-pos; exactly-once stock assertion), `tests/test_mr_pipeline_close.py` (fixture links the approved quote to its PO; new premature-close test). No application code changed.
 Root cause: all 16 encoded the pre-Phase-3Z workflow. PO creation moved out of quote approval into `finalize-pos` (`4ce1d14`), and `/approve` became an OWNER/PROCUREMENT_LEAD override with office staff voting (`9d684a5`); the auto-close fixture left an approved quote unlinked to a PO, which correctly keeps step 5 open. The shipped Procurement UI matches the current backend, confirming the product was right.

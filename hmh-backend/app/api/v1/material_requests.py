@@ -102,6 +102,10 @@ def submit_request(mr_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
 class ApproveBody(BaseModel):
     over_boq_reason: Optional[str] = None
     issuing_company: Optional[str] = "HMH_GROUP"
+    # Default True keeps the existing behaviour for every existing caller.
+    # False approves normally but skips the automatic supplier email; the office
+    # can still send it later with POST /material-requests/{id}/send-email.
+    send_supplier_email: bool = True
 
 
 @mr_router.post("/{mr_id}/approve", response_model=ApiSuccess[MaterialRequestRead], dependencies=[OFFICE_AND_ABOVE])
@@ -112,8 +116,10 @@ def approve_request(mr_id: uuid.UUID, body: ApproveBody, db: DbSession, current_
         db, mr_id, current_user.id,
         body.over_boq_reason,
         issuing_company=body.issuing_company or "HMH_GROUP",
+        send_supplier_email=body.send_supplier_email,
     )
-    return ApiSuccess(data=MaterialRequestRead.model_validate(mr), message="Request approved.")
+    message = "Request approved." if body.send_supplier_email else "Request approved — supplier email skipped."
+    return ApiSuccess(data=MaterialRequestRead.model_validate(mr), message=message)
 
 
 class RejectBody(BaseModel):
@@ -186,8 +192,10 @@ def procurement_approve(mr_id: uuid.UUID, body: ApproveBody, db: DbSession, curr
         db, mr_id, current_user.id,
         body.over_boq_reason,
         issuing_company=body.issuing_company or "HMH_GROUP",
+        send_supplier_email=body.send_supplier_email,
     )
-    return ApiSuccess(data=MaterialRequestRead.model_validate(mr), message="MR approved.")
+    message = "MR approved." if body.send_supplier_email else "MR approved — supplier email skipped."
+    return ApiSuccess(data=MaterialRequestRead.model_validate(mr), message=message)
 
 
 @mr_router.post("/{mr_id}/send-email", dependencies=[OFFICE_AND_ABOVE])
