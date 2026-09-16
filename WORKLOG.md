@@ -1,5 +1,13 @@
 # WORKLOG — append-only, newest first
 
+## 2026-09-16 — Procurement stability: 16 stale-workflow test failures resolved (no product change)
+Changed: `hmh-backend/tests/test_procurement_pipeline.py` (`TestQuoteApprove` rewritten for the current flow), `tests/test_e2e_procurement_pipeline.py` (step 6 approve → finalize-pos; exactly-once stock assertion), `tests/test_mr_pipeline_close.py` (fixture links the approved quote to its PO; new premature-close test). No application code changed.
+Root cause: all 16 encoded the pre-Phase-3Z workflow. PO creation moved out of quote approval into `finalize-pos` (`4ce1d14`), and `/approve` became an OWNER/PROCUREMENT_LEAD override with office staff voting (`9d684a5`); the auto-close fixture left an approved quote unlinked to a PO, which correctly keeps step 5 open. The shipped Procurement UI matches the current backend, confirming the product was right.
+Behaviour: unchanged. Tests strengthened — voting path, office-user 403, duplicate-vote 409, `finalize-pos` idempotency (no duplicate PO), premature-close guard, and exactly one DELIVERY_RECEIVED row of the delivered quantity.
+Tests: procurement set (15 files) 221 passed / 0 failed; security + warehouse/site/delivery set (21 files) 310 passed / 0 failed; 531 backend tests green with no failures. `test_procurement_analytics.py` 23/23 after installing the already-pinned `openpyxl==3.1.2` into the local venv (no dependency change). Frontend `tsc` clean, `vite build` passes, Playwright 32/32.
+Verdict: Self-verified; no independent verifier agent run.
+Unresolved: production pre-deploy checks (`stock_ledger.created_at` default, BOQ/lot/site project mismatch), requester self-vote governance decision, offline drafts dropping the supplier.
+
 ## 2026-09-15 — Project isolation for stock usage, delivery receiving, delivery-note capture, transfer reads
 Changed: `hmh-backend/app/core/resource_access.py` (`get_resource_in_project_or_404`); `app/api/v1/stock.py` + `app/services/stock_service.py`; `app/api/v1/deliveries.py` + `app/services/delivery_service.py`; `app/api/v1/site_capture.py`; `app/api/v1/warehouse_transfers.py`; new `tests/test_project_isolation_site_workflows.py`.
 Behaviour: Site roles get 403 on usage, stock reads, `receive-with-document`, delivery-note capture and transfer-request reads for projects they aren't assigned to. Payload ids (site/lot/PO/PO item/BOQ item) from another project return 404, and nothing is written or uploaded on refusal. `READ_ONLY` and `SITE_MANAGER_VIEW` can view delivery notes but get 403 on upload/correct/verify/sign. Assigned Site Clerks keep usage, receiving and capture. Requester self-voting investigated and left unchanged (DECISIONS/KNOWN_BUGS).

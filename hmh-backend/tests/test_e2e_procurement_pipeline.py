@@ -334,24 +334,49 @@ class TestProcurementPipelineEndToEnd:
 
     def test_step6_office_approves_quotation_and_po_created(self, client, db, scenario):
         """
-        Office approves the supplier quotation.
-        This auto-creates a Purchase Order and emails it to the supplier.
-        MR status moves to CONVERTED_TO_PO.
+        Office approves the supplier quotation, then creates the PO.
+
+        Since Phase 3Z the two are separate steps: approving a quote only marks it
+        APPROVED, and "Send PO to Suppliers" (finalize-pos) creates one PO per
+        supplier from the approved quotes. MR status moves to CONVERTED_TO_PO.
         """
         s = scenario
         self.test_step5_supplier_quotation_received(client, db, scenario)
 
+        # Owner/Procurement Lead override-approve (office staff use /vote instead)
         r = client.post(
             _api(f"/procurement/mrs/{s['mr_id']}/quotes/{s['quote_id']}/approve"),
             json={"notes": "Approved — price within budget."},
             headers=auth(s["office_tok"]),
         )
         assert r.status_code == 200, r.text
-        result = r.json()["data"]
-        assert "po_id"     in result, "po_id must be returned on quote approval"
-        assert "po_number" in result, "po_number must be returned on quote approval"
+        assert r.json()["data"]["status"] == "APPROVED"
 
-        s["po_id"] = result["po_id"]
+        # Approving alone must not create a PO yet
+        from app.models.purchase_order import PurchaseOrder
+        assert db.query(PurchaseOrder).filter(
+            PurchaseOrder.material_request_id == uuid.UUID(s["mr_id"])
+        ).count() == 0, "PO must only be created by finalize-pos, not by quote approval"
+
+        # Send PO to Suppliers → one PO per supplier
+        r = client.post(
+            _api(f"/procurement/mrs/{s['mr_id']}/finalize-pos"),
+            headers=auth(s["office_tok"]),
+        )
+        assert r.status_code == 200, r.text
+        result = r.json()["data"]
+        assert result["count"] == 1, "Exactly one PO expected for a single-supplier MR"
+        po_created = result["pos"][0]
+        assert "po_id"     in po_created, "po_id must be returned when the PO is created"
+        assert "po_number" in po_created, "po_number must be returned when the PO is created"
+
+        s["po_id"] = po_created["po_id"]
+
+        # The approved quote is now linked to that PO (drives pipeline step 5)
+        from app.models.mr_quote import MRQuote
+        db.expire_all()
+        quote_row = db.get(MRQuote, uuid.UUID(s["quote_id"]))
+        assert str(quote_row.purchase_order_id) == s["po_id"]
 
         # MR status should now be CONVERTED_TO_PO
         mr_r = client.get(
@@ -617,9 +642,20 @@ class TestProcurementPipelineEndToEnd:
         assert total_in is not None, (
             "Stock ledger must have DELIVERY_RECEIVED entries for the cement item"
         )
-        assert float(total_in) >= CEMENT_QTY, (
-            f"Total stock received must be ≥ {CEMENT_QTY} bags, got {total_in}"
+        # Exactly once: a single delivery of CEMENT_QTY must not be double-counted.
+        assert float(total_in) == pytest.approx(CEMENT_QTY), (
+            f"Total stock received must be exactly {CEMENT_QTY} bags, got {total_in}"
         )
+        rows = (
+            db.query(StockLedger)
+            .filter(
+                StockLedger.project_id    == uuid.UUID(s["project_id"]),
+                StockLedger.item_id       == uuid.UUID(s["item_id"]),
+                StockLedger.movement_type == MovementType.DELIVERY_RECEIVED,
+            )
+            .all()
+        )
+        assert len(rows) == 1, f"Expected exactly 1 DELIVERY_RECEIVED row, found {len(rows)}"
 
 
     # ─────────────────────────────────────────────────────────────────────────

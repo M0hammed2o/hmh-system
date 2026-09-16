@@ -74,11 +74,18 @@ Every count should be 0.
 **Impact:** A request saved offline syncs later with description/qty/unit only, so office sees no BOQ link or requested supplier for that request.
 **Fix:** Include `boq_item_id` and `preferred_supplier_id` per item in the draft payload and pass them through in `syncDrafts`.
 
-### Quote approval / pipeline auto-close tests failing on unmodified code
+### [FIXED 2026-09-16] Quote approval / pipeline auto-close test failures — stale tests, no product defect
 **Files:** `tests/test_procurement_pipeline.py::TestQuoteApprove` (5), `tests/test_e2e_procurement_pipeline.py` (8), `tests/test_mr_pipeline_close.py` (3)
-**Status:** Open — confirmed pre-existing on 2026-09-15 by running them with the session's app changes stashed
-**Impact:** `TestQuoteApprove` uses `OFFICE_USER`, but quote approval requires `OWNER`/`PROCUREMENT_LEAD` (403). The e2e/auto-close tests fail because quote approval returns no `po_id`, so the MR stays `CONVERTED_TO_PO` and never closes. Either the tests or the approval flow is stale; not investigated.
-**Fix:** Decide whether quote approval should still create a PO directly, then update the flow or the tests.
+**Root cause:** all 16 encoded a procurement workflow the product deliberately replaced. No application code was wrong, and none was changed.
+1. **Quote approval no longer creates the PO** (commit `4ce1d14`, "Phase 3Z — batched PO creation with Send PO to Suppliers"). PO creation moved to `POST /procurement/mrs/{id}/finalize-pos`, which makes one PO per supplier from approved quotes. The 5 `TestQuoteApprove` tests and e2e step 6 still expected `po_id` / `po_number` from `/approve`. The 8 e2e failures all cascaded from step 6, because each test re-runs the chain.
+2. **Single-user quote approval is an override** (commit `9d684a5`, "quote approval voting — 3 staff votes + Rafiq override"). `/approve` is `OWNER`/`PROCUREMENT_LEAD`; office staff use `/vote` (3 votes auto-approve). The tests called `/approve` as `OFFICE_USER` and got 403.
+3. **Auto-close fixture was not a complete pipeline.** `_make_full_pipeline` created an APPROVED quote with no `purchase_order_id`. Pipeline step 5 completes only when no approved quote is left without a PO, so the MR correctly stayed open. That guard is intended behaviour and is now asserted by its own test.
+
+The shipped Procurement UI implements the current flow (Vote / Approve override / "Send PO to Suppliers" buttons), which confirmed the product, not the tests, was correct.
+**Fix:** tests realigned to the real workflow and strengthened — added coverage for the voting path, the office-user 403 rule, duplicate-vote 409, `finalize-pos` idempotency (no duplicate PO), the premature-close guard, and exactly-once stock on delivery.
+
+### Local venv was missing openpyxl (environment only)
+**Status:** Resolved locally 2026-09-16 — `openpyxl==3.1.2`, already pinned in `requirements.txt`, was not installed in `hmh-backend/.venv`. Installed at the pinned version; no dependency change. The 4 procurement-analytics Excel export tests pass (23/23 in that file). Any fresh environment needs `pip install -r requirements.txt`.
 
 ---
 

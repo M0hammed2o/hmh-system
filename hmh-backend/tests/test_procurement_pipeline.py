@@ -223,59 +223,138 @@ class TestPipelineState:
 # ── Quote approve tests ───────────────────────────────────────────────────────
 
 class TestQuoteApprove:
-    def test_approve_quote_creates_po(self, db, client, setup):
-        tok = login(client, setup["office"]["email"], setup["office"]["password"])
-        mr  = _make_mr(client, tok, setup["project"]["id"], setup["site"]["id"],
-                       supplier_id=setup["supplier_email"]["id"])
+    """Quote approval and PO creation as the product works since Phase 3Z:
+
+      - office staff approve a quote with 3 votes (`/vote`);
+      - OWNER / PROCUREMENT_LEAD may override-approve a single quote (`/approve`);
+      - neither creates a PO. "Send PO to Suppliers" (`/finalize-pos`) creates one
+        PO per supplier from approved quotes, and is safe to call repeatedly.
+    """
+
+    def _approved_mr_with_quote(self, db, client, tok, setup, price=115.0):
+        mr = _make_mr(client, tok, setup["project"]["id"], setup["site"]["id"],
+                      supplier_id=setup["supplier_email"]["id"])
         _submit(client, tok, mr["id"])
         _approve(client, tok, mr["id"])
-        qid = _add_quote(db, mr["id"], setup["supplier_email"]["id"], price=115.0)
+        qid = _add_quote(db, mr["id"], setup["supplier_email"]["id"], price=price)
+        return mr, qid
 
-        r = client.post(
-            f"/api/v1/procurement/mrs/{mr['id']}/quotes/{qid}/approve",
-            json={},
-            headers=auth(tok),
-        )
-        assert r.status_code == 200, r.text
-        data = r.json()["data"]
-        assert "po_number" in data
-        assert data["total_amount"] == pytest.approx(115.0 * 10, abs=1)
+    def _pos_for(self, db, mr_id):
+        from app.models.purchase_order import PurchaseOrder
+        db.expire_all()
+        return db.query(PurchaseOrder).filter(
+            PurchaseOrder.material_request_id == uuid.UUID(mr_id)
+        ).all()
 
-    def test_approve_marks_quote_approved(self, db, client, setup):
+    def test_office_user_cannot_override_approve(self, db, client, setup):
+        """Single-user override is OWNER / PROCUREMENT_LEAD only; office staff vote."""
+        tok = login(client, setup["office"]["email"], setup["office"]["password"])
+        mr, qid = self._approved_mr_with_quote(db, client, tok, setup)
+
+        r = client.post(f"/api/v1/procurement/mrs/{mr['id']}/quotes/{qid}/approve",
+                        json={}, headers=auth(tok))
+        assert r.status_code == 403, r.text
+
+    def test_three_office_votes_approve_quote_without_creating_a_po(self, db, client, setup):
         from app.models.mr_quote import MRQuote
         tok = login(client, setup["office"]["email"], setup["office"]["password"])
-        mr  = _make_mr(client, tok, setup["project"]["id"], setup["site"]["id"],
-                       supplier_id=setup["supplier_email"]["id"])
-        _submit(client, tok, mr["id"])
-        _approve(client, tok, mr["id"])
-        qid = _add_quote(db, mr["id"], setup["supplier_email"]["id"], price=90.0)
+        mr, qid = self._approved_mr_with_quote(db, client, tok, setup, price=90.0)
 
-        client.post(
-            f"/api/v1/procurement/mrs/{mr['id']}/quotes/{qid}/approve",
-            json={},
-            headers=auth(tok),
-        )
+        voters = [tok]
+        for role in ("OFFICE_ADMIN", "OFFICE_USER"):
+            u = make_user(db, role=role)
+            make_user_project_access(db, u["id"], setup["project"]["id"])
+            voters.append(login(client, u["email"], u["password"]))
+
+        for i, voter in enumerate(voters, 1):
+            r = client.post(f"/api/v1/procurement/mrs/{mr['id']}/quotes/{qid}/vote",
+                            json={}, headers=auth(voter))
+            assert r.status_code == 200, r.text
+            assert r.json()["data"]["vote_count"] == i
+
         db.expire_all()
         q = db.get(MRQuote, uuid.UUID(qid))
         assert q.status == "APPROVED"
         assert q.approved_at is not None
+        assert self._pos_for(db, mr["id"]) == [], "Votes must not create a PO on their own"
+
+    def test_duplicate_vote_from_same_user_returns_409(self, db, client, setup):
+        tok = login(client, setup["office"]["email"], setup["office"]["password"])
+        mr, qid = self._approved_mr_with_quote(db, client, tok, setup)
+
+        assert client.post(f"/api/v1/procurement/mrs/{mr['id']}/quotes/{qid}/vote",
+                           json={}, headers=auth(tok)).status_code == 200
+        r = client.post(f"/api/v1/procurement/mrs/{mr['id']}/quotes/{qid}/vote",
+                        json={}, headers=auth(tok))
+        assert r.status_code == 409, r.text
+
+    def test_owner_override_marks_quote_approved(self, db, client, setup):
+        from app.models.mr_quote import MRQuote
+        tok = login(client, setup["office"]["email"], setup["office"]["password"])
+        owner_tok = login(client, setup["owner"]["email"], setup["owner"]["password"])
+        mr, qid = self._approved_mr_with_quote(db, client, tok, setup, price=90.0)
+
+        r = client.post(f"/api/v1/procurement/mrs/{mr['id']}/quotes/{qid}/approve",
+                        json={}, headers=auth(owner_tok))
+        assert r.status_code == 200, r.text
+        assert r.json()["data"]["status"] == "APPROVED"
+
+        db.expire_all()
+        q = db.get(MRQuote, uuid.UUID(qid))
+        assert q.status == "APPROVED"
+        assert q.approved_at is not None
+        assert self._pos_for(db, mr["id"]) == [], "Approval must not create a PO on its own"
+
+    def test_finalize_pos_creates_po_from_approved_quote(self, db, client, setup):
+        from app.models.material_request import MaterialRequest
+        from app.models.mr_quote import MRQuote
+        tok = login(client, setup["office"]["email"], setup["office"]["password"])
+        owner_tok = login(client, setup["owner"]["email"], setup["owner"]["password"])
+        mr, qid = self._approved_mr_with_quote(db, client, tok, setup, price=115.0)
+        client.post(f"/api/v1/procurement/mrs/{mr['id']}/quotes/{qid}/approve",
+                    json={}, headers=auth(owner_tok))
+
+        r = client.post(f"/api/v1/procurement/mrs/{mr['id']}/finalize-pos", headers=auth(tok))
+        assert r.status_code == 200, r.text
+        data = r.json()["data"]
+        assert data["count"] == 1
+        po = data["pos"][0]
+        assert "po_number" in po
+        assert po["total_amount"] == pytest.approx(115.0 * 10, abs=1)
+
+        db.expire_all()
+        assert str(db.get(MRQuote, uuid.UUID(qid)).purchase_order_id) == po["po_id"]
+        assert db.get(MaterialRequest, uuid.UUID(mr["id"])).status.value == "CONVERTED_TO_PO"
+
+    def test_finalize_pos_does_not_duplicate_the_po(self, db, client, setup):
+        tok = login(client, setup["office"]["email"], setup["office"]["password"])
+        owner_tok = login(client, setup["owner"]["email"], setup["owner"]["password"])
+        mr, qid = self._approved_mr_with_quote(db, client, tok, setup)
+        client.post(f"/api/v1/procurement/mrs/{mr['id']}/quotes/{qid}/approve",
+                    json={}, headers=auth(owner_tok))
+
+        first = client.post(f"/api/v1/procurement/mrs/{mr['id']}/finalize-pos", headers=auth(tok))
+        assert first.status_code == 200, first.text
+        second = client.post(f"/api/v1/procurement/mrs/{mr['id']}/finalize-pos", headers=auth(tok))
+        assert second.status_code == 422, "Nothing left to finalize — must not create a second PO"
+
+        pos = self._pos_for(db, mr["id"])
+        assert len(pos) == 1, f"Expected exactly 1 PO, found {len(pos)}"
 
     def test_approve_already_approved_quote_returns_409(self, db, client, setup):
         tok = login(client, setup["office"]["email"], setup["office"]["password"])
-        mr  = _make_mr(client, tok, setup["project"]["id"], setup["site"]["id"],
-                       supplier_id=setup["supplier_email"]["id"])
-        _submit(client, tok, mr["id"])
-        _approve(client, tok, mr["id"])
-        qid = _add_quote(db, mr["id"], setup["supplier_email"]["id"])
+        owner_tok = login(client, setup["owner"]["email"], setup["owner"]["password"])
+        mr, qid = self._approved_mr_with_quote(db, client, tok, setup)
 
         client.post(f"/api/v1/procurement/mrs/{mr['id']}/quotes/{qid}/approve",
-                    json={}, headers=auth(tok))
+                    json={}, headers=auth(owner_tok))
         r2 = client.post(f"/api/v1/procurement/mrs/{mr['id']}/quotes/{qid}/approve",
-                         json={}, headers=auth(tok))
+                         json={}, headers=auth(owner_tok))
         assert r2.status_code == 409
 
     def test_approve_quote_on_unapproved_mr_returns_422(self, db, client, setup):
         tok = login(client, setup["office"]["email"], setup["office"]["password"])
+        owner_tok = login(client, setup["owner"]["email"], setup["owner"]["password"])
         mr  = _make_mr(client, tok, setup["project"]["id"], setup["site"]["id"],
                        supplier_id=setup["supplier_email"]["id"])
         # MR is still DRAFT — not yet submitted or approved
@@ -284,12 +363,13 @@ class TestQuoteApprove:
         r = client.post(
             f"/api/v1/procurement/mrs/{mr['id']}/quotes/{qid}/approve",
             json={},
-            headers=auth(tok),
+            headers=auth(owner_tok),
         )
         assert r.status_code == 422
 
     def test_approve_unknown_quote_returns_404(self, db, client, setup):
         tok = login(client, setup["office"]["email"], setup["office"]["password"])
+        owner_tok = login(client, setup["owner"]["email"], setup["owner"]["password"])
         mr  = _make_mr(client, tok, setup["project"]["id"], setup["site"]["id"],
                        supplier_id=setup["supplier_email"]["id"])
         _submit(client, tok, mr["id"])
@@ -297,7 +377,7 @@ class TestQuoteApprove:
         r = client.post(
             f"/api/v1/procurement/mrs/{mr['id']}/quotes/{uuid.uuid4()}/approve",
             json={},
-            headers=auth(tok),
+            headers=auth(owner_tok),
         )
         assert r.status_code == 404
 

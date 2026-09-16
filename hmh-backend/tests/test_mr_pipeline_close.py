@@ -91,8 +91,8 @@ def _make_full_pipeline(db, project_id: str, site_id: str, supplier_id: str,
     ))
     db.flush()
 
-    # Step 4 — Approved quote
-    db.add(MRQuote(
+    # Step 4 — Approved quote (linked to the PO below, as finalize-pos does)
+    quote = MRQuote(
         id=uuid.uuid4(),
         material_request_id=mr.id,
         supplier_id=uuid.UUID(supplier_id),
@@ -106,7 +106,8 @@ def _make_full_pipeline(db, project_id: str, site_id: str, supplier_id: str,
         status="APPROVED",
         approved_at=_now(),
         created_at=_now(),
-    ))
+    )
+    db.add(quote)
     db.flush()
 
     # Step 5 — Purchase Order
@@ -124,6 +125,12 @@ def _make_full_pipeline(db, project_id: str, site_id: str, supplier_id: str,
         vat_amount=130.43,
     )
     db.add(po)
+    db.flush()
+
+    # finalize-pos links every approved quote to the PO it created. Step 5 only
+    # completes when no approved quote is left without a PO, so the link is part
+    # of a genuinely complete pipeline.
+    quote.purchase_order_id = po.id
     db.flush()
 
     db.add(PurchaseOrderItem(
@@ -295,6 +302,44 @@ class TestMRPipelineAutoClose:
         assert mr_fresh.status == RecordStatus.CLOSED, (
             "An already-CLOSED MR must remain CLOSED after a pipeline call"
         )
+
+    def test_approved_quote_without_po_keeps_pipeline_open(self, client, db, setup):
+        """Premature-close guard: an approved quote with no PO leaves step 5 incomplete,
+        so the MR must not close even though every other record exists."""
+        from app.models.material_request import MaterialRequest
+        from app.models.mr_quote import MRQuote
+        from app.models.enums import RecordStatus
+
+        s = setup
+        mr = _make_full_pipeline(db, s["project_id"], s["site_id"],
+                                 s["supplier_id"], s["owner_id"])
+        # A second approved quote that finalize-pos has not turned into a PO yet
+        db.add(MRQuote(
+            id=uuid.uuid4(),
+            material_request_id=mr.id,
+            supplier_id=uuid.UUID(s["supplier_id"]),
+            description="Extra cement",
+            quoted_quantity=5,
+            unit="bag",
+            unit_price=100,
+            total_price=500,
+            is_selected=True,
+            source="MANUAL",
+            status="APPROVED",
+            approved_at=_now(),
+            created_at=_now(),
+        ))
+        db.flush()
+
+        r = client.get(f"/api/v1/procurement/mrs/{mr.id}/pipeline", headers=auth(s["tok"]))
+        assert r.status_code == 200, r.text
+        data = r.json()["data"]
+        assert data["steps"][4]["status"] != "COMPLETE", "Step 5 must stay open while a quote has no PO"
+        assert data["pipeline_complete"] is False
+        assert data["mr_status"] != "CLOSED"
+
+        db.expire(mr)
+        assert db.get(MaterialRequest, mr.id).status != RecordStatus.CLOSED
 
     def test_cancelled_mr_is_not_auto_closed(self, client, db, setup):
         """A CANCELLED MR must never be auto-closed by the pipeline endpoint."""

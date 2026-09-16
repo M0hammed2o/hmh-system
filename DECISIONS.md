@@ -93,6 +93,12 @@ View stays `ALL_ROLES`, plus project access through the note's site, so `READ_ON
 **2026-09-15 — Warehouse transfer requesters may still vote on their own requests (unchanged).**
 This matches MR staff votes and quote votes (see the 2026-07-08 decision on keeping approval flows consistent). The number of production office voters is unknown, and Owner override already allows single-person execution. Changing it is a client governance decision covering all 3-person approval flows (see KNOWN_BUGS). Site roles cannot vote at all.
 
+**2026-09-16 — Quote approval and PO creation are two separate steps, and single-user approval is an override.**
+Approving a quote (by 3 office votes on `/vote`, or an `OWNER`/`PROCUREMENT_LEAD` override on `/approve`) only marks the quote APPROVED. `POST /procurement/mrs/{id}/finalize-pos` ("Send PO to Suppliers") then creates one PO per supplier, linking each approved quote to its PO and moving the MR to CONVERTED_TO_PO. It only picks up approved quotes with no `purchase_order_id`, and merges into an existing APPROVED PO for the same MR+supplier, so repeat calls cannot duplicate a PO. This was established by commits `4ce1d14` (Phase 3Z) and `9d684a5` and is what the Procurement UI ships; it was never written down, so tests from the older one-step flow survived and looked like product failures. Do not restore PO creation inside quote approval.
+
+**2026-09-16 — Pipeline step 5 stays open while any approved quote has no PO, and that gates MR auto-close.**
+`GET /procurement/mrs/{id}/pipeline` marks step 5 COMPLETE only when `has_any_po and not quotes_without_po`, and auto-closes the MR only when all 7 steps are COMPLETE (never for CANCELLED). This is the guard against closing a multi-supplier MR whose remaining quotes have not been turned into POs. A test fixture that creates an approved quote without linking it to a PO is not a complete pipeline.
+
 ---
 
 ## Lessons (repeated-mistake register)
