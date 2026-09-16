@@ -48,7 +48,7 @@ cronJobs:
     schedule: "*/5 * * * *"
     command: >
       curl -s -f -X POST
-      https://hmh-backend.onrender.com/api/v1/internal/process-notifications
+      https://hmh-backend-uhzu.onrender.com/api/v1/internal/process-notifications
       -H "X-Cron-Secret: $CRON_SECRET"
     envVars:
       - key: CRON_SECRET

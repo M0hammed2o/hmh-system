@@ -94,7 +94,7 @@ Site-level roles (`SITE_MANAGER`, `SITE_STAFF`, `SITE_MANAGER_VIEW`) require an 
 | `development` | Docker (`localhost:55432`) | Disabled (`MOCK_SENT`) | `/docs` enabled | DEBUG=true, SQL logging |
 | `production` | External PostgreSQL | Enabled (if configured) | Hidden | Startup secret checks enforced |
 
-Production URLs: `https://app.hmhgroup.co.za` (frontend) · `https://hmh-backend.onrender.com` (backend)
+Production URLs: `https://app.hmhgroup.co.za` (frontend) · `https://hmh-backend-uhzu.onrender.com` (backend)
 
 ## Commands
 ```bash
