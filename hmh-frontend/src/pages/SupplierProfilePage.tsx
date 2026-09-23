@@ -156,6 +156,14 @@ function DocQuickViewModal({
               <Eye className="w-3.5 h-3.5" />
               View File
             </button>
+          ) : (doc.doc_type === "PURCHASE_ORDER" || doc.doc_type === "MATERIAL_REQUEST") ? (
+            <button
+              onClick={() => { onOpenFile?.(doc); onClose(); }}
+              className="flex items-center gap-1.5 text-xs px-3 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors"
+            >
+              <Eye className="w-3.5 h-3.5" />
+              View Document
+            </button>
           ) : doc.file_url && doc.file_url.startsWith("http") ? (
             <a
               href={doc.file_url}
@@ -405,6 +413,28 @@ function SupplierDocCentre({ supplierId }: { supplierId: string }) {
     }
   };
 
+  /** Re-render a PO/MR document from the live record. Creates nothing, sends nothing. */
+  const openGeneratedDoc = async (doc: SupplierDocument) => {
+    const path = doc.doc_type === "PURCHASE_ORDER"
+      ? `/purchase-orders/${doc.doc_id}/document`
+      : `/material-requests/${doc.doc_id}/document`;
+    setViewerLoading(true);
+    try {
+      const res = await client.get(path, { responseType: "blob" });
+      const url = URL.createObjectURL(res.data as Blob);
+      setViewerDoc({
+        url,
+        title: `${doc.title} (regenerated)`,
+        filename: doc.file_name || `${doc.ref_number}.pdf`,
+        isBlob: true,
+      });
+    } catch {
+      setDocError(`Could not build the document for ${doc.title}.`);
+    } finally {
+      setViewerLoading(false);
+    }
+  };
+
   const handleView = async (doc: SupplierDocument) => {
     setDocError("");
     // Gmail attachments — fetch blob with auth then show inline
@@ -454,7 +484,16 @@ function SupplierDocCentre({ supplierId }: { supplierId: string }) {
         setViewerDoc({ url: doc.file_url, title: doc.title, filename: doc.file_name || doc.title, isBlob: false });
         return;
       }
-      // Relative API path with no attachment id — cannot be fetched with auth.
+    }
+
+    // No stored file — for a PO or MR the document can be re-rendered from the
+    // record itself. Read-only: it creates nothing and changes nothing.
+    if (doc.doc_type === "PURCHASE_ORDER" || doc.doc_type === "MATERIAL_REQUEST") {
+      await openGeneratedDoc(doc);
+      return;
+    }
+
+    if (doc.file_url) {
       setDocError(`No downloadable file is stored for ${doc.title}.`);
       return;
     }

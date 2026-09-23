@@ -1,5 +1,13 @@
 # WORKLOG — append-only, newest first
 
+## 2026-09-23 — View/regenerate PO and MR documents without side effects
+Changed: `hmh-backend/app/api/v1/purchase_orders.py` (+`GET /purchase-orders/{id}/document`); `app/api/v1/material_requests.py` (+`GET /material-requests/{id}/document`); `hmh-frontend/src/pages/SupplierProfilePage.tsx` (PO/MR rows fall back to the regenerated document; "View Document" action in the quick view); new `hmh-backend/tests/test_document_regeneration.py`.
+Reason: PO/MR PDFs are only stored as a side effect of sending the email, so a record whose email was never sent had no viewable document, and there was no way to re-render one without sending again.
+Behaviour: both routes re-render the PDF from the existing record and stream it (`ALL_ROLES` + project access, same as the record's own GET). They create no PO/MR, store no attachment, write no email log and change no status — asserted by repeating each call twice and comparing record/attachment/email-log counts and statuses.
+Tests: new suite 5/5; PO/MR/supplier/attachment/e2e suites 125 passed / 0 failed; `tsc` clean, `vite build` passes, Playwright 32/32.
+Verdict: Self-verified; no independent verifier agent run.
+Unresolved: stored PO/MR PDFs still only appear when the email is sent; viewing saved files needs 91de2cc deployed.
+
 ## 2026-09-23 — Supplier documents: files were unreachable (wrong id)
 Changed: `hmh-backend/app/api/v1/suppliers.py` (`attachment_id` on every document row; delivery rows prefer the stored delivery-note attachment over the raw storage URL); `hmh-frontend/src/api/suppliers.ts` (+`attachment_id`); `hmh-frontend/src/pages/SupplierProfilePage.tsx` (open/preview/delete use `attachment_id`; removed the `window.open` fallback onto a relative API path; image previews fetch a blob; "no stored file" message); `hmh-backend/tests/test_supplier_documents.py` (+5 tests).
 Root cause: rows built from a PO / MR / delivery carry the record id in `doc_id`, but the file lives under a different attachment id. The page fetched `/attachments/{doc_id}/download` → 404, then fell back to `window.open(file_url)` on a *relative* `/api/v1/...` path, which hits the frontend origin and returns the SPA shell — and a plain link/iframe cannot send the Bearer token anyway. Only manual supplier uploads worked, because there `doc_id` IS the attachment id. Invoices and quotations are record-only rows and never had a file.

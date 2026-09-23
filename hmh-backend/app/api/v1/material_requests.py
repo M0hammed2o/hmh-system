@@ -69,6 +69,30 @@ def get_material_request(mr_id: uuid.UUID, db: DbSession, current_user: CurrentU
     return ApiSuccess(data=MaterialRequestRead.model_validate(mr))
 
 
+@mr_router.get("/{mr_id}/document", dependencies=[ALL_ROLES])
+def get_material_request_document(mr_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
+    """Re-render this MR's PDF from its current data and stream it back.
+
+    Read-only on purpose: it creates no MR, changes no status, stores no
+    attachment and sends no email — unlike /send-email, which does all three.
+    """
+    from fastapi.responses import Response
+    from app.services.email_service import _generate_mr_pdf
+
+    mr = secure_project_lookup(mr_service.get_request(db, mr_id), db, current_user)
+    try:
+        pdf_bytes = _generate_mr_pdf(db, mr)
+    except Exception as exc:  # reportlab/data problem — report instead of 500
+        raise HTTPException(422, f"Could not build the MR document: {exc}")
+
+    filename = f"MR-{mr.request_number or str(mr.id)[:8]}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="{filename}"'},
+    )
+
+
 @mr_router.patch("/{mr_id}", response_model=ApiSuccess[MaterialRequestRead], dependencies=[OFFICE_AND_ABOVE])
 def update_material_request(mr_id: uuid.UUID, body: MaterialRequestUpdate, db: DbSession, current_user: CurrentUser):
     get_and_check_project_resource(db, current_user, MaterialRequest, mr_id, "Material request not found.")

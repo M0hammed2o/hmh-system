@@ -172,6 +172,31 @@ def get_purchase_order(po_id: uuid.UUID, db: DbSession, current_user: CurrentUse
     return ApiSuccess(data=PurchaseOrderRead.model_validate(po))
 
 
+@po_router.get("/{po_id}/document", dependencies=[ALL_ROLES])
+def get_purchase_order_document(po_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
+    """Re-render this PO's PDF from its current data and stream it back.
+
+    Read-only on purpose: it creates no PO, changes no status, stores no
+    attachment and sends no email. Use it to view or re-download the document
+    for an existing PO without touching the record.
+    """
+    from fastapi.responses import Response
+    from app.services.email_service import _generate_po_pdf
+
+    po = secure_project_lookup(po_service.get_po(db, po_id), db, current_user)
+    try:
+        pdf_bytes = _generate_po_pdf(po)
+    except Exception as exc:  # reportlab/data problem — report instead of 500
+        raise HTTPException(422, f"Could not build the PO document: {exc}")
+
+    filename = f"PO-{po.po_number or str(po.id)[:8]}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="{filename}"'},
+    )
+
+
 @po_router.patch(
     "/{po_id}",
     response_model=ApiSuccess[PurchaseOrderRead],
