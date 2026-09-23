@@ -408,7 +408,9 @@ def supplier_documents(supplier_id: uuid.UUID, db: DbSession):
             key = str(att.entity_id)
             if key not in po_pdf_map:
                 read = AttachmentRead.model_validate(att)
-                po_pdf_map[key] = read.download_url
+                # (download_url, attachment_id) — the id is what the client must use to
+                # fetch the file; doc_id is the PO's own id and never resolves here.
+                po_pdf_map[key] = (read.download_url, str(att.id))
 
     # Find all MRs emailed to this supplier via MREmailLog (works before a PO exists)
     from app.models.mr_email_log import MREmailLog
@@ -423,6 +425,7 @@ def supplier_documents(supplier_id: uuid.UUID, db: DbSession):
     mr_ids_for_supplier = list({log.material_request_id for log in mr_email_logs})
 
     for po in pos:
+        po_url, po_att_id = po_pdf_map.get(str(po.id), (None, None))
         docs.append({
             "doc_id":        str(po.id),
             "doc_type":      "PURCHASE_ORDER",
@@ -431,9 +434,10 @@ def supplier_documents(supplier_id: uuid.UUID, db: DbSession):
             "date":          po.po_date.date().isoformat() if po.po_date else None,
             "amount":        float(po.total_amount or 0),
             "status":        po.status.value,
-            "file_url":      po_pdf_map.get(str(po.id)),
+            "file_url":      po_url,
+            "attachment_id": po_att_id,
             "file_name":     f"PO-{po.po_number}.pdf" if po.po_number else None,
-            "is_attachment":  bool(po_pdf_map.get(str(po.id))),
+            "is_attachment":  bool(po_url),
             "detail_path":   f"/procurement?po={po.id}",
         })
 
@@ -448,12 +452,38 @@ def supplier_documents(supplier_id: uuid.UUID, db: DbSession):
                 "amount":       float(inv.total_amount or 0),
                 "status":       inv.status.value,
                 "file_url":     None,
+                "attachment_id": None,
                 "file_name":    None,
                 "is_attachment": False,
                 "detail_path":  f"/reconciliation",
             })
-        for d in db.query(Delivery).filter(Delivery.purchase_order_id.in_(po_ids)).all():
-            img = d.delivery_note_image_url or None
+        deliveries = db.query(Delivery).filter(Delivery.purchase_order_id.in_(po_ids)).all()
+
+        # Prefer the stored delivery-note attachment: it downloads through the
+        # permission-checked endpoint. delivery_note_image_url is a raw storage
+        # URL kept only as a fallback for records saved without an attachment.
+        dn_map: dict = {}
+        if deliveries:
+            dn_atts = (
+                db.query(Attachment)
+                .filter(
+                    Attachment.entity_type == AttachmentEntity.DELIVERY,
+                    Attachment.entity_id.in_([d.id for d in deliveries]),
+                    Attachment.attachment_type == AttachmentType.DELIVERY_NOTE,
+                    Attachment.is_active == True,  # noqa: E712
+                )
+                .order_by(Attachment.uploaded_at.desc())
+                .all()
+            )
+            for att in dn_atts:
+                key = str(att.entity_id)
+                if key not in dn_map:
+                    read = AttachmentRead.model_validate(att)
+                    dn_map[key] = (read.download_url, str(att.id), att.file_name)
+
+        for d in deliveries:
+            dn_url, dn_att_id, dn_name = dn_map.get(str(d.id), (None, None, None))
+            img = dn_url or d.delivery_note_image_url or None
             docs.append({
                 "doc_id":        str(d.id),
                 "doc_type":      "DELIVERY_NOTE",
@@ -463,7 +493,8 @@ def supplier_documents(supplier_id: uuid.UUID, db: DbSession):
                 "amount":        None,
                 "status":        d.delivery_status.value if d.delivery_status else None,
                 "file_url":      img,
-                "file_name":     d.delivery_number or str(d.id)[:8],
+                "attachment_id": dn_att_id,
+                "file_name":     dn_name or d.delivery_number or str(d.id)[:8],
                 "is_attachment":  bool(img),
                 "detail_path":   f"/deliveries",
             })
@@ -478,6 +509,7 @@ def supplier_documents(supplier_id: uuid.UUID, db: DbSession):
             "amount":       float(q.gross_amount or 0),
             "status":       q.status.value,
             "file_url":     None,
+            "attachment_id": None,
             "file_name":    None,
             "is_attachment": False,
             "detail_path":  f"/procurement",
@@ -504,7 +536,7 @@ def supplier_documents(supplier_id: uuid.UUID, db: DbSession):
             key = str(att.entity_id)
             if key not in mr_pdf_map:
                 read = AttachmentRead.model_validate(att)
-                mr_pdf_map[key] = (read.download_url, att.file_name)
+                mr_pdf_map[key] = (read.download_url, att.file_name, str(att.id))
 
         mrs = (
             db.query(MaterialRequest)
@@ -513,7 +545,7 @@ def supplier_documents(supplier_id: uuid.UUID, db: DbSession):
             .all()
         )
         for mr in mrs:
-            pdf_url, pdf_name = mr_pdf_map.get(str(mr.id), (None, None))
+            pdf_url, pdf_name, pdf_att_id = mr_pdf_map.get(str(mr.id), (None, None, None))
             docs.append({
                 "doc_id":        str(mr.id),
                 "doc_type":      "MATERIAL_REQUEST",
@@ -523,6 +555,7 @@ def supplier_documents(supplier_id: uuid.UUID, db: DbSession):
                 "amount":        None,
                 "status":        mr.status.value if hasattr(mr.status, "value") else str(mr.status),
                 "file_url":      pdf_url,
+                "attachment_id": pdf_att_id,
                 "file_name":     pdf_name or f"MR-{mr.request_number}.pdf",
                 "is_attachment": bool(pdf_url),
                 "detail_path":   f"/procurement",
@@ -565,6 +598,7 @@ def supplier_documents(supplier_id: uuid.UUID, db: DbSession):
                 "amount":             None,
                 "status":             "Email Attachment",
                 "file_url":           None,
+                "attachment_id":      None,
                 "file_name":          gatt.filename,
                 "is_attachment":      True,
                 "attachment_type":    "GMAIL",
@@ -599,6 +633,7 @@ def supplier_documents(supplier_id: uuid.UUID, db: DbSession):
             "amount":           None,
             "status":           None,
             "file_url":         read.download_url,
+            "attachment_id":    str(att.id),
             "file_name":        att.file_name,
             "is_attachment":    True,
             "attachment_type":  att.attachment_type.value,

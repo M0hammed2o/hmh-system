@@ -70,10 +70,12 @@ function DocQuickViewModal({
   doc,
   onClose,
   onDownloadGmail,
+  onOpenFile,
 }: {
   doc: SupplierDocument;
   onClose: () => void;
   onDownloadGmail?: (attId: string) => void;
+  onOpenFile?: (doc: SupplierDocument) => void;
 }) {
   const typeLabel = DOC_TYPE_LABELS[doc.doc_type] ?? doc.doc_type;
   const statusColour = doc.status ? (STATUS_COLOURS[doc.status] ?? "text-muted-foreground bg-muted") : "";
@@ -146,7 +148,15 @@ function DocQuickViewModal({
               View from Email
             </button>
           )}
-          {doc.file_url && (
+          {doc.attachment_id ? (
+            <button
+              onClick={() => { onOpenFile?.(doc); onClose(); }}
+              className="flex items-center gap-1.5 text-xs px-3 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors"
+            >
+              <Eye className="w-3.5 h-3.5" />
+              View File
+            </button>
+          ) : doc.file_url && doc.file_url.startsWith("http") ? (
             <a
               href={doc.file_url}
               target="_blank"
@@ -156,7 +166,7 @@ function DocQuickViewModal({
               <Eye className="w-3.5 h-3.5" />
               View File
             </a>
-          )}
+          ) : null}
           {doc.detail_path && (
             <a
               href={doc.detail_path}
@@ -300,9 +310,9 @@ function SupplierDocRow({
           View
         </span>
         <Eye className="w-3.5 h-3.5 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
-        {doc.is_attachment && !doc.gmail_attachment_id && (
+        {doc.doc_type === "ATTACHMENT" && doc.attachment_id && !doc.gmail_attachment_id && (
           <button
-            onClick={e => { e.stopPropagation(); onDeleteAttachment(doc.doc_id); }}
+            onClick={e => { e.stopPropagation(); onDeleteAttachment(doc.attachment_id!); }}
             className="p-1.5 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors opacity-0 group-hover:opacity-100"
             title="Delete"
           >
@@ -325,6 +335,7 @@ function SupplierDocCentre({ supplierId }: { supplierId: string }) {
   const [quickView, setQuickView] = useState<SupplierDocument | null>(null);
   const [viewerDoc, setViewerDoc] = useState<{ url: string; title: string; filename: string; isBlob: boolean } | null>(null);
   const [viewerLoading, setViewerLoading] = useState(false);
+  const [docError, setDocError] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const loadDocs = () => {
@@ -395,6 +406,7 @@ function SupplierDocCentre({ supplierId }: { supplierId: string }) {
   };
 
   const handleView = async (doc: SupplierDocument) => {
+    setDocError("");
     // Gmail attachments — fetch blob with auth then show inline
     if (doc.gmail_attachment_id) {
       setViewerLoading(true);
@@ -407,28 +419,43 @@ function SupplierDocCentre({ supplierId }: { supplierId: string }) {
       return;
     }
 
+    // Stored file (PO PDF, MR PDF, delivery note, manual upload) — fetch through the
+    // permission-checked endpoint with auth headers. attachment_id is the file's own
+    // id; doc_id is the PO/MR/delivery record and never resolves here.
+    if (doc.attachment_id) {
+      setViewerLoading(true);
+      try {
+        const res = await client.get(`/attachments/${doc.attachment_id}/download`, { responseType: "blob" });
+        const url = URL.createObjectURL(res.data as Blob);
+        // Images go to the lightbox, everything else to the document viewer. Both
+        // need the blob URL — the raw file_url is a protected API path that an
+        // <img>/<iframe> cannot authenticate against.
+        if (doc.is_image) {
+          setPreview({ ...doc, file_url: url });
+        } else {
+          setViewerDoc({ url, title: doc.title, filename: doc.file_name || doc.title, isBlob: true });
+        }
+      } catch {
+        setDocError(`Could not open ${doc.file_name || doc.title}. The file may no longer be stored.`);
+      } finally {
+        setViewerLoading(false);
+      }
+      return;
+    }
+
     if (doc.file_url) {
       // Images — use existing lightbox
       if (doc.is_image) {
         setPreview(doc);
         return;
       }
-      // Supabase public URL — use directly in iframe
+      // Absolute storage URL (legacy public bucket) — use directly in iframe
       if (doc.file_url.startsWith("http")) {
         setViewerDoc({ url: doc.file_url, title: doc.title, filename: doc.file_name || doc.title, isBlob: false });
         return;
       }
-      // Local backend file — fetch as blob with auth headers
-      setViewerLoading(true);
-      try {
-        const res = await client.get(`/attachments/${doc.doc_id}/download`, { responseType: "blob" });
-        const url = URL.createObjectURL(res.data as Blob);
-        setViewerDoc({ url, title: doc.title, filename: doc.file_name || doc.title, isBlob: true });
-      } catch {
-        window.open(doc.file_url, "_blank", "noopener,noreferrer");
-      } finally {
-        setViewerLoading(false);
-      }
+      // Relative API path with no attachment id — cannot be fetched with auth.
+      setDocError(`No downloadable file is stored for ${doc.title}.`);
       return;
     }
 
@@ -484,6 +511,7 @@ function SupplierDocCentre({ supplierId }: { supplierId: string }) {
       </div>
 
       {uploadError && <p className="text-xs text-destructive">{uploadError}</p>}
+      {docError && <p className="text-xs text-destructive">{docError}</p>}
 
       {/* Document list */}
       {loading ? (
@@ -539,6 +567,7 @@ function SupplierDocCentre({ supplierId }: { supplierId: string }) {
           doc={quickView}
           onClose={() => setQuickView(null)}
           onDownloadGmail={handleDownloadGmail}
+          onOpenFile={handleView}
         />
       )}
 

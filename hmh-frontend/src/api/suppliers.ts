@@ -166,6 +166,9 @@ export interface SupplierDocument {
   amount: number | null;
   status: string | null;
   file_url: string | null;
+  /** Id of the stored file, when the row has one. This — not doc_id — is what
+   *  /attachments/{id}/download expects; doc_id is the PO/MR/delivery record id. */
+  attachment_id?: string | null;
   file_name: string | null;
   is_attachment: boolean;
   attachment_type?: string;

@@ -102,6 +102,9 @@ Approving a quote (by 3 office votes on `/vote`, or an `OWNER`/`PROCUREMENT_LEAD
 **2026-09-16 — A deliberately skipped supplier email is recorded as an `MREmailLog` row with status `SKIPPED` — no migration.**
 `ApproveBody.send_supplier_email` (default `true`) lets the approver approve without the automatic supplier email. The skip is persisted in the existing `mr_email_logs` table, whose `status` is a free-form `String(50)` and whose `sent_at` is nullable, so no schema change was needed. It is never written as `SENT`/`MOCK_SENT`, and `sent_at` stays null, so nothing looks delivered. Pipeline step 3 treats `email_sent or email_skipped` as COMPLETE — otherwise an MR approved without an email could never finish or auto-close — while still reporting `email_sent: false`, letting the UI show sent / not sent yet / intentionally skipped. The manual `POST /material-requests/{id}/send-email` action still works afterwards and supersedes the skip.
 
+**2026-09-23 — Document rows expose `attachment_id` separately from `doc_id`.**
+In `GET /suppliers/{id}/documents` a row's `doc_id` is the business record (PO, MR, delivery), which is what the UI links to. The stored file has its own id, so every row that advertises a file now also carries `attachment_id`, and that is the only id `/attachments/{id}/download` accepts. Clients must fetch files through the axios client so the Bearer token is sent: `download_url` is a protected relative API path, so a plain `<a href>`, `<img src>` or `window.open` resolves against the frontend origin and returns the SPA shell instead of the file.
+
 ---
 
 ## Lessons (repeated-mistake register)

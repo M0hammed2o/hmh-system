@@ -187,3 +187,139 @@ class TestSupplierDocuments:
         gmail_ids = {d.get("gmail_attachment_id") for d in docs if d.get("gmail_attachment_id")}
         assert str(gatt_mine.id) in gmail_ids
         assert len(gmail_ids) == 1, f"Expected only 1 Gmail doc, got {gmail_ids}"
+
+
+# ── Downloadable file ids (2026-09-23) ────────────────────────────────────────
+# Rows built from a PO / MR / delivery carry the record's own id in doc_id. The
+# stored file lives under a different id, so the row must also expose
+# attachment_id — that is what /attachments/{id}/download resolves.
+
+def _make_stored_attachment(db, entity_type, entity_id, attachment_type, file_name, body=b"%PDF-1.4 test"):
+    """Create a real file under UPLOAD_DIR plus its Attachment row."""
+    from app.core.config import settings
+    from app.models.attachment import Attachment
+
+    rel_dir = "test_supplier_docs"
+    abs_dir = os.path.join(settings.UPLOAD_DIR, rel_dir)
+    os.makedirs(abs_dir, exist_ok=True)
+    unique = f"{uuid.uuid4().hex}_{file_name}"
+    with open(os.path.join(abs_dir, unique), "wb") as fh:
+        fh.write(body)
+
+    att = Attachment(
+        entity_type=entity_type,
+        entity_id=entity_id,
+        file_name=file_name,
+        stored_path=f"{rel_dir}/{unique}",
+        file_url=f"{rel_dir}/{unique}",
+        mime_type="application/pdf",
+        file_size_bytes=len(body),
+        attachment_type=attachment_type,
+        uploaded_at=_now(),
+        is_active=True,
+    )
+    db.add(att)
+    db.flush()
+    return att
+
+
+class TestSupplierDocumentDownloadIds:
+
+    def _docs(self, client, s):
+        r = client.get(f"/api/v1/suppliers/{s['supplier_id']}/documents", headers=auth(s["tok"]))
+        assert r.status_code == 200, r.text
+        return r.json()["data"]
+
+    def test_po_row_exposes_a_downloadable_attachment_id(self, client, db, doc_setup):
+        from app.models.enums import AttachmentEntity, AttachmentType
+        s = doc_setup
+        po = _make_po(db, s["project_id"], s["supplier_id"], s["owner_id"])
+        att = _make_stored_attachment(db, AttachmentEntity.PURCHASE_ORDER, po.id,
+                                      AttachmentType.PO_DOCUMENT, "po.pdf")
+        db.commit()
+
+        row = next(d for d in self._docs(client, s) if d["doc_type"] == "PURCHASE_ORDER")
+        assert row["attachment_id"] == str(att.id)
+        assert row["is_attachment"] is True
+
+        # The exposed id downloads the file...
+        ok = client.get(f"/api/v1/attachments/{row['attachment_id']}/download", headers=auth(s["tok"]))
+        assert ok.status_code == 200, ok.text
+        assert ok.content == b"%PDF-1.4 test"
+
+        # ...while doc_id (the PO record) does not — the bug this guards against.
+        assert row["doc_id"] == str(po.id)
+        bad = client.get(f"/api/v1/attachments/{row['doc_id']}/download", headers=auth(s["tok"]))
+        assert bad.status_code == 404
+
+    def test_po_row_without_a_saved_pdf_has_no_attachment_id(self, client, db, doc_setup):
+        s = doc_setup
+        _make_po(db, s["project_id"], s["supplier_id"], s["owner_id"])
+        db.commit()
+
+        row = next(d for d in self._docs(client, s) if d["doc_type"] == "PURCHASE_ORDER")
+        assert row["attachment_id"] is None
+        assert row["is_attachment"] is False
+        assert row["file_url"] is None
+
+    def test_delivery_row_uses_the_stored_delivery_note(self, client, db, doc_setup):
+        from app.models.delivery import Delivery
+        from app.models.enums import AttachmentEntity, AttachmentType, RecordStatus
+        s = doc_setup
+        po = _make_po(db, s["project_id"], s["supplier_id"], s["owner_id"])
+        d = Delivery(
+            delivery_number=f"DN-{uuid.uuid4().hex[:6].upper()}",
+            purchase_order_id=po.id,
+            supplier_id=uuid.UUID(s["supplier_id"]),
+            project_id=uuid.UUID(s["project_id"]),
+            site_id=uuid.UUID(s["site_id"]),
+            received_by_user_id=uuid.UUID(s["owner_id"]),
+            delivery_date=_now(),
+            delivery_status=RecordStatus.RECEIVED,
+        )
+        db.add(d)
+        db.flush()
+        att = _make_stored_attachment(db, AttachmentEntity.DELIVERY, d.id,
+                                      AttachmentType.DELIVERY_NOTE, "dn.pdf")
+        db.commit()
+
+        row = next(x for x in self._docs(client, s) if x["doc_type"] == "DELIVERY_NOTE")
+        assert row["attachment_id"] == str(att.id)
+        ok = client.get(f"/api/v1/attachments/{row['attachment_id']}/download", headers=auth(s["tok"]))
+        assert ok.status_code == 200, ok.text
+
+    def test_manual_supplier_upload_still_downloads(self, client, db, doc_setup):
+        from app.models.enums import AttachmentEntity, AttachmentType
+        s = doc_setup
+        att = _make_stored_attachment(db, AttachmentEntity.SUPPLIER, uuid.UUID(s["supplier_id"]),
+                                      AttachmentType.INVOICE_COPY, "manual.pdf")
+        db.commit()
+
+        row = next(d for d in self._docs(client, s) if d["doc_type"] == "ATTACHMENT")
+        assert row["attachment_id"] == str(att.id) == row["doc_id"]
+        ok = client.get(f"/api/v1/attachments/{row['attachment_id']}/download", headers=auth(s["tok"]))
+        assert ok.status_code == 200, ok.text
+
+    def test_every_row_with_a_file_exposes_an_id_that_resolves(self, client, db, doc_setup):
+        """No row may advertise a file the client cannot actually fetch."""
+        from app.models.enums import AttachmentEntity, AttachmentType
+        s = doc_setup
+        po = _make_po(db, s["project_id"], s["supplier_id"], s["owner_id"])
+        _make_stored_attachment(db, AttachmentEntity.PURCHASE_ORDER, po.id,
+                                AttachmentType.PO_DOCUMENT, "po.pdf")
+        _make_stored_attachment(db, AttachmentEntity.SUPPLIER, uuid.UUID(s["supplier_id"]),
+                                AttachmentType.INVOICE_COPY, "manual.pdf")
+        db.commit()
+
+        checked = 0
+        for row in self._docs(client, s):
+            if not row.get("is_attachment") or row.get("gmail_attachment_id"):
+                continue
+            file_url = row.get("file_url") or ""
+            if file_url.startswith("http"):
+                continue  # legacy public bucket URL, fetched directly
+            assert row.get("attachment_id"), f"{row['doc_type']} advertises a file but exposes no attachment_id"
+            got = client.get(f"/api/v1/attachments/{row['attachment_id']}/download", headers=auth(s["tok"]))
+            assert got.status_code == 200, f"{row['doc_type']}: {got.status_code}"
+            checked += 1
+        assert checked >= 2
