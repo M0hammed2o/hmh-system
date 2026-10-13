@@ -1,5 +1,8 @@
 /**
- * AI Document Import.
+ * Bypass Orders — the user-facing name for AI Document Import.
+ *
+ * The route, API paths, services and database tables keep the ai_import
+ * name. Only what staff read is renamed.
  *
  * Upload scanned or photographed procurement paperwork — material requests,
  * purchase orders, delivery notes, invoices — in any mix and any order. The
@@ -271,7 +274,7 @@ function UploadPanel({
         {busy ? (
           <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Uploading {progress}%</>
         ) : (
-          <><Upload className="w-4 h-4 mr-2" /> Upload {files.length || ""} document{files.length === 1 ? "" : "s"}</>
+          <><Upload className="w-4 h-4 mr-2" /> Import {files.length || ""} document{files.length === 1 ? "" : "s"}</>
         )}
       </Button>
     </div>
@@ -456,7 +459,7 @@ function DocumentQueue({
         <EmptyState
           icon={Inbox}
           title="No documents match these filters"
-          description="Upload scanned paperwork on the Upload tab, or widen the filters."
+          description="Import scanned paperwork on the Import Documents tab, or widen the filters."
         />
       ) : (
         <>
@@ -793,8 +796,8 @@ export default function AIDocumentImportPage() {
   return (
     <div className="p-4 sm:p-6 max-w-[1400px] mx-auto">
       <PageHeader
-        title="AI Document Import"
-        description="Scan or upload procurement paperwork. The system reads each document, works out what it relates to, and asks you to confirm before anything is posted."
+        title="Bypass Orders"
+        description="Upload material requests, purchase orders, delivery notes and supplier invoices. AI will automatically identify, extract and reconcile the documents with the correct project and records."
         actions={
           <Button variant="outline" onClick={bump}>
             <RefreshCw className="w-4 h-4 mr-2" /> Refresh
@@ -804,7 +807,7 @@ export default function AIDocumentImportPage() {
 
       <Tabs
         tabs={[
-          { key: "upload", label: "Upload" },
+          { key: "upload", label: "Import Documents" },
           { key: "documents", label: "Documents" },
           { key: "dashboard", label: "Reconciliation" },
         ]}

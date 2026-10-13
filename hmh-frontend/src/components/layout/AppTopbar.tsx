@@ -22,7 +22,7 @@ const pageTitles: Record<string, string> = {
   "/suppliers":       "Suppliers",
   "/deliveries":      "Deliveries",
   "/gmail-inbox":     "Gmail Inbox",
-  "/ai-document-import": "AI Document Import",
+  "/ai-document-import": "Bypass Orders",
   "/stock":           "Stock",
   "/site-materials":  "Site Materials",
   "/labour":          "Job Cards",
@@ -68,7 +68,7 @@ const navGroups = [
       { title: "Suppliers",       path: "/suppliers",       icon: Building2 },
       { title: "Deliveries",      path: "/deliveries",      icon: Truck },
       { title: "Gmail Inbox",     path: "/gmail-inbox",     icon: Mail },
-      { title: "AI Document Import", path: "/ai-document-import", icon: ScanLine },
+      { title: "Bypass Orders", path: "/ai-document-import", icon: ScanLine },
     ],
   },
   {

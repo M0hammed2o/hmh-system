@@ -1,7 +1,11 @@
 import client from "./client";
 
 /**
- * AI Document Import & Reconciliation Engine.
+ * Bypass Orders (AI Document Import & Reconciliation Engine).
+ *
+ * "Bypass Orders" is the user-facing name. The API paths, services and
+ * tables keep the ai_import name deliberately — renaming them would be a
+ * migration and an API break for no user benefit.
  *
  * Upload scanned procurement paperwork, let the backend read and reconcile it,
  * review what it found, and post the authorised result through the existing

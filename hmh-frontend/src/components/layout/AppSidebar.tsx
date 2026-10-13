@@ -35,7 +35,7 @@ const navGroups = [
       { title: "Reconciliation",       path: "/reconciliation",        icon: GitMerge },
       { title: "Procurement Analytics",path: "/procurement-analytics", icon: BarChart2 },
       { title: "Gmail Inbox",          path: "/gmail-inbox",           icon: Mail },
-      { title: "AI Document Import",   path: "/ai-document-import",    icon: ScanLine },
+      { title: "Bypass Orders",        path: "/ai-document-import",    icon: ScanLine },
     ],
   },
   {
