@@ -36,7 +36,7 @@ Only these. Everything else is done.
 | # | Blocker | Needed from | Clears by |
 |---|---|---|---|
 | **B1** | **No Anthropic API key.** Without it the engine runs in degraded mode: it stores, hashes, deduplicates and routes documents, but reads almost nothing. A pilot on that would fail for the wrong reason. | You | Creating a TEST-only key and setting it in the Render dashboard |
-| **B2** | **Extraction accuracy unmeasured.** Nobody knows how well the model reads an HMH invoice. Piloting before measuring means staff discover the error rate on real paperwork. | Whoever runs the pilot | `LIVE_VALIDATION.md` §4 (fictional samples, ~10 min) then §5 (~20 historical invoices) |
+| **B2** | **Extraction accuracy unmeasured.** Nobody knows how well the model reads an HMH invoice. Piloting before measuring means staff discover the error rate on real paperwork. | Whoever runs the pilot | `python scripts/validate_ai_import_live.py` (one command, ~1 min, prints a verdict) then `LIVE_VALIDATION.md` §5 (~20 historical invoices) |
 | **B3** | **Supabase TEST credentials not verified.** `SUPABASE_SERVICE_KEY` for the TEST project must be set, and the signed-URL round trip confirmed once. | You | Setting the key, then `LIVE_VALIDATION.md` §6 (~10 min) |
 
 Not blockers, but decisions you should make knowingly:
@@ -124,8 +124,10 @@ Each step is verifiable before the next.
    `GET /health/db` reports `db=connected`.
 5. **Confirm the startup log** shows
    `ai_import_worker=started ... auto_post=False`.
-6. **Run `LIVE_VALIDATION.md` §4** against the fictional samples. This is the
-   step that clears B1 and B2 in part.
+6. **Run `python scripts/validate_ai_import_live.py`** on the TEST instance
+   (or locally with the key set). One command, prints PASS / MARGINAL / FAIL
+   against the fictional samples. This is the step that clears B1 and part
+   of B2. Then walk the UI steps in `LIVE_VALIDATION.md` §4.
 7. **Run `LIVE_VALIDATION.md` §6** for storage. Clears B3.
 8. **Measure accuracy** on ~20 closed historical invoices (§5). Post nothing.
 9. **Run the pilot** per `AI_DOCUMENT_IMPORT_PILOT.md`.

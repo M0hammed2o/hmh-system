@@ -74,6 +74,33 @@ answer key for section 4.
 
 **Cost: roughly $0.02–0.10 for the whole section** at `claude-opus-5-5` rates.
 
+### The one-command version
+
+```bash
+cd hmh-backend
+python scripts/validate_ai_import_live.py
+```
+
+This calls the real API on all four fictional samples, compares every field
+against the answer key, and prints a verdict. It writes nothing to the
+database and posts nothing.
+
+| Exit code | Meaning |
+|---|---|
+| `0` | **PASS** — every critical field read, ≥95% overall. Go to section 5. |
+| `1` | **MARGINAL** — critical fields read, but below 95%. Usable with review; tune the prompt before widening. |
+| `2` | **FAIL** — a supplier, document number or total was misread. Do not pilot. |
+| `3` | Could not run — no `ANTHROPIC_API_KEY`. |
+
+The comparison logic itself is verified: it reports PASS on correct data and
+FAIL (naming the offending fields) on a deliberately misreading model.
+
+Run this first. Then walk the UI steps below, which check the parts a script
+cannot — that the original renders beside the extraction, that confidence
+markers land on the right fields, and that corrections behave.
+
+### The manual walkthrough
+
 1. Set `ANTHROPIC_API_KEY` in the backend environment. Do not commit it.
    Confirm `AI_IMPORT_AUTO_POST_ENABLED=false`.
 2. Start the backend. The startup log must show
