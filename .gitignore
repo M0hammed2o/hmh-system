@@ -50,6 +50,10 @@ tools/screenshots/output/
 # Claude Code
 .claude/scheduled_tasks.lock
 
+# AI Document Import — regenerable fictional samples
+# (python scripts/generate_ai_import_samples.py)
+hmh-backend/sample_documents/
+
 # Local database backups
 *.sql.backup
 hmh_system_backup_*.sql

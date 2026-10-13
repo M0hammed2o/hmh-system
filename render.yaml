@@ -28,6 +28,25 @@ services:
       - key: PYTHON_VERSION
         value: "3.11"
 
+      # ── AI Document Import ────────────────────────────────────────────
+      # OFF in production until the TEST pilot produces a measured
+      # extraction accuracy figure. This is explicit rather than left to
+      # the code default (which is on), so that deploying the feature does
+      # not quietly make it available to staff before anyone has verified
+      # how well it reads a real HMH invoice.
+      #
+      # To turn it on after the pilot:
+      #   1. AI_IMPORT_ENABLED=true
+      #   2. add ANTHROPIC_API_KEY and CRON_SECRET in the dashboard
+      #   3. add the two cron jobs (see render.test.yaml for the shape)
+      # Leave AI_IMPORT_AUTO_POST_ENABLED=false. Automatic posting is a
+      # business decision taken on evidence, not a deployment setting.
+      # See docs/AI_DOCUMENT_IMPORT_PILOT.md.
+      - key: AI_IMPORT_ENABLED
+        value: "false"
+      - key: AI_IMPORT_AUTO_POST_ENABLED
+        value: "false"
+
   - type: web
     name: hmh-frontend
     runtime: static

@@ -29,8 +29,15 @@ backend has SMTP, IMAP, WhatsApp, OCR/AI calls and cron endpoints disabled.
    check).
 4. Deploy the frontend. Map `test.hmhgroup.co.za` to the TEST frontend in
    Render and at the DNS provider, then wait for managed TLS to become active.
-5. Never add production email, WhatsApp, Google, Anthropic or webhook secrets
-   to either TEST service.
+5. Never add **production** email, WhatsApp, Google, Anthropic or webhook
+   secrets to either TEST service.
+
+   One deliberate exception, added for the AI Document Import pilot: TEST may
+   hold an Anthropic API key, because measuring extraction accuracy is the
+   whole point of the pilot and cannot be done without one. It must be a
+   **separate key issued for TEST**, with its own spend limit, revocable
+   independently — never the production key. Everything else on this list
+   stands. See `docs/AI_DOCUMENT_IMPORT_PILOT.md`.
 
 ## Recreate the TEST data
 
