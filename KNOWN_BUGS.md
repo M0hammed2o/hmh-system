@@ -1,5 +1,19 @@
 # KNOWN BUGS & ACCEPTED RISKS
 
+## Pre-existing test failures (verified 2026-10-13, not caused by current work)
+
+Three backend tests fail on `main` with no uncommitted changes. Confirmed
+twice (2026-10-12 and again 2026-10-13, the second time including a change to
+`delivery_service.py`) by stashing the AI Document Import work and re-running
+them: they fail identically either way. Full suite is otherwise 1296 passed.
+
+- `tests/test_document_ai_service.py::TestDeliveryItemOptionalUnit::test_multiple_items_mixed_units`
+- `tests/test_gmail_processing.py::TestMRMatching::test_no_mr_reference_returns_no_reference`
+- `tests/test_whatsapp.py::TestCronEndpoint::test_correct_secret_processes_queue`
+
+Not investigated — flagged here so a future session does not attribute them to
+whatever it is working on.
+
 Source: `SECURITY_AUDIT_PHASE_B.md` (2026-05-26), `PRODUCTION_DEPLOY_CHECKLIST.md` (2026-05-26), session observations.
 Status labels: **Open**, **Accepted risk**, **Deferred**, **Production blocker**.
 

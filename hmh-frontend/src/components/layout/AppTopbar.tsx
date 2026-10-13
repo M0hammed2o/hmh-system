@@ -5,7 +5,7 @@ import {
   LayoutDashboard, Users, FolderKanban, FileSpreadsheet,
   ShoppingCart, Truck, Package, CreditCard, Bell, Settings,
   Copy, Building2, Mail, FileCheck2, Car, Droplet,
-  Smartphone, Clock, User, Flag, Warehouse, AlertTriangle,
+  Smartphone, Clock, User, Flag, Warehouse, AlertTriangle, ScanLine,
 } from "lucide-react";
 import { TOKEN_KEY, REFRESH_TOKEN_KEY, ROLE_KEY, DUAL_ACCESS_ROLE_SET } from "@/lib/constants";
 import { useAuthContext } from "@/context/AuthContext";
@@ -22,6 +22,7 @@ const pageTitles: Record<string, string> = {
   "/suppliers":       "Suppliers",
   "/deliveries":      "Deliveries",
   "/gmail-inbox":     "Gmail Inbox",
+  "/ai-document-import": "AI Document Import",
   "/stock":           "Stock",
   "/site-materials":  "Site Materials",
   "/labour":          "Job Cards",
@@ -67,6 +68,7 @@ const navGroups = [
       { title: "Suppliers",       path: "/suppliers",       icon: Building2 },
       { title: "Deliveries",      path: "/deliveries",      icon: Truck },
       { title: "Gmail Inbox",     path: "/gmail-inbox",     icon: Mail },
+      { title: "AI Document Import", path: "/ai-document-import", icon: ScanLine },
     ],
   },
   {

@@ -330,7 +330,17 @@ def create_delivery(
         except Exception:
             db.rollback()
 
-    return _get_delivery_or_404(db, delivery.id)
+    # The delivery is committed by this point, so this must not raise: a
+    # post-commit exception would tell the caller nothing was written when
+    # the stock ledger has already moved. Re-query only to eager-load the
+    # items, and fall back to the in-session object if that lookup misses.
+    reloaded = (
+        db.query(Delivery)
+        .options(joinedload(Delivery.items))
+        .filter(Delivery.id == delivery.id)
+        .first()
+    )
+    return reloaded if reloaded is not None else delivery
 
 
 def receive_stock(

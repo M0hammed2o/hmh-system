@@ -46,6 +46,42 @@ TestSessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False, 
 def ensure_tables():
     """Create all tables once per test session. Also relaxes NOT NULL on updated columns."""
     from sqlalchemy import text as _t
+
+    # ── Enum types the ORM declares with create_type=False ────────────────────
+    # create_all() will not emit CREATE TYPE for these, so they must exist
+    # before the tables that use them. Mirrors alembic 0076.
+    _AI_IMPORT_ENUMS = {
+        "ai_import_batch_status_enum": (
+            "'OPEN', 'PROCESSING', 'COMPLETE', 'CANCELLED'"
+        ),
+        "ai_import_document_type_enum": (
+            "'MATERIAL_REQUEST', 'PURCHASE_ORDER', 'SUPPLIER_INVOICE', 'DELIVERY_NOTE', "
+            "'GOODS_RECEIVED_NOTE', 'SUPPLIER_CREDIT_NOTE', 'PAYMENT_PROOF', 'UNKNOWN'"
+        ),
+        "ai_import_document_status_enum": (
+            "'UPLOADED', 'QUEUED', 'PROCESSING', 'EXTRACTED', 'CLASSIFIED', 'MATCHING', "
+            "'AWAITING_REVIEW', 'AWAITING_AUTHORISATION', 'READY_TO_POST', 'POSTED', "
+            "'PARTIALLY_POSTED', 'FAILED', 'REJECTED', 'DUPLICATE'"
+        ),
+        "ai_import_processing_outcome_enum": (
+            "'AUTO_ELIGIBLE', 'NEEDS_REVIEW', 'BLOCKED'"
+        ),
+        "ai_import_match_status_enum": (
+            "'PROPOSED', 'CONFIRMED', 'REJECTED', 'AMBIGUOUS'"
+        ),
+        "ai_import_job_status_enum": (
+            "'PENDING', 'RUNNING', 'COMPLETED', 'FAILED', 'DEAD'"
+        ),
+    }
+    with engine.begin() as conn:
+        for _name, _labels in _AI_IMPORT_ENUMS.items():
+            conn.execute(_t(f"""
+                DO $$ BEGIN
+                    CREATE TYPE {_name} AS ENUM ({_labels});
+                EXCEPTION WHEN duplicate_object THEN NULL;
+                END $$;
+            """))
+
     Base.metadata.create_all(bind=engine)
     # ── Schema patches for test DB (create_all skips existing tables) ────────────
     with engine.begin() as conn:
@@ -684,6 +720,16 @@ def ensure_tables():
             END $$;
         """))
 
+    # migration 0076: partial unique index on live AI import jobs.
+    # create_all() cannot express a WHERE-filtered unique index, so add it
+    # here; without it the duplicate-concurrent-job guard is untested.
+    with engine.begin() as conn:
+        conn.execute(_t("""
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_ai_import_jobs_active
+            ON ai_import_jobs (document_id, job_type)
+            WHERE status IN ('PENDING', 'RUNNING')
+        """))
+
     yield
 
 
@@ -692,7 +738,11 @@ def db():
     """Yield a DB session that is rolled back after each test."""
     connection = engine.connect()
     transaction = connection.begin()
-    session = Session(bind=connection)
+    # create_savepoint makes commit/rollback inside application code behave as it
+    # does in production: a commit survives a later rollback. The default mode
+    # rolls the whole fixture transaction back, which hides real bugs and
+    # invents fake ones.
+    session = Session(bind=connection, join_transaction_mode="create_savepoint")
 
     yield session
 

@@ -36,7 +36,11 @@ google-cloud-vision>=3.4.0   # Google Vision OCR (OCR_PROVIDER=google_vision)
 pypdf>=4.0.0                  # Pure-Python PDF text extraction (no binary deps — works on Render)
 
 # AI / LLM
-anthropic>=0.40.0             # Anthropic Claude API — AI OCR field extraction (Phase 6A)
+# 0.109.1 is the version verified against this code. The AI Document Import
+# engine calls messages.create(output_config=...), which older releases do
+# not accept — a looser floor lets a fresh install resolve to an SDK that
+# raises TypeError on every extraction.
+anthropic>=0.109.1            # Anthropic Claude API — AI OCR + AI Document Import
 
 # Analytics / Export
 openpyxl==3.1.2               # Excel (.xlsx) export for management reports
