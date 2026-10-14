@@ -195,9 +195,13 @@ def test_the_same_note_number_from_a_different_supplier_is_not_a_duplicate(db, w
 
 
 def test_one_delivery_posting_stock_twice_is_flagged(db, world):
-    """No duplicate note number — the duplicate is in the ledger."""
+    """
+    No duplicate note number — the duplicate is in the ledger: one captured
+    line, two movements against it.
+    """
     d = _delivery(db, world["project"], world["site"], world["supplier"],
                   note_number="DN-7777")
+    _delivery_item(db, d, world["item"], 100)
     _ledger(db, world["project"], world["lot"], world["item"], d, 100)
     _ledger(db, world["project"], world["lot"], world["item"], d, 100)
     db.commit()
@@ -595,3 +599,88 @@ def test_a_cancelled_duplicate_does_not_block_recapture(db, world):
     db.commit()
 
     assert db.query(Delivery).filter(Delivery.project_id == pid).count() == 2
+
+
+# ── Partial receipts and multi-line notes must not be mistaken for duplicates ─
+
+def _delivery_item(db, delivery, item, qty, *, unit_cost=10):
+    from app.models.delivery import DeliveryItem
+
+    di = DeliveryItem(
+        delivery_id=delivery.id,
+        item_id=uuid.UUID(item["id"]),
+        description=item["name"],
+        quantity_received=qty,
+        unit="bag",
+        created_at=_now(),
+    )
+    db.add(di)
+    db.flush()
+    return di
+
+
+def test_one_note_listing_the_same_item_twice_is_genuine(db, world):
+    """
+    create_delivery writes one ledger row per LINE. A note with two batches
+    of the same cement is two movements for one item and is entirely
+    legitimate — reversing it would destroy a real delivery.
+    """
+    d = _delivery(db, world["project"], world["site"], world["supplier"],
+                  note_number="DN-8001")
+    _delivery_item(db, d, world["item"], 60)
+    _delivery_item(db, d, world["item"], 40)
+    _ledger(db, world["project"], world["lot"], world["item"], d, 60)
+    _ledger(db, world["project"], world["lot"], world["item"], d, 40)
+    db.commit()
+
+    report = cleanup.classify(db, _project_id(world))
+    row = report["delivery_notes"][0]
+
+    assert row["verdict"] == cleanup.GENUINE, row["reason"]
+    assert cleanup.plan(report) == []
+
+
+def test_a_movement_with_no_line_behind_it_is_still_caught(db, world):
+    """Two movements, one line — that is a genuine double posting."""
+    d = _delivery(db, world["project"], world["site"], world["supplier"],
+                  note_number="DN-8002")
+    _delivery_item(db, d, world["item"], 100)
+    _ledger(db, world["project"], world["lot"], world["item"], d, 100)
+    _ledger(db, world["project"], world["lot"], world["item"], d, 100)
+    db.commit()
+
+    report = cleanup.classify(db, _project_id(world))
+    assert report["delivery_notes"][0]["verdict"] == cleanup.DUPLICATE_LEDGER
+
+
+def test_a_partial_receipt_against_a_po_is_genuine(db, world):
+    """Two separate partial deliveries, each with its own note number."""
+    first = _delivery(db, world["project"], world["site"], world["supplier"],
+                      note_number="DN-8003", when=date(2026, 3, 18))
+    _delivery_item(db, first, world["item"], 60)
+    _ledger(db, world["project"], world["lot"], world["item"], first, 60)
+
+    second = _delivery(db, world["project"], world["site"], world["supplier"],
+                       note_number="DN-8004", when=date(2026, 3, 25))
+    _delivery_item(db, second, world["item"], 40)
+    _ledger(db, world["project"], world["lot"], world["item"], second, 40)
+    db.commit()
+
+    report = cleanup.classify(db, _project_id(world))
+    assert report["totals"]["genuine"] == 2
+    assert cleanup.plan(report) == []
+
+
+def test_a_delivery_with_no_captured_lines_is_left_alone(db, world):
+    """
+    Legacy or imported rows may carry movements but no DeliveryItem lines.
+    With nothing to compare against, the utility must not guess.
+    """
+    d = _delivery(db, world["project"], world["site"], world["supplier"],
+                  note_number="DN-8005")
+    _ledger(db, world["project"], world["lot"], world["item"], d, 100)
+    _ledger(db, world["project"], world["lot"], world["item"], d, 100)
+    db.commit()
+
+    report = cleanup.classify(db, _project_id(world))
+    assert report["delivery_notes"][0]["verdict"] == cleanup.GENUINE

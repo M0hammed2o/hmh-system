@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from app.core.config import settings
 from app.core.exceptions import ValidationError
 from app.models.ai_import import AIImportMatch, AIImportPosting
 from app.models.enums import (
@@ -585,3 +586,52 @@ def test_reclaiming_a_job_records_which_worker_died(db):
 
     db.refresh(job)
     assert "dead-host:1234" in job.last_error
+
+
+# ── Service status: an honest account of what the installation can do ────────
+#
+# Bypass Orders degrades rather than fails when its external integrations are
+# absent. The operator has to be able to tell "nothing was extracted because
+# no provider is configured" from "nothing was extracted because the scan was
+# bad", so the page reads this endpoint.
+
+def test_service_status_reports_each_integration(client, db):
+    user = make_user(db, role="OFFICE_ADMIN")
+    token = login(client, user["email"], "Test@1234")
+
+    r = client.get("/api/v1/ai-import/service-status", headers=auth(token))
+    assert r.status_code == 200, r.text
+    data = r.json()["data"]
+
+    for key in ("enabled", "extraction_available", "extraction_model",
+                "private_storage_configured", "auto_post_enabled",
+                "worker_enabled"):
+        assert key in data, f"service-status is missing {key}"
+
+    # Nothing here may be or contain a credential.
+    assert data["extraction_model"] == settings.AI_IMPORT_MODEL
+    assert isinstance(data["extraction_available"], bool)
+    blob = str(data).lower()
+    assert "sk-ant" not in blob and "key" not in [k for k in data if "key" in k]
+
+
+def test_service_status_never_claims_auto_posting_is_on_when_it_is_off(client, db):
+    user = make_user(db, role="OFFICE_ADMIN")
+    token = login(client, user["email"], "Test@1234")
+
+    r = client.get("/api/v1/ai-import/service-status", headers=auth(token))
+    assert r.json()["data"]["auto_post_enabled"] == settings.AI_IMPORT_AUTO_POST_ENABLED
+    assert settings.AI_IMPORT_AUTO_POST_ENABLED is False
+
+
+def test_service_status_is_not_public(client):
+    assert client.get("/api/v1/ai-import/service-status").status_code in (401, 403)
+
+
+def test_service_status_refuses_a_role_with_no_import_access(client, db):
+    """Site staff have no business reading the import service's configuration."""
+    user = make_user(db, role="SITE_STAFF")
+    token = login(client, user["email"], "Test@1234")
+
+    r = client.get("/api/v1/ai-import/service-status", headers=auth(token))
+    assert r.status_code == 403, r.text

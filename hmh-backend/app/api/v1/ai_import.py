@@ -53,6 +53,7 @@ from app.schemas.ai_import import (
     RejectRequest,
 )
 from app.schemas.common import ApiSuccess
+from app.services import ai_import_extraction_service as extraction
 from app.services import ai_import_matching_service as matching
 from app.services import ai_import_policy_service as policy
 from app.services import ai_import_posting_service as posting_service
@@ -321,7 +322,7 @@ async def upload_documents(
     if not settings.AI_IMPORT_ENABLED:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="AI Document Import is switched off.",
+            detail="Bypass Orders is switched off.",
         )
 
     batch = ai_import_service.get_batch(db, batch_id)
@@ -866,6 +867,32 @@ def get_dashboard(
         date_from=date_from, date_to=date_to,
     )
     return ApiSuccess(data=ai_import_service.dashboard(db, filters, viewer=current_user))
+
+
+@router.get("/service-status", response_model=ApiSuccess[dict], dependencies=[IMPORT_VIEWERS])
+def get_service_status():
+    """
+    What this installation can actually do right now.
+
+    Bypass Orders degrades rather than fails when its external integrations
+    are absent: without an AI provider it still stores, hashes, de-duplicates
+    and routes documents to human review, but reads almost nothing off them.
+    That difference has to be visible to the operator, otherwise an empty
+    extraction looks like a bad document rather than an unconfigured service.
+
+    Deliberately viewer-level and free of secrets: it reports whether each
+    integration is configured, never any part of a credential.
+    """
+    from app.core.storage import _supabase_enabled
+
+    return ApiSuccess(data={
+        "enabled": settings.AI_IMPORT_ENABLED,
+        "extraction_available": extraction.ai_available(),
+        "extraction_model": extraction.ai_model(),
+        "private_storage_configured": _supabase_enabled(),
+        "auto_post_enabled": settings.AI_IMPORT_AUTO_POST_ENABLED,
+        "worker_enabled": settings.AI_IMPORT_WORKER_ENABLED,
+    })
 
 
 @router.get("/health", response_model=ApiSuccess[dict], dependencies=[OFFICE_ADMIN_AND_ABOVE])

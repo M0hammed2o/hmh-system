@@ -91,8 +91,14 @@ assert len(_seen_item_ids) == len(set(_seen_item_ids)), (
 
 The allocated quantity of a merged row is added to the survivor, so the BOQ
 allocation total is unchanged — only the delivered and used figures stop
-multiplying. The assertion makes a regression fail loudly rather than quietly
-inflating a number again.
+multiplying.
+
+A runtime guard, `_enforce_one_row_per_item`, re-checks the invariant on
+every request. It is deliberately **not** an assertion: `python -O` strips
+those, and raising would take the whole staff dashboard down over a display
+concern. Instead it folds any straggler the way de-duplication would have,
+and logs `boq_dedup_invariant_broken` at ERROR so a regression is found
+rather than silently tolerated.
 
 Applied to **both** endpoints. They had drifted into holding two copies of
 the same logic; fixing one would have left the other wrong.
@@ -117,7 +123,7 @@ load after deployment.
 
 ## 3. Tests that stop it coming back
 
-`tests/test_site_dashboard_boq_duplication.py` — 10 tests, all passing:
+`tests/test_site_dashboard_boq_duplication.py` — 15 tests, all passing:
 
 | Test | Guards |
 |---|---|
@@ -131,6 +137,11 @@ load after deployment.
 | `test_another_projects_delivery_does_not_leak_in` | project isolation |
 | `test_project_lot_summary_does_not_duplicate_used_quantities` | the second endpoint |
 | `test_project_lot_summary_still_totals_allocation_across_sections` | the second endpoint |
+| `test_the_guard_folds_a_colliding_row_instead_of_raising` | the runtime guard repairs rather than 500s |
+| `test_the_guard_leaves_a_healthy_list_untouched` | no effect in the normal case |
+| `test_the_guard_keeps_rows_without_a_catalogue_item` | free-text rows never folded together |
+| `test_the_guard_logs_when_it_fires` | a regression is visible in the logs |
+| `test_no_assertion_remains_in_the_dedup_path` | `python -O` cannot strip the invariant |
 
 Verified load-bearing: reverting the fix fails 3 of them; restoring it passes
 all 10.
@@ -203,6 +214,20 @@ Note numbers are compared case- and whitespace-insensitively. A blank note
 number never pairs with another blank one. The same number from a *different*
 supplier is not a duplicate.
 
+### Partial receipts are not duplicates
+
+The first cut of the classifier flagged any delivery with more than one
+`DELIVERY_RECEIVED` movement for an item as a double posting. That was wrong
+and would have destroyed real data: `create_delivery` writes **one ledger row
+per delivery line**, so a legitimate note listing the same item twice — two
+batches at different rates, or two BOQ lines — looked exactly like a
+duplicate.
+
+The signal is now a movement with no line behind it: movements for an item
+exceeding the captured lines for that item. Two separate partial deliveries,
+each with its own note number, are two genuine notes. A delivery carrying no
+captured lines at all is left alone rather than guessed at.
+
 ### What it will not do
 
 - **It deletes nothing.** Stock is reversed by writing a contra entry; the
@@ -258,7 +283,7 @@ exact planned actions.
 
 ### Its own tests
 
-`tests/test_delivery_note_cleanup.py` — 21 tests, all passing: classification
+`tests/test_delivery_note_cleanup.py` — 25 tests, all passing: classification
 in both directions, the dry run changing nothing, reversal correcting the BOQ
 delivered figure *and* stock on hand without registering as consumption,
 nothing deleted, an audit event written, a second run being a no-op,
@@ -316,9 +341,9 @@ notes" was the wrong first move.
 | Item | Status |
 |---|---|
 | Root cause identified | Done — dashboard aggregation, both endpoints |
-| Code defect fixed | Done, 10 regression tests |
+| Code defect fixed | Done, 15 regression tests, no runtime assertions |
 | Duplicate posting guard added | Done, 5 tests — `create_delivery` had none |
-| Cleanup utility built | Done, 21 tests, dry run by default |
+| Cleanup utility built | Done, 25 tests, dry run by default |
 | Per-note Dassenhoek inventory | **Blocked** — no reachable database |
 | Before/after live totals | **Blocked** — same |
 | Production data changed | **No. Nothing has been executed.** |

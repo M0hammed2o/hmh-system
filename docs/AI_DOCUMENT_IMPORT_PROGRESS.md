@@ -168,3 +168,96 @@ TEST_DATABASE_URL=postgresql://hmh:hmhdev@127.0.0.1:55433/hmh_test
 ```
 The 181-test session-1 baseline reproduced exactly on this fresh cluster,
 which also confirms the suite depends on no leftover state.
+
+---
+
+# Session 4 — Dassenhoek BOQ fix, Bypass Orders, production enablement
+
+2026-10-14. Branch `feat/ai-document-import`, from commit `19464d6`.
+
+## What changed
+
+### The Dassenhoek duplication was a dashboard defect, not duplicated data
+
+Both material-summary endpoints de-duplicated BOQ rows on
+`(raw_description, unit)` while delivered and used quantities are looked up
+by `item_id`. Two BOQ rows sharing a catalogue item but worded differently
+both survived, and each claimed the full delivered quantity. One 100-bag
+delivery read as 200. Identity is now the catalogue item where there is one.
+Full write-up: `docs/DASSENHOEK_DELIVERY_NOTE_CLEANUP.md`.
+
+### The invariant no longer depends on an assertion
+
+The first cut pinned the "one row per catalogue item" invariant with a bare
+`assert`. Two problems: `python -O` strips assertions, and raising would take
+the whole staff dashboard down over a display concern.
+`_enforce_one_row_per_item` now re-checks at runtime, folds any straggler the
+way de-duplication would have, and logs `boq_dedup_invariant_broken` at ERROR
+so a regression is found rather than silently tolerated. A test asserts no
+`assert` remains in either endpoint or the guard.
+
+### create_delivery had no duplicate guard
+
+Found while investigating. A double-tapped submit, a retried request or a
+re-imported historical document each created a second delivery and a second
+set of stock movements — the mechanism that produces genuinely duplicated
+data. `_refuse_duplicate_note` rejects a repeat of a supplier note number
+already recorded for that supplier on that project (409). Blanks never
+collide, other suppliers and projects are unaffected, and a `CANCELLED`
+delivery does not block recapture. The AI import posting path inherits it.
+
+### Cleanup utility: a false positive that would have destroyed real data
+
+`scripts/cleanup_project_delivery_notes.py` originally flagged any delivery
+with more than one `DELIVERY_RECEIVED` movement for an item as a double
+posting. But `create_delivery` writes **one ledger row per delivery line**, so
+a legitimate note listing the same item twice — two batches at different
+rates, or two BOQ lines — looked identical to a duplicate and would have been
+reversed and archived. The signal is now a movement with no line behind it:
+movements per item exceeding captured lines per item. A delivery with no
+captured lines at all is left alone rather than guessed at.
+
+### Bypass Orders is on in production, honestly degraded
+
+`render.yaml` now sets `AI_IMPORT_ENABLED=true` so staff can reach the page
+and upload. `ANTHROPIC_API_KEY` is deliberately **not** in the file — it is
+added in the Render dashboard when you are ready to spend on extraction.
+Until then the engine stores, hashes, de-duplicates and queues documents for
+human review but reads almost nothing off them.
+
+So that this is visible rather than mysterious, `GET
+/api/v1/ai-import/service-status` (viewer-level, no secrets) reports
+`enabled`, `extraction_available`, `extraction_model`,
+`private_storage_configured`, `auto_post_enabled` and `worker_enabled`, and
+the page shows a banner explaining that empty fields are missing
+configuration, not a bad scan.
+
+`AI_IMPORT_AUTO_POST_ENABLED` remains `false` everywhere — code default,
+`render.yaml` and `render.test.yaml`. Nothing reaches stock, supplier
+balances or the ledger without a person approving it.
+
+## Verification
+
+| Check | Result |
+|---|---|
+| Dashboard / BOQ / stock / warehouse subset | 262 passed, 0 failed |
+| Dashboard duplication regression | 15 passed (10 behavioural + 5 for the runtime guard) |
+| Cleanup utility and duplicate guard | 25 passed |
+| AI import safety, incl. service-status | 23 passed |
+| Migrations on an empty database | `alembic upgrade head` → `0076`, 7 `ai_import` tables; second run applies nothing |
+| Migration 0076 content | additive only — 7 `CREATE TABLE`, 13 `CREATE INDEX`, 1 `CREATE TYPE`; no `DROP`/`ALTER`/`TRUNCATE` on existing tables, so the currently-deployed backend keeps working after it runs |
+| Frontend production build | exit 0 |
+| Type check | 0 errors in changed files |
+| Anthropic | model `claude-opus-5-5`, SDK 0.109.1; `ai_available()` is `False` without a key and nothing else breaks |
+
+Each fix was verified load-bearing by reverting it and watching the specific
+tests fail.
+
+## Still open
+
+- **The live model has never been called.** No `ANTHROPIC_API_KEY` in any
+  session. Extraction accuracy on real HMH paperwork is unmeasured.
+- **No Dassenhoek data is reachable**, so no cleanup dry run has been
+  produced and no live figures can be quoted.
+- **No Render API credentials**, so deployment status, the deployed revision
+  and deploy logs cannot be read from here.

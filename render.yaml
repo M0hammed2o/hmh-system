@@ -28,24 +28,42 @@ services:
       - key: PYTHON_VERSION
         value: "3.11"
 
-      # ── AI Document Import ────────────────────────────────────────────
-      # OFF in production until the TEST pilot produces a measured
-      # extraction accuracy figure. This is explicit rather than left to
-      # the code default (which is on), so that deploying the feature does
-      # not quietly make it available to staff before anyone has verified
-      # how well it reads a real HMH invoice.
+      # ── Bypass Orders (AI Document Import) ────────────────────────────
+      # ON, so staff can reach the page and upload paperwork.
       #
-      # To turn it on after the pilot:
-      #   1. AI_IMPORT_ENABLED=true
-      #   2. add ANTHROPIC_API_KEY and CRON_SECRET in the dashboard
-      #   3. add the two cron jobs (see render.test.yaml for the shape)
-      # Leave AI_IMPORT_AUTO_POST_ENABLED=false. Automatic posting is a
-      # business decision taken on evidence, not a deployment setting.
-      # See docs/AI_DOCUMENT_IMPORT_PILOT.md.
+      # ANTHROPIC_API_KEY is NOT set here — it is added in the Render
+      # dashboard (sync: false) when you are ready to spend on extraction.
+      # Until it is, the engine runs degraded on purpose: it stores, hashes,
+      # de-duplicates and queues documents for human review, but reads
+      # almost nothing off them. The page says so plainly rather than
+      # implying the AI is working — GET /api/v1/ai-import/service-status
+      # reports exactly which integrations are configured.
+      #
+      # AI_IMPORT_AUTO_POST_ENABLED stays false. Nothing reaches stock,
+      # supplier balances or the ledger without a person approving it.
+      # Turning it on is a business decision taken on measured extraction
+      # accuracy, not a deployment setting. See
+      # docs/AI_DOCUMENT_IMPORT_PILOT.md before changing it.
       - key: AI_IMPORT_ENABLED
-        value: "false"
+        value: "true"
       - key: AI_IMPORT_AUTO_POST_ENABLED
         value: "false"
+      - key: AI_IMPORT_MODEL
+        value: claude-opus-5-5
+      - key: AI_IMPORT_WORKER_ENABLED
+        value: "true"
+      - key: AI_IMPORT_WORKER_BATCH_SIZE
+        value: "2"
+      - key: AI_IMPORT_WORKER_INTERVAL_SECONDS
+        value: "30"
+      - key: AI_IMPORT_MAX_UPLOAD_MB
+        value: "20"
+      - key: AI_IMPORT_SCAN_ENABLED
+        value: "false"
+      # Added by hand in the dashboard, never in this file:
+      #   ANTHROPIC_API_KEY  — enables extraction
+      - key: ANTHROPIC_API_KEY
+        sync: false
 
   - type: web
     name: hmh-frontend

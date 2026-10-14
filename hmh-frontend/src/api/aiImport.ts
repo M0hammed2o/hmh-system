@@ -311,6 +311,15 @@ export interface UploadResult {
 
 // ── API ───────────────────────────────────────────────────────────────────────
 
+export interface ServiceStatus {
+  enabled: boolean;
+  extraction_available: boolean;
+  extraction_model: string;
+  private_storage_configured: boolean;
+  auto_post_enabled: boolean;
+  worker_enabled: boolean;
+}
+
 export const aiImportApi = {
   createBatch: async (body: {
     project_id?: string | null;
@@ -470,6 +479,18 @@ export const aiImportApi = {
       };
       message: string;
     }>(`/ai-import/documents/${id}/post`, body);
+    return res.data.data;
+  },
+
+  /**
+   * What the service can actually do right now.
+   *
+   * Bypass Orders degrades rather than fails when its external integrations
+   * are missing, so the page has to say which of them are configured — an
+   * empty extraction otherwise reads as a bad scan.
+   */
+  serviceStatus: async (): Promise<ServiceStatus> => {
+    const res = await client.get<{ data: ServiceStatus }>("/ai-import/service-status");
     return res.data.data;
   },
 

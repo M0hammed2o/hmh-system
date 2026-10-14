@@ -36,6 +36,7 @@ import {
   type ImportBatch,
   type ImportDashboard,
   type ImportDocument,
+  type ServiceStatus,
 } from "@/api/aiImport";
 import { projectsApi, type Project } from "@/api/projects";
 import { suppliersApi, type Supplier } from "@/api/suppliers";
@@ -784,11 +785,13 @@ export default function AIDocumentImportPage() {
   const [openId, setOpenId] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
   const [queueFilters, setQueueFilters] = useState<DocumentFilters | undefined>();
+  const [service, setService] = useState<ServiceStatus | null>(null);
 
   useEffect(() => {
     void projectsApi.list(1, 200).then((r) => setProjects(r.items ?? [])).catch(() => setProjects([]));
     void suppliersApi.list().then(setSuppliers).catch(() => setSuppliers([]));
     void companiesApi.list().then(setCompanies).catch(() => setCompanies([]));
+    void aiImportApi.serviceStatus().then(setService).catch(() => setService(null));
   }, []);
 
   const bump = () => setRefreshKey((k) => k + 1);
@@ -804,6 +807,31 @@ export default function AIDocumentImportPage() {
           </Button>
         }
       />
+
+      {service && (!service.enabled || !service.extraction_available || !service.private_storage_configured) && (
+        <div className="mb-4 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+          <p className="font-medium">
+            {!service.enabled
+              ? "Bypass Orders is switched off"
+              : "Bypass Orders is running with reduced capability"}
+          </p>
+          <ul className="mt-1 list-disc pl-5 space-y-0.5">
+            {!service.enabled && (
+              <li>Uploading is disabled for this environment. Existing documents remain viewable.</li>
+            )}
+            {service.enabled && !service.extraction_available && (
+              <li>
+                No AI provider is configured, so documents are stored, de-duplicated and queued for
+                review, but their contents are not read. Fields will come back empty — that is the
+                missing configuration, not a bad scan.
+              </li>
+            )}
+            {service.enabled && !service.private_storage_configured && (
+              <li>Private document storage is not configured, so uploads may be refused.</li>
+            )}
+          </ul>
+        </div>
+      )}
 
       <Tabs
         tabs={[

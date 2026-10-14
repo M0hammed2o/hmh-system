@@ -17,6 +17,51 @@ from app.core.upload_validation import PHOTO_MIMES, validate_upload
 from app.dependencies import ALL_ROLES, CurrentUser, OFFICE_AND_ABOVE, DbSession, check_project_access
 
 _log = get_logger(__name__)
+
+
+def _enforce_one_row_per_item(boq_items, boq_id_to_canonical, canonical_extra_qty, *, endpoint):
+    """
+    Last line of defence for the invariant the delivered/used lookup rests on:
+    no two surviving BOQ rows may share a catalogue item_id.
+
+    The de-duplication above already guarantees it. This re-checks at runtime
+    because the cost of the invariant breaking is silent, permanent
+    over-reporting of delivered quantities and the costs derived from them —
+    the Dassenhoek symptom. Deliberately not an assertion: `python -O` strips
+    those, and raising would take the whole staff dashboard down over a
+    display concern. Instead it folds the straggler into the canonical row,
+    exactly as the de-duplication would have, and logs loudly so the
+    regression is found.
+
+    Returns the (possibly repaired) list.
+    """
+    seen: dict = {}
+    kept = []
+    collisions = []
+    for bi in boq_items:
+        if bi.item_id and bi.item_id in seen:
+            canonical = seen[bi.item_id]
+            collisions.append(str(bi.item_id))
+            if bi.id:
+                boq_id_to_canonical[bi.id] = canonical
+            canonical_extra_qty[canonical.id] = (
+                canonical_extra_qty.get(canonical.id, 0.0) + float(bi.planned_quantity or 0)
+            )
+            continue
+        if bi.item_id:
+            seen[bi.item_id] = bi
+        kept.append(bi)
+
+    if collisions:
+        _log.error(
+            "boq_dedup_invariant_broken endpoint=%s item_ids=%s — two BOQ rows "
+            "shared a catalogue item after de-duplication; delivered and used "
+            "quantities would have been double-counted. Rows folded; fix the "
+            "de-duplication in site_dashboard.py.",
+            endpoint, ",".join(sorted(set(collisions))),
+        )
+    return kept
+
 from app.models.boq import BOQItem
 from app.models.enums import ItemType, MovementType
 from app.models.stock import StockLedger
@@ -149,10 +194,9 @@ def lot_material_summary(site_id: uuid.UUID, lot_id: uuid.UUID, db: DbSession, c
     # Invariant the fix rests on: no two surviving rows share an item_id, so
     # the delivered/used lookup by item_id below attributes each movement to
     # exactly one row.
-    _seen_item_ids = [bi.item_id for bi in boq_items if bi.item_id]
-    assert len(_seen_item_ids) == len(set(_seen_item_ids)), (
-        "BOQ deduplication left two rows sharing a catalogue item; delivered "
-        "quantities would be double-counted"
+    boq_items = _enforce_one_row_per_item(
+        boq_items, boq_id_to_canonical, canonical_extra_qty,
+        endpoint="lot_material_summary",
     )
 
     # ── 4. Batch-load all StockLedger aggregates in 4 queries (replaces N+1) ────
@@ -675,10 +719,9 @@ def project_lot_material_summary(project_id: uuid.UUID, lot_id: uuid.UUID, db: D
             )
     boq_items = unique_items
 
-    _seen_item_ids_p = [bi.item_id for bi in boq_items if bi.item_id]
-    assert len(_seen_item_ids_p) == len(set(_seen_item_ids_p)), (
-        "BOQ deduplication left two rows sharing a catalogue item; delivered "
-        "and used quantities would be double-counted"
+    boq_items = _enforce_one_row_per_item(
+        boq_items, boq_id_to_canonical_p, canonical_extra_qty_p,
+        endpoint="project_lot_material_summary",
     )
 
     # ── 4. Build summary rows ─────────────────────────────────────────────────

@@ -107,11 +107,31 @@ def classify(db, project_id: uuid.UUID) -> dict:
         ]
         reversals = [r for r in ledger if r.reference_type == "delivery_reversal"]
 
-        # Did this one delivery post stock more than once for the same item?
-        per_item: dict = defaultdict(int)
+        # Did this one delivery post stock more times than it has lines?
+        #
+        # NOT "more than one movement for an item" — create_delivery writes
+        # one ledger row per delivery LINE, and a legitimate note may list the
+        # same item twice (two batches at different rates, or two BOQ lines).
+        # Counting movements alone would flag that as a duplicate and reverse
+        # a real delivery. The honest signal is a movement with no line behind
+        # it.
+        items = db.query(DeliveryItem).filter(DeliveryItem.delivery_id == d.id).all()
+        lines_per_item: dict = defaultdict(int)
+        for li in items:
+            if li.item_id:
+                lines_per_item[li.item_id] += 1
+
+        movements_per_item: dict = defaultdict(int)
         for r in received:
-            per_item[r.item_id] += 1
-        double_posted = {str(k): v for k, v in per_item.items() if v > 1}
+            movements_per_item[r.item_id] += 1
+
+        double_posted = {
+            str(item_id): count
+            for item_id, count in movements_per_item.items()
+            # A delivery with no lines at all tells us nothing — leave it alone
+            # rather than guess.
+            if items and count > lines_per_item.get(item_id, 0)
+        }
 
         number = (d.supplier_delivery_note_number or "").strip().upper()
         siblings = by_note.get((d.supplier_id, number), []) if number else []
@@ -124,8 +144,9 @@ def classify(db, project_id: uuid.UUID) -> dict:
             )
         elif double_posted:
             verdict, reason = DUPLICATE_LEDGER, (
-                f"{sum(double_posted.values())} stock movements for "
-                f"{len(double_posted)} item(s) on one delivery"
+                f"{sum(double_posted.values())} stock movements against "
+                f"{len(double_posted)} item(s) that the delivery has fewer "
+                f"lines for"
             )
         else:
             verdict, reason = GENUINE, "no duplicate signal"
@@ -143,7 +164,6 @@ def classify(db, project_id: uuid.UUID) -> dict:
             ]
 
         boq_item_ids = sorted({str(r.boq_item_id) for r in ledger if r.boq_item_id})
-        items = db.query(DeliveryItem).filter(DeliveryItem.delivery_id == d.id).all()
 
         rows.append({
             "delivery_id": str(d.id),

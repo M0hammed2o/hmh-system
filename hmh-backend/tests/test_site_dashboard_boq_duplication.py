@@ -362,3 +362,79 @@ def test_project_lot_summary_still_totals_allocation_across_sections(db, client,
 
     assert len(rows) == 1
     assert float(rows[0]["boq_allocated_qty"]) == 39.0
+
+
+# ── The runtime guard ─────────────────────────────────────────────────────────
+#
+# The de-duplication above already guarantees one row per catalogue item. The
+# guard re-checks it at runtime because the failure mode is silent and
+# permanent. It must repair and log, never raise — an assertion would be
+# stripped by `python -O` and would take the dashboard down if it ever fired.
+
+class _FakeRow:
+    def __init__(self, item_id, planned_quantity, row_id=None):
+        self.id = row_id or uuid.uuid4()
+        self.item_id = item_id
+        self.planned_quantity = planned_quantity
+
+
+def test_the_guard_folds_a_colliding_row_instead_of_raising():
+    from app.api.v1.site_dashboard import _enforce_one_row_per_item
+
+    item = uuid.uuid4()
+    a, b = _FakeRow(item, 100), _FakeRow(item, 40)
+    id_to_canonical, extra = {}, {}
+
+    kept = _enforce_one_row_per_item(
+        [a, b], id_to_canonical, extra, endpoint="test",
+    )
+
+    assert kept == [a]
+    assert id_to_canonical[b.id] is a
+    assert extra[a.id] == 40.0
+
+
+def test_the_guard_leaves_a_healthy_list_untouched():
+    from app.api.v1.site_dashboard import _enforce_one_row_per_item
+
+    rows = [_FakeRow(uuid.uuid4(), 10), _FakeRow(uuid.uuid4(), 20)]
+    id_to_canonical, extra = {}, {}
+
+    assert _enforce_one_row_per_item(
+        rows, id_to_canonical, extra, endpoint="test") == rows
+    assert id_to_canonical == {} and extra == {}
+
+
+def test_the_guard_keeps_rows_without_a_catalogue_item():
+    """Free-text BOQ lines have no item_id and must never be folded together."""
+    from app.api.v1.site_dashboard import _enforce_one_row_per_item
+
+    rows = [_FakeRow(None, 10), _FakeRow(None, 20)]
+    assert _enforce_one_row_per_item(rows, {}, {}, endpoint="test") == rows
+
+
+def test_the_guard_logs_when_it_fires(caplog):
+    import logging
+
+    from app.api.v1.site_dashboard import _enforce_one_row_per_item
+
+    item = uuid.uuid4()
+    with caplog.at_level(logging.ERROR):
+        _enforce_one_row_per_item(
+            [_FakeRow(item, 1), _FakeRow(item, 1)], {}, {}, endpoint="test")
+
+    assert any("boq_dedup_invariant_broken" in r.getMessage()
+               for r in caplog.records)
+
+
+def test_no_assertion_remains_in_the_dedup_path():
+    """`python -O` strips assertions; the invariant must not depend on one."""
+    import inspect
+
+    from app.api.v1 import site_dashboard
+
+    for fn in (site_dashboard.lot_material_summary,
+               site_dashboard.project_lot_material_summary,
+               site_dashboard._enforce_one_row_per_item):
+        src = inspect.getsource(fn)
+        assert "assert " not in src, f"{fn.__name__} still relies on an assertion"
