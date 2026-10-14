@@ -57,6 +57,7 @@ const ProgrammePlanPage               = lazy(() => import("@/pages/ProgrammePlan
 const WeeklyPlanPage                  = lazy(() => import("@/pages/WeeklyPlanPage"));
 const NotificationDeepLinkPage        = lazy(() => import("@/pages/NotificationDeepLinkPage"));
 const FuelOrderDeepLinkPage           = lazy(() => import("@/pages/FuelOrderDeepLinkPage"));
+const AIDocumentImportPage            = lazy(() => import("@/pages/AIDocumentImportPage"));
 
 function PageLoader() {
   return (
@@ -192,6 +193,7 @@ export function AppRouter() {
             <Route path="work-done/monthly-summary" element={<MonthlySubcontractorSummaryPage />} />
             <Route path="municipality-invoices" element={<MunicipalityInvoicePage />} />
             <Route path="documents" element={<DocumentCenterPage />} />
+            <Route path="ai-document-import" element={<AIDocumentImportPage />} />
             <Route path="progress-claims" element={<ProgressClaimsPage />} />
             <Route path="progress-claims/:claimId" element={<ProgressClaimDetailPage />} />
             <Route path="programme" element={<ProgrammePlanPage />} />

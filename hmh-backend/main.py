@@ -394,6 +394,10 @@ from app.api.v1.weekly_plans import weekly_plan_project_router, weekly_plan_rout
 app.include_router(weekly_plan_project_router, prefix="/api/v1")
 app.include_router(weekly_plan_router, prefix="/api/v1")
 
+# AI Document Import & Reconciliation Engine
+from app.api.v1.ai_import import router as ai_import_router
+app.include_router(ai_import_router, prefix="/api/v1")
+
 # ── Static file serving for uploaded documents (development/test only) ────────
 # Use settings.UPLOAD_DIR (absolute path from env) so the static mount and all
 # file-save calls (stages, deliveries, usage, gmail) reference the SAME directory.
@@ -444,6 +448,93 @@ async def internal_process_notifications(request: Request):
         _log.info("internal_cron queue_drain sent=%d mock=%d failed=%d skipped=%d",
                   result.get("sent", 0), result.get("mock_sent", 0),
                   result.get("failed", 0), result.get("skipped", 0))
+        return JSONResponse(result)
+    except Exception:
+        _db.rollback()
+        raise
+    finally:
+        _db.close()
+
+
+# ── Internal: drain the AI document import queue ─────────────────────────────
+
+@app.post("/api/v1/internal/process-ai-import", include_in_schema=False)
+async def internal_process_ai_import(request: Request):
+    """
+    External safety net for the AI Document Import queue.
+
+    The primary drain is the in-process loop below; this endpoint exists so a
+    Render cron job can keep documents moving if the worker loop is disabled or
+    the web process was restarted mid-batch. Both paths are safe to run at the
+    same time: jobs are claimed with FOR UPDATE SKIP LOCKED.
+
+    Validates X-Cron-Secret against CRON_SECRET. Returns 404 when CRON_SECRET is
+    unset (endpoint disabled), 403 on a wrong secret.
+    """
+    if not settings.CRON_SECRET:
+        return JSONResponse({"detail": "Not found"}, status_code=404)
+
+    import secrets as _secrets
+    header_secret = request.headers.get("X-Cron-Secret", "")
+    if not _secrets.compare_digest(settings.CRON_SECRET, header_secret):
+        _log.warning("internal_cron rejected invalid_secret endpoint=ai-import ip=%s",
+                     request.client.host if request.client else "unknown")
+        return JSONResponse({"detail": "Forbidden"}, status_code=403)
+
+    from app.db.session import SessionLocal
+    from app.services.ai_import_worker import drain_once
+    _db = SessionLocal()
+    try:
+        result = drain_once(_db)
+        if result.get("processed") or result.get("failed") or result.get("reclaimed"):
+            _log.info("internal_cron ai_import processed=%s failed=%s reclaimed=%s",
+                      result.get("processed"), result.get("failed"), result.get("reclaimed"))
+        return JSONResponse(result)
+    except Exception:
+        _db.rollback()
+        raise
+    finally:
+        _db.close()
+
+
+# ── Internal: apply the AI document import retention policy ──────────────────
+
+@app.post("/api/v1/internal/ai-import-retention", include_in_schema=False)
+async def internal_ai_import_retention(request: Request):
+    """
+    Scheduled retention cleanup for imported document files.
+
+    Removes only the stored file and the raw extraction text once a document
+    is past AI_IMPORT_RETENTION_DAYS. Document rows, postings and audit
+    history are always kept, and a document behind a live posting is never
+    touched — it is the evidence for a transaction.
+
+    Defaults to a dry run so a schedule can be proven before it deletes
+    anything: pass ?apply=true to act. Guarded by X-Cron-Secret like the
+    other internal endpoints.
+    """
+    if not settings.CRON_SECRET:
+        return JSONResponse({"detail": "Not found"}, status_code=404)
+
+    import secrets as _secrets
+    header_secret = request.headers.get("X-Cron-Secret", "")
+    if not _secrets.compare_digest(settings.CRON_SECRET, header_secret):
+        _log.warning("internal_cron rejected invalid_secret endpoint=ai-import-retention ip=%s",
+                     request.client.host if request.client else "unknown")
+        return JSONResponse({"detail": "Forbidden"}, status_code=403)
+
+    apply = str(request.query_params.get("apply", "")).lower() in ("1", "true", "yes")
+
+    from app.db.session import SessionLocal
+    from app.services.ai_import_service import purge_expired_documents
+    _db = SessionLocal()
+    try:
+        result = purge_expired_documents(_db, dry_run=not apply)
+        if result.get("purged_count"):
+            _log.info(
+                "internal_cron ai_import_retention dry_run=%s purged=%d skipped=%d",
+                result["dry_run"], result["purged_count"], len(result.get("skipped", [])),
+            )
         return JSONResponse(result)
     except Exception:
         _db.rollback()
@@ -712,6 +803,61 @@ async def _start_background_queue_drain() -> None:
     _ns._drain_event = _asyncio.Event()
     _asyncio.create_task(_queue_drain_loop())
     _log.info("startup queue_drain_task=started interval=30s_or_immediate")
+
+
+# ── Background AI document import worker ─────────────────────────────────────
+
+async def _ai_import_worker_loop() -> None:
+    """
+    Drain the AI document import queue.
+
+    Document extraction is a slow model call, so it never runs inside an HTTP
+    request. This loop picks up queued documents, and because jobs are claimed
+    with FOR UPDATE SKIP LOCKED it is safe to run alongside the Render cron
+    endpoint and alongside other web instances.
+
+    drain_once() also reclaims jobs whose worker died, which is what makes
+    processing resume after a container restart.
+    """
+    from app.services.ai_import_worker import drain_once
+
+    interval = max(5, int(settings.AI_IMPORT_WORKER_INTERVAL_SECONDS))
+    await _asyncio.sleep(10)  # let DB connections settle before the first pass
+
+    while True:
+        try:
+            from app.db.session import SessionLocal
+            _db = SessionLocal()
+            try:
+                result = drain_once(_db)
+                if result.get("processed") or result.get("failed") or result.get("reclaimed"):
+                    _log.info(
+                        "ai_import_drain processed=%s failed=%s reclaimed=%s",
+                        result.get("processed"), result.get("failed"), result.get("reclaimed"),
+                    )
+            finally:
+                _db.close()
+        except Exception:
+            _log.exception("ai_import worker loop error — will retry in %ds", interval)
+
+        await _asyncio.sleep(interval)
+
+
+@app.on_event("startup")
+async def _start_ai_import_worker() -> None:
+    if not (settings.AI_IMPORT_ENABLED and settings.AI_IMPORT_WORKER_ENABLED):
+        _log.info(
+            "startup ai_import_worker=disabled enabled=%s worker_enabled=%s",
+            settings.AI_IMPORT_ENABLED, settings.AI_IMPORT_WORKER_ENABLED,
+        )
+        return
+    _asyncio.create_task(_ai_import_worker_loop())
+    _log.info(
+        "startup ai_import_worker=started interval=%ss batch=%s auto_post=%s",
+        settings.AI_IMPORT_WORKER_INTERVAL_SECONDS,
+        settings.AI_IMPORT_WORKER_BATCH_SIZE,
+        settings.AI_IMPORT_AUTO_POST_ENABLED,
+    )
 
 
 # Migrations are applied by the release/start command (`alembic upgrade head &&

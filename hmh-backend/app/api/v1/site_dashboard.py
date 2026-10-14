@@ -17,6 +17,51 @@ from app.core.upload_validation import PHOTO_MIMES, validate_upload
 from app.dependencies import ALL_ROLES, CurrentUser, OFFICE_AND_ABOVE, DbSession, check_project_access
 
 _log = get_logger(__name__)
+
+
+def _enforce_one_row_per_item(boq_items, boq_id_to_canonical, canonical_extra_qty, *, endpoint):
+    """
+    Last line of defence for the invariant the delivered/used lookup rests on:
+    no two surviving BOQ rows may share a catalogue item_id.
+
+    The de-duplication above already guarantees it. This re-checks at runtime
+    because the cost of the invariant breaking is silent, permanent
+    over-reporting of delivered quantities and the costs derived from them —
+    the Dassenhoek symptom. Deliberately not an assertion: `python -O` strips
+    those, and raising would take the whole staff dashboard down over a
+    display concern. Instead it folds the straggler into the canonical row,
+    exactly as the de-duplication would have, and logs loudly so the
+    regression is found.
+
+    Returns the (possibly repaired) list.
+    """
+    seen: dict = {}
+    kept = []
+    collisions = []
+    for bi in boq_items:
+        if bi.item_id and bi.item_id in seen:
+            canonical = seen[bi.item_id]
+            collisions.append(str(bi.item_id))
+            if bi.id:
+                boq_id_to_canonical[bi.id] = canonical
+            canonical_extra_qty[canonical.id] = (
+                canonical_extra_qty.get(canonical.id, 0.0) + float(bi.planned_quantity or 0)
+            )
+            continue
+        if bi.item_id:
+            seen[bi.item_id] = bi
+        kept.append(bi)
+
+    if collisions:
+        _log.error(
+            "boq_dedup_invariant_broken endpoint=%s item_ids=%s — two BOQ rows "
+            "shared a catalogue item after de-duplication; delivered and used "
+            "quantities would have been double-counted. Rows folded; fix the "
+            "de-duplication in site_dashboard.py.",
+            endpoint, ",".join(sorted(set(collisions))),
+        )
+    return kept
+
 from app.models.boq import BOQItem
 from app.models.enums import ItemType, MovementType
 from app.models.stock import StockLedger
@@ -91,24 +136,53 @@ def lot_material_summary(site_id: uuid.UUID, lot_id: uuid.UUID, db: DbSession, c
     # their stock is folded into the canonical using the right lookup dict.
     # Alias planned quantities are summed into canonical so the row shows the
     # TOTAL allocation across all sections (e.g. 26+13=39, not just 26).
-    seen_keys: dict = {}              # normalized_key → canonical BOQItem
-    boq_id_to_canonical: dict = {}   # discarded_boq_item_id → canonical BOQItem
-    canonical_extra_qty: dict = {}   # canonical BOQItem.id → extra qty from aliases
+    # Two rows are the same material if they share a catalogue item_id, OR —
+    # for rows with no catalogue link — if they read the same.
+    #
+    # Keying on description ALONE is not enough, and getting this wrong
+    # double-counts real deliveries. Stock is matched by item_id further
+    # down, so two rows sharing an item_id but worded differently ("50kg
+    # bag" vs "50kg bags") both survive and both claim the FULL delivered
+    # quantity. One 100-bag delivery then reads as 200 — and both rows
+    # render with the same catalogue name, so it looks like a duplicated
+    # BOQ entry rather than an arithmetic error.
+    #
+    # Each canonical row is registered under both keys, so a non-catalogue
+    # row still merges into a catalogue row that reads the same (the sort
+    # puts item_id rows first, so the catalogue row wins the canonical slot
+    # and the item_id stock path is never lost).
+    seen_keys: dict = {}              # identity key → canonical BOQItem
+    boq_id_to_canonical: dict = {}    # discarded_boq_item_id → canonical BOQItem
+    canonical_extra_qty: dict = {}    # canonical BOQItem.id → extra qty from aliases
     unique_boq_items = []
+
+    def _desc_key(bi) -> tuple:
+        return (
+            "desc",
+            _re.sub(r"\s+", " ", (bi.raw_description or "").lower().strip()),
+            (bi.unit or "").lower(),  # normalise unit case: "Rolls" == "rolls"
+        )
+
     for bi in sorted(
         boq_items,
         key=lambda x: (1 if x.item_id else 0, float(x.planned_quantity or 0)),
         reverse=True,
     ):
-        key = (
-            _re.sub(r"\s+", " ", (bi.raw_description or "").lower().strip()),
-            (bi.unit or "").lower(),  # normalise unit case: "Rolls" == "rolls"
-        )
-        if key not in seen_keys:
-            seen_keys[key] = bi
+        item_key = ("item", bi.item_id) if bi.item_id else None
+        desc_key = _desc_key(bi)
+
+        canonical = None
+        if item_key and item_key in seen_keys:
+            canonical = seen_keys[item_key]
+        elif desc_key in seen_keys:
+            canonical = seen_keys[desc_key]
+
+        if canonical is None:
+            if item_key:
+                seen_keys[item_key] = bi
+            seen_keys[desc_key] = bi
             unique_boq_items.append(bi)
         else:
-            canonical = seen_keys[key]
             if bi.id:
                 boq_id_to_canonical[bi.id] = canonical
             # Accumulate alias planned qty so canonical shows total allocation
@@ -116,6 +190,14 @@ def lot_material_summary(site_id: uuid.UUID, lot_id: uuid.UUID, db: DbSession, c
                 canonical_extra_qty.get(canonical.id, 0.0) + float(bi.planned_quantity or 0)
             )
     boq_items = unique_boq_items
+
+    # Invariant the fix rests on: no two surviving rows share an item_id, so
+    # the delivered/used lookup by item_id below attributes each movement to
+    # exactly one row.
+    boq_items = _enforce_one_row_per_item(
+        boq_items, boq_id_to_canonical, canonical_extra_qty,
+        endpoint="lot_material_summary",
+    )
 
     # ── 4. Batch-load all StockLedger aggregates in 4 queries (replaces N+1) ────
     from app.models.boq import BOQSection
@@ -597,6 +679,11 @@ def project_lot_material_summary(project_id: uuid.UUID, lot_id: uuid.UUID, db: D
     # non-catalog; higher planned_qty wins among equals.
     # Alias planned quantities are summed so the canonical row shows the TOTAL
     # allocation across all sections (e.g. 26+13=39, not just 26).
+    # Same identity rule as lot_material_summary: a shared catalogue item_id
+    # means the same material, whatever the wording. Keying on description
+    # alone leaves two rows sharing an item_id, and the per-row stock queries
+    # below filter by that item_id — so each row would report the FULL
+    # delivered and used quantity for the material.
     seen_keys_p: dict = {}
     boq_id_to_canonical_p: dict = {}   # alias boq_item_id → canonical BOQItem
     canonical_extra_qty_p: dict = {}   # canonical BOQItem.id → extra qty from aliases
@@ -606,21 +693,36 @@ def project_lot_material_summary(project_id: uuid.UUID, lot_id: uuid.UUID, db: D
         key=lambda x: (1 if x.item_id else 0, float(x.planned_quantity or 0)),
         reverse=True,
     ):
-        key = (
+        item_key = ("item", bi.item_id) if bi.item_id else None
+        desc_key = (
+            "desc",
             _re.sub(r"\s+", " ", (bi.raw_description or "").lower().strip()),
             (bi.unit or "").lower(),
         )
-        if key not in seen_keys_p:
-            seen_keys_p[key] = bi
+
+        canonical = None
+        if item_key and item_key in seen_keys_p:
+            canonical = seen_keys_p[item_key]
+        elif desc_key in seen_keys_p:
+            canonical = seen_keys_p[desc_key]
+
+        if canonical is None:
+            if item_key:
+                seen_keys_p[item_key] = bi
+            seen_keys_p[desc_key] = bi
             unique_items.append(bi)
         else:
-            canonical = seen_keys_p[key]
             if bi.id:
                 boq_id_to_canonical_p[bi.id] = canonical
             canonical_extra_qty_p[canonical.id] = (
                 canonical_extra_qty_p.get(canonical.id, 0.0) + float(bi.planned_quantity or 0)
             )
     boq_items = unique_items
+
+    boq_items = _enforce_one_row_per_item(
+        boq_items, boq_id_to_canonical_p, canonical_extra_qty_p,
+        endpoint="project_lot_material_summary",
+    )
 
     # ── 4. Build summary rows ─────────────────────────────────────────────────
     result = []

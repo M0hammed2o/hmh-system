@@ -50,6 +50,15 @@ from app.models.warehouse_transfer import WarehouseTransferRequest, WarehouseTra
 from app.models.progress_claim import MunicipalityProgressClaim, ProgressClaimLine, ProgressClaimEvidence
 from app.models.programme import ProgrammeActivity
 from app.models.weekly_plan import WeeklyPlan, WeeklyPlanItem
+from app.models.ai_import import (
+    AIImportBatch,
+    AIImportCorrection,
+    AIImportDocument,
+    AIImportExtraction,
+    AIImportJob,
+    AIImportMatch,
+    AIImportPosting,
+)
 from app.models.workshop import (
     WorkshopCategory,
     WorkshopItem,
@@ -155,4 +164,11 @@ __all__ = [
     "ProgrammeActivity",
     "WeeklyPlan",
     "WeeklyPlanItem",
+    "AIImportBatch",
+    "AIImportDocument",
+    "AIImportExtraction",
+    "AIImportMatch",
+    "AIImportPosting",
+    "AIImportJob",
+    "AIImportCorrection",
 ]

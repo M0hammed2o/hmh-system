@@ -14,11 +14,11 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import text
+from sqlalchemy import func, text
 from sqlalchemy.orm import Session, joinedload
 
 from app.core.config import settings
-from app.core.exceptions import NotFoundError, ValidationError
+from app.core.exceptions import ConflictError, NotFoundError, ValidationError
 from app.models.delivery import Delivery, DeliveryItem
 from app.models.enums import (
     AlertSeverity, AlertStatus, AlertType,
@@ -115,6 +115,48 @@ def update_delivery(db: Session, delivery_id: uuid.UUID, data) -> Delivery:
     return _get_delivery_or_404(db, delivery_id)
 
 
+def _refuse_duplicate_note(db: Session, project_id: uuid.UUID, data) -> None:
+    """
+    Refuse a second delivery carrying a supplier note number already recorded
+    for that supplier on that project.
+
+    Without this, a double-tapped submit, a retried request or a historical
+    document imported twice each create a second delivery — and a second set
+    of stock movements, which inflates delivered quantities and BOQ costs for
+    good. Nothing downstream can tell the two apart afterwards.
+
+    Deliberately narrow:
+      * a blank note number never matches another blank one — plenty of
+        deliveries arrive without one;
+      * CANCELLED deliveries are ignored, so a note archived by the cleanup
+        utility can be recaptured correctly;
+      * scoped to one supplier on one project, because note numbers are only
+        unique within a supplier's own book.
+    """
+    number = (getattr(data, "supplier_delivery_note_number", None) or "").strip()
+    if not number or not getattr(data, "supplier_id", None):
+        return
+
+    existing = (
+        db.query(Delivery)
+        .filter(
+            Delivery.project_id == project_id,
+            Delivery.supplier_id == data.supplier_id,
+            func.upper(func.trim(Delivery.supplier_delivery_note_number)) == number.upper(),
+            Delivery.delivery_status != RecordStatus.CANCELLED,
+        )
+        .first()
+    )
+    if existing is not None:
+        raise ConflictError(
+            f"Delivery note {number} from this supplier is already recorded on "
+            f"this project as {existing.delivery_number} "
+            f"({existing.delivery_date:%Y-%m-%d}). Recording it again would "
+            f"count the same stock twice. Open that delivery to amend it, or "
+            f"use a different note number if this is a separate delivery."
+        )
+
+
 def create_delivery(
     db: Session,
     project_id: uuid.UUID,
@@ -130,6 +172,7 @@ def create_delivery(
       when any item has quantity_received < quantity_expected.
     """
     _validate_delivery_references(db, project_id, data)
+    _refuse_duplicate_note(db, project_id, data)
 
     now = datetime.now(timezone.utc)
 
@@ -330,7 +373,17 @@ def create_delivery(
         except Exception:
             db.rollback()
 
-    return _get_delivery_or_404(db, delivery.id)
+    # The delivery is committed by this point, so this must not raise: a
+    # post-commit exception would tell the caller nothing was written when
+    # the stock ledger has already moved. Re-query only to eager-load the
+    # items, and fall back to the in-session object if that lookup misses.
+    reloaded = (
+        db.query(Delivery)
+        .options(joinedload(Delivery.items))
+        .filter(Delivery.id == delivery.id)
+        .first()
+    )
+    return reloaded if reloaded is not None else delivery
 
 
 def receive_stock(

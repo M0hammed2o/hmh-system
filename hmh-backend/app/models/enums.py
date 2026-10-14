@@ -493,3 +493,68 @@ class WeeklyPlanStatus(str, enum.Enum):
     COMPLETED   = "COMPLETED"
     REVIEWED    = "REVIEWED"
     CANCELLED   = "CANCELLED"
+
+
+# ── AI Document Import enums ──────────────────────────────────────────────────
+
+class AIImportBatchStatus(str, enum.Enum):
+    OPEN       = "OPEN"        # accepting uploads
+    PROCESSING = "PROCESSING"  # at least one document still in flight
+    COMPLETE   = "COMPLETE"    # every document reached a terminal state
+    CANCELLED  = "CANCELLED"
+
+
+class AIImportDocumentType(str, enum.Enum):
+    """
+    Document categories the classifier can assign.
+
+    Add new members here plus a field schema in app/schemas/ai_import.py;
+    nothing else in the pipeline needs to change.
+    """
+    MATERIAL_REQUEST     = "MATERIAL_REQUEST"
+    PURCHASE_ORDER       = "PURCHASE_ORDER"
+    SUPPLIER_INVOICE     = "SUPPLIER_INVOICE"
+    DELIVERY_NOTE        = "DELIVERY_NOTE"
+    GOODS_RECEIVED_NOTE  = "GOODS_RECEIVED_NOTE"
+    SUPPLIER_CREDIT_NOTE = "SUPPLIER_CREDIT_NOTE"
+    PAYMENT_PROOF        = "PAYMENT_PROOF"
+    UNKNOWN              = "UNKNOWN"
+
+
+class AIImportDocumentStatus(str, enum.Enum):
+    UPLOADED               = "UPLOADED"
+    QUEUED                 = "QUEUED"
+    PROCESSING             = "PROCESSING"
+    EXTRACTED              = "EXTRACTED"
+    CLASSIFIED             = "CLASSIFIED"
+    MATCHING               = "MATCHING"
+    AWAITING_REVIEW        = "AWAITING_REVIEW"
+    AWAITING_AUTHORISATION = "AWAITING_AUTHORISATION"
+    READY_TO_POST          = "READY_TO_POST"
+    POSTED                 = "POSTED"
+    PARTIALLY_POSTED       = "PARTIALLY_POSTED"
+    FAILED                 = "FAILED"
+    REJECTED               = "REJECTED"
+    DUPLICATE              = "DUPLICATE"
+
+
+class AIImportProcessingOutcome(str, enum.Enum):
+    """Deterministic policy verdict. AI confidence alone never sets this."""
+    AUTO_ELIGIBLE = "AUTO_ELIGIBLE"
+    NEEDS_REVIEW  = "NEEDS_REVIEW"
+    BLOCKED       = "BLOCKED"
+
+
+class AIImportMatchStatus(str, enum.Enum):
+    PROPOSED  = "PROPOSED"   # AI or heuristic suggestion, not yet usable
+    CONFIRMED = "CONFIRMED"  # deterministic validation or human decision
+    REJECTED  = "REJECTED"
+    AMBIGUOUS = "AMBIGUOUS"  # several candidates scored too closely to choose
+
+
+class AIImportJobStatus(str, enum.Enum):
+    PENDING   = "PENDING"
+    RUNNING   = "RUNNING"
+    COMPLETED = "COMPLETED"
+    FAILED    = "FAILED"     # retryable; next_attempt_at set
+    DEAD      = "DEAD"       # permanent failure, max_attempts exhausted

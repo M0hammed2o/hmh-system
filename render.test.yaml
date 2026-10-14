@@ -1,5 +1,14 @@
-# Dedicated HMH TEST deployment. This blueprint intentionally defines no cron
-# jobs and no outbound integration credentials.
+# Dedicated HMH TEST deployment.
+#
+# Outbound integrations stay off here, with one deliberate exception: the AI
+# Document Import pilot needs a real Anthropic key on TEST to measure
+# extraction accuracy before anything reaches production. That key must be a
+# SEPARATE key issued for TEST with its own spend limit — never the
+# production key. Every secret below is `sync: false`, meaning Render asks
+# for it in the dashboard and it is never written to this file.
+#
+# Pilot procedure: docs/AI_DOCUMENT_IMPORT_PILOT.md
+# Live validation:  docs/AI_DOCUMENT_IMPORT_LIVE_VALIDATION.md
 services:
   - type: web
     name: hmh-test-backend
@@ -41,13 +50,46 @@ services:
         value: "false"
       - key: OCR_PROVIDER
         value: disabled
-      - key: ANTHROPIC_API_KEY
-        value: ""
       - key: GOOGLE_CREDENTIALS_JSON
         value: ""
-      - key: CRON_SECRET
-        value: ""
       - key: RUN_STARTUP_SEED
+        value: "false"
+
+      # ── AI Document Import ────────────────────────────────────────────
+      # A TEST-only Anthropic key with its own spend limit. Leave unset and
+      # the engine still ingests, hashes, deduplicates and routes documents
+      # to human review using the deterministic parser — it simply reads
+      # very little, which is not a useful pilot.
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      # Drives the queue-drain and retention cron jobs below.
+      - key: CRON_SECRET
+        sync: false
+      - key: AI_IMPORT_ENABLED
+        value: "true"
+      - key: AI_IMPORT_MODEL
+        value: claude-opus-5-5
+      # Automatic posting stays OFF for the entire pilot. A person presses
+      # the button on every document. Do not change this on TEST or
+      # production without a measured accuracy figure and a decision taken
+      # by the business, not by a deploy.
+      - key: AI_IMPORT_AUTO_POST_ENABLED
+        value: "false"
+      - key: AI_IMPORT_WORKER_ENABLED
+        value: "true"
+      # Modest on a TEST instance: documents are uploaded by hand here, not
+      # in bulk, and a smaller batch keeps the web dyno responsive.
+      - key: AI_IMPORT_WORKER_BATCH_SIZE
+        value: "2"
+      - key: AI_IMPORT_WORKER_INTERVAL_SECONDS
+        value: "20"
+      # 20 MB, not higher: base64 inflates a file by 4/3 and the provider
+      # caps a request at 32 MB.
+      - key: AI_IMPORT_MAX_UPLOAD_MB
+        value: "20"
+      # No malware scanner is procured yet. Content-type verification against
+      # the file's own magic bytes runs regardless and needs no configuration.
+      - key: AI_IMPORT_SCAN_ENABLED
         value: "false"
 
   - type: web
@@ -66,3 +108,28 @@ services:
         source: /*
         destination: /index.html
 
+cronJobs:
+  # Safety net for the AI Document Import queue. The in-process worker in
+  # main.py is the primary drain; both are safe to run together because jobs
+  # are claimed with FOR UPDATE SKIP LOCKED.
+  - name: ai-import-queue-drain-test
+    schedule: "*/5 * * * *"
+    command: >
+      curl -s -f -X POST
+      https://hmh-test-backend.onrender.com/api/v1/internal/process-ai-import
+      -H "X-Cron-Secret: $CRON_SECRET"
+    envVars:
+      - key: CRON_SECRET
+        sync: false
+
+  # Retention. DRY RUN: this reports what it would remove and removes
+  # nothing. Read the logs for a month before appending ?apply=true.
+  - name: ai-import-retention-test
+    schedule: "30 2 * * 0"
+    command: >
+      curl -s -f -X POST
+      https://hmh-test-backend.onrender.com/api/v1/internal/ai-import-retention
+      -H "X-Cron-Secret: $CRON_SECRET"
+    envVars:
+      - key: CRON_SECRET
+        sync: false

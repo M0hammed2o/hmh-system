@@ -83,6 +83,49 @@ class Settings(BaseSettings):
     GOOGLE_CREDENTIALS_JSON: str = ""
     GOOGLE_APPLICATION_CREDENTIALS: str = ""
 
+    # ── AI Document Import & Reconciliation Engine ────────────────────────────
+    # The engine degrades gracefully: with no ANTHROPIC_API_KEY it still ingests,
+    # stores and tracks documents, falling back to the deterministic parser, and
+    # every document lands in human review rather than auto-posting.
+    AI_IMPORT_ENABLED: bool = True
+    AI_IMPORT_MODEL: str = "claude-opus-5-5"
+    AI_IMPORT_TIMEOUT_SECONDS: float = 120.0
+    # Output budget per extraction. Thinking shares this budget on the current
+    # Opus/Sonnet models, so it must leave room for both.
+    AI_IMPORT_MAX_OUTPUT_TOKENS: int = 16000
+    # 20 MB, not 25: base64 inflates a file by 4/3, and the provider caps a
+    # request at 32 MB. A 25 MB upload encodes to ~33 MB and would be accepted
+    # here only to fail at the provider every time.
+    AI_IMPORT_MAX_UPLOAD_MB: int = 20
+    AI_IMPORT_MAX_FILES_PER_BATCH: int = 50
+    # Malware scanning. HMH has no scanner today, so this is the integration
+    # point: point AI_IMPORT_SCAN_URL at a service that takes the bytes and
+    # answers whether they are infected. Content-type verification against the
+    # file's own magic bytes always runs and needs no configuration.
+    AI_IMPORT_SCAN_ENABLED: bool = False
+    AI_IMPORT_SCAN_URL: str = ""
+    AI_IMPORT_SCAN_TIMEOUT_SECONDS: float = 30.0
+    # An unreachable scanner is not evidence a file is clean, so the default
+    # is to refuse the upload. Set true only if uploads must continue anyway.
+    AI_IMPORT_SCAN_FAIL_OPEN: bool = False
+    # Worker: how often the in-process loop drains, how many documents per pass,
+    # and how long a RUNNING job may hold its lock before another worker
+    # reclaims it (crash/restart recovery).
+    AI_IMPORT_WORKER_ENABLED: bool = True
+    AI_IMPORT_WORKER_INTERVAL_SECONDS: int = 20
+    AI_IMPORT_WORKER_BATCH_SIZE: int = 3
+    AI_IMPORT_JOB_STALE_MINUTES: int = 15
+    AI_IMPORT_JOB_MAX_ATTEMPTS: int = 3
+    AI_IMPORT_RETRY_BACKOFF_SECONDS: int = 60
+    # Auto-posting is opt-in. While false, an AUTO_ELIGIBLE document still stops
+    # at READY_TO_POST and waits for a human to press post.
+    AI_IMPORT_AUTO_POST_ENABLED: bool = False
+    # Confidence floor for AUTO_ELIGIBLE. Necessary but never sufficient —
+    # the deterministic preconditions in ai_import_policy_service also apply.
+    AI_IMPORT_MIN_AUTO_CONFIDENCE: float = 0.85
+    # Documents older than this are purged by the retention job when it is run.
+    AI_IMPORT_RETENTION_DAYS: int = 2555  # ~7 years, SA tax record retention
+
     # Alert thresholds — read by alert_scan and reactive alert logic
     LOW_STOCK_THRESHOLD:              float = 5.0    # items below this trigger LOW_STOCK alert
     BOQ_VARIANCE_ALERT_PCT:           float = 10.0   # BOQ usage variance % that triggers BOQ_VARIANCE alert
