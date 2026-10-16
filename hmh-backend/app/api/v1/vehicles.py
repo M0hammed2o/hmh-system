@@ -4,6 +4,7 @@ import math
 import os
 import uuid
 from datetime import date, datetime as dt, timezone
+from decimal import Decimal
 from typing import Optional
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
@@ -160,9 +161,17 @@ def _differs(current, proposed) -> bool:
 
 
 def _audit_value(v):
-    """JSON-safe rendering of a field value for the audit trail."""
+    """
+    JSON-safe rendering of a field value for the audit trail.
+
+    Numerics become floats rather than strings: an amount recorded as
+    "5000.00" cannot be compared with one recorded as 5000.0, and the whole
+    point of the trail is being able to see what a figure changed from.
+    """
     if v is None or isinstance(v, (bool, int, float, str)):
         return v
+    if isinstance(v, Decimal):
+        return float(v)
     if isinstance(v, (date, dt)):
         return v.isoformat()
     return str(v)
