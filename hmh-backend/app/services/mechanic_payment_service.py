@@ -43,18 +43,41 @@ def _now() -> datetime:
 
 # ── What is owed ─────────────────────────────────────────────────────────────
 
+# Cost types that represent work the mechanic or workshop performed, and so
+# money owed to them.
+#
+# A repair can carry any VehicleCost type — the capture form offers all seven
+# — but most of them are not the mechanic's to be paid for. Tyres bought from
+# a tyre dealer, a licence renewal, an insurance premium or fuel are the
+# vehicle's costs, settled with whoever supplied them. Summing everything
+# booked against the repair would tell the office it owes the mechanic for
+# them, which is both wrong and a way to pay the same money twice.
+#
+# OTHER is excluded deliberately: it is unclassified by definition, and
+# overstating what is owed is the worse error. A genuine mechanic cost
+# captured as OTHER should be recaptured as REPAIR or SERVICE, or the
+# repair's invoiced amount filled in — both of which this honours.
+MECHANIC_COST_TYPES = ("REPAIR", "SERVICE")
+
+
 def amount_payable(db: Session, job: RepairJob) -> tuple[float, str]:
     """
-    What the repair is recognised at, and where that figure came from.
+    What is owed to the mechanic for this repair, and where the figure came
+    from.
 
     In order of authority:
-      1. the supplier's invoice — what the mechanic actually billed;
+      1. the mechanic's invoice — what they actually billed;
       2. the accepted quote, before an invoice arrives;
-      3. the costs booked against the repair, when there is no paperwork.
+      3. the repair and service costs booked against the job, when there is
+         no paperwork at all.
 
-    Returning the basis as well as the number matters: an operator looking at
-    an outstanding balance needs to know whether it rests on an invoice or on
-    a quote that may still change.
+    Only the third needs filtering. An invoice or a quote comes *from* the
+    mechanic, so whatever parts it includes are theirs to be paid for. Loose
+    cost rows do not: they are whatever anyone booked against the repair.
+
+    Returning the basis as well as the number matters — an operator looking
+    at an outstanding balance needs to know whether it rests on an invoice or
+    on a quote that may still change.
     """
     if job.invoice_amount is not None:
         return float(job.invoice_amount), "invoice"
@@ -63,10 +86,33 @@ def amount_payable(db: Session, job: RepairJob) -> tuple[float, str]:
 
     booked = (
         db.query(func.coalesce(func.sum(VehicleCost.amount), 0))
-        .filter(VehicleCost.repair_job_id == job.id)
+        .filter(
+            VehicleCost.repair_job_id == job.id,
+            VehicleCost.cost_type.in_(MECHANIC_COST_TYPES),
+        )
         .scalar()
     ) or 0
-    return float(booked), "recorded costs"
+    return float(booked), "recorded labour"
+
+
+def non_mechanic_costs(db: Session, job: RepairJob) -> float:
+    """
+    Costs booked against the repair that are not the mechanic's to be paid.
+
+    Reported alongside the balance so a payable that is smaller than the
+    repair's total spend is explainable rather than looking like a bug. Only
+    meaningful where the payable rests on loose cost rows; where the mechanic
+    invoiced, their invoice already says what they are owed.
+    """
+    total = (
+        db.query(func.coalesce(func.sum(VehicleCost.amount), 0))
+        .filter(
+            VehicleCost.repair_job_id == job.id,
+            VehicleCost.cost_type.notin_(MECHANIC_COST_TYPES),
+        )
+        .scalar()
+    ) or 0
+    return float(total)
 
 
 def amount_paid(db: Session, repair_job_id: uuid.UUID) -> float:
@@ -108,6 +154,8 @@ def repair_payment_summary(db: Session, job: RepairJob) -> dict:
     )
     vehicle = db.get(Vehicle, job.vehicle_id)
 
+    other_costs = non_mechanic_costs(db, job)
+
     return {
         "repair_job_id": str(job.id),
         "repair_title": job.title,
@@ -125,6 +173,9 @@ def repair_payment_summary(db: Session, job: RepairJob) -> dict:
         "outstanding": round(max(payable - paid, 0.0), 2),
         "payment_status": payment_status(payable, paid),
         "last_payment_date": last.isoformat() if last else None,
+        # Parts, tyres, licences and the like booked against this repair but
+        # owed to whoever supplied them, not to the mechanic.
+        "other_costs_not_payable_to_mechanic": round(other_costs, 2),
     }
 
 
@@ -162,9 +213,10 @@ def record_payment(
     payable, basis = amount_payable(db, job)
     if payable <= CENT:
         raise ValidationError(
-            "This repair has no cost recorded against it yet, so there is "
-            "nothing to pay. Capture the quote, the invoice or the repair "
-            "costs first."
+            "Nothing is owed to a mechanic on this repair yet. Capture the "
+            "mechanic's quote or invoice, or log the labour as a Repair or "
+            "Service cost. Parts, tyres and licences booked here are owed to "
+            "whoever supplied them, not to the mechanic."
         )
 
     already = amount_paid(db, repair_job_id)

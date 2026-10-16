@@ -369,6 +369,14 @@ function RepairPaymentsDrawer({
           </div>
         </div>
 
+        {(history?.other_costs_not_payable_to_mechanic ?? 0) > 0 && (
+          <p className="text-xs text-muted-foreground bg-muted/50 border border-border rounded-lg px-3 py-2 mb-3">
+            A further {money(history!.other_costs_not_payable_to_mechanic)} of parts,
+            tyres or licences is booked against this repair. That is owed to whoever
+            supplied it, not to the mechanic, so it is not part of the balance above.
+          </p>
+        )}
+
         {error && (
           <p className="text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-lg px-3 py-2 mb-3">
             {error}

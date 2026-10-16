@@ -179,7 +179,7 @@ def test_booked_costs_are_used_when_there_is_no_paperwork(db, client, world):
     db.commit()
     data = _history(client, _token(client, world), job.id)
     assert data["total_payable"] == 2000.0
-    assert data["payable_basis"] == "recorded costs"
+    assert data["payable_basis"] == "recorded labour"
 
 
 def test_recording_a_payment_does_not_add_to_what_the_repair_cost(db, client, world):
@@ -321,7 +321,7 @@ def test_a_repair_with_no_cost_recorded_cannot_be_paid(db, client, world):
     db.commit()
     r = _pay(client, _token(client, world), job.id, 500)
     assert r.status_code in (400, 422)
-    assert "nothing to pay" in _error_text(r)
+    assert "Nothing is owed to a mechanic" in _error_text(r)
 
 
 def test_paying_an_unknown_repair_is_a_404(client, world):
@@ -703,3 +703,91 @@ def test_reversing_the_payment_releases_the_lock(db, client, world):
     r = client.patch(f"/api/v1/vehicles/repairs/{job.id}",
                      json={"vehicle_id": str(other.id)}, headers=auth(token))
     assert r.status_code == 200, r.text
+
+
+# ── Only the mechanic's own work is payable to the mechanic ──────────────────
+#
+# A repair can carry any VehicleCost type — the capture form offers all seven.
+# Tyres from a tyre dealer, a licence renewal, fuel: those are owed to
+# whoever supplied them. Counting them as owed to the mechanic would both
+# overstate the balance and invite paying the same money twice.
+
+def test_parts_and_licence_costs_are_not_owed_to_the_mechanic(db, client, world):
+    job = _repair(db, world["vehicle"])
+    _cost(db, world["vehicle"], job, 3000, cost_type="REPAIR")
+    _cost(db, world["vehicle"], job, 2000, cost_type="TYRE")
+    _cost(db, world["vehicle"], job, 500, cost_type="LICENCE")
+    db.commit()
+
+    data = _history(client, _token(client, world), job.id)
+    assert data["total_payable"] == 3000.0
+    assert data["payable_basis"] == "recorded labour"
+    assert data["other_costs_not_payable_to_mechanic"] == 2500.0
+
+
+def test_service_costs_count_as_the_mechanics_work(db, client, world):
+    job = _repair(db, world["vehicle"])
+    _cost(db, world["vehicle"], job, 1200, cost_type="REPAIR")
+    _cost(db, world["vehicle"], job, 800, cost_type="SERVICE")
+    db.commit()
+
+    assert _history(client, _token(client, world), job.id)["total_payable"] == 2000.0
+
+
+def test_fuel_booked_against_a_repair_is_never_payable(db, client, world):
+    job = _repair(db, world["vehicle"])
+    _cost(db, world["vehicle"], job, 1500, cost_type="FUEL")
+    db.commit()
+
+    data = _history(client, _token(client, world), job.id)
+    assert data["total_payable"] == 0.0
+    r = _pay(client, _token(client, world), job.id, 100)
+    assert r.status_code in (400, 422)
+    assert "Nothing is owed to a mechanic" in _error_text(r)
+
+
+def test_an_unclassified_cost_is_not_assumed_to_be_the_mechanics(db, client, world):
+    """Overstating what is owed is the worse error, so OTHER is excluded."""
+    job = _repair(db, world["vehicle"])
+    _cost(db, world["vehicle"], job, 900, cost_type="OTHER")
+    db.commit()
+
+    assert _history(client, _token(client, world), job.id)["total_payable"] == 0.0
+
+
+def test_an_invoice_from_the_mechanic_covers_whatever_it_includes(db, client, world):
+    """
+    Parts on the mechanic's own invoice ARE theirs to be paid for, so an
+    invoiced repair is not filtered — only loose cost rows are.
+    """
+    job = _repair(db, world["vehicle"], invoice=7500)
+    _cost(db, world["vehicle"], job, 2000, cost_type="TYRE")
+    db.commit()
+
+    data = _history(client, _token(client, world), job.id)
+    assert data["total_payable"] == 7500.0
+    assert data["payable_basis"] == "invoice"
+
+
+def test_the_overview_excludes_non_mechanic_costs_too(db, client, world):
+    job = _repair(db, world["vehicle"], title="Mixed")
+    _cost(db, world["vehicle"], job, 3000, cost_type="REPAIR")
+    _cost(db, world["vehicle"], job, 4000, cost_type="TYRE")
+    db.commit()
+
+    data = _overview(client, _token(client, world))
+    assert data["totals"]["total_payable"] == 3000.0
+    assert data["totals"]["total_outstanding"] == 3000.0
+
+
+def test_paying_cannot_exceed_the_mechanics_share(db, client, world):
+    """The overpayment guard must use the filtered figure, not the gross spend."""
+    job = _repair(db, world["vehicle"])
+    _cost(db, world["vehicle"], job, 3000, cost_type="REPAIR")
+    _cost(db, world["vehicle"], job, 5000, cost_type="TYRE")
+    db.commit()
+    token = _token(client, world)
+
+    assert _pay(client, token, job.id, 3000).status_code == 201
+    r = _pay(client, token, job.id, 1, payment_reference="over")
+    assert r.status_code == 409

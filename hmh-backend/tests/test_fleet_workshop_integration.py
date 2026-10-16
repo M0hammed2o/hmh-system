@@ -282,3 +282,175 @@ def test_a_new_company_appears_on_its_own_letterhead(db, client, owner_token):
     assert letterhead("Ophezulu", company)["name"] == "Ophezulu"
     # Nothing invented for a company whose details have not been captured.
     assert letterhead(str(company.id), company)["vat"] == ""
+
+
+# ── Adding a company grants nobody anything ──────────────────────────────────
+#
+# Access in this system is per project, not per company. A new company has no
+# projects until someone creates them, and a site-level user still needs an
+# explicit UserProjectAccess row. Registering a company must not widen
+# anyone's reach on its own.
+
+def test_a_new_company_does_not_widen_site_staff_access(db, client):
+    from app.models.project import Project
+    from app.models.vehicle import RepairJob
+
+    owner = make_user(db, role="OWNER")
+    company = _company(db, "Ophezulu")
+    project = make_project(db, owner["id"])
+    db.get(Project, uuid.UUID(project["id"])).company_id = company.id
+    vehicle = _vehicle(db, name="Ophezulu truck", project_id=project["id"])
+    db.flush()
+    db.add(RepairJob(
+        vehicle_id=vehicle.id, title="Ophezulu repair", status="OPEN",
+        date_opened=date(2026, 4, 1), invoice_amount=1000,
+        created_at=_now(), updated_at=_now(),
+    ))
+
+    outsider = make_user(db, role="SITE_STAFF")
+    db.commit()
+    token = login(client, outsider["email"], "Test@1234")
+
+    # Payables are office-level throughout; a site user sees none of it.
+    assert client.get("/api/v1/workshop/mechanic-payments",
+                      headers=auth(token)).status_code == 403
+    assert client.post(
+        f"/api/v1/workshop/repairs/{db.query(RepairJob).first().id}/payments",
+        json={"amount": 100, "payment_date": "2026-04-02"},
+        headers=auth(token),
+    ).status_code == 403
+
+
+def test_a_new_company_does_not_let_site_staff_edit_its_repairs(db, client):
+    from app.models.project import Project
+    from app.models.vehicle import RepairJob
+
+    owner = make_user(db, role="OWNER")
+    company = _company(db, "Kukhanya Kabusha")
+    project = make_project(db, owner["id"])
+    db.get(Project, uuid.UUID(project["id"])).company_id = company.id
+    vehicle = _vehicle(db, name="KK truck", project_id=project["id"])
+    db.flush()
+    job = RepairJob(
+        vehicle_id=vehicle.id, title="KK repair", status="OPEN",
+        date_opened=date(2026, 4, 1), created_at=_now(), updated_at=_now(),
+    )
+    db.add(job)
+
+    outsider = make_user(db, role="SITE_STAFF")
+    db.commit()
+    token = login(client, outsider["email"], "Test@1234")
+
+    assert client.patch(f"/api/v1/vehicles/repairs/{job.id}",
+                        json={"title": "hijacked"}, headers=auth(token)).status_code == 403
+
+
+def test_registering_a_company_creates_no_project_access_rows(db):
+    """The company is a label on projects, not a grant of anything."""
+    from app.models.access import UserProjectAccess
+
+    before = db.query(UserProjectAccess).count()
+    for name in NEW_COMPANIES:
+        _company(db, name)
+    db.commit()
+    assert db.query(UserProjectAccess).count() == before
+
+
+# ── Purchase-order letterheads for the new companies ─────────────────────────
+
+def _purchase_order(db, owner, project, *, issuing_company):
+    from app.models.enums import RecordStatus
+    from app.models.purchase_order import PurchaseOrder
+    from tests.conftest import make_supplier
+
+    supplier = make_supplier(db)
+    po = PurchaseOrder(
+        po_number=f"PO-{uuid.uuid4().hex[:6].upper()}",
+        project_id=uuid.UUID(project["id"]),
+        supplier_id=uuid.UUID(supplier["id"]),
+        po_date=date(2026, 5, 1),
+        status=RecordStatus.ORDERED,
+        subtotal_amount=1000, vat_amount=150, total_amount=1150,
+        issuing_company=issuing_company,
+        created_by=uuid.UUID(owner["id"]),
+        created_at=_now(), updated_at=_now(),
+    )
+    db.add(po)
+    db.flush()
+    return po
+
+
+def test_a_purchase_order_renders_under_its_own_company(db, owner_token):
+    """
+    The real path: a PO carrying a company id must render that company's
+    name, not fall back to HMH Group. Before the resolver change it would
+    have — the wrong company on a supplier-facing document.
+    """
+    from app.services.email_service import _company as letterhead
+
+    owner, _ = owner_token
+    project = make_project(db, owner["id"])
+    company = _company(db, "Premium Structures")
+    db.flush()
+    po = _purchase_order(db, owner, project, issuing_company=str(company.id))
+    db.commit()
+
+    assert letterhead(po.issuing_company, po)["name"] == "Premium Structures"
+
+
+def test_a_company_id_fits_the_issuing_company_column(db, owner_token):
+    """A UUID is 36 characters; the column holds 50. Worth pinning."""
+    from app.models.purchase_order import PurchaseOrder
+
+    owner, _ = owner_token
+    project = make_project(db, owner["id"])
+    company = _company(db, "Kukhanya Kabusha")
+    db.flush()
+    po = _purchase_order(db, owner, project, issuing_company=str(company.id))
+    db.commit()
+
+    assert db.get(PurchaseOrder, po.id).issuing_company == str(company.id)
+
+
+def test_legacy_purchase_orders_are_unchanged(db, owner_token):
+    """Documents issued under the old keys must render exactly as before."""
+    from app.services.email_service import _company as letterhead
+
+    owner, _ = owner_token
+    project = make_project(db, owner["id"])
+    db.flush()
+    po = _purchase_order(db, owner, project, issuing_company="MINERAT")
+    db.commit()
+
+    co = letterhead(po.issuing_company, po)
+    assert co["name"] == "Minerat Construction & Civils"
+    assert co["vat"] == "4380258618"
+    assert co["tel"] == "(031) 301 3038"
+
+
+def test_a_purchase_order_with_no_company_still_renders(db, owner_token):
+    from app.services.email_service import _company as letterhead
+
+    owner, _ = owner_token
+    project = make_project(db, owner["id"])
+    db.flush()
+    po = _purchase_order(db, owner, project, issuing_company=None)
+    db.commit()
+
+    assert letterhead(po.issuing_company, po)["name"] == "HMH Group"
+
+
+def test_a_purchase_order_pdf_generates_for_a_new_company(db, owner_token):
+    """End to end: the document actually renders, with the right name in it."""
+    from app.services.email_service import _generate_po_pdf
+
+    owner, _ = owner_token
+    project = make_project(db, owner["id"])
+    company = _company(db, "Ophezulu")
+    db.flush()
+    po = _purchase_order(db, owner, project, issuing_company=str(company.id))
+    db.commit()
+
+    pdf = _generate_po_pdf(po)
+    assert pdf[:4] == b"%PDF"
+    assert len(pdf) > 1000

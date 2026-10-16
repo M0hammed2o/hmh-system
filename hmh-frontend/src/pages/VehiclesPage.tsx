@@ -752,6 +752,14 @@ export default function VehiclesPage() {
   const [editVehicle, setEditVehicle] = useState<Vehicle | null>(null);
   const [assignFor, setAssignFor] = useState<Vehicle | null>(null);
   const [newRepairFor, setNewRepairFor] = useState<Vehicle | null>(null);
+  // Fuel timeline paging. The timeline is assembled in the browser from fuel
+  // logs and issues that are already loaded, and the totals above it are
+  // computed over all of them - only the rendered rows were capped at ten,
+  // which hid older fills with no way to reach them. Paging here is purely a
+  // display change; what gets fetched is unchanged.
+  const [fuelPage, setFuelPage] = useState<Record<string, number>>({});
+  const FUEL_PAGE_SIZE = 10;
+
   const [editRepairFor, setEditRepairFor] = useState<{ vehicle: Vehicle; job: RepairJob } | null>(null);
   const [logRepairCostFor, setLogRepairCostFor] = useState<{ vehicle: Vehicle; job: RepairJob } | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -1118,7 +1126,10 @@ export default function VehiclesPage() {
                                 <span>Est. remaining: <strong className="text-foreground">{latestIssue.estimated_remaining_litres.toFixed(1)} L</strong></span>
                               )}
                             </div>
-                            {timeline.slice(0, 10).map(entry => (
+                            {timeline
+                              .slice(((fuelPage[v.id] ?? 1) - 1) * FUEL_PAGE_SIZE,
+                                     (fuelPage[v.id] ?? 1) * FUEL_PAGE_SIZE)
+                              .map(entry => (
                               <div key={entry.key} className={cn(
                                 "flex items-start justify-between text-xs rounded-lg px-2 py-1.5",
                                 entry.anomaly && "bg-destructive/5",
@@ -1156,6 +1167,14 @@ export default function VehiclesPage() {
                                 </div>
                               </div>
                             ))}
+                            <HistoryPager
+                              page={fuelPage[v.id] ?? 1}
+                              limit={FUEL_PAGE_SIZE}
+                              total={timeline.length}
+                              totalPages={Math.max(1, Math.ceil(timeline.length / FUEL_PAGE_SIZE))}
+                              noun="fuel entry"
+                              onPageChange={(page) => setFuelPage((prev) => ({ ...prev, [v.id]: page }))}
+                            />
                           </>
                         );
                       })()}

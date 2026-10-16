@@ -14,7 +14,7 @@ import client from "./client";
 export type MechanicPaymentStatus = "UNPAID" | "PARTIALLY_PAID" | "PAID";
 
 /** Where the payable figure came from, so a balance can be read in context. */
-export type PayableBasis = "invoice" | "quote" | "recorded costs";
+export type PayableBasis = "invoice" | "quote" | "recorded labour";
 
 export interface RepairPaymentSummary {
   repair_job_id: string;
@@ -31,6 +31,12 @@ export interface RepairPaymentSummary {
   outstanding: number;
   payment_status: MechanicPaymentStatus;
   last_payment_date: string | null;
+  /**
+   * Parts, tyres, licences and the like booked against the repair but
+   * owed to whoever supplied them, not to the mechanic. Shown so a
+   * payable smaller than the repair's total spend is explainable.
+   */
+  other_costs_not_payable_to_mechanic: number;
 }
 
 export interface MechanicPayment {
