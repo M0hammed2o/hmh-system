@@ -14,6 +14,8 @@ import {
 } from "lucide-react";
 import {
   vehiclesApi,
+  DEFAULT_HISTORY_PAGE_SIZE,
+  type Paged,
   type Vehicle,
   type VehicleCost,
   type VehicleCostCreate,
@@ -22,6 +24,7 @@ import {
   type RepairJob,
   type RepairJobCreate,
 } from "@/api/vehicles";
+import { HistoryPager } from "@/components/shared/HistoryPager";
 import { fuelApi, fuelPhotoUrl, type FuelLog } from "@/api/fuel";
 import { fuelManagementApi, type FuelIssue } from "@/api/fuelManagement";
 import { Button } from "@/components/ui/button";
@@ -430,8 +433,9 @@ interface SiteVehiclesProps {
 export function SiteVehicles({ siteId, projectId, sites, isViewOnly = false }: SiteVehiclesProps) {
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [loading, setLoading] = useState(true);
-  const [costs, setCosts] = useState<Record<string, VehicleCost[]>>({});
-  const [repairs, setRepairs] = useState<Record<string, RepairJob[]>>({});
+  // One page of costs per vehicle, plus the full-history total.
+  const [costs, setCosts] = useState<Record<string, Paged<VehicleCost>>>({});
+  const [repairs, setRepairs] = useState<Record<string, Paged<RepairJob>>>({});
   const [fuelLogs, setFuelLogs] = useState<Record<string, FuelLog[]>>({});
   const [fuelIssues, setFuelIssues] = useState<Record<string, FuelIssue[]>>({});
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -448,13 +452,17 @@ export function SiteVehicles({ siteId, projectId, sites, isViewOnly = false }: S
       .finally(() => setLoading(false));
   };
 
-  const loadCosts = async (vehicleId: string) => {
-    const data = await vehiclesApi.listCosts(vehicleId).catch(() => []);
+  const loadCosts = async (vehicleId: string, page = 1, limit = DEFAULT_HISTORY_PAGE_SIZE) => {
+    const data = await vehiclesApi
+      .listCosts(vehicleId, { page, limit })
+      .catch(() => ({ items: [], total: 0, page: 1, limit, total_pages: 1 }));
     setCosts(prev => ({ ...prev, [vehicleId]: data }));
   };
 
-  const loadRepairs = async (vehicleId: string) => {
-    const data = await vehiclesApi.listRepairs(vehicleId).catch(() => []);
+  const loadRepairs = async (vehicleId: string, page = 1, limit = DEFAULT_HISTORY_PAGE_SIZE) => {
+    const data = await vehiclesApi
+      .listRepairs(vehicleId, { page, limit })
+      .catch(() => ({ items: [], total: 0, page: 1, limit, total_pages: 1 }));
     setRepairs(prev => ({ ...prev, [vehicleId]: data }));
   };
 
@@ -576,9 +584,9 @@ export function SiteVehicles({ siteId, projectId, sites, isViewOnly = false }: S
                           : tab === "fuel" ? <Droplet className="w-3 h-3" />
                           : <ClipboardList className="w-3 h-3" />}
                         {tab === "details" ? "Details"
-                          : tab === "costs" ? `Costs (${costs[v.id]?.length ?? 0})`
+                          : tab === "costs" ? `Costs (${costs[v.id]?.total ?? 0})`
                           : tab === "fuel" ? `Fuel (${(fuelLogs[v.id]?.length ?? 0) + (fuelIssues[v.id]?.length ?? 0)})`
-                          : `Repairs (${repairs[v.id]?.length ?? 0})`}
+                          : `Repairs (${repairs[v.id]?.total ?? 0})`}
                       </button>
                     ))}
                   </div>
@@ -623,14 +631,14 @@ export function SiteVehicles({ siteId, projectId, sites, isViewOnly = false }: S
                           </Button>
                         </div>
                       )}
-                      {costs[v.id]?.length === 0 ? (
+                      {costs[v.id]?.total === 0 ? (
                         <p className="text-xs text-muted-foreground">No costs logged yet.</p>
-                      ) : costs[v.id]?.length > 0 ? (
+                      ) : (costs[v.id]?.total ?? 0) > 0 ? (
                         <>
                           <div className="flex gap-4 text-xs text-muted-foreground pb-1 border-b border-border/50">
-                            <span>Total: <strong className="text-foreground">{formatCurrency(costs[v.id].reduce((s, c) => s + c.amount, 0))}</strong></span>
+                            <span>This page: <strong className="text-foreground">{formatCurrency(costs[v.id].items.reduce((s, c) => s + c.amount, 0))}</strong></span>
                           </div>
-                          {costs[v.id].slice(0, 10).map(cost => (
+                          {costs[v.id].items.map(cost => (
                             <div key={cost.id} className="flex items-center justify-between text-xs">
                               <div className="flex items-center gap-2">
                                 <Wrench className="w-3.5 h-3.5 text-muted-foreground" />
@@ -643,6 +651,15 @@ export function SiteVehicles({ siteId, projectId, sites, isViewOnly = false }: S
                               </div>
                             </div>
                           ))}
+                          <HistoryPager
+                            page={costs[v.id].page}
+                            limit={costs[v.id].limit}
+                            total={costs[v.id].total}
+                            totalPages={costs[v.id].total_pages}
+                            noun="cost"
+                            onPageChange={(p) => loadCosts(v.id, p, costs[v.id].limit)}
+                            onLimitChange={(l) => loadCosts(v.id, 1, l)}
+                          />
                         </>
                       ) : null}
                     </div>
@@ -719,7 +736,7 @@ export function SiteVehicles({ siteId, projectId, sites, isViewOnly = false }: S
                   {(activeTab[v.id] ?? "details") === "repairs" && (
                     <div className="px-4 py-3 space-y-3">
                       <div className="flex items-center justify-between">
-                        <span className="text-xs text-muted-foreground">{repairs[v.id]?.length ?? 0} repair job(s)</span>
+                        <span className="text-xs text-muted-foreground">{repairs[v.id]?.total ?? 0} repair job(s)</span>
                         {!isViewOnly && (
                           <Button size="sm" variant="outline" onClick={() => setNewRepairFor(v)}>
                             <Plus className="w-3.5 h-3.5 mr-1" /> Report Issue
@@ -728,21 +745,28 @@ export function SiteVehicles({ siteId, projectId, sites, isViewOnly = false }: S
                       </div>
                       {!repairs[v.id] ? (
                         <p className="text-xs text-muted-foreground">Loading…</p>
-                      ) : repairs[v.id].length === 0 ? (
+                      ) : repairs[v.id].total === 0 ? (
                         <p className="text-xs text-muted-foreground">No repair jobs yet.</p>
                       ) : (
                         <div className="space-y-3">
-                          {repairs[v.id].map(job => (
+                          {repairs[v.id].items.map(job => (
                             <RepairJobCard
                               key={job.id}
                               job={job}
                               vehicle={v}
                               isViewOnly={isViewOnly}
                               onUpdated={updated => {
-                                setRepairs(prev => ({
-                                  ...prev,
-                                  [v.id]: (prev[v.id] ?? []).map(j => j.id === updated.id ? updated : j),
-                                }));
+                                setRepairs(prev => {
+                                  const current = prev[v.id];
+                                  if (!current) return prev;
+                                  return {
+                                    ...prev,
+                                    [v.id]: {
+                                      ...current,
+                                      items: current.items.map(j => j.id === updated.id ? updated : j),
+                                    },
+                                  };
+                                });
                               }}
                             />
                           ))}
@@ -766,11 +790,10 @@ export function SiteVehicles({ siteId, projectId, sites, isViewOnly = false }: S
             <NewRepairJobForm
               vehicle={newRepairFor}
               onClose={() => setNewRepairFor(null)}
-              onCreated={job => {
-                setRepairs(prev => ({
-                  ...prev,
-                  [newRepairFor.id]: [job, ...(prev[newRepairFor.id] ?? [])],
-                }));
+              onCreated={() => {
+                // Reload: a new repair shifts page boundaries and the total,
+                // and the newest one belongs at the top of page 1.
+                void loadRepairs(newRepairFor.id, 1);
                 setNewRepairFor(null);
                 // Auto-open repairs tab
                 setExpanded(newRepairFor.id);

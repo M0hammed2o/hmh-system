@@ -14,7 +14,10 @@ import {
   type FuelType,
   type RepairJob,
   type RepairJobCreate,
+  type Paged,
+  type HistoryQuery,
 } from "@/api/vehicles";
+import { HistoryPager } from "@/components/shared/HistoryPager";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -634,8 +637,12 @@ function AssignVehicleModal({ vehicle, onClose, onSaved }: { vehicle: Vehicle; o
 
 export default function VehiclesPage() {
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
-  const [costs, setCosts] = useState<Record<string, VehicleCost[]>>({});
-  const [repairs, setRepairs] = useState<Record<string, RepairJob[]>>({});
+  // Each vehicle holds one PAGE of its history plus the full-history total,
+  // so the screen can say how many records exist behind what it is showing.
+  const [costs, setCosts] = useState<Record<string, Paged<VehicleCost>>>({});
+  const [repairs, setRepairs] = useState<Record<string, Paged<RepairJob>>>({});
+  const [costQuery, setCostQuery] = useState<Record<string, HistoryQuery>>({});
+  const [repairQuery, setRepairQuery] = useState<Record<string, HistoryQuery>>({});
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
   const [logCostFor, setLogCostFor] = useState<Vehicle | null>(null);
@@ -665,13 +672,22 @@ export default function VehiclesPage() {
       .finally(() => setLoading(false));
   };
 
-  const loadCosts = async (vehicleId: string) => {
-    const data = await vehiclesApi.listCosts(vehicleId);
+  /**
+   * Load one page of history. The query is remembered per vehicle so that
+   * editing a repair, or logging a cost, returns to the page and filters the
+   * user was on rather than throwing them back to the top.
+   */
+  const loadCosts = async (vehicleId: string, patch: HistoryQuery = {}) => {
+    const query = { ...(costQuery[vehicleId] ?? {}), ...patch };
+    setCostQuery((prev) => ({ ...prev, [vehicleId]: query }));
+    const data = await vehiclesApi.listCosts(vehicleId, query);
     setCosts((prev) => ({ ...prev, [vehicleId]: data }));
   };
 
-  const loadRepairs = async (vehicleId: string) => {
-    const data = await vehiclesApi.listRepairs(vehicleId);
+  const loadRepairs = async (vehicleId: string, patch: HistoryQuery = {}) => {
+    const query = { ...(repairQuery[vehicleId] ?? {}), ...patch };
+    setRepairQuery((prev) => ({ ...prev, [vehicleId]: query }));
+    const data = await vehiclesApi.listRepairs(vehicleId, query);
     setRepairs((prev) => ({ ...prev, [vehicleId]: data }));
   };
 
@@ -862,9 +878,9 @@ export default function VehiclesPage() {
                          : tab === "repairs" ? <ClipboardList className="w-3 h-3" />
                          : <History className="w-3 h-3" />}
                         {tab === "details"  ? "Details"
-                         : tab === "costs"  ? `Costs (${costs[v.id]?.length ?? 0})`
+                         : tab === "costs"  ? `Costs (${costs[v.id]?.total ?? 0})`
                          : tab === "fuel"   ? `Fuel (${(fuelLogs[v.id]?.length ?? 0) + (fuelIssues[v.id]?.length ?? 0)})`
-                         : tab === "repairs" ? `Repairs (${repairs[v.id]?.length ?? 0})`
+                         : tab === "repairs" ? `Repairs (${repairs[v.id]?.total ?? 0})`
                          : `Parts (${partsHistory[v.id]?.length ?? 0})`}
                       </button>
                     ))}
@@ -940,16 +956,16 @@ export default function VehiclesPage() {
                   {/* Costs tab */}
                   {(activeTab[v.id] ?? "details") === "costs" && costs[v.id] && (
                     <div className="px-4 py-3 space-y-2">
-                      {costs[v.id].length > 0 && (
+                      {costs[v.id].total > 0 && (
                         <div className="flex gap-4 text-xs text-muted-foreground pb-1 border-b border-border/50">
-                          <span>Total: <strong className="text-foreground">R{costs[v.id].reduce((s, c) => s + c.amount, 0).toLocaleString()}</strong></span>
-                          <span>{costs[v.id].length} entries</span>
+                          <span>This page: <strong className="text-foreground">R{costs[v.id].items.reduce((s, c) => s + c.amount, 0).toLocaleString()}</strong></span>
+                          <span>{costs[v.id].total} entries</span>
                         </div>
                       )}
-                      {costs[v.id].length === 0 ? (
+                      {costs[v.id].total === 0 ? (
                         <p className="text-xs text-muted-foreground">No costs logged yet.</p>
                       ) : (
-                        costs[v.id].slice(0, 10).map(cost => (
+                        costs[v.id].items.map(cost => (
                           <div key={cost.id} className="flex items-center justify-between text-sm">
                             <div className="flex items-center gap-2">
                               {cost.cost_type === "FUEL" ? <Fuel className="w-3.5 h-3.5 text-muted-foreground" /> : <Wrench className="w-3.5 h-3.5 text-muted-foreground" />}
@@ -963,6 +979,15 @@ export default function VehiclesPage() {
                           </div>
                         ))
                       )}
+                      <HistoryPager
+                        page={costs[v.id].page}
+                        limit={costs[v.id].limit}
+                        total={costs[v.id].total}
+                        totalPages={costs[v.id].total_pages}
+                        noun="cost"
+                        onPageChange={(page) => loadCosts(v.id, { page })}
+                        onLimitChange={(limit) => loadCosts(v.id, { limit, page: 1 })}
+                      />
                     </div>
                   )}
 
@@ -1089,7 +1114,7 @@ export default function VehiclesPage() {
                     <div className="px-4 py-3 space-y-3">
                       <div className="flex items-center justify-between">
                         <span className="text-xs text-muted-foreground">
-                          {repairs[v.id]?.length ?? 0} repair job(s)
+                          {repairs[v.id]?.total ?? 0} repair job(s)
                         </span>
                         <Button size="sm" variant="outline" onClick={() => setNewRepairFor(v)}>
                           <Plus className="w-3.5 h-3.5" />
@@ -1098,11 +1123,11 @@ export default function VehiclesPage() {
                       </div>
                       {!repairs[v.id] ? (
                         <p className="text-xs text-muted-foreground">Loading…</p>
-                      ) : repairs[v.id].length === 0 ? (
+                      ) : repairs[v.id].total === 0 ? (
                         <p className="text-xs text-muted-foreground">No repair jobs logged yet. Click "New Repair Job" to get started.</p>
                       ) : (
                         <div className="space-y-3">
-                          {repairs[v.id].map(job => (
+                          {repairs[v.id].items.map(job => (
                             <div key={job.id} className="border border-border/60 rounded-lg p-3 space-y-2">
                               <div className="flex items-start justify-between gap-2">
                                 <div className="min-w-0">
@@ -1173,10 +1198,17 @@ export default function VehiclesPage() {
                                           status: "CLOSED",
                                           date_closed: new Date().toISOString().split("T")[0],
                                         });
-                                        setRepairs(prev => ({
-                                          ...prev,
-                                          [v.id]: (prev[v.id] ?? []).map(j => j.id === job.id ? updated : j),
-                                        }));
+                                        setRepairs(prev => {
+                                          const current = prev[v.id];
+                                          if (!current) return prev;
+                                          return {
+                                            ...prev,
+                                            [v.id]: {
+                                              ...current,
+                                              items: current.items.map(j => j.id === job.id ? updated : j),
+                                            },
+                                          };
+                                        });
                                       } catch {
                                         alert("Failed to close repair job.");
                                       }
@@ -1190,6 +1222,17 @@ export default function VehiclesPage() {
                             </div>
                           ))}
                         </div>
+                      )}
+                      {repairs[v.id] && (
+                        <HistoryPager
+                          page={repairs[v.id].page}
+                          limit={repairs[v.id].limit}
+                          total={repairs[v.id].total}
+                          totalPages={repairs[v.id].total_pages}
+                          noun="repair"
+                          onPageChange={(page) => loadRepairs(v.id, { page })}
+                          onLimitChange={(limit) => loadRepairs(v.id, { limit, page: 1 })}
+                        />
                       )}
                     </div>
                   )}
@@ -1244,11 +1287,10 @@ export default function VehiclesPage() {
         <NewRepairJobModal
           vehicle={newRepairFor}
           onClose={() => setNewRepairFor(null)}
-          onCreated={(job) => {
-            setRepairs(prev => ({
-              ...prev,
-              [newRepairFor.id]: [job, ...(prev[newRepairFor.id] ?? [])],
-            }));
+          onCreated={() => {
+            // Reload rather than splice: a new repair shifts the page
+            // boundaries and the total, and the newest belongs on page 1.
+            void loadRepairs(newRepairFor.id, { page: 1 });
           }}
         />
       )}

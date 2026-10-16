@@ -153,6 +153,14 @@ class RepairJobCreate(BaseModel):
 
 
 class RepairJobUpdate(BaseModel):
+    """
+    Correcting a captured repair. Every field is optional — only what is sent
+    is considered, so a client may patch one field without restating the rest.
+
+    `vehicle_id`, `quote_amount` and `invoice_amount` are accepted here but
+    refused by the route once the repair's financial history depends on them;
+    see vehicle_service.repair_locked_fields.
+    """
     title: Optional[str] = None
     description: Optional[str] = None
     status: Optional[str] = None
@@ -161,6 +169,9 @@ class RepairJobUpdate(BaseModel):
     date_closed: Optional[date] = None
     odometer_at_repair: Optional[float] = None
     notes: Optional[str] = None
+    vehicle_id: Optional[uuid.UUID] = None
+    quote_amount: Optional[float] = None
+    invoice_amount: Optional[float] = None
 
 
 class RepairJobRead(BaseModel):
