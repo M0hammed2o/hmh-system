@@ -13,6 +13,7 @@ import { StatCard } from "@/components/shared/StatCard";
 import { Modal } from "@/components/shared/Modal";
 import { projectsApi, type Project, type ProjectCreate, type ProjectStatus } from "@/api/projects";
 import { formatDate } from "@/lib/format";
+import { CompanySelect } from "@/components/shared/CompanySelect";
 
 const statusVariant: Record<ProjectStatus, "success" | "default" | "secondary" | "outline"> = {
   ACTIVE: "success",
@@ -99,16 +100,12 @@ function CreateProjectModal({ onClose, onCreated }: CreateProjectModalProps) {
               <Building2 className="w-3.5 h-3.5" />
               Company
             </Label>
-            <select
+            <CompanySelect
               value={form.client_name ?? ""}
-              onChange={(e) => setForm({ ...form, client_name: e.target.value })}
+              onChange={(v) => setForm({ ...form, client_name: v })}
+              valueMode="name"
               required
-              className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
-            >
-              <option value="">— Select company —</option>
-              <option value="HMH Group">HMH Group</option>
-              <option value="Minerat Construction &amp; Civils">Minerat Construction &amp; Civils</option>
-            </select>
+            />
           </div>
           <div className="space-y-2">
             <Label>Location</Label>
