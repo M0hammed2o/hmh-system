@@ -14,7 +14,10 @@ import {
   type FuelType,
   type RepairJob,
   type RepairJobCreate,
+  type Paged,
+  type HistoryQuery,
 } from "@/api/vehicles";
+import { HistoryPager } from "@/components/shared/HistoryPager";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -388,17 +391,56 @@ function LogCostModal({ vehicle, onClose, onLogged }: { vehicle: Vehicle; onClos
   );
 }
 
-function NewRepairJobModal({
+/**
+ * Create or correct a repair job.
+ *
+ * One form for both, prefilled when editing, so a correction is made in the
+ * same place the record was captured rather than in a second form that
+ * drifts out of step with this one.
+ *
+ * The server refuses changes to fields the repair's financial history
+ * depends on - moving a paid repair to another vehicle, cutting an amount
+ * below what has been paid - and says which record is in the way. That
+ * message is shown as-is: it is far more use than "save failed".
+ */
+function RepairJobModal({
   vehicle,
+  job,
   onClose,
-  onCreated,
+  onSaved,
 }: {
   vehicle: Vehicle;
+  job?: RepairJob;
   onClose: () => void;
-  onCreated: (job: RepairJob) => void;
+  onSaved: (job: RepairJob) => void;
 }) {
+  const editing = Boolean(job);
   const today = new Date().toISOString().split("T")[0];
-  const [form, setForm] = useState<RepairJobCreate>({ title: "", date_opened: today });
+
+  type RepairForm = RepairJobCreate & {
+    status?: string;
+    date_closed?: string;
+    quote_amount?: number;
+    invoice_amount?: number;
+    notes?: string;
+  };
+
+  const [form, setForm] = useState<RepairForm>(
+    job
+      ? {
+          title: job.title,
+          description: job.description ?? undefined,
+          workshop_name: job.workshop_name ?? undefined,
+          date_opened: job.date_opened,
+          date_closed: job.date_closed ?? undefined,
+          odometer_at_repair: job.odometer_at_repair ?? undefined,
+          notes: job.notes ?? undefined,
+          status: job.status,
+          quote_amount: job.quote_amount ?? undefined,
+          invoice_amount: job.invoice_amount ?? undefined,
+        }
+      : { title: "", date_opened: today },
+  );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -408,18 +450,25 @@ function NewRepairJobModal({
     setLoading(true);
     setError("");
     try {
-      const job = await vehiclesApi.createRepair(vehicle.id, form);
-      onCreated(job);
+      const saved = editing
+        ? await vehiclesApi.updateRepair(job!.id, form)
+        : await vehiclesApi.createRepair(vehicle.id, form);
+      onSaved(saved);
       onClose();
     } catch (err: unknown) {
-      setError((err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Failed to create repair job.");
+      const res = (err as { response?: { data?: { message?: string; detail?: string } } })?.response;
+      setError(
+        res?.data?.message
+          || res?.data?.detail
+          || `Failed to ${editing ? "update" : "create"} repair job.`,
+      );
     } finally { setLoading(false); }
   };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-foreground/40">
-      <div className="bg-card border border-border rounded-xl w-full max-w-md p-6 animate-fade-in">
-        <h2 className="text-base font-semibold mb-1">New Repair Job</h2>
+      <div className="bg-card border border-border rounded-xl w-full max-w-md p-6 animate-fade-in max-h-[90vh] overflow-y-auto">
+        <h2 className="text-base font-semibold mb-1">{editing ? "Edit Repair Job" : "New Repair Job"}</h2>
         <p className="text-sm text-muted-foreground mb-5">{vehicle.name} ({vehicle.registration})</p>
         <form onSubmit={submit} className="space-y-3">
           <div className="space-y-2">
@@ -432,7 +481,7 @@ function NewRepairJobModal({
             />
           </div>
           <div className="space-y-2">
-            <Label>Workshop / Supplier</Label>
+            <Label>Workshop / Mechanic</Label>
             <Input
               value={form.workshop_name || ""}
               onChange={(e) => setForm({ ...form, workshop_name: e.target.value || undefined })}
@@ -468,9 +517,65 @@ function NewRepairJobModal({
               placeholder="Brief description of the issue"
             />
           </div>
+
+          {editing && (
+            <>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-2">
+                  <Label>Status</Label>
+                  <select
+                    value={form.status ?? "OPEN"}
+                    onChange={(e) => setForm({ ...form, status: e.target.value })}
+                    className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                  >
+                    <option value="OPEN">Open</option>
+                    <option value="IN_PROGRESS">In progress</option>
+                    <option value="CLOSED">Closed</option>
+                  </select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Date Closed</Label>
+                  <Input
+                    type="date"
+                    value={form.date_closed ?? ""}
+                    onChange={(e) => setForm({ ...form, date_closed: e.target.value || undefined })}
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-2">
+                  <Label>Quoted amount (R)</Label>
+                  <Input
+                    type="number" min="0" step="0.01"
+                    value={form.quote_amount ?? ""}
+                    onChange={(e) => setForm({ ...form, quote_amount: e.target.value ? parseFloat(e.target.value) : undefined })}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Invoiced amount (R)</Label>
+                  <Input
+                    type="number" min="0" step="0.01"
+                    value={form.invoice_amount ?? ""}
+                    onChange={(e) => setForm({ ...form, invoice_amount: e.target.value ? parseFloat(e.target.value) : undefined })}
+                  />
+                </div>
+              </div>
+              <div className="space-y-2">
+                <Label>Notes</Label>
+                <Input
+                  value={form.notes || ""}
+                  onChange={(e) => setForm({ ...form, notes: e.target.value || undefined })}
+                  placeholder="Anything worth recording about this repair"
+                />
+              </div>
+            </>
+          )}
+
           {error && <p className="text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-lg px-3 py-2">{error}</p>}
           <div className="flex gap-2 pt-1">
-            <Button type="submit" disabled={loading} className="flex-1">{loading ? "Creating…" : "Create Job"}</Button>
+            <Button type="submit" disabled={loading} className="flex-1">
+              {loading ? "Saving..." : editing ? "Save Changes" : "Create Job"}
+            </Button>
             <Button type="button" variant="outline" onClick={onClose} className="flex-1">Cancel</Button>
           </div>
         </form>
@@ -478,6 +583,7 @@ function NewRepairJobModal({
     </div>
   );
 }
+
 
 function LogRepairCostModal({
   job,
@@ -634,14 +740,27 @@ function AssignVehicleModal({ vehicle, onClose, onSaved }: { vehicle: Vehicle; o
 
 export default function VehiclesPage() {
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
-  const [costs, setCosts] = useState<Record<string, VehicleCost[]>>({});
-  const [repairs, setRepairs] = useState<Record<string, RepairJob[]>>({});
+  // Each vehicle holds one PAGE of its history plus the full-history total,
+  // so the screen can say how many records exist behind what it is showing.
+  const [costs, setCosts] = useState<Record<string, Paged<VehicleCost>>>({});
+  const [repairs, setRepairs] = useState<Record<string, Paged<RepairJob>>>({});
+  const [costQuery, setCostQuery] = useState<Record<string, HistoryQuery>>({});
+  const [repairQuery, setRepairQuery] = useState<Record<string, HistoryQuery>>({});
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
   const [logCostFor, setLogCostFor] = useState<Vehicle | null>(null);
   const [editVehicle, setEditVehicle] = useState<Vehicle | null>(null);
   const [assignFor, setAssignFor] = useState<Vehicle | null>(null);
   const [newRepairFor, setNewRepairFor] = useState<Vehicle | null>(null);
+  // Fuel timeline paging. The timeline is assembled in the browser from fuel
+  // logs and issues that are already loaded, and the totals above it are
+  // computed over all of them - only the rendered rows were capped at ten,
+  // which hid older fills with no way to reach them. Paging here is purely a
+  // display change; what gets fetched is unchanged.
+  const [fuelPage, setFuelPage] = useState<Record<string, number>>({});
+  const FUEL_PAGE_SIZE = 10;
+
+  const [editRepairFor, setEditRepairFor] = useState<{ vehicle: Vehicle; job: RepairJob } | null>(null);
   const [logRepairCostFor, setLogRepairCostFor] = useState<{ vehicle: Vehicle; job: RepairJob } | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [error, setError] = useState("");
@@ -665,13 +784,22 @@ export default function VehiclesPage() {
       .finally(() => setLoading(false));
   };
 
-  const loadCosts = async (vehicleId: string) => {
-    const data = await vehiclesApi.listCosts(vehicleId);
+  /**
+   * Load one page of history. The query is remembered per vehicle so that
+   * editing a repair, or logging a cost, returns to the page and filters the
+   * user was on rather than throwing them back to the top.
+   */
+  const loadCosts = async (vehicleId: string, patch: HistoryQuery = {}) => {
+    const query = { ...(costQuery[vehicleId] ?? {}), ...patch };
+    setCostQuery((prev) => ({ ...prev, [vehicleId]: query }));
+    const data = await vehiclesApi.listCosts(vehicleId, query);
     setCosts((prev) => ({ ...prev, [vehicleId]: data }));
   };
 
-  const loadRepairs = async (vehicleId: string) => {
-    const data = await vehiclesApi.listRepairs(vehicleId);
+  const loadRepairs = async (vehicleId: string, patch: HistoryQuery = {}) => {
+    const query = { ...(repairQuery[vehicleId] ?? {}), ...patch };
+    setRepairQuery((prev) => ({ ...prev, [vehicleId]: query }));
+    const data = await vehiclesApi.listRepairs(vehicleId, query);
     setRepairs((prev) => ({ ...prev, [vehicleId]: data }));
   };
 
@@ -862,9 +990,9 @@ export default function VehiclesPage() {
                          : tab === "repairs" ? <ClipboardList className="w-3 h-3" />
                          : <History className="w-3 h-3" />}
                         {tab === "details"  ? "Details"
-                         : tab === "costs"  ? `Costs (${costs[v.id]?.length ?? 0})`
+                         : tab === "costs"  ? `Costs (${costs[v.id]?.total ?? 0})`
                          : tab === "fuel"   ? `Fuel (${(fuelLogs[v.id]?.length ?? 0) + (fuelIssues[v.id]?.length ?? 0)})`
-                         : tab === "repairs" ? `Repairs (${repairs[v.id]?.length ?? 0})`
+                         : tab === "repairs" ? `Repairs (${repairs[v.id]?.total ?? 0})`
                          : `Parts (${partsHistory[v.id]?.length ?? 0})`}
                       </button>
                     ))}
@@ -940,16 +1068,16 @@ export default function VehiclesPage() {
                   {/* Costs tab */}
                   {(activeTab[v.id] ?? "details") === "costs" && costs[v.id] && (
                     <div className="px-4 py-3 space-y-2">
-                      {costs[v.id].length > 0 && (
+                      {costs[v.id].total > 0 && (
                         <div className="flex gap-4 text-xs text-muted-foreground pb-1 border-b border-border/50">
-                          <span>Total: <strong className="text-foreground">R{costs[v.id].reduce((s, c) => s + c.amount, 0).toLocaleString()}</strong></span>
-                          <span>{costs[v.id].length} entries</span>
+                          <span>This page: <strong className="text-foreground">R{costs[v.id].items.reduce((s, c) => s + c.amount, 0).toLocaleString()}</strong></span>
+                          <span>{costs[v.id].total} entries</span>
                         </div>
                       )}
-                      {costs[v.id].length === 0 ? (
+                      {costs[v.id].total === 0 ? (
                         <p className="text-xs text-muted-foreground">No costs logged yet.</p>
                       ) : (
-                        costs[v.id].slice(0, 10).map(cost => (
+                        costs[v.id].items.map(cost => (
                           <div key={cost.id} className="flex items-center justify-between text-sm">
                             <div className="flex items-center gap-2">
                               {cost.cost_type === "FUEL" ? <Fuel className="w-3.5 h-3.5 text-muted-foreground" /> : <Wrench className="w-3.5 h-3.5 text-muted-foreground" />}
@@ -963,6 +1091,15 @@ export default function VehiclesPage() {
                           </div>
                         ))
                       )}
+                      <HistoryPager
+                        page={costs[v.id].page}
+                        limit={costs[v.id].limit}
+                        total={costs[v.id].total}
+                        totalPages={costs[v.id].total_pages}
+                        noun="cost"
+                        onPageChange={(page) => loadCosts(v.id, { page })}
+                        onLimitChange={(limit) => loadCosts(v.id, { limit, page: 1 })}
+                      />
                     </div>
                   )}
 
@@ -989,7 +1126,10 @@ export default function VehiclesPage() {
                                 <span>Est. remaining: <strong className="text-foreground">{latestIssue.estimated_remaining_litres.toFixed(1)} L</strong></span>
                               )}
                             </div>
-                            {timeline.slice(0, 10).map(entry => (
+                            {timeline
+                              .slice(((fuelPage[v.id] ?? 1) - 1) * FUEL_PAGE_SIZE,
+                                     (fuelPage[v.id] ?? 1) * FUEL_PAGE_SIZE)
+                              .map(entry => (
                               <div key={entry.key} className={cn(
                                 "flex items-start justify-between text-xs rounded-lg px-2 py-1.5",
                                 entry.anomaly && "bg-destructive/5",
@@ -1027,6 +1167,14 @@ export default function VehiclesPage() {
                                 </div>
                               </div>
                             ))}
+                            <HistoryPager
+                              page={fuelPage[v.id] ?? 1}
+                              limit={FUEL_PAGE_SIZE}
+                              total={timeline.length}
+                              totalPages={Math.max(1, Math.ceil(timeline.length / FUEL_PAGE_SIZE))}
+                              noun="fuel entry"
+                              onPageChange={(page) => setFuelPage((prev) => ({ ...prev, [v.id]: page }))}
+                            />
                           </>
                         );
                       })()}
@@ -1089,7 +1237,7 @@ export default function VehiclesPage() {
                     <div className="px-4 py-3 space-y-3">
                       <div className="flex items-center justify-between">
                         <span className="text-xs text-muted-foreground">
-                          {repairs[v.id]?.length ?? 0} repair job(s)
+                          {repairs[v.id]?.total ?? 0} repair job(s)
                         </span>
                         <Button size="sm" variant="outline" onClick={() => setNewRepairFor(v)}>
                           <Plus className="w-3.5 h-3.5" />
@@ -1098,11 +1246,11 @@ export default function VehiclesPage() {
                       </div>
                       {!repairs[v.id] ? (
                         <p className="text-xs text-muted-foreground">Loading…</p>
-                      ) : repairs[v.id].length === 0 ? (
+                      ) : repairs[v.id].total === 0 ? (
                         <p className="text-xs text-muted-foreground">No repair jobs logged yet. Click "New Repair Job" to get started.</p>
                       ) : (
                         <div className="space-y-3">
-                          {repairs[v.id].map(job => (
+                          {repairs[v.id].items.map(job => (
                             <div key={job.id} className="border border-border/60 rounded-lg p-3 space-y-2">
                               <div className="flex items-start justify-between gap-2">
                                 <div className="min-w-0">
@@ -1164,6 +1312,14 @@ export default function VehiclesPage() {
                                 >
                                   <Plus className="w-3 h-3 mr-1" /> Add Cost
                                 </Button>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="text-xs h-7 px-2.5"
+                                  onClick={() => setEditRepairFor({ vehicle: v, job })}
+                                >
+                                  <Pencil className="w-3 h-3 mr-1" /> Edit
+                                </Button>
                                 {job.status === "OPEN" && (
                                   <button
                                     onClick={async () => {
@@ -1173,10 +1329,17 @@ export default function VehiclesPage() {
                                           status: "CLOSED",
                                           date_closed: new Date().toISOString().split("T")[0],
                                         });
-                                        setRepairs(prev => ({
-                                          ...prev,
-                                          [v.id]: (prev[v.id] ?? []).map(j => j.id === job.id ? updated : j),
-                                        }));
+                                        setRepairs(prev => {
+                                          const current = prev[v.id];
+                                          if (!current) return prev;
+                                          return {
+                                            ...prev,
+                                            [v.id]: {
+                                              ...current,
+                                              items: current.items.map(j => j.id === job.id ? updated : j),
+                                            },
+                                          };
+                                        });
                                       } catch {
                                         alert("Failed to close repair job.");
                                       }
@@ -1190,6 +1353,17 @@ export default function VehiclesPage() {
                             </div>
                           ))}
                         </div>
+                      )}
+                      {repairs[v.id] && (
+                        <HistoryPager
+                          page={repairs[v.id].page}
+                          limit={repairs[v.id].limit}
+                          total={repairs[v.id].total}
+                          totalPages={repairs[v.id].total_pages}
+                          noun="repair"
+                          onPageChange={(page) => loadRepairs(v.id, { page })}
+                          onLimitChange={(limit) => loadRepairs(v.id, { limit, page: 1 })}
+                        />
                       )}
                     </div>
                   )}
@@ -1241,14 +1415,36 @@ export default function VehiclesPage() {
       )}
 
       {newRepairFor && (
-        <NewRepairJobModal
+        <RepairJobModal
           vehicle={newRepairFor}
           onClose={() => setNewRepairFor(null)}
-          onCreated={(job) => {
-            setRepairs(prev => ({
-              ...prev,
-              [newRepairFor.id]: [job, ...(prev[newRepairFor.id] ?? [])],
-            }));
+          onSaved={() => {
+            // Reload rather than splice: a new repair shifts the page
+            // boundaries and the total, and the newest belongs on page 1.
+            void loadRepairs(newRepairFor.id, { page: 1 });
+          }}
+        />
+      )}
+
+      {editRepairFor && (
+        <RepairJobModal
+          vehicle={editRepairFor.vehicle}
+          job={editRepairFor.job}
+          onClose={() => setEditRepairFor(null)}
+          onSaved={(updated) => {
+            // Replace in place: an edit does not move the record between
+            // pages, so the user stays where they were, filters intact.
+            setRepairs((prev) => {
+              const current = prev[editRepairFor.vehicle.id];
+              if (!current) return prev;
+              return {
+                ...prev,
+                [editRepairFor.vehicle.id]: {
+                  ...current,
+                  items: current.items.map((j) => (j.id === updated.id ? updated : j)),
+                },
+              };
+            });
           }}
         />
       )}

@@ -6,14 +6,17 @@
  *   Parts     — parts catalog (categories + items) with stock adjustment
  *   Issuances — parts-to-vehicle issuance log + issue parts manually
  *   Suppliers — link suppliers to parts categories
+ *   Mechanic Payments — what is owed to mechanics for vehicle repairs,
+ *                       and what has been paid against it
  */
 
 import { useEffect, useState, useCallback } from "react";
 import { useAuth } from "@/hooks/useAuth";
+import { MechanicPaymentsTab } from "@/components/workshop/MechanicPaymentsTab";
 import {
   Wrench, ClipboardList, Package, Building2, CheckCircle2, Ban,
   ChevronRight, Plus, RefreshCw, Trash2, X, Pencil, TrendingDown,
-  TrendingUp, AlertTriangle, Clock, Send, Car, History, Mail,
+  TrendingUp, AlertTriangle, Clock, Send, Car, History, Mail, Banknote,
 } from "lucide-react";
 import {
   workshopApi,
@@ -2449,13 +2452,14 @@ function IssuancesTab() {
 // Main page
 // ─────────────────────────────────────────────────────────────────────────────
 
-type Tab = "requests" | "parts" | "issuances" | "suppliers";
+type Tab = "requests" | "parts" | "issuances" | "suppliers" | "payments";
 
 const TABS: { key: Tab; label: string; icon: React.ElementType }[] = [
   { key: "requests",  label: "Requests",  icon: ClipboardList },
   { key: "parts",     label: "Parts",     icon: Package      },
   { key: "issuances", label: "Issuances", icon: History      },
   { key: "suppliers", label: "Suppliers", icon: Building2    },
+  { key: "payments",  label: "Mechanic Payments", icon: Banknote },
 ];
 
 export default function WorkshopPage() {
@@ -2498,6 +2502,7 @@ export default function WorkshopPage() {
       {tab === "parts"     && <PartsTab />}
       {tab === "issuances" && <IssuancesTab />}
       {tab === "suppliers" && <SuppliersTab />}
+      {tab === "payments"  && <MechanicPaymentsTab />}
     </div>
   );
 }

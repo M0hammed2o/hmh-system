@@ -1,6 +1,7 @@
 """Workshop API routes — parts catalog, stock, MRs, and issuances."""
 
 import uuid
+from datetime import date
 from typing import Optional
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
@@ -33,7 +34,7 @@ from app.schemas.workshop import (
     WorkshopSupplierLinkCreate,
     WorkshopSupplierLinkRead,
 )
-from app.services import workshop_service
+from app.services import mechanic_payment_service, workshop_service
 
 router = APIRouter(prefix="/workshop", tags=["workshop"])
 
@@ -614,3 +615,181 @@ async def upload_delivery_file(
     file_url = save_upload(content, f"workshop/delivery/{note_id}/delivery.{ext}")
     dn = workshop_service.attach_delivery_file(db, note_id, file_url)
     return ApiSuccess(data=WorkshopDeliveryNoteRead.model_validate(dn), message="Delivery note document uploaded.")
+
+
+# ---------------------------------------------------------------------------
+# Mechanic payments
+#
+# Recording what has been paid to mechanics for vehicle repairs. These
+# endpoints never move money — they record payments already made, so the
+# office can see what is still owed. The amount owed is always derived from
+# the repair, so nothing here can create a second expense for a cost the
+# books have already recognised.
+# ---------------------------------------------------------------------------
+
+class MechanicPaymentCreate(BaseModel):
+    amount: float
+    payment_date: date
+    supplier_id: Optional[uuid.UUID] = None
+    mechanic_name: Optional[str] = None
+    payment_method: Optional[str] = None
+    payment_reference: Optional[str] = None
+    notes: Optional[str] = None
+    proof_file_url: Optional[str] = None
+
+
+class MechanicPaymentReverse(BaseModel):
+    reason: str
+
+
+def _payment_dict(p) -> dict:
+    return {
+        "id": str(p.id),
+        "repair_job_id": str(p.repair_job_id),
+        "supplier_id": str(p.supplier_id) if p.supplier_id else None,
+        "mechanic_name": p.mechanic_name,
+        "amount": float(p.amount),
+        "payment_date": p.payment_date.isoformat(),
+        "payment_method": p.payment_method,
+        "payment_reference": p.payment_reference,
+        "notes": p.notes,
+        "proof_file_url": p.proof_file_url,
+        "is_reversed": p.reversed_at is not None,
+        "reversed_at": p.reversed_at.isoformat() if p.reversed_at else None,
+        "reversal_reason": p.reversal_reason,
+        "recorded_by": str(p.recorded_by) if p.recorded_by else None,
+        "created_at": p.created_at.isoformat(),
+    }
+
+
+@router.get(
+    "/mechanic-payments",
+    response_model=ApiSuccess[dict],
+    dependencies=[OFFICE_AND_ABOVE],
+)
+def mechanic_payments_overview(
+    db: DbSession,
+    page: int = Query(1, ge=1),
+    limit: int = Query(25, ge=1, le=100),
+    mechanic: Optional[str] = Query(None, description="Matches the workshop name"),
+    vehicle_id: Optional[uuid.UUID] = None,
+    company_id: Optional[uuid.UUID] = None,
+    status: Optional[str] = Query(None, description="UNPAID, PARTIALLY_PAID or PAID"),
+    date_from: Optional[date] = None,
+    date_to: Optional[date] = None,
+    unpaid_only: bool = Query(False, description="Only repairs still owing"),
+):
+    """
+    What is owed to mechanics, and what has been paid.
+
+    Totals cover everything the filters match, not the page — "total
+    outstanding" is only useful as a whole figure.
+    """
+    return ApiSuccess(data=mechanic_payment_service.overview(
+        db, page=page, limit=limit, mechanic=mechanic, vehicle_id=vehicle_id,
+        company_id=company_id, status=status, date_from=date_from,
+        date_to=date_to, unpaid_only=unpaid_only,
+    ))
+
+
+@router.get(
+    "/repairs/{repair_job_id}/payments",
+    response_model=ApiSuccess[dict],
+    dependencies=[OFFICE_AND_ABOVE],
+)
+def repair_payment_history(repair_job_id: uuid.UUID, db: DbSession):
+    """Every payment against one repair, reversals included, with the balance."""
+    from app.models.vehicle import RepairJob
+
+    job = db.get(RepairJob, repair_job_id)
+    if job is None:
+        raise HTTPException(404, "Repair job not found.")
+
+    return ApiSuccess(data={
+        **mechanic_payment_service.repair_payment_summary(db, job),
+        "payments": [
+            _payment_dict(p) for p in mechanic_payment_service.list_payments(db, repair_job_id)
+        ],
+    })
+
+
+@router.post(
+    "/repairs/{repair_job_id}/payments",
+    response_model=ApiSuccess[dict],
+    status_code=201,
+    dependencies=[OFFICE_AND_ABOVE],
+)
+def record_mechanic_payment(
+    repair_job_id: uuid.UUID,
+    body: MechanicPaymentCreate,
+    db: DbSession,
+    current_user: CurrentUser,
+):
+    """
+    Record a payment already made to a mechanic.
+
+    Partial payments are expected: a repair may have many. Paying more than
+    is outstanding is refused, as is reusing a payment reference already
+    recorded against the repair.
+    """
+    payment = mechanic_payment_service.record_payment(
+        db, repair_job_id,
+        amount=body.amount,
+        payment_date=body.payment_date,
+        actor_id=current_user.id,
+        supplier_id=body.supplier_id,
+        mechanic_name=body.mechanic_name,
+        payment_method=body.payment_method,
+        payment_reference=body.payment_reference,
+        notes=body.notes,
+        proof_file_url=body.proof_file_url,
+    )
+    db.commit()
+    db.refresh(payment)
+
+    from app.models.vehicle import RepairJob
+    job = db.get(RepairJob, repair_job_id)
+
+    return ApiSuccess(
+        data={
+            "payment": _payment_dict(payment),
+            **mechanic_payment_service.repair_payment_summary(db, job),
+        },
+        message="Payment recorded.",
+        status_code=201,
+    )
+
+
+@router.post(
+    "/mechanic-payments/{payment_id}/reverse",
+    response_model=ApiSuccess[dict],
+    dependencies=[OFFICE_ADMIN_AND_ABOVE],
+)
+def reverse_mechanic_payment(
+    payment_id: uuid.UUID,
+    body: MechanicPaymentReverse,
+    db: DbSession,
+    current_user: CurrentUser,
+):
+    """
+    Withdraw a payment recorded in error.
+
+    The payment stays visible and stops counting towards the balance. There
+    is deliberately no way to delete one.
+    """
+    payment = mechanic_payment_service.reverse_payment(
+        db, payment_id, actor_id=current_user.id, reason=body.reason,
+    )
+    db.commit()
+    db.refresh(payment)
+
+    from app.models.vehicle import RepairJob
+    job = db.get(RepairJob, payment.repair_job_id)
+
+    return ApiSuccess(
+        data={
+            "payment": _payment_dict(payment),
+            **mechanic_payment_service.repair_payment_summary(db, job),
+        },
+        message="Payment reversed.",
+    )

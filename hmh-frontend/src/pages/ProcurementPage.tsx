@@ -32,6 +32,19 @@ import client from "@/api/client";
 import { EmailDraftModal } from "@/components/EmailDraftModal";
 import { formatDate } from "@/lib/format";
 import type { ProcurementActivityEntry } from "@/api/procurement";
+import { CompanySelect } from "@/components/shared/CompanySelect";
+
+/**
+ * The two letterhead keys that predate the companies table.
+ *
+ * Documents issued under them are still rendered from a fixed letterhead in
+ * email_service, so the keys must stay selectable and must keep their exact
+ * stored values. Every other company resolves from the table by id.
+ */
+const ISSUING_COMPANY_LEGACY = [
+  { value: "HMH_GROUP", label: "HMH Group" },
+  { value: "MINERAT", label: "Minerat Construction & Civils" },
+];
 
 /** Human-readable labels for delivery_destination values. */
 const DEST_LABEL: Record<DeliveryDestination, string> = {
@@ -1004,14 +1017,14 @@ function MRDetailModal({ mr, suppliers, defaultIssuingCompany, onClose, onUpdate
           {canApprove && (
             <div className="bg-muted/40 border border-border rounded-lg p-3 space-y-2">
               <p className="text-xs font-medium text-muted-foreground">Issuing company for this order</p>
-              <select
+              <CompanySelect
                 value={issuingCompany}
-                onChange={(e) => setIssuingCompany(e.target.value)}
-                className="h-8 w-full rounded-md border border-input bg-background px-2 text-xs"
-              >
-                <option value="HMH_GROUP">HMH Group</option>
-                <option value="MINERAT">Minerat Construction &amp; Civils</option>
-              </select>
+                onChange={setIssuingCompany}
+                valueMode="id"
+                legacyOptions={ISSUING_COMPANY_LEGACY}
+                placeholder="— Select issuing company —"
+                className="h-8 px-2 text-xs"
+              />
             </div>
           )}
 
@@ -1544,14 +1557,14 @@ function PipelinePanelModal({ mrId, suppliers, defaultIssuingCompany, onClose, o
 
                         <div className="bg-muted/40 border border-border rounded-lg p-2.5 space-y-1.5">
                           <p className="text-xs font-medium text-muted-foreground">Issuing company</p>
-                          <select
+                          <CompanySelect
                             value={pipelineIssuingCompany}
-                            onChange={(e) => setPipelineIssuingCompany(e.target.value)}
-                            className="h-8 w-full rounded-md border border-input bg-background px-2 text-xs"
-                          >
-                            <option value="HMH_GROUP">HMH Group</option>
-                            <option value="MINERAT">Minerat Construction &amp; Civils</option>
-                          </select>
+                            onChange={setPipelineIssuingCompany}
+                            valueMode="id"
+                            legacyOptions={ISSUING_COMPANY_LEGACY}
+                            placeholder="— Select issuing company —"
+                            className="h-8 px-2 text-xs"
+                          />
                         </div>
                         {pipeline.over_boq && (
                           <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-2.5 space-y-2">
@@ -2584,6 +2597,7 @@ function CaptureExternalPOModal({
 }
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
+
 
 export default function ProcurementPage() {
   const [tab, setTab] = useState<"mr" | "po">("mr");

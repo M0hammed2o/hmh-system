@@ -27,6 +27,7 @@ from app.models.attachment import Attachment, UsageRemainingProof
 from app.models.alert import SystemAlert
 from app.models.fuel import FuelLog
 from app.models.vehicle import Vehicle, VehicleCost, FuelDelivery
+from app.models.mechanic_payment import MechanicPayment
 from app.models.fuel_management import (
     FuelTypeDefinition, FuelStorageLocation, FuelOrder, FuelIssue,
     FuelStockAdjustment, FuelReconciliation, FuelEquipmentProfile,
@@ -171,4 +172,5 @@ __all__ = [
     "AIImportPosting",
     "AIImportJob",
     "AIImportCorrection",
+    "MechanicPayment",
 ]
