@@ -57,3 +57,7 @@ hmh-backend/sample_documents/
 # Local database backups
 *.sql.backup
 hmh_system_backup_*.sql
+
+# Live production evidence: captured against the real site, kept out of
+# the public repository. See docs/testing/HMH_LIVE_PRODUCTION_AUDIT.md.
+docs/testing/live-production-screenshots/
