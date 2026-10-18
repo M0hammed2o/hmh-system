@@ -4,6 +4,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import ConflictError, NotFoundError
@@ -214,11 +215,141 @@ def log_cost(
     return cost
 
 
-def list_costs(db: Session, vehicle_id: uuid.UUID) -> list[VehicleCost]:
+def list_costs(
+    db: Session,
+    vehicle_id: uuid.UUID,
+    *,
+    page: int = 1,
+    limit: int = 25,
+    cost_type: Optional[str] = None,
+    search: Optional[str] = None,
+    date_from=None,
+    date_to=None,
+) -> tuple[list[VehicleCost], int]:
+    """
+    One page of a vehicle's costs, newest first, with the unfiltered-by-page
+    total so the caller can show how many records exist.
+    """
     get_vehicle(db, vehicle_id)
-    return (
-        db.query(VehicleCost)
-        .filter(VehicleCost.vehicle_id == vehicle_id)
-        .order_by(VehicleCost.cost_date.desc())
+
+    q = db.query(VehicleCost).filter(VehicleCost.vehicle_id == vehicle_id)
+
+    if cost_type:
+        q = q.filter(VehicleCost.cost_type == cost_type)
+    if search and search.strip():
+        like = f"%{search.strip()}%"
+        q = q.filter(
+            func.coalesce(VehicleCost.description, "").ilike(like)
+            | func.coalesce(VehicleCost.notes, "").ilike(like)
+        )
+    if date_from:
+        q = q.filter(VehicleCost.cost_date >= date_from)
+    if date_to:
+        q = q.filter(VehicleCost.cost_date <= date_to)
+
+    total = q.count()
+    rows = (
+        # id breaks ties so a page boundary cannot hide or repeat a record.
+        q.order_by(VehicleCost.cost_date.desc(), VehicleCost.id.desc())
+        .offset((page - 1) * limit)
+        .limit(limit)
         .all()
     )
+    return rows, total
+
+
+def repair_locked_fields(db: Session, job) -> dict[str, str]:
+    """
+    Fields of a repair that may no longer be changed, and why.
+
+    A repair can always be corrected — a wrong description or odometer
+    reading helps nobody. But once the repair's figures have been acted on,
+    silently rewriting them would leave the books disagreeing with the
+    paperwork. So the fields that financial history depends on are refused
+    with a message naming the record in the way, rather than a generic
+    "locked", and the operator reverses or corrects that record instead.
+
+    Returns {field_name: reason}. Empty means everything is editable.
+    """
+    from app.models.material_request import MaterialRequest
+    from app.models.vehicle import VehicleCost
+
+    locked: dict[str, str] = {}
+
+    cost_count = (
+        db.query(func.count(VehicleCost.id))
+        .filter(VehicleCost.repair_job_id == job.id)
+        .scalar()
+    ) or 0
+    mr_count = (
+        db.query(func.count(MaterialRequest.id))
+        .filter(MaterialRequest.repair_job_id == job.id)
+        .scalar()
+    ) or 0
+
+    if cost_count or mr_count:
+        parts = []
+        if cost_count:
+            parts.append(f"{cost_count} recorded cost(s)")
+        if mr_count:
+            parts.append(f"{mr_count} material request(s)")
+        locked["vehicle_id"] = (
+            f"This repair has {' and '.join(parts)} booked against it. Moving it "
+            f"to another vehicle would move that spend too. Reverse the costs "
+            f"first, or raise the repair against the correct vehicle."
+        )
+
+    # Money already paid to the mechanic is settled against the repair's
+    # recognised amount. Moving the repair, or cutting its amount below what
+    # has been paid, would leave the books showing an overpayment that never
+    # happened.
+    from app.models.mechanic_payment import MechanicPayment
+
+    paid = (
+        db.query(func.coalesce(func.sum(MechanicPayment.amount), 0))
+        .filter(
+            MechanicPayment.repair_job_id == job.id,
+            MechanicPayment.reversed_at.is_(None),
+        )
+        .scalar()
+    ) or 0
+    paid = float(paid)
+
+    if paid > 0:
+        locked["vehicle_id"] = (
+            f"{paid:.2f} has been paid to the mechanic for this repair. "
+            f"Moving it to another vehicle would move that settlement too. "
+            f"Reverse the payments first."
+        )
+
+    if (job.approval_stage or 0) > 0:
+        reason = (
+            f"The quoted and invoiced amounts were approved (stage "
+            f"{job.approval_stage}) and cannot be edited. Reopen the approval "
+            f"if the figures were captured wrongly."
+        )
+        locked["quote_amount"] = reason
+        locked["invoice_amount"] = reason
+
+    return locked
+
+
+def repair_amount_floor(db: Session, job) -> float:
+    """
+    The lowest the repair's recognised amount may be reduced to.
+
+    Correcting a figure captured too high is legitimate — until the mechanic
+    has been paid more than the corrected figure, which would turn a settled
+    repair into a phantom overpayment.
+    """
+    from app.models.mechanic_payment import MechanicPayment
+
+    paid = (
+        db.query(func.coalesce(func.sum(MechanicPayment.amount), 0))
+        .filter(
+            MechanicPayment.repair_job_id == job.id,
+            MechanicPayment.reversed_at.is_(None),
+        )
+        .scalar()
+    ) or 0
+    return float(paid)

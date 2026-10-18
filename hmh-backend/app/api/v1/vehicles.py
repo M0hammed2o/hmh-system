@@ -1,8 +1,10 @@
 """Vehicle and fleet cost routes."""
 
+import math
 import os
 import uuid
 from datetime import date, datetime as dt, timezone
+from decimal import Decimal
 from typing import Optional
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
@@ -11,7 +13,7 @@ from sqlalchemy import func
 from app.core.storage import save_upload
 from app.core.upload_validation import DOCUMENT_MIMES, validate_upload
 from app.dependencies import ALL_ROLES, CurrentUser, DbSession, OFFICE_AND_ABOVE
-from app.schemas.common import ApiSuccess
+from app.schemas.common import ApiSuccess, PaginatedResult
 from app.schemas.vehicle import (
     RepairJobCreate,
     RepairJobUpdate,
@@ -21,7 +23,8 @@ from app.schemas.vehicle import (
     VehicleRead,
     VehicleUpdate,
 )
-from app.services import fuel_service, vehicle_service
+from app.models.enums import AuditAction
+from app.services import audit_service, fuel_service, vehicle_service
 
 router = APIRouter(prefix="/vehicles", tags=["vehicles"])
 
@@ -103,17 +106,76 @@ def log_cost(vehicle_id: uuid.UUID, body: VehicleCostCreate, db: DbSession, curr
 
 @router.get(
     "/{vehicle_id}/costs",
-    response_model=ApiSuccess[list[VehicleCostRead]],
+    response_model=ApiSuccess[PaginatedResult[VehicleCostRead]],
     dependencies=[ALL_ROLES],
 )
-def list_costs(vehicle_id: uuid.UUID, db: DbSession):
-    costs = vehicle_service.list_costs(db, vehicle_id)
-    return ApiSuccess(data=[VehicleCostRead.model_validate(c) for c in costs])
+def list_costs(
+    vehicle_id: uuid.UUID,
+    db: DbSession,
+    page: int = Query(1, ge=1),
+    limit: int = Query(25, ge=1, le=100),
+    cost_type: Optional[str] = Query(None, description="FUEL, REPAIR, SERVICE, ..."),
+    search: Optional[str] = Query(None, description="Matches description or notes"),
+    date_from: Optional[date] = None,
+    date_to: Optional[date] = None,
+):
+    """
+    Costs recorded against a vehicle, newest first.
+
+    Paginated because a vehicle's cost history only grows and the screens
+    that render it used to show the first ten with no way to reach the rest.
+    """
+    costs, total = vehicle_service.list_costs(
+        db, vehicle_id, page=page, limit=limit, cost_type=cost_type,
+        search=search, date_from=date_from, date_to=date_to,
+    )
+    return ApiSuccess(data=PaginatedResult(
+        items=[VehicleCostRead.model_validate(c) for c in costs],
+        total=total,
+        page=page,
+        limit=limit,
+        total_pages=math.ceil(total / limit) if total else 1,
+    ))
 
 
 # ---------------------------------------------------------------------------
 # Repair jobs
 # ---------------------------------------------------------------------------
+
+
+def _differs(current, proposed) -> bool:
+    """
+    Would writing `proposed` actually change anything?
+
+    Compared loosely on purpose: the client round-trips dates as strings and
+    numbers as floats, and a no-op resubmission of the whole form must not
+    land in the audit trail as a change.
+    """
+    if current is None and proposed is None:
+        return False
+    if current is None or proposed is None:
+        return True
+    if isinstance(current, (int, float)) and isinstance(proposed, (int, float)):
+        return abs(float(current) - float(proposed)) > 1e-9
+    return str(current) != str(proposed)
+
+
+def _audit_value(v):
+    """
+    JSON-safe rendering of a field value for the audit trail.
+
+    Numerics become floats rather than strings: an amount recorded as
+    "5000.00" cannot be compared with one recorded as 5000.0, and the whole
+    point of the trail is being able to see what a figure changed from.
+    """
+    if v is None or isinstance(v, (bool, int, float, str)):
+        return v
+    if isinstance(v, Decimal):
+        return float(v)
+    if isinstance(v, (date, dt)):
+        return v.isoformat()
+    return str(v)
+
 
 def _build_repair_job_dict(job, labour_costs, mrs) -> dict:
     """Serialize a RepairJob ORM object plus pre-fetched related collections."""
@@ -173,34 +235,81 @@ def _build_repair_job_dict(job, labour_costs, mrs) -> dict:
 
 @router.get(
     "/{vehicle_id}/repairs",
-    response_model=ApiSuccess[list],
+    response_model=ApiSuccess[PaginatedResult[dict]],
     dependencies=[ALL_ROLES],
 )
-def list_repairs(vehicle_id: uuid.UUID, db: DbSession):
-    """List all repair jobs for a vehicle, newest first, with cost totals."""
-    from app.models.vehicle import RepairJob, VehicleCost
-    from app.models.material_request import MaterialRequest
+def list_repairs(
+    vehicle_id: uuid.UUID,
+    db: DbSession,
+    page: int = Query(1, ge=1),
+    limit: int = Query(25, ge=1, le=100),
+    search: Optional[str] = Query(None, description="Matches title, description or workshop"),
+    status: Optional[str] = Query(None, description="Filter by repair status"),
+    date_from: Optional[date] = Query(None, description="Repairs opened on or after this date"),
+    date_to: Optional[date] = Query(None, description="Repairs opened on or before this date"),
+):
+    """
+    Repair jobs for a vehicle, newest first.
 
-    # Verify vehicle exists
-    from app.models.vehicle import Vehicle
+    Paginated at the database, not in the browser: a vehicle accumulates
+    repairs for its whole life and no screen should pull all of them to show
+    one page. `total` is the count of everything matching the filters, so the
+    caller can always see how many records exist behind the page it is on.
+    """
+    from app.models.material_request import MaterialRequest
+    from app.models.vehicle import RepairJob, Vehicle, VehicleCost
+
     v = db.get(Vehicle, vehicle_id)
     if not v:
         raise HTTPException(404, "Vehicle not found.")
 
+    q = db.query(RepairJob).filter(RepairJob.vehicle_id == vehicle_id)
+
+    if search and search.strip():
+        like = f"%{search.strip()}%"
+        q = q.filter(
+            func.coalesce(RepairJob.title, "").ilike(like)
+            | func.coalesce(RepairJob.description, "").ilike(like)
+            | func.coalesce(RepairJob.workshop_name, "").ilike(like)
+        )
+    if status:
+        q = q.filter(RepairJob.status == status)
+    if date_from:
+        q = q.filter(RepairJob.date_opened >= date_from)
+    if date_to:
+        q = q.filter(RepairJob.date_opened <= date_to)
+
+    total = q.count()
+
     jobs = (
-        db.query(RepairJob)
-        .filter(RepairJob.vehicle_id == vehicle_id)
-        .order_by(RepairJob.date_opened.desc())
+        # id is the tie-breaker: without it two repairs opened the same day
+        # can swap places between pages and a record is seen twice or missed.
+        q.order_by(RepairJob.date_opened.desc(), RepairJob.id.desc())
+        .offset((page - 1) * limit)
+        .limit(limit)
         .all()
     )
 
-    result = []
-    for job in jobs:
-        labour_costs = db.query(VehicleCost).filter(VehicleCost.repair_job_id == job.id).all()
-        mrs = db.query(MaterialRequest).filter(MaterialRequest.repair_job_id == job.id).all()
-        result.append(_build_repair_job_dict(job, labour_costs, mrs))
+    # Two queries for the whole page rather than two per row.
+    job_ids = [j.id for j in jobs]
+    costs_by_job: dict = {}
+    mrs_by_job: dict = {}
+    if job_ids:
+        for c in db.query(VehicleCost).filter(VehicleCost.repair_job_id.in_(job_ids)).all():
+            costs_by_job.setdefault(c.repair_job_id, []).append(c)
+        for mr in db.query(MaterialRequest).filter(MaterialRequest.repair_job_id.in_(job_ids)).all():
+            mrs_by_job.setdefault(mr.repair_job_id, []).append(mr)
 
-    return ApiSuccess(data=result)
+    return ApiSuccess(data=PaginatedResult(
+        items=[
+            _build_repair_job_dict(j, costs_by_job.get(j.id, []), mrs_by_job.get(j.id, []))
+            for j in jobs
+        ],
+        total=total,
+        page=page,
+        limit=limit,
+        total_pages=math.ceil(total / limit) if total else 1,
+    ))
 
 
 @router.post(
@@ -246,16 +355,73 @@ def create_repair(vehicle_id: uuid.UUID, body: RepairJobCreate, db: DbSession, c
     dependencies=[OFFICE_AND_ABOVE],
 )
 def update_repair(repair_job_id: uuid.UUID, body: RepairJobUpdate, db: DbSession, current_user: CurrentUser):
-    """Update fields on a repair job."""
-    from app.models.vehicle import RepairJob, VehicleCost
+    """
+    Correct a repair job.
+
+    Staff make mistakes capturing repairs and need to fix them. What they may
+    not do is quietly rewrite figures the books have already acted on, so
+    fields the repair's financial history depends on are refused once that
+    history exists, with a message saying which record is in the way. Every
+    accepted change is recorded field by field, old value and new.
+    """
     from app.models.material_request import MaterialRequest
+    from app.models.vehicle import RepairJob, Vehicle, VehicleCost
 
     job = db.get(RepairJob, repair_job_id)
     if not job:
         raise HTTPException(404, "Repair job not found.")
 
-    for field, val in body.model_dump(exclude_unset=True).items():
+    changes = body.model_dump(exclude_unset=True)
+    if not changes:
+        labour_costs = db.query(VehicleCost).filter(VehicleCost.repair_job_id == job.id).all()
+        mrs = db.query(MaterialRequest).filter(MaterialRequest.repair_job_id == job.id).all()
+        return ApiSuccess(data=_build_repair_job_dict(job, labour_costs, mrs),
+                          message="Nothing to change.")
+
+    if "vehicle_id" in changes and changes["vehicle_id"]:
+        if not db.get(Vehicle, changes["vehicle_id"]):
+            raise HTTPException(404, "Vehicle not found.")
+
+    locked = vehicle_service.repair_locked_fields(db, job)
+    for field in changes:
+        if field in locked and _differs(getattr(job, field, None), changes[field]):
+            raise HTTPException(409, locked[field])
+
+    # Cutting the recognised amount below what the mechanic has already been
+    # paid would turn a settled repair into an overpayment that never
+    # happened.
+    floor = vehicle_service.repair_amount_floor(db, job)
+    if floor > 0:
+        for field in ("invoice_amount", "quote_amount"):
+            if field in changes and changes[field] is not None and float(changes[field]) < floor:
+                raise HTTPException(
+                    409,
+                    f"{floor:.2f} has already been paid to the mechanic for this "
+                    f"repair, so it cannot be reduced to {float(changes[field]):.2f}. "
+                    f"Reverse the payments that no longer apply first.",
+                )
+
+    before: dict = {}
+    after: dict = {}
+    for field, val in changes.items():
+        current = getattr(job, field, None)
+        if not _differs(current, val):
+            continue
+        before[field] = _audit_value(current)
+        after[field] = _audit_value(val)
         setattr(job, field, val)
+
+    if not before:
+        labour_costs = db.query(VehicleCost).filter(VehicleCost.repair_job_id == job.id).all()
+        mrs = db.query(MaterialRequest).filter(MaterialRequest.repair_job_id == job.id).all()
+        return ApiSuccess(data=_build_repair_job_dict(job, labour_costs, mrs),
+                          message="Nothing to change.")
+
+    audit_service.write_event(
+        db, AuditAction.UPDATE, "repair_job", current_user.id, job.id,
+        before_value=before, after_value=after,
+        notes=f"Repair corrected: {', '.join(sorted(before))}.",
+    )
 
     db.commit()
     db.refresh(job)
@@ -263,7 +429,10 @@ def update_repair(repair_job_id: uuid.UUID, body: RepairJobUpdate, db: DbSession
     labour_costs = db.query(VehicleCost).filter(VehicleCost.repair_job_id == job.id).all()
     mrs = db.query(MaterialRequest).filter(MaterialRequest.repair_job_id == job.id).all()
 
-    return ApiSuccess(data=_build_repair_job_dict(job, labour_costs, mrs))
+    return ApiSuccess(
+        data=_build_repair_job_dict(job, labour_costs, mrs),
+        message=f"Repair updated ({len(before)} field(s) changed).",
+    )
 
 
 @router.post(

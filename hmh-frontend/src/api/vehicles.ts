@@ -190,6 +190,35 @@ export interface VehicleTransferRequest {
   created_at: string;
 }
 
+/**
+ * A vehicle's repair and cost history is paginated at the server.
+ *
+ * It only ever grows, and the screens that show it used to render the first
+ * ten of whatever had been fetched, with no way to reach the rest. `total`
+ * is the count of everything matching the filters, not the page.
+ */
+export interface Paged<T> {
+  items: T[];
+  total: number;
+  page: number;
+  limit: number;
+  total_pages: number;
+}
+
+export interface HistoryQuery {
+  page?: number;
+  limit?: number;
+  search?: string;
+  status?: string;
+  cost_type?: string;
+  date_from?: string;
+  date_to?: string;
+}
+
+/** Offered page sizes, smallest first. */
+export const HISTORY_PAGE_SIZES = [10, 25, 50] as const;
+export const DEFAULT_HISTORY_PAGE_SIZE = 25;
+
 export const vehiclesApi = {
   list: async (projectId?: string, siteId?: string): Promise<Vehicle[]> => {
     const params: Record<string, string> = {};
@@ -219,8 +248,14 @@ export const vehiclesApi = {
     return res.data.data;
   },
 
-  listCosts: async (vehicleId: string): Promise<VehicleCost[]> => {
-    const res = await client.get<{ data: VehicleCost[] }>(`/vehicles/${vehicleId}/costs`);
+  listCosts: async (
+    vehicleId: string,
+    params: HistoryQuery = {},
+  ): Promise<Paged<VehicleCost>> => {
+    const res = await client.get<{ data: Paged<VehicleCost> }>(
+      `/vehicles/${vehicleId}/costs`,
+      { params: { page: 1, limit: DEFAULT_HISTORY_PAGE_SIZE, ...params } },
+    );
     return res.data.data;
   },
 
@@ -228,8 +263,14 @@ export const vehiclesApi = {
     await client.delete(`/vehicles/${vehicleId}`);
   },
 
-  listRepairs: async (vehicleId: string): Promise<RepairJob[]> => {
-    const res = await client.get<{ data: RepairJob[] }>(`/vehicles/${vehicleId}/repairs`);
+  listRepairs: async (
+    vehicleId: string,
+    params: HistoryQuery = {},
+  ): Promise<Paged<RepairJob>> => {
+    const res = await client.get<{ data: Paged<RepairJob> }>(
+      `/vehicles/${vehicleId}/repairs`,
+      { params: { page: 1, limit: DEFAULT_HISTORY_PAGE_SIZE, ...params } },
+    );
     return res.data.data;
   },
 

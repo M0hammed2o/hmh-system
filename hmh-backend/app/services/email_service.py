@@ -28,7 +28,9 @@ from email.mime.text import MIMEText
 from email import encoders
 from typing import Optional
 
-from sqlalchemy.orm import Session
+from sqlalchemy import func
+from sqlalchemy.exc import StatementError
+from sqlalchemy.orm import Session, object_session
 
 from app.core.config import settings
 from app.models.enums import EmailStatus
@@ -224,8 +226,56 @@ _COMPANY_DETAILS: dict[str, dict] = {
 }
 
 
-def _company(key: Optional[str]) -> dict:
-    return _COMPANY_DETAILS.get(key or "HMH_GROUP", _COMPANY_DETAILS["HMH_GROUP"])
+def _company(key: Optional[str], record=None) -> dict:
+    """
+    Letterhead details for the company issuing a document.
+
+    `key` is whatever was stored on the order or request. Historically that
+    was one of two hardcoded keys; it is now usually a company id, because
+    the group trades under more names than the two this module was written
+    for and the list has to be able to grow without a code change.
+
+    Resolution order:
+      1. a legacy key — kept so documents issued before the change still
+         render with exactly the letterhead they were issued under;
+      2. a row in `companies`, matched by id or name;
+      3. HMH Group.
+
+    Fields the company record has no column for (VAT number, telephone) come
+    back empty rather than guessed. A blank VAT line on a purchase order is a
+    gap the office fills in from the company admin screen; a plausible but
+    wrong VAT number on a supplier-facing document is worse than no number.
+    """
+    if not key:
+        return _COMPANY_DETAILS["HMH_GROUP"]
+    if key in _COMPANY_DETAILS:
+        return _COMPANY_DETAILS[key]
+
+    db = object_session(record) if record is not None else None
+    if db is not None:
+        from app.models.company import Company
+
+        company = None
+        try:
+            company = db.get(Company, uuid.UUID(str(key)))
+        except (ValueError, TypeError, StatementError):
+            company = None
+        if company is None:
+            company = (
+                db.query(Company)
+                .filter(func.lower(func.trim(Company.name)) == str(key).strip().lower())
+                .first()
+            )
+        if company is not None:
+            return {
+                "name":    company.name,
+                "address": company.address or "",
+                "vat":     "",
+                "tel":     company.contact_phone or "",
+                "color":   _COMPANY_DETAILS["HMH_GROUP"]["color"],
+            }
+
+    return _COMPANY_DETAILS["HMH_GROUP"]
 
 
 # ── PDF generators ───────────────────────────────────────────────────────────
@@ -240,7 +290,7 @@ def _generate_po_pdf(po) -> bytes:
     from reportlab.lib.enums import TA_RIGHT, TA_CENTER, TA_LEFT
     from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 
-    co    = _company(getattr(po, "issuing_company", None))
+    co    = _company(getattr(po, "issuing_company", None), po)
     brand = HexColor(co["color"])
     light = HexColor("#f0f4f8")
 
@@ -365,7 +415,7 @@ def _generate_mr_pdf(db: Session, mr, supplier_override=None, items_override=Non
     from app.models.user import User
     from app.models.supplier import Supplier
 
-    co    = _company(getattr(mr, "issuing_company", None))
+    co    = _company(getattr(mr, "issuing_company", None), mr)
     brand = HexColor("#e85d04")
     light = HexColor("#f5f5f5")
 
@@ -476,7 +526,7 @@ def build_po_email_body(po: PurchaseOrder) -> tuple[str, str]:
     """Return (subject, html_body) for a purchase-order email."""
     from app.models.supplier import Supplier as _Supplier
 
-    co = _company(getattr(po, "issuing_company", None))
+    co = _company(getattr(po, "issuing_company", None), po)
     co_name = co["name"]
     subject = f"Purchase Order {po.po_number} — {co_name}"
 
@@ -786,7 +836,7 @@ def build_mr_email_body(db: Session, mr, supplier_override=None, items_override=
     from app.models.supplier import Supplier
 
     request_number = mr.request_number
-    co = _company(getattr(mr, "issuing_company", None))
+    co = _company(getattr(mr, "issuing_company", None), mr)
     co_name = co["name"]
     subject = f"Material Request {request_number} — {co_name}"
 

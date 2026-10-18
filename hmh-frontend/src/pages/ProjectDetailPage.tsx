@@ -25,6 +25,7 @@ import { BulkPropagateModal } from "@/components/BulkPropagateModal";
 import { boqApi, type BOQTemplate } from "@/api/boq";
 import { warehouseApi, type WarehouseStockItem } from "@/api/warehouse";
 import { formatDate } from "@/lib/format";
+import { CompanySelect } from "@/components/shared/CompanySelect";
 
 // ── Status display maps ───────────────────────────────────────────────────────
 
@@ -159,15 +160,11 @@ function EditProjectModal({
               <Building2 className="w-3.5 h-3.5" />
               Company
             </Label>
-            <select
+            <CompanySelect
               value={(form.client_name as string) ?? ""}
-              onChange={(e) => setForm({ ...form, client_name: e.target.value })}
-              className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
-            >
-              <option value="">— Select company —</option>
-              <option value="HMH Group">HMH Group</option>
-              <option value="Minerat Construction &amp; Civils">Minerat Construction &amp; Civils</option>
-            </select>
+              onChange={(v) => setForm({ ...form, client_name: v })}
+              valueMode="name"
+            />
           </div>
           {field("Location", "location")}
         </div>
