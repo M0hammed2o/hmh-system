@@ -109,8 +109,8 @@ export function MechanicPaymentsTab() {
 
       <div className="flex flex-wrap items-end gap-2">
         <div className="space-y-1">
-          <Label className="text-xs">Mechanic</Label>
-          <Input
+          <Label className="text-xs" htmlFor="mp-filter-mechanic">Mechanic</Label>
+          <Input id="mp-filter-mechanic"
             className="h-8 w-44 text-xs"
             placeholder="Workshop name"
             defaultValue={filters.mechanic ?? ""}
@@ -121,8 +121,8 @@ export function MechanicPaymentsTab() {
           />
         </div>
         <div className="space-y-1">
-          <Label className="text-xs">Company</Label>
-          <select
+          <Label className="text-xs" htmlFor="mp-filter-company">Company</Label>
+          <select id="mp-filter-company"
             className="h-8 rounded-md border border-input bg-background px-2 text-xs"
             value={filters.company_id ?? ""}
             onChange={(e) => patch({ company_id: e.target.value || undefined })}
@@ -134,8 +134,8 @@ export function MechanicPaymentsTab() {
           </select>
         </div>
         <div className="space-y-1">
-          <Label className="text-xs">Status</Label>
-          <select
+          <Label className="text-xs" htmlFor="mp-filter-status">Status</Label>
+          <select id="mp-filter-status"
             className="h-8 rounded-md border border-input bg-background px-2 text-xs"
             value={filters.status ?? ""}
             onChange={(e) =>
@@ -149,14 +149,14 @@ export function MechanicPaymentsTab() {
           </select>
         </div>
         <div className="space-y-1">
-          <Label className="text-xs">From</Label>
-          <Input type="date" className="h-8 w-36 text-xs"
+          <Label className="text-xs" htmlFor="mp-filter-from">From</Label>
+          <Input id="mp-filter-from" type="date" className="h-8 w-36 text-xs"
                  value={filters.date_from ?? ""}
                  onChange={(e) => patch({ date_from: e.target.value || undefined })} />
         </div>
         <div className="space-y-1">
-          <Label className="text-xs">To</Label>
-          <Input type="date" className="h-8 w-36 text-xs"
+          <Label className="text-xs" htmlFor="mp-filter-to">To</Label>
+          <Input id="mp-filter-to" type="date" className="h-8 w-36 text-xs"
                  value={filters.date_to ?? ""}
                  onChange={(e) => patch({ date_to: e.target.value || undefined })} />
         </div>
@@ -390,35 +390,35 @@ function RepairPaymentsDrawer({
             </p>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1">
-                <Label className="text-xs">Amount (R) *</Label>
-                <Input type="number" min="0.01" step="0.01" required
+                <Label className="text-xs" htmlFor="mp-amount">Amount (R) *</Label>
+                <Input id="mp-amount" type="number" min="0.01" step="0.01" required
                        value={form.amount}
                        onChange={(e) => setForm({ ...form, amount: e.target.value })}
                        placeholder={outstanding.toFixed(2)} />
               </div>
               <div className="space-y-1">
-                <Label className="text-xs">Payment date *</Label>
-                <Input type="date" required value={form.payment_date}
+                <Label className="text-xs" htmlFor="mp-date">Payment date *</Label>
+                <Input id="mp-date" type="date" required value={form.payment_date}
                        onChange={(e) => setForm({ ...form, payment_date: e.target.value })} />
               </div>
               <div className="space-y-1">
-                <Label className="text-xs">Method</Label>
-                <Input value={form.payment_method} placeholder="EFT, cash…"
+                <Label className="text-xs" htmlFor="mp-method">Method</Label>
+                <Input id="mp-method" value={form.payment_method} placeholder="EFT, cash…"
                        onChange={(e) => setForm({ ...form, payment_method: e.target.value })} />
               </div>
               <div className="space-y-1">
-                <Label className="text-xs">Reference</Label>
-                <Input value={form.payment_reference} placeholder="EFT-55012"
+                <Label className="text-xs" htmlFor="mp-reference">Reference</Label>
+                <Input id="mp-reference" value={form.payment_reference} placeholder="EFT-55012"
                        onChange={(e) => setForm({ ...form, payment_reference: e.target.value })} />
               </div>
               <div className="space-y-1 col-span-2">
-                <Label className="text-xs">Proof of payment (link)</Label>
-                <Input value={form.proof_file_url} placeholder="Link to the remittance or receipt"
+                <Label className="text-xs" htmlFor="mp-proof">Proof of payment (link)</Label>
+                <Input id="mp-proof" value={form.proof_file_url} placeholder="Link to the remittance or receipt"
                        onChange={(e) => setForm({ ...form, proof_file_url: e.target.value })} />
               </div>
               <div className="space-y-1 col-span-2">
-                <Label className="text-xs">Notes</Label>
-                <Input value={form.notes}
+                <Label className="text-xs" htmlFor="mp-notes">Notes</Label>
+                <Input id="mp-notes" value={form.notes}
                        onChange={(e) => setForm({ ...form, notes: e.target.value })} />
               </div>
             </div>
