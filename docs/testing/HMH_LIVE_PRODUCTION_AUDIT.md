@@ -268,3 +268,43 @@ without saving.
 
 - Live Anthropic extraction, pending your go-ahead to upload one synthetic
   document to production
+
+---
+
+## Addendum — 2026-10-19, after PR #3 was merged
+
+**PR #3 (accessibility + audit suites) merged into `main` as `ad2adcc`.** It
+carries no migration, so a deploy of it runs `alembic upgrade head` against a
+database already at `0078` — a no-op. No data risk.
+
+**PR #4 (migration 0079) is NOT merged, and is held deliberately.**
+
+`render.yaml` does not set `autoDeploy: false`, and PR #2 merged at 20:41Z
+with its backend route answering on production by 22:20Z with no manual
+step. Merging to `main` therefore triggers a Render deploy, which runs
+`alembic upgrade head` — so **merging PR #4 is the production migration**,
+the step gated on a confirmed database recovery point. That recovery point
+cannot be confirmed from this environment: there is application admin access,
+but no Supabase or Render credential.
+
+PR #4 is `MERGEABLE` / `CLEAN` with checks passing, rebased on the new
+`main`, one merge away.
+
+### Live re-verification, same day
+
+| Area | Result |
+|---|---|
+| Companies | **Still 3 on production.** The regression is live until PR #4 deploys |
+| **Dassenhoek BOQ** | **Still clean** — lots A17 and A175, 35 rows each, **0 sharing a catalogue item** |
+| Bypass Orders | `extraction_available: true`, `private_storage_configured: true`, **`auto_post_enabled: false`** |
+| Mechanic Payments | Loads; totals R0,00 — production still holds 0 repair jobs |
+| Vehicles | 22 vehicles, 0 repairs |
+
+### Two ways to clear the gate
+
+1. Confirm a recent Supabase restore point (Database → Backups) and PR #4
+   can be merged. Rollback is `alembic downgrade 0078`, which removes only
+   rows nothing references.
+2. Or add the two companies through the application's own
+   **Companies → New Company** control, which creates the same rows. That is
+   a production write, and has not been done without a specific instruction.
