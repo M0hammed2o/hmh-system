@@ -353,3 +353,57 @@ def repair_amount_floor(db: Session, job) -> float:
         .scalar()
     ) or 0
     return float(paid)
+
+
+def cost_payable_floor(db: Session, cost) -> tuple[float, float, str]:
+    """
+    How far a repair cost may be cut before it contradicts money already paid.
+
+    A cost booked against a repair feeds that repair's mechanic payable when
+    there is no quote or invoice to go on — the "recorded labour" basis. Edit
+    the amount down, or reclassify it away from labour, and the payable drops
+    with it. If it drops below what the mechanic has already been paid, the
+    books would show an overpayment that never happened.
+
+    Returns (already_paid, payable_from_other_costs, repair_title). A caller
+    comparing the proposed new contribution against
+    `already_paid - payable_from_other_costs` knows whether the edit is safe.
+    Everything is zero when the cost is not attached to a repair, or when the
+    repair prices from a quote or invoice instead.
+    """
+    from app.models.mechanic_payment import MechanicPayment
+    from app.models.vehicle import RepairJob, VehicleCost
+    from app.services.mechanic_payment_service import MECHANIC_COST_TYPES
+
+    if not cost.repair_job_id:
+        return 0.0, 0.0, ""
+
+    job = db.get(RepairJob, cost.repair_job_id)
+    if job is None:
+        return 0.0, 0.0, ""
+
+    # Priced from paperwork, so loose cost rows do not move the payable.
+    if job.invoice_amount is not None or job.quote_amount is not None:
+        return 0.0, 0.0, job.title
+
+    paid = float(
+        db.query(func.coalesce(func.sum(MechanicPayment.amount), 0))
+        .filter(
+            MechanicPayment.repair_job_id == job.id,
+            MechanicPayment.reversed_at.is_(None),
+        )
+        .scalar() or 0
+    )
+    if paid <= 0:
+        return 0.0, 0.0, job.title
+
+    others = float(
+        db.query(func.coalesce(func.sum(VehicleCost.amount), 0))
+        .filter(
+            VehicleCost.repair_job_id == job.id,
+            VehicleCost.id != cost.id,
+            VehicleCost.cost_type.in_(MECHANIC_COST_TYPES),
+        )
+        .scalar() or 0
+    )
+    return paid, others, job.title

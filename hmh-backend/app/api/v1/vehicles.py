@@ -19,6 +19,7 @@ from app.schemas.vehicle import (
     RepairJobUpdate,
     VehicleCostCreate,
     VehicleCostRead,
+    VehicleCostUpdate,
     VehicleCreate,
     VehicleRead,
     VehicleUpdate,
@@ -104,6 +105,83 @@ def log_cost(vehicle_id: uuid.UUID, body: VehicleCostCreate, db: DbSession, curr
     return ApiSuccess(data=VehicleCostRead.model_validate(cost), message="Cost logged.")
 
 
+@router.patch(
+    "/costs/{cost_id}",
+    response_model=ApiSuccess[VehicleCostRead],
+    dependencies=[OFFICE_AND_ABOVE],
+)
+def update_cost(cost_id: uuid.UUID, body: VehicleCostUpdate, db: DbSession, current_user: CurrentUser):
+    """
+    Correct a cost that was captured wrongly.
+
+    Costs get typed in on site, so a transposed amount or the wrong category
+    is ordinary. What the correction may not do is contradict money already
+    paid out on the strength of that figure, so an edit that would drop a
+    repair's mechanic payable below what the mechanic has been paid is
+    refused with the amount in question. Every accepted change is recorded
+    field by field, old value and new.
+
+    The vehicle and the repair are not editable here. Moving a cost
+    re-attributes spend that reports and balances have been built on; that is
+    a reversal and a re-capture, not an edit.
+    """
+    from app.models.vehicle import VehicleCost
+
+    cost = db.get(VehicleCost, cost_id)
+    if not cost:
+        raise HTTPException(404, "Cost entry not found.")
+
+    changes = body.model_dump(exclude_unset=True)
+    if "amount" in changes and changes["amount"] is not None and float(changes["amount"]) <= 0:
+        raise HTTPException(422, "A cost must be a positive amount.")
+
+    # Would this edit leave the repair's mechanic payable short of what has
+    # already been paid?
+    paid, from_other_costs, repair_title = vehicle_service.cost_payable_floor(db, cost)
+    if paid > 0:
+        from app.services.mechanic_payment_service import MECHANIC_COST_TYPES
+
+        new_type = changes.get("cost_type", cost.cost_type)
+        new_type = new_type.value if hasattr(new_type, "value") else str(new_type)
+        new_amount = float(changes.get("amount", cost.amount) or 0)
+        contribution = new_amount if new_type in MECHANIC_COST_TYPES else 0.0
+
+        if from_other_costs + contribution < paid - 0.005:
+            raise HTTPException(
+                409,
+                f"{paid:.2f} has already been paid to the mechanic for "
+                f"\"{repair_title}\", and this change would leave only "
+                f"{from_other_costs + contribution:.2f} recorded against it. "
+                f"Reverse the payments that no longer apply first.",
+            )
+
+    before: dict = {}
+    after: dict = {}
+    for field, val in changes.items():
+        current = getattr(cost, field, None)
+        if not _differs(current, val):
+            continue
+        before[field] = _audit_value(current)
+        after[field] = _audit_value(val)
+        setattr(cost, field, val)
+
+    if not before:
+        return ApiSuccess(data=VehicleCostRead.model_validate(cost), message="Nothing to change.")
+
+    audit_service.write_event(
+        db, AuditAction.UPDATE, "vehicle_cost", current_user.id, cost.id,
+        before_value=before, after_value=after,
+        notes=f"Cost corrected: {', '.join(sorted(before))}.",
+    )
+
+    db.commit()
+    db.refresh(cost)
+    return ApiSuccess(
+        data=VehicleCostRead.model_validate(cost),
+        message=f"Cost updated ({len(before)} field(s) changed).",
+    )
+
+
 @router.get(
     "/{vehicle_id}/costs",
     response_model=ApiSuccess[PaginatedResult[VehicleCostRead]],
@@ -148,14 +226,19 @@ def _differs(current, proposed) -> bool:
     Would writing `proposed` actually change anything?
 
     Compared loosely on purpose: the client round-trips dates as strings and
-    numbers as floats, and a no-op resubmission of the whole form must not
-    land in the audit trail as a change.
+    numbers as floats, the database returns NUMERIC columns as Decimal, and a
+    no-op resubmission of the whole form must not land in the audit trail as
+    a change.
     """
     if current is None and proposed is None:
         return False
     if current is None or proposed is None:
         return True
-    if isinstance(current, (int, float)) and isinstance(proposed, (int, float)):
+    # Decimal counts as a number here. Money and odometer columns are
+    # NUMERIC, so the stored value comes back as Decimal("1500.00") while the
+    # client sends 1500 — comparing those as text reports a change that did
+    # not happen, and fills the audit trail with phantom edits.
+    if isinstance(current, (int, float, Decimal)) and isinstance(proposed, (int, float, Decimal)):
         return abs(float(current) - float(proposed)) > 1e-9
     return str(current) != str(proposed)
 

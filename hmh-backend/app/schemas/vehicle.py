@@ -118,6 +118,29 @@ class VehicleCostCreate(BaseModel):
     repair_job_id: Optional[uuid.UUID] = None
 
 
+class VehicleCostUpdate(BaseModel):
+    """
+    Correcting a cost that was captured wrongly.
+
+    Every field optional — only what is sent is considered, so a client may
+    fix one figure without restating the rest.
+
+    `vehicle_id` and `repair_job_id` are deliberately absent. Moving a cost
+    to another vehicle or repair re-attributes spend that reports and
+    mechanic balances have already been built on; that is a reversal and a
+    re-capture, not an edit.
+    """
+    cost_type: Optional[VehicleCostType] = None
+    amount: Optional[float] = None
+    description: Optional[str] = None
+    project_id: Optional[uuid.UUID] = None
+    site_id: Optional[uuid.UUID] = None
+    lot_id: Optional[uuid.UUID] = None
+    proof_image_url: Optional[str] = None
+    cost_date: Optional[date] = None
+    notes: Optional[str] = None
+
+
 class VehicleCostRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

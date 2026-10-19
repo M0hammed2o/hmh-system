@@ -248,6 +248,21 @@ export const vehiclesApi = {
     return res.data.data;
   },
 
+  /**
+   * Correct a cost captured wrongly.
+   *
+   * The vehicle and the repair a cost belongs to are not editable: moving a
+   * cost re-attributes spend that reports and mechanic balances were built
+   * on, which is a reversal and a re-capture rather than an edit.
+   */
+  updateCost: async (
+    costId: string,
+    body: Partial<Omit<VehicleCostCreate, "repair_job_id">>,
+  ): Promise<VehicleCost> => {
+    const res = await client.patch<{ data: VehicleCost }>(`/vehicles/costs/${costId}`, body);
+    return res.data.data;
+  },
+
   listCosts: async (
     vehicleId: string,
     params: HistoryQuery = {},
