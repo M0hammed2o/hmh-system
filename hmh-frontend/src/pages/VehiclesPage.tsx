@@ -472,8 +472,8 @@ function RepairJobModal({
         <p className="text-sm text-muted-foreground mb-5">{vehicle.name} ({vehicle.registration})</p>
         <form onSubmit={submit} className="space-y-3">
           <div className="space-y-2">
-            <Label>Title *</Label>
-            <Input
+            <Label htmlFor="rj-title">Title *</Label>
+            <Input id="rj-title"
               value={form.title}
               onChange={(e) => setForm({ ...form, title: e.target.value })}
               placeholder="e.g. Engine oil leak repair"
@@ -481,8 +481,8 @@ function RepairJobModal({
             />
           </div>
           <div className="space-y-2">
-            <Label>Workshop / Mechanic</Label>
-            <Input
+            <Label htmlFor="rj-workshop">Workshop / Mechanic</Label>
+            <Input id="rj-workshop"
               value={form.workshop_name || ""}
               onChange={(e) => setForm({ ...form, workshop_name: e.target.value || undefined })}
               placeholder="e.g. ABC Auto Repairs"
@@ -490,8 +490,8 @@ function RepairJobModal({
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-2">
-              <Label>Date Opened</Label>
-              <Input
+              <Label htmlFor="rj-date-opened">Date Opened</Label>
+              <Input id="rj-date-opened"
                 type="date"
                 value={form.date_opened}
                 onChange={(e) => setForm({ ...form, date_opened: e.target.value })}
@@ -499,8 +499,8 @@ function RepairJobModal({
               />
             </div>
             <div className="space-y-2">
-              <Label>Odometer (km)</Label>
-              <Input
+              <Label htmlFor="rj-odometer">Odometer (km)</Label>
+              <Input id="rj-odometer"
                 type="number"
                 min="0"
                 value={form.odometer_at_repair ?? ""}
@@ -510,8 +510,8 @@ function RepairJobModal({
             </div>
           </div>
           <div className="space-y-2">
-            <Label>Description</Label>
-            <Input
+            <Label htmlFor="rj-description">Description</Label>
+            <Input id="rj-description"
               value={form.description || ""}
               onChange={(e) => setForm({ ...form, description: e.target.value || undefined })}
               placeholder="Brief description of the issue"
@@ -522,8 +522,8 @@ function RepairJobModal({
             <>
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-2">
-                  <Label>Status</Label>
-                  <select
+                  <Label htmlFor="rj-status">Status</Label>
+                  <select id="rj-status"
                     value={form.status ?? "OPEN"}
                     onChange={(e) => setForm({ ...form, status: e.target.value })}
                     className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
@@ -534,8 +534,8 @@ function RepairJobModal({
                   </select>
                 </div>
                 <div className="space-y-2">
-                  <Label>Date Closed</Label>
-                  <Input
+                  <Label htmlFor="rj-date-closed">Date Closed</Label>
+                  <Input id="rj-date-closed"
                     type="date"
                     value={form.date_closed ?? ""}
                     onChange={(e) => setForm({ ...form, date_closed: e.target.value || undefined })}
@@ -544,16 +544,16 @@ function RepairJobModal({
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-2">
-                  <Label>Quoted amount (R)</Label>
-                  <Input
+                  <Label htmlFor="rj-quote">Quoted amount (R)</Label>
+                  <Input id="rj-quote"
                     type="number" min="0" step="0.01"
                     value={form.quote_amount ?? ""}
                     onChange={(e) => setForm({ ...form, quote_amount: e.target.value ? parseFloat(e.target.value) : undefined })}
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label>Invoiced amount (R)</Label>
-                  <Input
+                  <Label htmlFor="rj-invoice">Invoiced amount (R)</Label>
+                  <Input id="rj-invoice"
                     type="number" min="0" step="0.01"
                     value={form.invoice_amount ?? ""}
                     onChange={(e) => setForm({ ...form, invoice_amount: e.target.value ? parseFloat(e.target.value) : undefined })}
@@ -561,8 +561,8 @@ function RepairJobModal({
                 </div>
               </div>
               <div className="space-y-2">
-                <Label>Notes</Label>
-                <Input
+                <Label htmlFor="rj-notes">Notes</Label>
+                <Input id="rj-notes"
                   value={form.notes || ""}
                   onChange={(e) => setForm({ ...form, notes: e.target.value || undefined })}
                   placeholder="Anything worth recording about this repair"

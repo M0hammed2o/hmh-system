@@ -2,6 +2,12 @@ import { defineConfig } from "playwright/test";
 
 export default defineConfig({
   testDir: "./tests",
+  // The audit and production suites need their own environments - a local
+  // backend bound to a throwaway database, or the live site - and each has
+  // its own config. Sweeping them in here would point the audit specs at
+  // whatever this preview happens to serve, which at one point meant posting
+  // a local test login at production.
+  testIgnore: ["audit/**", "production/**"],
   timeout: 30_000,
   fullyParallel: false,
   use: {
