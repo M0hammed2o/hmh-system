@@ -7,7 +7,7 @@ export default defineConfig({
   // its own config. Sweeping them in here would point the audit specs at
   // whatever this preview happens to serve, which at one point meant posting
   // a local test login at production.
-  testIgnore: ["audit/**", "production/**"],
+  testIgnore: ["audit/**", "production/**", "verify/**"],
   timeout: 30_000,
   fullyParallel: false,
   use: {
