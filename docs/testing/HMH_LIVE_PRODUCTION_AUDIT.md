@@ -2,233 +2,309 @@
 
 | | |
 |---|---|
-| **Frontend tested** | https://app.hmhgroup.co.za (Vercel) |
-| **Backend tested** | https://hmh-backend-uhzu.onrender.com (Render) |
-| **Date/time** | 2026-10-18, 22:17–22:20 UTC |
+| **Frontend** | https://app.hmhgroup.co.za (Vercel) |
+| **Backend** | https://hmh-backend-uhzu.onrender.com (Render) |
+| **Date** | 2026-10-18 / 19 |
 | **Browser** | Chromium via Playwright, 1440×900 and 390×844 |
-| **Deployed revision** | `main` @ `07109d2` (merge of PR #2); feature code confirmed present in the live bundles |
+| **Account** | An administrator login supplied by the system owner. Held in environment variables for the run; never written to a file, a report or a commit |
+| **Mode** | **READ-ONLY.** No repair edit was saved, no payment recorded or reversed, no delivery note touched, no customer, stock or financial record altered |
 
 ---
 
-## Overall: PARTIAL PASS
+## Overall: PARTIAL PASS — one production regression found and fixed
 
-**Everything reachable without a login passes. Nothing behind the login was
-tested, because no authorised production credential exists in this
-environment.**
+The headline result is good: **the Dassenhoek BOQ duplication is confirmed
+fixed on live production data.** Both lots were checked against the real
+database through the API, and neither shows the duplication signature.
 
-This is the honest shape of the result. The live site is up, the new code is
-demonstrably deployed and serving to real users, and protected routes refuse
-anonymous access. But *using* the features — opening a repair, recording a
-mechanic payment, reading Dassenhoek's quantities — requires signing in, and
-I have no credentials to do so.
-
-I did not guess credentials, forge a session, or bypass authentication. Every
-feature behind the login is marked **NOT VERIFIED (production)** below, not
-"pass".
+One regression was found, caused by this work, and is fixed in a pull request
+awaiting review. Several features are deployed and loading correctly but
+**cannot be judged working in the field, because production holds no data for
+them yet** — stated as unexercised rather than passing.
 
 ---
 
-## The blocker, stated plainly
+## The regression: HMH Group and Minerat vanished from the company selector
 
-**B1 — No authorised production login.** Searched: every `.env` in the repo,
-Playwright storage-state files, and secret-manager CLIs (`op`, `vault`,
-`aws`). None holds a production application credential, and there is no saved
-browser session.
+**Severity: high — it blocks an everyday workflow.**
 
-To clear it, I need either:
+### What happened
 
-- a production login for a **read-only** role (e.g. `READ_ONLY` or
-  `SITE_MANAGER_VIEW`) — enough for sections 1, 2 (read), 3, 4 (read), 5 and
-  6; or
-- a disposable production test account, for the write paths you authorised
-  against "an approved disposable test record".
+The two original trading names were never rows in the `companies` table.
+They existed only as hardcoded `<option>` values written into
+`projects.client_name`, and as fixed letterhead keys in `email_service`. The
+companies table served a narrower purpose — linking approved suppliers — and
+nobody had needed rows there.
 
-Send one and I will finish every NOT VERIFIED row below in a single pass.
+Migration 0077 then added the three new companies, and the project company
+selector was changed to read the table instead of its hardcoded list. On
+production the table holds **exactly three rows**, so the selector now offers
+only the new companies:
+
+```
+Production /api/v1/companies/  →  Kukhanya Kabusha, Ophezulu, Premium Structures
+Production project selector    →  the same three. No HMH Group. No Minerat.
+```
+
+Staff creating a project can no longer choose either company they actually
+trade as.
+
+### What was NOT damaged
+
+Both production projects still carry `client_name = "Minerat Construction &
+Civils"`, intact. `CompanySelect` keeps an unrecognised saved value
+selectable rather than discarding it, so opening and saving an existing
+project could not silently blank its company. Procurement letterheads are
+also unaffected — that selector retains the legacy `HMH_GROUP` and `MINERAT`
+keys, and documents already issued render exactly as before.
+
+### The fix
+
+**Migration 0079** registers the two names, byte-identical to what the
+retired hardcoded options wrote, so a project already carrying one matches a
+real row instead of rendering as a leftover. Idempotent and additive like
+0077; name only, because registration and VAT numbers appear on
+supplier-facing documents and are not for a migration to invent.
+
+Branch `fix/restore-hmh-minerat-companies`, with three regression tests
+asserting all five names are selectable and that nothing is invented.
+**Not merged, not deployed.**
 
 ---
 
-## What was verified on production
+## Production data volumes (read-only)
 
-All five checks ran in a real browser against the real site.
-
-### P1 — The live site loads · **PASS**
-
-- **URL:** https://app.hmhgroup.co.za
-- **Action:** navigate, wait for network idle, screenshot
-- **Expected:** HTTP 200, the real application shell
-- **Actual:** 200; the genuine HMH login page rendered — logo, "Sign in to
-  the management portal", email and password fields, Sign in, and the
-  "Go to Site Dashboard →" link
-- **Evidence:** `P01-live-login-desktop-1440x900.png`, `P01-live-login-text.txt`
-
-### P2 — Mobile rendering · **PASS**
-
-- **Action:** 390×844, navigate, measure horizontal overflow
-- **Expected:** renders, no horizontal scroll
-- **Actual:** renders correctly; overflow ≤ 1px
-- **Evidence:** `P02-live-login-mobile-390x844.png`
-
-### P3 — Protected routes do not leak · **PASS**
-
-- **URLs:** `/vehicles`, `/workshop`, `/companies`, `/ai-document-import`
-- **Expected:** no authenticated content without a session
-- **Actual:** none of the four rendered real screen data anonymously
-- **Evidence:** `P03-protected-route-requires-login.png`
-
-### P4 — The new code is live · **PASS**
-
-This is the strongest production evidence available without a login. The
-deployed JavaScript was downloaded from `app.hmhgroup.co.za` — **91 bundles,
-including lazy route chunks** — and searched for literal runtime strings that
-exist only because of the recent work.
-
-| Marker | In the live bundle |
-|---|---|
-| `Bypass Orders` (rename) | ✅ |
-| `Import Documents` (tab) | ✅ |
-| `Mechanic Payments` (tab) | ✅ |
-| `Record a payment` (form) | ✅ |
-| `Still owing` (filter) | ✅ |
-| `is booked against this repair` (non-mechanic cost note) | ✅ |
-| `/ page` (history pager page size) | ✅ |
-| `Edit Repair Job` (edit modal) | ✅ |
-| `repair job(s)` (repair count) | ✅ |
-| `/ai-import/service-status` | ✅ |
-
-All ten present. The non-mechanic cost note comes from the most recent commit
-(`2e4233c`), so production is serving the **latest** build, not merely PR #2.
-
-- **Evidence:** `P04-deployed-bundle-markers.json`
-
-> **A correction worth recording.** An earlier run of this check reported
-> three markers missing. All three were faults in the check, not in
-> production: one targeted a TypeScript type (erased at build time), one used
-> wording that never existed, and one lived in a lazy chunk the crawler had
-> not fetched. Fixed and re-run before anything was reported. No production
-> defect was involved.
-
-### P5 — Production API protects the new routes · **PASS**
-
-| Endpoint | Status |
-|---|---|
-| `/api/v1/workshop/mechanic-payments` | **401** |
-| `/api/v1/ai-import/service-status` | **401** |
-| `/api/v1/companies/` | **401** |
-| `/api/v1/vehicles/` | **401** |
-
-401 (not 404) proves each route exists in the deployed backend and demands
-authentication. Migration `0078` is therefore consistent with what is
-deployed — though **not confirmed**, since confirming it needs either a login
-or database access.
-
-- **Evidence:** `P05-production-api-auth.json`
-
-### Infrastructure
+Measured through the API. These explain most of the results below.
 
 | | |
 |---|---|
-| Vercel | `Server: Vercel`, `X-Vercel-Cache: HIT`, id `cpt1::j6bp4-…` — serving normally |
-| Render backend | `/health` 200 `env=production`; `/health/db` 200 `db=connected` |
+| Projects | **2** — `DASS` (DASSENHOEK), `CORNUBIA` |
+| Companies | **3** (the regression above) |
+| Vehicles | **22** |
+| **Repair jobs** | **0** |
+| Vehicle costs | 102 |
+| Fuel logs readable via `/fuel/?project_id=` | 0 |
+
+With no repair jobs in production, repair editing, repair pagination and
+mechanic payments have nothing to act on. Their screens load correctly; their
+behaviour on real data is unexercised.
 
 ---
 
-## Requested sections that could NOT be verified on production
+## Results
 
-Each needs a login. None is reported as passing.
+### 1. Companies — **FAIL (regression, fixed in PR)**
 
-| § | Feature | Production status | What a login would settle |
-|---|---|---|---|
-| 1 | Company management — five companies in selectors, project links, permissions | **NOT VERIFIED (production)** | That all five appear in the live `/companies` list and in project/procurement selectors, against live data |
-| 2 | Vehicle repair editing — open, edit, audit history | **NOT VERIFIED (production)** | Read-only: that Edit is offered and the form prefills. Writes only against a disposable record you approve |
-| 3 | Repair history pagination — beyond 10, both Vehicles and Site Vehicles | **NOT VERIFIED (production)** | That a real vehicle with >10 repairs pages correctly and counts match |
-| 4 | Workshop mechanic payments — dashboard, statuses, balances, exclusions | **NOT VERIFIED (production)** | Read-only: that the live dashboard loads and balances look right. **No payment would be recorded on production** |
-| 5 | Fuel history — >10 transactions, pagination, totals | **NOT VERIFIED (production)** | That a real vehicle's fuel history pages and totals hold |
-| 6 | **Dassenhoek BOQ — delivered quantities no longer duplicated** | **NOT VERIFIED (production)** | The single most valuable check here: whether live Dassenhoek quantities are now correct. Read-only; no delivery note would be touched |
-| 7 | Bypass Orders — upload, Anthropic config, extraction | **NOT VERIFIED (production)** | Whether `ANTHROPIC_API_KEY` is set in Render, and whether extraction actually runs |
+- **Expected:** all five selectable
+- **Actual:** three. HMH Group and Minerat Construction & Civils absent
+- **Evidence:** `A01-companies-live.png`, `A03-company-selector-live.png`, `A99-findings.json`
+- **Status:** fix ready for review
 
-### On section 7 specifically
+### 2. Vehicle repair editing — **NOT EXERCISED**
 
-Two separate unknowns, worth not conflating:
+- **Actual:** the Vehicles screen loads with all 22 vehicles. **No repair
+  exists on any of them**, so no Edit control can appear and the edit form
+  could not be opened against real data
+- **Not a defect:** the Edit control is present in the deployed bundle
+  (`Edit Repair Job`) and is proven working against a throwaway database in
+  `tests/audit`
+- **Evidence:** `A04-vehicles-live.png`, `A05-repair-history-live.png`
+- **Writes:** none. No repair was created or modified on production
 
-1. **Is the page live?** Yes — `Bypass Orders` and `/ai-import/service-status`
-   are both in the deployed bundle, and the endpoint answers 401.
-2. **Does extraction work in production?** Unknown. `GET
-   /api/v1/ai-import/service-status` reports `extraction_available` and
-   `private_storage_configured` for the live instance, and one authenticated
-   call would answer it definitively. **No API key is exposed by that
-   endpoint** — it reports only whether each integration is configured.
+### 3. Repair history pagination — **NOT EXERCISED**
 
-**Staging comparison:** on a local stack at the same revision,
-`extraction_available` is `false` (no `ANTHROPIC_API_KEY` in this
-environment), `auto_post_enabled` is `false`, and the page states its degraded
-condition plainly rather than implying the AI is working. **The real Anthropic
-extraction test has not been run anywhere** — not against production, not
-against staging — because no key exists in this environment. No mock was
-substituted, and no accuracy or token-cost figure is reported.
+- **Actual:** no vehicle has more than 0 repairs, so there is no second page
+  to reach. The paginated endpoint answers correctly and returns `total: 0`
+- **Status:** correct behaviour, no data to prove the fix in the field
 
-`AI_IMPORT_AUTO_POST_ENABLED` is `false` in the code default, `render.yaml`
-and `render.test.yaml`.
+### 4. Workshop mechanic payments — **PASS (loads correctly; no data)**
+
+- **Actual:** the Mechanic Payments tab is present and loads. Totals read
+  R0,00 / R0,00 / R0,00, with the correct empty state: *"No repairs match
+  these filters. Only repairs with a quoted, invoiced or recorded cost appear
+  here — there is nothing to pay until one of those is captured."*
+- The balance arithmetic assertion (`outstanding = payable − paid`) ran
+  against every returned row; with zero rows it proved nothing, and is
+  reported as such
+- **Evidence:** `A07-mechanic-payments-live.png`
+- **Writes:** none. No payment was recorded or reversed on production
+
+### 5. Fuel history — **NOT EXERCISED**
+
+- **Actual:** no fuel logs were readable for any production vehicle through
+  the endpoint checked
+- **Caveat worth stating:** the fuel timeline draws on fuel logs and fuel
+  issues, and this check queried one source. "No fuel history visible to this
+  account" is the honest reading, not "no fuel data exists"
+
+### 6. **Dassenhoek BOQ — PASS (verified on live production data)**
+
+The most valuable result in this audit.
+
+- **Project:** `DASSENHOEK`, code `DASS`
+- **Lots checked:** 2 — `A17` and `A175`
+- **Method:** for each lot, the live material summary was read and inspected
+  for the duplication signature — two surviving rows sharing one catalogue
+  `item_id`, which is what multiplied delivered quantities
+
+| Lot | BOQ rows returned | Rows sharing a catalogue item |
+|---|---|---|
+| A17 | 35 | **0** |
+| A175 | 35 | **0** |
+
+- **Actual:** no duplication in either lot. Genuine separate allocations are
+  intact — 35 distinct rows each, not collapsed
+- **Evidence:** `A09-dassenhoek-live.png`, `A99-findings.json`
+- **Writes:** none. No delivery note was deleted, cancelled, reversed or
+  altered
+
+### 7. Bypass Orders — **PASS (and fully configured)**
+
+This resolves the unknown carried through every previous report.
+
+| Setting (live production) | Value |
+|---|---|
+| `enabled` | `true` |
+| **`extraction_available`** | **`true`** — an Anthropic API key *is* configured in Render |
+| `extraction_model` | `claude-opus-5-5` |
+| **`private_storage_configured`** | **`true`** — Supabase private storage is configured |
+| **`auto_post_enabled`** | **`false`** ✅ |
+| `worker_enabled` | `true` |
+
+- The page loads, the upload controls are present, and **no degraded-capability
+  banner is shown — because production is not degraded.** Both integrations
+  this environment lacks are present there
+- **Automatic posting is off in production**, asserted directly
+- **Evidence:** `A10-bypass-orders-live.png`, `A99-findings.json`
+
+**The live extraction test was not run.** Uploading even a synthetic document
+writes an `ai_import_document` row to production that somebody must then
+review or reject. No explicitly authorised production test workspace was
+designated, and I was asked not to create records on production. The
+capability is confirmed configured; say the word and I will upload one clearly
+marked synthetic document and verify it creates no accounting, stock or
+supplier transaction.
+
+**No API key was exposed.** `service-status` reports only whether each
+integration is configured.
+
+### 8. Unauthenticated checks — **PASS**
+
+| Check | Result |
+|---|---|
+| Site loads | 200, genuine login page |
+| Mobile 390×844 | renders, overflow ≤1px |
+| Protected routes | leak nothing anonymously |
+| Deployed bundle | **10/10 feature markers across 91 live bundles**, including text from the most recent commit |
+| API auth | the four new routes answer 401, not 404 |
 
 ---
 
 ## Bugs found
 
-One, during the preceding local browser audit at this revision:
+| # | Bug | Severity | Status |
+|---|---|---|---|
+| 1 | HMH Group and Minerat missing from the company selector on production | **High** — blocks project creation with the real companies | Fixed, migration 0079, `fix/restore-hmh-minerat-companies`. Not merged |
+| 2 | Form labels not associated with their inputs in the mechanic payment drawer and repair modal | Accessibility | Fixed, PR #3. Not merged |
 
-| Bug | Severity | Status |
-|---|---|---|
-| Form labels in the mechanic payment drawer and the repair create/edit modal were not associated with their inputs (`<Label>` without `htmlFor`). A screen reader announced unlabelled textboxes, and clicking a label did not focus its field. | Accessibility | **Fixed** on `fix/audit-form-labels`; pull request opened. Not merged, not deployed. |
-
-No production defect was found by this audit. Everything checkable from
-outside the login behaved correctly.
+No other defect was found. Everything checked behaved correctly.
 
 ---
 
 ## Evidence
 
-Stored at
-`C:\Users\junsm\Downloads\HMH-System\docs\testing\live-production-screenshots\`
-and **deliberately excluded from version control** via `.gitignore`, since
-this repository is public.
+At `C:\Users\junsm\Downloads\HMH-System\docs\testing\live-production-screenshots\`,
+**gitignored** — this repository is public.
 
 | File | Shows |
 |---|---|
-| `P01-live-login-desktop-1440x900.png` | The real production login page at 1440×900 |
-| `P01-live-login-text.txt` | Text extracted from that live page |
-| `P02-live-login-mobile-390x844.png` | The same page at 390×844 |
-| `P03-protected-route-requires-login.png` | A protected route refusing anonymous access |
-| `P04-deployed-bundle-markers.json` | 10/10 feature markers found across 91 live bundles |
-| `P05-production-api-auth.json` | The four new routes returning 401 |
+| `A01-companies-live.png` | Live Companies screen — three companies, the regression |
+| `A02-projects-live.png` | Live Projects |
+| `A03-company-selector-live.png` | The selector missing HMH and Minerat |
+| `A04-vehicles-live.png` | Live Vehicles, 22 records |
+| `A05-repair-history-live.png` | Live repair history (empty) |
+| `A07-mechanic-payments-live.png` | Live Mechanic Payments tab |
+| `A09-dassenhoek-live.png` | Live Projects showing DASSENHOEK |
+| `A10-bypass-orders-live.png` | Live Bypass Orders, fully configured |
+| `A99-findings.json` | Every machine-readable finding, including the Dassenhoek per-lot results |
+| `P01`–`P05` | Unauthenticated checks from the earlier pass |
 
-Reproduce with:
+Reproduce:
 
 ```bash
 cd hmh-frontend
-npx playwright test --config=playwright.production.config.mjs
+PROD_EMAIL=... PROD_PASSWORD=... \
+  npx playwright test --config=playwright.production.config.mjs live-authenticated-audit
 ```
 
-The spec is `hmh-frontend/tests/production/live-production-audit.spec.mjs`.
-It authenticates with nothing and writes nothing.
+The suite is read-only by construction: where a write would prove something,
+it verifies the control is present and the form prefills, then closes it
+without saving.
 
 ---
 
 ## What is working, what is unproven
 
-**Working on the live system, verified in a browser:**
+**Confirmed working on live production:**
 
-- The site loads and renders correctly, desktop and mobile
-- The latest build — including the most recent payable fix — is deployed and
-  serving to users
-- All ten new features are present in the production bundle
-- Protected routes and the four new API endpoints require authentication
-- Backend, database connection and Vercel delivery are healthy
+- **Dassenhoek BOQ quantities are no longer duplicated** — verified against
+  real data in both lots
+- Bypass Orders is deployed **and fully configured**: Anthropic key present,
+  private storage present, automatic posting off
+- Workshop → Mechanic Payments loads with correct totals and empty state
+- The latest build is serving; protected routes and APIs require auth
+- Existing project data intact; procurement letterheads unaffected
 
-**Unproven, and not claimed:**
+**Broken, fix awaiting review:**
 
-- Every feature's behaviour once logged in, including Dassenhoek's live
-  quantities
-- Whether Anthropic extraction is configured and working in production
-- The exact production migration level (consistent with `0078`, unconfirmed)
+- HMH Group and Minerat missing from the company selector
 
-**To fix:** nothing in production, on this evidence. The one open item is the
-accessibility fix awaiting review.
+**Deployed but unexercised, because production has no data for them:**
+
+- Repair editing, repair pagination, fuel history, and mechanic payment
+  balances on real repairs
+
+**Not run:**
+
+- Live Anthropic extraction, pending your go-ahead to upload one synthetic
+  document to production
+
+---
+
+## Addendum — 2026-10-19, after PR #3 was merged
+
+**PR #3 (accessibility + audit suites) merged into `main` as `ad2adcc`.** It
+carries no migration, so a deploy of it runs `alembic upgrade head` against a
+database already at `0078` — a no-op. No data risk.
+
+**PR #4 (migration 0079) is NOT merged, and is held deliberately.**
+
+`render.yaml` does not set `autoDeploy: false`, and PR #2 merged at 20:41Z
+with its backend route answering on production by 22:20Z with no manual
+step. Merging to `main` therefore triggers a Render deploy, which runs
+`alembic upgrade head` — so **merging PR #4 is the production migration**,
+the step gated on a confirmed database recovery point. That recovery point
+cannot be confirmed from this environment: there is application admin access,
+but no Supabase or Render credential.
+
+PR #4 is `MERGEABLE` / `CLEAN` with checks passing, rebased on the new
+`main`, one merge away.
+
+### Live re-verification, same day
+
+| Area | Result |
+|---|---|
+| Companies | **Still 3 on production.** The regression is live until PR #4 deploys |
+| **Dassenhoek BOQ** | **Still clean** — lots A17 and A175, 35 rows each, **0 sharing a catalogue item** |
+| Bypass Orders | `extraction_available: true`, `private_storage_configured: true`, **`auto_post_enabled: false`** |
+| Mechanic Payments | Loads; totals R0,00 — production still holds 0 repair jobs |
+| Vehicles | 22 vehicles, 0 repairs |
+
+### Two ways to clear the gate
+
+1. Confirm a recent Supabase restore point (Database → Backups) and PR #4
+   can be merged. Rollback is `alembic downgrade 0078`, which removes only
+   rows nothing references.
+2. Or add the two companies through the application's own
+   **Companies → New Company** control, which creates the same rows. That is
+   a production write, and has not been done without a specific instruction.

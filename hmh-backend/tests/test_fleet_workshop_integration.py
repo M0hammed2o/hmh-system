@@ -454,3 +454,59 @@ def test_a_purchase_order_pdf_generates_for_a_new_company(db, owner_token):
     pdf = _generate_po_pdf(po)
     assert pdf[:4] == b"%PDF"
     assert len(pdf) > 1000
+
+
+# ── All five trading names must be selectable ────────────────────────────────
+#
+# Found by authenticated testing against live production: the companies table
+# held only the three names migration 0077 added. HMH Group and Minerat had
+# never been rows — they were hardcoded <option> values written into
+# projects.client_name. Once the selector became table-driven, staff could no
+# longer choose the two companies they actually use.
+
+ALL_COMPANIES = (
+    "HMH Group",
+    "Minerat Construction & Civils",
+    "Kukhanya Kabusha",
+    "Premium Structures",
+    "Ophezulu",
+)
+
+
+def test_every_trading_name_is_available_as_a_company(db, client, owner_token):
+    """A company the business trades as must be selectable, not just the new ones."""
+    for name in ALL_COMPANIES:
+        _company(db, name)
+    db.commit()
+
+    owner, token = owner_token
+    r = client.get("/api/v1/companies/", headers=auth(token))
+    assert r.status_code == 200, r.text
+    names = {c["name"] for c in r.json()["data"]}
+
+    missing = [n for n in ALL_COMPANIES if n not in names]
+    assert not missing, f"not selectable: {missing}"
+
+
+def test_the_original_two_names_match_what_projects_already_store(db):
+    """
+    Byte-identical to the retired hardcoded options.
+
+    Existing projects carry these strings in client_name. If the company row
+    differed by so much as an ampersand, the selector would show the saved
+    value as an unrecognised leftover instead of matching a real company.
+    """
+    hmh = _company(db, "HMH Group")
+    minerat = _company(db, "Minerat Construction & Civils")
+    db.commit()
+
+    assert hmh.name == "HMH Group"
+    assert minerat.name == "Minerat Construction & Civils"
+
+
+def test_registering_them_invents_no_details(db):
+    for name in ("HMH Group", "Minerat Construction & Civils"):
+        c = _company(db, name)
+        db.commit()
+        assert c.registration_number is None, f"{name} got an invented registration number"
+        assert c.address is None, f"{name} got an invented address"
