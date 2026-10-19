@@ -528,3 +528,239 @@ def test_moving_a_repair_to_a_vehicle_that_does_not_exist_is_a_404(db, client, w
     r = client.patch(f"/api/v1/vehicles/repairs/{job.id}",
                      json={"vehicle_id": str(uuid.uuid4())}, headers=auth(token))
     assert r.status_code == 404
+
+
+# ── Correcting a cost entry ──────────────────────────────────────────────────
+#
+# Costs are typed in on site, so a transposed amount or the wrong category is
+# ordinary. Until now a cost could be logged but never corrected: there was
+# no update endpoint at all, and the rows rendered read-only.
+
+def _patch_cost(client, token, cost_id, body):
+    return client.patch(f"/api/v1/vehicles/costs/{cost_id}", json=body, headers=auth(token))
+
+
+def test_a_cost_entry_can_be_corrected(db, client, world):
+    cost = _cost(db, world["vehicle"], amount=1500, description="Tyre repair")
+    db.commit()
+    token = _token(client, world)
+
+    r = _patch_cost(client, token, cost.id,
+                    {"amount": 1050, "description": "Tyre repair (corrected)"})
+    assert r.status_code == 200, r.text
+    assert r.json()["data"]["amount"] == 1050
+    assert r.json()["data"]["description"] == "Tyre repair (corrected)"
+
+
+def test_the_corrected_amount_persists(db, client, world):
+    from app.models.vehicle import VehicleCost
+
+    cost = _cost(db, world["vehicle"], amount=1500)
+    db.commit()
+    token = _token(client, world)
+
+    _patch_cost(client, token, cost.id, {"amount": 1050})
+    db.expire_all()
+    assert float(db.get(VehicleCost, cost.id).amount) == 1050
+
+
+def test_the_cost_category_can_be_corrected(db, client, world):
+    cost = _cost(db, world["vehicle"], amount=900, cost_type="REPAIR")
+    db.commit()
+    token = _token(client, world)
+
+    r = _patch_cost(client, token, cost.id, {"cost_type": "TYRE"})
+    assert r.status_code == 200, r.text
+    assert r.json()["data"]["cost_type"] == "TYRE"
+
+
+def test_correcting_a_cost_does_not_create_a_second_one(db, client, world):
+    from app.models.vehicle import VehicleCost
+
+    cost = _cost(db, world["vehicle"], amount=1500)
+    db.commit()
+    before = db.query(VehicleCost).filter(
+        VehicleCost.vehicle_id == world["vehicle"].id).count()
+
+    _patch_cost(client, _token(client, world), cost.id, {"amount": 1050})
+    assert db.query(VehicleCost).filter(
+        VehicleCost.vehicle_id == world["vehicle"].id).count() == before
+
+
+def test_every_cost_change_is_audited(db, client, world):
+    from app.models.audit import AuditEvent
+
+    cost = _cost(db, world["vehicle"], amount=1500, description="Tyre")
+    db.commit()
+    token = _token(client, world)
+
+    _patch_cost(client, token, cost.id, {"amount": 1050, "description": "Tyre (corrected)"})
+
+    e = (db.query(AuditEvent)
+           .filter(AuditEvent.entity_type == "vehicle_cost",
+                   AuditEvent.entity_id == cost.id)
+           .one())
+    assert e.actor_id == uuid.UUID(world["owner"]["id"])
+    assert e.before_value["amount"] == 1500.0
+    assert e.after_value["amount"] == 1050.0
+    assert e.before_value["description"] == "Tyre"
+
+
+def test_resubmitting_the_same_cost_values_records_nothing(db, client, world):
+    from app.models.audit import AuditEvent
+
+    cost = _cost(db, world["vehicle"], amount=1500, description="Tyre")
+    db.commit()
+    token = _token(client, world)
+
+    r = _patch_cost(client, token, cost.id, {"amount": 1500, "description": "Tyre"})
+    assert r.status_code == 200
+    assert db.query(AuditEvent).filter(
+        AuditEvent.entity_type == "vehicle_cost",
+        AuditEvent.entity_id == cost.id).count() == 0
+
+
+def test_a_cost_cannot_be_corrected_to_zero_or_negative(db, client, world):
+    cost = _cost(db, world["vehicle"], amount=1500)
+    db.commit()
+    token = _token(client, world)
+
+    assert _patch_cost(client, token, cost.id, {"amount": 0}).status_code == 422
+    assert _patch_cost(client, token, cost.id, {"amount": -50}).status_code == 422
+
+
+def test_correcting_an_unknown_cost_is_a_404(client, world):
+    token = _token(client, world)
+    assert _patch_cost(client, token, uuid.uuid4(), {"amount": 10}).status_code == 404
+
+
+def test_site_staff_cannot_correct_a_cost(db, client, world):
+    cost = _cost(db, world["vehicle"], amount=1500)
+    user = make_user(db, role="SITE_STAFF")
+    db.commit()
+    token = login(client, user["email"], "Test@1234")
+
+    assert _patch_cost(client, token, cost.id, {"amount": 10}).status_code == 403
+
+
+def test_a_cost_cannot_be_moved_to_another_vehicle_or_repair(db, client, world):
+    """
+    Re-attributing spend is a reversal and a re-capture, not an edit, so the
+    fields are not offered at all - sending them changes nothing.
+    """
+    from app.models.vehicle import VehicleCost
+
+    other = _vehicle(db, name="Other")
+    job = _repair(db, other)
+    cost = _cost(db, world["vehicle"], amount=1500)
+    db.commit()
+    token = _token(client, world)
+
+    _patch_cost(client, token, cost.id,
+                {"vehicle_id": str(other.id), "repair_job_id": str(job.id), "amount": 1200})
+
+    db.expire_all()
+    fresh = db.get(VehicleCost, cost.id)
+    assert fresh.vehicle_id == world["vehicle"].id, "cost was re-attributed to another vehicle"
+    assert fresh.repair_job_id is None, "cost was re-attributed to another repair"
+    assert float(fresh.amount) == 1200, "the legitimate part of the edit was lost"
+
+
+# ── A correction must not contradict money already paid ─────────────────────
+
+def _pay_mechanic(client, token, repair_id, amount, reference=None):
+    body = {"amount": amount, "payment_date": "2026-03-10"}
+    if reference:
+        body["payment_reference"] = reference
+    return client.post(f"/api/v1/workshop/repairs/{repair_id}/payments",
+                       json=body, headers=auth(token))
+
+
+def _msg(response):
+    body = response.json()
+    return str(body.get("message") or body.get("detail") or body)
+
+
+def test_a_cost_cannot_be_cut_below_what_the_mechanic_was_paid(db, client, world):
+    """
+    The repair prices off its recorded labour, so cutting the cost cuts the
+    payable. Below what has been paid, that invents an overpayment.
+    """
+    job = _repair(db, world["vehicle"])
+    cost = _cost(db, world["vehicle"], repair=job, amount=5000, cost_type="REPAIR")
+    db.commit()
+    token = _token(client, world)
+    assert _pay_mechanic(client, token, job.id, 4000).status_code == 201
+
+    r = _patch_cost(client, token, cost.id, {"amount": 1000})
+    assert r.status_code == 409
+    assert "4000.00 has already been paid" in _msg(r)
+
+
+def test_reclassifying_a_paid_labour_cost_away_is_refused(db, client, world):
+    """REPAIR to TYRE would remove it from the payable entirely."""
+    job = _repair(db, world["vehicle"])
+    cost = _cost(db, world["vehicle"], repair=job, amount=5000, cost_type="REPAIR")
+    db.commit()
+    token = _token(client, world)
+    _pay_mechanic(client, token, job.id, 4000)
+
+    assert _patch_cost(client, token, cost.id, {"cost_type": "TYRE"}).status_code == 409
+
+
+def test_a_paid_cost_can_still_be_raised(db, client, world):
+    job = _repair(db, world["vehicle"])
+    cost = _cost(db, world["vehicle"], repair=job, amount=5000, cost_type="REPAIR")
+    db.commit()
+    token = _token(client, world)
+    _pay_mechanic(client, token, job.id, 4000)
+
+    r = _patch_cost(client, token, cost.id, {"amount": 5500})
+    assert r.status_code == 200, r.text
+
+
+def test_a_paid_cost_can_be_cut_to_exactly_what_was_paid(db, client, world):
+    job = _repair(db, world["vehicle"])
+    cost = _cost(db, world["vehicle"], repair=job, amount=5000, cost_type="REPAIR")
+    db.commit()
+    token = _token(client, world)
+    _pay_mechanic(client, token, job.id, 4000)
+
+    assert _patch_cost(client, token, cost.id, {"amount": 4000}).status_code == 200
+
+
+def test_another_labour_cost_on_the_repair_keeps_the_edit_safe(db, client, world):
+    """The guard weighs the whole repair, not the single row being edited."""
+    job = _repair(db, world["vehicle"])
+    a = _cost(db, world["vehicle"], repair=job, amount=3000, cost_type="REPAIR")
+    _cost(db, world["vehicle"], repair=job, amount=3000, cost_type="REPAIR")
+    db.commit()
+    token = _token(client, world)
+    _pay_mechanic(client, token, job.id, 4000)
+
+    # Cutting one row to 1000 still leaves 1000 + 3000 = 4000 recorded.
+    assert _patch_cost(client, token, a.id, {"amount": 1000}).status_code == 200
+
+
+def test_an_unpaid_repair_cost_can_be_corrected_freely(db, client, world):
+    job = _repair(db, world["vehicle"])
+    cost = _cost(db, world["vehicle"], repair=job, amount=5000, cost_type="REPAIR")
+    db.commit()
+
+    r = _patch_cost(client, _token(client, world), cost.id, {"amount": 250})
+    assert r.status_code == 200, r.text
+
+
+def test_an_invoiced_repair_is_unaffected_by_a_cost_edit(db, client, world):
+    """
+    The payable comes from the invoice, so a loose cost row does not move it
+    and the guard must not fire.
+    """
+    job = _repair(db, world["vehicle"])
+    job.invoice_amount = 5000
+    cost = _cost(db, world["vehicle"], repair=job, amount=5000, cost_type="REPAIR")
+    db.commit()
+    token = _token(client, world)
+    _pay_mechanic(client, token, job.id, 4000)
+
+    assert _patch_cost(client, token, cost.id, {"amount": 10}).status_code == 200

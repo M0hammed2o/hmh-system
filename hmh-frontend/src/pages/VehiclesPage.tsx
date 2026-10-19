@@ -296,9 +296,38 @@ function EditVehicleModal({ vehicle, onClose, onSaved }: { vehicle: Vehicle; onC
   );
 }
 
-function LogCostModal({ vehicle, onClose, onLogged }: { vehicle: Vehicle; onClose: () => void; onLogged: () => void }) {
+/**
+ * Log a cost, or correct one already captured.
+ *
+ * One form for both, prefilled when editing, so a correction happens where
+ * the entry was made rather than in a second form that drifts from this one.
+ *
+ * The server refuses a correction that would contradict money already paid
+ * to a mechanic — cutting a repair cost below what has been settled, or
+ * reclassifying it away from labour. That message is shown as-is: it names
+ * the amount and what to do about it.
+ */
+function LogCostModal({ vehicle, cost, onClose, onLogged }: {
+  vehicle: Vehicle;
+  cost?: VehicleCost;
+  onClose: () => void;
+  onLogged: () => void;
+}) {
+  const editing = Boolean(cost);
   const today = new Date().toISOString().split("T")[0];
-  const [form, setForm] = useState<VehicleCostCreate>({ cost_type: "FUEL", amount: 0, cost_date: today });
+  const [form, setForm] = useState<VehicleCostCreate>(
+    cost
+      ? {
+          cost_type: cost.cost_type,
+          amount: cost.amount,
+          description: cost.description ?? undefined,
+          cost_date: cost.cost_date,
+          project_id: (cost.project_id ?? undefined) as VehicleCostCreate["project_id"],
+          site_id: (cost.site_id ?? undefined) as VehicleCostCreate["site_id"],
+          notes: cost.notes ?? undefined,
+        }
+      : { cost_type: "FUEL", amount: 0, cost_date: today },
+  );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [projects, setProjects] = useState<Project[]>([]);
@@ -318,24 +347,36 @@ function LogCostModal({ vehicle, onClose, onLogged }: { vehicle: Vehicle; onClos
     setLoading(true);
     setError("");
     try {
-      await vehiclesApi.logCost(vehicle.id, form);
+      if (editing) {
+        // repair_job_id and vehicle_id are deliberately not sent.
+        const { cost_type, amount, description, cost_date, project_id, site_id, notes } = form;
+        await vehiclesApi.updateCost(cost!.id, {
+          cost_type, amount, description, cost_date, project_id, site_id, notes,
+        });
+      } else {
+        await vehiclesApi.logCost(vehicle.id, form);
+      }
       onLogged();
       onClose();
     } catch (err: unknown) {
-      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message || "Failed to log cost.";
-      setError(msg);
+      const res = (err as { response?: { data?: { message?: string; detail?: string } } })?.response;
+      setError(
+        res?.data?.message
+          || res?.data?.detail
+          || `Failed to ${editing ? "update" : "log"} cost.`,
+      );
     } finally { setLoading(false); }
   };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-foreground/40">
       <div className="bg-card border border-border rounded-xl w-full max-w-md p-6 animate-fade-in">
-        <h2 className="text-base font-semibold mb-1">Log Cost</h2>
+        <h2 className="text-base font-semibold mb-1">{editing ? "Edit Cost" : "Log Cost"}</h2>
         <p className="text-sm text-muted-foreground mb-5">{vehicle.name} ({vehicle.registration})</p>
         <form onSubmit={submit} className="space-y-4">
           <div className="space-y-2">
-            <Label>Cost Type</Label>
-            <select
+            <Label htmlFor="lc-type">Cost Type</Label>
+            <select id="lc-type"
               value={form.cost_type}
               onChange={(e) => setForm({ ...form, cost_type: e.target.value as VehicleCostType })}
               className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
@@ -369,20 +410,20 @@ function LogCostModal({ vehicle, onClose, onLogged }: { vehicle: Vehicle; onClos
             </div>
           </div>
           <div className="space-y-2">
-            <Label>Amount (R)</Label>
-            <Input type="number" min="0" step="0.01" value={form.amount} onChange={(e) => setForm({ ...form, amount: parseFloat(e.target.value) || 0 })} required />
+            <Label htmlFor="lc-amount">Amount (R)</Label>
+            <Input id="lc-amount" type="number" min="0" step="0.01" value={form.amount} onChange={(e) => setForm({ ...form, amount: parseFloat(e.target.value) || 0 })} required />
           </div>
           <div className="space-y-2">
-            <Label>Description</Label>
-            <Input value={form.description || ""} onChange={(e) => setForm({ ...form, description: e.target.value })} placeholder="Brief description" />
+            <Label htmlFor="lc-description">Description</Label>
+            <Input id="lc-description" value={form.description || ""} onChange={(e) => setForm({ ...form, description: e.target.value })} placeholder="Brief description" />
           </div>
           <div className="space-y-2">
-            <Label>Date</Label>
-            <Input type="date" value={form.cost_date} onChange={(e) => setForm({ ...form, cost_date: e.target.value })} required />
+            <Label htmlFor="lc-date">Date</Label>
+            <Input id="lc-date" type="date" value={form.cost_date} onChange={(e) => setForm({ ...form, cost_date: e.target.value })} required />
           </div>
           {error && <p className="text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-lg px-3 py-2">{error}</p>}
           <div className="flex gap-2 pt-1">
-            <Button type="submit" disabled={loading} className="flex-1">{loading ? "Logging…" : "Log Cost"}</Button>
+            <Button type="submit" disabled={loading} className="flex-1">{loading ? "Saving…" : editing ? "Save Changes" : "Log Cost"}</Button>
             <Button type="button" variant="outline" onClick={onClose} className="flex-1">Cancel</Button>
           </div>
         </form>
@@ -749,6 +790,7 @@ export default function VehiclesPage() {
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
   const [logCostFor, setLogCostFor] = useState<Vehicle | null>(null);
+  const [editCostFor, setEditCostFor] = useState<{ vehicle: Vehicle; cost: VehicleCost } | null>(null);
   const [editVehicle, setEditVehicle] = useState<Vehicle | null>(null);
   const [assignFor, setAssignFor] = useState<Vehicle | null>(null);
   const [newRepairFor, setNewRepairFor] = useState<Vehicle | null>(null);
@@ -1087,6 +1129,14 @@ export default function VehiclesPage() {
                             <div className="flex items-center gap-3">
                               <span className="font-medium text-xs">R{cost.amount.toLocaleString()}</span>
                               <span className="text-xs text-muted-foreground">{cost.cost_date}</span>
+                              <button
+                                type="button"
+                                aria-label={`Edit cost ${cost.description ?? cost.cost_type}`}
+                                className="text-xs text-primary hover:underline"
+                                onClick={() => setEditCostFor({ vehicle: v, cost })}
+                              >
+                                Edit
+                              </button>
                             </div>
                           </div>
                         ))
@@ -1399,6 +1449,19 @@ export default function VehiclesPage() {
           onSaved={(updated) => {
             setVehicles(prev => prev.map(v => v.id === updated.id ? updated : v));
             setEditVehicle(null);
+          }}
+        />
+      )}
+
+      {editCostFor && (
+        <LogCostModal
+          vehicle={editCostFor.vehicle}
+          cost={editCostFor.cost}
+          onClose={() => setEditCostFor(null)}
+          onLogged={() => {
+            // Reload the page being viewed so the corrected figure and the
+            // totals above it agree, without losing the user's place.
+            void loadCosts(editCostFor.vehicle.id);
           }}
         />
       )}
