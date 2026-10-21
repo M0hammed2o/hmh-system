@@ -234,6 +234,45 @@ def create_signed_url(stored_path: str, expires_in: Optional[int] = None) -> str
 
 # ── Supabase Storage ──────────────────────────────────────────────────────────
 
+
+def _supabase_error_detail(exc: Exception) -> str:
+    """
+    A usable description of why Supabase refused an upload.
+
+    httpx raises with the status and URL but not the body, and the body is
+    where Supabase explains itself — `invalid_mime_type`, `Payload too large`,
+    `Bucket not found`. Losing it turns a diagnosable configuration problem
+    into an opaque "400 Bad Request".
+
+    Never includes credentials: the service key travels in a request header,
+    and nothing from the request is echoed here — only the response.
+    """
+    response = getattr(exc, "response", None)
+    if response is None:
+        return f"{type(exc).__name__}: {exc}"
+
+    status = getattr(response, "status_code", "?")
+    body = ""
+    try:
+        payload = response.json()
+        if isinstance(payload, dict):
+            # Supabase answers with some combination of these.
+            body = " ".join(
+                str(payload[k]) for k in ("error", "message", "statusCode", "code")
+                if payload.get(k)
+            ) or str(payload)
+        else:
+            body = str(payload)
+    except Exception:                                # noqa: BLE001 - body may not be JSON
+        try:
+            body = (response.text or "").strip()
+        except Exception:                            # noqa: BLE001
+            body = ""
+
+    body = body[:400]
+    return f"Supabase returned HTTP {status}: {body}" if body else f"Supabase returned HTTP {status}"
+
+
 def _save_to_supabase(content: bytes, relative_path: str, private: bool = False) -> str:
     """Upload to Supabase Storage. Returns a permanent public URL (legacy,
     private=False) or an internal 'supabase://...' reference (private=True)."""
@@ -254,13 +293,28 @@ def _save_to_supabase(content: bytes, relative_path: str, private: bool = False)
         logger.info("Uploaded to Supabase Storage: %s", public)
         return public
     except Exception as exc:
+        detail = _supabase_error_detail(exc)
         if private:
             if _local_fallback_allowed():
-                logger.error("Private evidence upload to Supabase failed: %s — falling back to disk (development only)", exc)
+                logger.error(
+                    "Private upload to Supabase failed (%s) — falling back to disk (development only)",
+                    detail,
+                )
                 return _save_to_disk(content, relative_path)
-            logger.error("Private evidence upload to Supabase failed: %s", exc)
-            raise StorageError("Evidence upload to persistent storage failed. No file was recorded.") from exc
-        logger.error("Supabase Storage upload failed: %s — falling back to disk", exc)
+            # Name the bucket, the content type and what Supabase actually
+            # said. Without this the log records only "400 Bad Request", which
+            # cannot distinguish a bucket that rejects the content type from a
+            # file over its size limit or a bucket that does not exist — and
+            # the upload has already been refused, so there is nothing to
+            # retry blind.
+            logger.error(
+                "Private upload to Supabase failed: bucket=%s content_type=%s bytes=%d path=%s %s",
+                bucket, headers["Content-Type"], len(content), relative_path, detail,
+            )
+            raise StorageError(
+                f"Evidence upload to persistent storage failed. No file was recorded. {detail}"
+            ) from exc
+        logger.error("Supabase Storage upload failed (%s) — falling back to disk", detail)
         return _save_to_disk(content, relative_path)
 
 

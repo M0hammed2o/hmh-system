@@ -525,12 +525,27 @@ class ExtractionTransientError(RuntimeError):
     """Provider outage, timeout or rate limit. The job should be retried."""
 
 
+def workspace_headers() -> dict[str, str]:
+    """
+    The `anthropic-workspace-id` header, when the key needs one.
+
+    An API key created at organisation level is not tied to a workspace, and
+    the Messages API refuses it with HTTP 400 unless each request names the
+    workspace to bill and apply limits against. A key created inside a
+    workspace carries that context itself and needs no header — so this stays
+    empty unless the deployment says otherwise.
+    """
+    workspace = (settings.ANTHROPIC_WORKSPACE_ID or "").strip()
+    return {"anthropic-workspace-id": workspace} if workspace else {}
+
+
 def _anthropic_client():
     import anthropic
     return anthropic.Anthropic(
         api_key=settings.ANTHROPIC_API_KEY,
         timeout=float(getattr(settings, "AI_IMPORT_TIMEOUT_SECONDS", 120.0)),
         max_retries=1,
+        default_headers=workspace_headers() or None,
     )
 
 
