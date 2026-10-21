@@ -54,6 +54,7 @@ from app.schemas.ai_import import (
 )
 from app.schemas.common import ApiSuccess
 from app.services import ai_import_extraction_service as extraction
+from app.services import ai_import_receiving_service
 from app.services import ai_import_matching_service as matching
 from app.services import ai_import_policy_service as policy
 from app.services import ai_import_posting_service as posting_service
@@ -172,6 +173,11 @@ def _document_dict(db, document: AIImportDocument, *, detail: bool = False) -> d
         "rejection_reason": document.rejection_reason,
         "uploaded_by": str(document.uploaded_by),
         "created_at": document.created_at.isoformat() if document.created_at else None,
+        # Where this document actually stands, end to end. The status above
+        # stops at POSTED, which is where the confusion starts: a delivery can
+        # be posted and still be sitting in the project warehouse, nowhere
+        # near a BOQ lot.
+        "pipeline": ai_import_receiving_service.pipeline_stage(db, document),
         "can_post": bool(
             document.processing_outcome is not None
             and document.status == AIImportDocumentStatus.READY_TO_POST
