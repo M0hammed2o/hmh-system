@@ -83,6 +83,18 @@ Fuel is measured in litres against a **storage location**, and the document
 never says which one. So posting is refused and the operator is sent to the
 fuel screen. Guessing the tank would corrupt the fuel reconciliation.
 
+**Fuel the commodity, not the word.** The workshop buys a great deal of
+fuel-related hardware — `OIL, FUEL. INLINE, HYDRAULIC FILTERS` is a real
+line from this company's repair history. Diverting that order would refuse a
+legitimate purchase and send the buyer to a screen that cannot record it.
+
+So litres or a fuel grade (50PPM, 500PPM) settle it outright: nobody buys a
+filter by the 500 litres, and *"delivered to tank"* would otherwise make a
+genuine bulk delivery look like hardware. Only when neither is present do
+part words — filter, pump, seal, injector, sender — rule the line out. The
+supplier's name is a hint and never a verdict, because a fuel supplier sells
+filters too; it is consulted only when no line item could be read at all.
+
 ---
 
 ## 3. Accounts Payable
