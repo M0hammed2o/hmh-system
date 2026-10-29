@@ -328,3 +328,53 @@ def test_the_temporary_copy_is_removed_even_when_extraction_raises(db, monkeypat
         ai_import_service.process_document(db, doc)
 
     assert not os.path.exists(staged), "the staged copy outlived a failed extraction"
+
+
+# ── The blocker has to be visible without reading a dashboard ────────────────
+
+def test_service_status_reports_whether_a_workspace_is_configured(db, client, monkeypatch):
+    """
+    An organisation-scoped Anthropic key is refused with HTTP 400 "not scoped
+    to a workspace" unless every request names one. From the operator's side
+    that refusal looks exactly like a document the model could not read, so
+    without this flag the only way to tell them apart is to read the hosting
+    dashboard.
+    """
+    from app.core.config import settings
+    from tests.conftest import make_user
+
+    user = make_user(db, role="OWNER")
+    db.commit()
+    res = client.post("/api/v1/auth/login", json={
+        "email": user["email"], "password": "Test@1234",
+    })
+    headers = {"Authorization": f"Bearer {res.json()['access_token']}"}
+
+    monkeypatch.setattr(settings, "ANTHROPIC_WORKSPACE_ID", "", raising=False)
+    data = client.get("/api/v1/ai-import/service-status", headers=headers).json()["data"]
+    assert data["workspace_scoped"] is False
+
+    monkeypatch.setattr(settings, "ANTHROPIC_WORKSPACE_ID", "wrkspc_example", raising=False)
+    data = client.get("/api/v1/ai-import/service-status", headers=headers).json()["data"]
+    assert data["workspace_scoped"] is True
+
+
+def test_service_status_never_reveals_the_workspace_id(db, client, monkeypatch):
+    """
+    It reports that one is configured, never which. The id authorises
+    nothing on its own, but it identifies a workspace and this endpoint is
+    viewer-level.
+    """
+    from app.core.config import settings
+    from tests.conftest import make_user
+
+    user = make_user(db, role="OWNER")
+    db.commit()
+    res = client.post("/api/v1/auth/login", json={
+        "email": user["email"], "password": "Test@1234",
+    })
+    headers = {"Authorization": f"Bearer {res.json()['access_token']}"}
+
+    monkeypatch.setattr(settings, "ANTHROPIC_WORKSPACE_ID", "wrkspc_secret_value", raising=False)
+    body = client.get("/api/v1/ai-import/service-status", headers=headers).text
+    assert "wrkspc_secret_value" not in body

@@ -1007,6 +1007,13 @@ def get_service_status():
         "enabled": settings.AI_IMPORT_ENABLED,
         "extraction_available": extraction.ai_available(),
         "extraction_model": extraction.ai_model(),
+        # Whether a workspace id is configured, never which one. An
+        # organisation-scoped Anthropic key is refused with HTTP 400 "not
+        # scoped to a workspace" unless every request names one, and that
+        # refusal is indistinguishable, from the operator's side, from a
+        # document the model could not read. Without this flag the only way
+        # to tell them apart is to read the hosting dashboard.
+        "workspace_scoped": bool(extraction.workspace_headers()),
         "private_storage_configured": _supabase_enabled(),
         "auto_post_enabled": settings.AI_IMPORT_AUTO_POST_ENABLED,
         "worker_enabled": settings.AI_IMPORT_WORKER_ENABLED,
