@@ -512,7 +512,13 @@ class AIImportDocumentType(str, enum.Enum):
     nothing else in the pipeline needs to change.
     """
     MATERIAL_REQUEST     = "MATERIAL_REQUEST"
+    # A price offer. Commits nobody: no liability, no stock, no payment.
+    QUOTATION            = "QUOTATION"
     PURCHASE_ORDER       = "PURCHASE_ORDER"
+    # A request for payment before supply. It says "Invoice" across the top
+    # and is not one — booking it as a supplier invoice creates a liability
+    # that does not exist, and doubles it when the tax invoice arrives.
+    PRO_FORMA_INVOICE    = "PRO_FORMA_INVOICE"
     SUPPLIER_INVOICE     = "SUPPLIER_INVOICE"
     DELIVERY_NOTE        = "DELIVERY_NOTE"
     GOODS_RECEIVED_NOTE  = "GOODS_RECEIVED_NOTE"

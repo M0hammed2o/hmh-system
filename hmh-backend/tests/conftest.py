@@ -55,7 +55,8 @@ def ensure_tables():
             "'OPEN', 'PROCESSING', 'COMPLETE', 'CANCELLED'"
         ),
         "ai_import_document_type_enum": (
-            "'MATERIAL_REQUEST', 'PURCHASE_ORDER', 'SUPPLIER_INVOICE', 'DELIVERY_NOTE', "
+            "'MATERIAL_REQUEST', 'QUOTATION', 'PURCHASE_ORDER', 'PRO_FORMA_INVOICE', "
+            "'SUPPLIER_INVOICE', 'DELIVERY_NOTE', "
             "'GOODS_RECEIVED_NOTE', 'SUPPLIER_CREDIT_NOTE', 'PAYMENT_PROOF', 'UNKNOWN'"
         ),
         "ai_import_document_status_enum": (

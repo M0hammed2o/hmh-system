@@ -869,6 +869,25 @@ def post_supplier_invoice(
 # ── Unsupported postings ──────────────────────────────────────────────────────
 
 _UNSUPPORTED: dict[AIImportDocumentType, str] = {
+    # A quotation is a price offer. Nobody has ordered anything, nothing has
+    # been delivered and nothing is owed, so there is no record to create —
+    # posting one would invent a commitment that does not exist. It is kept
+    # as evidence and linked to the supplier and project.
+    AIImportDocumentType.QUOTATION: (
+        "A quotation is a price offer, not an order, a delivery or a liability, so "
+        "there is nothing to post. It is stored against the supplier and project for "
+        "reference. Raise a purchase order from it when the price is accepted."
+    ),
+    # A pro-forma says "Invoice" across the top and is a request for payment
+    # in advance. Booking it as a supplier invoice creates a payable that does
+    # not exist, and when the real tax invoice arrives for the same goods the
+    # business owes it twice.
+    AIImportDocumentType.PRO_FORMA_INVOICE: (
+        "A pro-forma invoice is a request for payment before supply, not a tax "
+        "invoice, so it does not create a supplier liability — posting it would be "
+        "counted again when the real invoice arrives. It is stored as evidence and "
+        "linked to its order. Post the tax invoice when the supplier issues one."
+    ),
     AIImportDocumentType.SUPPLIER_CREDIT_NOTE: (
         "This system has no credit note record, so a credit cannot be posted against the "
         "supplier balance. The credit note is stored as evidence and linked to the invoice "
