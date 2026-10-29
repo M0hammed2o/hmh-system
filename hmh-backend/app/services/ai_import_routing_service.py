@@ -142,8 +142,26 @@ def destination_for(doc_type: Optional[AIImportDocumentType]) -> Destination:
 # mix.
 
 _FUEL_WORDS = (
-    "diesel", "petrol", "paraffin", "50ppm", "500ppm", "10ppm",
-    "unleaded", "lubricant", "fuel",
+    "diesel", "petrol", "paraffin", "unleaded", "fuel",
+)
+
+# A fuel grade. Only a bulk purchase of the commodity is specified this way.
+_FUEL_GRADES = ("50ppm", "500ppm", "10ppm")
+
+# Units a bulk fuel purchase is measured in.
+_LITRE_WORDS = ("litre", "liter", "ltr")
+
+# Words that make a line a vehicle part rather than a tank of fuel.
+#
+# Needed because the workshop buys a great deal of fuel-related hardware.
+# "OIL, FUEL. INLINE, HYDRAULIC FILTERS" is a real line from this company's
+# own repair history, and a purchase order carrying it must stay an ordinary
+# materials order — diverting it to fuel management refuses a legitimate
+# purchase and sends the buyer to a screen that cannot record it.
+_PART_WORDS = (
+    "filter", "pump", "cap", "hose", "gauge", "sender", "injector", "seal",
+    "kit", "element", "nozzle", "gasket", "sensor", "pipe", "valve", "cable",
+    "bracket", "sedimenter", "separator", "lift pump", "line",
 )
 
 
@@ -153,18 +171,48 @@ def _line_description(item) -> Optional[str]:
     return getattr(item, "description", None)
 
 
+def _is_bulk_fuel(text: str) -> bool:
+    """
+    Does this line describe fuel itself, rather than a part that handles it?
+
+    Litres or a fuel grade settle it outright: nobody buys a filter by the
+    500 litres, and "delivered to tank" would otherwise make a genuine bulk
+    delivery look like hardware. Only when neither is present do the part
+    words get to rule the line out.
+    """
+    lowered = (text or "").lower()
+    if not any(word in lowered for word in _FUEL_WORDS):
+        return False
+    if any(grade in lowered for grade in _FUEL_GRADES):
+        return True
+    if any(unit in lowered for unit in _LITRE_WORDS):
+        return True
+    return not any(part in lowered for part in _PART_WORDS)
+
+
 def _mentions_fuel(payload: DocumentExtractionPayload) -> bool:
-    haystacks: list[str] = []
-    for name in ("supplier_name", "notes"):
-        value = payload.value(name)
-        if value:
-            haystacks.append(str(value))
-    for item in (payload.line_items or []):
-        description = _line_description(item)
-        if description:
-            haystacks.append(str(description))
-    blob = " ".join(haystacks).lower()
-    return any(word in blob for word in _FUEL_WORDS)
+    """
+    Is this order for bulk fuel?
+
+    Decided from the line items, because that is where the commodity is
+    named. The supplier's name is only consulted when nothing could be read
+    from the lines at all — a fuel supplier also sells filters, so the name
+    alone is a hint and never a verdict.
+    """
+    lines = [
+        _line_description(item) for item in (payload.line_items or [])
+    ]
+    lines = [line for line in lines if line]
+
+    if lines:
+        return any(_is_bulk_fuel(line) for line in lines)
+
+    # Nothing legible in the lines. Fall back to the header, which is how a
+    # thin extraction of a real fuel order still gets routed correctly.
+    header = " ".join(
+        str(payload.value(name) or "") for name in ("supplier_name", "notes")
+    )
+    return _is_bulk_fuel(header)
 
 
 # ── Routing verdict ───────────────────────────────────────────────────────────
