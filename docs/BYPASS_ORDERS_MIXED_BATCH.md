@@ -43,9 +43,9 @@ That chain was in the batch three times over:
 
 | Order | Follow-up document | Amount |
 |---|---|---|
-| PO-01 to Build It | Pinetown Build It pro-forma QTE254210 | R3 699.50 |
-| PO-022 to SDS Blocks | SDS pro-forma QTE5895 | R12 254.00 |
-| PO-017 to Killarney | Killarney **tax invoice** 85956 | R494.32 |
+| PO-101 to Lakeside Merchant | Lakeside Builders Merchant pro-forma QTE880114 | R4 120.50 |
+| PO-122 to Maswell Blocks | Maswell pro-forma QTE7410 | R14 300.00 |
+| PO-117 to Quarryside | Quarryside **tax invoice** 85956 | R577.32 |
 
 One purchase each. One liability each — and only when the tax invoice comes.
 
@@ -75,7 +75,7 @@ Each row also carries a **manifest action**: `CREATE`, `LINK_EXISTING`,
 
 ### Fuel
 
-PO-038 was 500 litres of 50PPM diesel. Routed as an ordinary purchase order
+PO-108 was 500 litres of 50PPM diesel. Routed as an ordinary purchase order
 it creates a materials order, and the delivery that follows tries to receive
 diesel into the warehouse as though it were cement.
 
@@ -144,8 +144,8 @@ Four independent guards, at different layers:
 3. **Pro-forma superseded by its tax invoice** — posting an invoice calls
    `provisional_charge_service.find_pending_for_invoice` and closes the
    matching charge, which then leaves the pending total.
-4. **Same amount, different number** — the two Cretemix pro-formas carry an
-   identical R17 444.89 eleven days apart. One reading is a second pour, the
+4. **Same amount, different number** — the two Vantage Readymix pro-formas carry an
+   identical R20 360.89 eleven days apart. One reading is a second pour, the
    other is the same pour scanned twice, and nothing on the paper
    distinguishes them. The manifest **raises the question** and never
    resolves it.
@@ -172,7 +172,7 @@ Two passes, in `ai_import_extraction_service._classify_from_text`:
 
 Three rules were learned from the real paperwork:
 
-**Negations are stripped.** PO-022 carries a handwritten *"No Delivery
+**Negations are stripped.** PO-122 carries a handwritten *"No Delivery
 note"*. Read as a marker, that phrase turns a purchase order into proof of
 delivery for goods the annotation explicitly says never arrived.
 
@@ -208,7 +208,7 @@ guessed allocation impossible:
   batch's only delivery note is handwritten on a carbon-copy book. Any line
   whose quantity was not read confidently is named, because "needs review"
   without saying why invites a rubber stamp.
-- PO-017 names lot **A599**. Dassenhoek has A17 and A175; production
+- PO-117 names lot **A599**. Dassenhoek has A17 and A175; production
   reconciliation confirmed A599 does not exist. Nothing allocates to it,
   because nothing allocates to any lot at import.
 
@@ -289,4 +289,4 @@ forgotten.
 | Supplier credit notes | Still evidence-only; no credit-note record exists. |
 | Payment proof posting | Evidence-only; matching to an invoice stays manual. |
 | Fuel order posting | Deliberately refused — the document never names a storage location. |
-| Suppliers absent from production | Build It and J S Singh Glazzing. Documents naming them route to `REVIEW`. |
+| Suppliers absent from production | Lakeside Merchant and Clearview Glazing. Documents naming them route to `REVIEW`. |

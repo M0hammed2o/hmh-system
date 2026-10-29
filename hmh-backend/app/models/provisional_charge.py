@@ -53,7 +53,7 @@ class ProvisionalCharge(TimestampMixin, Base):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
 
-    # The supplier's own number for the document (QTE254210, P89250, …).
+    # The supplier's own number for the document (QTE880114, P77120, …).
     reference: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
 
     supplier_id: Mapped[uuid.UUID] = mapped_column(

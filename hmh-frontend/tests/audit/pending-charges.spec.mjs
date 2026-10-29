@@ -89,7 +89,7 @@ test("an open request shows its supplier, reference and amount", async ({ page }
   const row = page.locator("table tbody tr", { hasText: "P88120" });
   await expect(row).toContainText("Vantage Readymix");
   // en-ZA groups thousands with U+00A0, not an ordinary space.
-  await expect(row).toContainText(/17[\s\u00a0]?444[,.]89/);
+  await expect(row).toContainText(/20[\s\u00a0]?360[,.]89/);
   await expect(row).toContainText(/Awaiting invoice/i);
   await expect(row).toContainText(/Not yet issued/i);
   await row.screenshot({ path: `${SHOTS}/03-open-request.png` });

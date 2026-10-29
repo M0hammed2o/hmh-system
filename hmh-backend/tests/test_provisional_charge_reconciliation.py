@@ -3,12 +3,12 @@ Pending charges, Accounts Payable, and the line between them.
 
 The sequence this file is about, taken from the real batch:
 
-    PO-022 is raised with SDS Blocks for R12 254.00
-    SDS sends pro-forma QTE5895 for R12 254.00 and asks to be paid up front
+    PO-122 is raised with Maswell Blocks for R14 300.00
+    SDS sends pro-forma QTE7410 for R14 300.00 and asks to be paid up front
     the blocks are delivered
-    SDS sends a tax invoice for the same R12 254.00
+    SDS sends a tax invoice for the same R14 300.00
 
-A business holding all four documents owes R12 254.00, once. The ways to get
+A business holding all four documents owes R14 300.00, once. The ways to get
 that wrong are to book the pro-forma as a payable (owed twice), to pay the
 pro-forma and lose the record (paid, then invoiced again), or to discard the
 pro-forma entirely (no record of what was asked for, and the advance payment
@@ -35,7 +35,7 @@ def _setup(db):
 
     owner = make_user(db, role="OWNER")
     project = make_project(db, owner_id=owner["id"])
-    supplier = make_supplier(db, name="SDS Brick and Block")
+    supplier = make_supplier(db, name="Maswell Brick and Block")
     db.commit()
     return (
         uuid.UUID(owner["id"]),
@@ -65,7 +65,7 @@ def _invoice(db, project_id, supplier_id, actor_id, *, number, total, po_id=None
     return invoice
 
 
-def _purchase_order(db, project_id, supplier_id, actor_id, number="PO-022"):
+def _purchase_order(db, project_id, supplier_id, actor_id, number="PO-122"):
     from datetime import date
 
     from app.models.enums import RecordStatus
@@ -94,7 +94,7 @@ def test_a_pending_charge_does_not_appear_in_accounts_payable(db):
 
     charges.create_charge(
         db, project_id=project, supplier_id=supplier,
-        reference="QTE5895", total_amount=12254.00, actor_id=actor,
+        reference="QTE7410", total_amount=14300.00, actor_id=actor,
     )
     db.commit()
 
@@ -105,15 +105,15 @@ def test_outstanding_total_is_reported_separately(db):
     actor, project, supplier = _setup(db)
     charges.create_charge(
         db, project_id=project, supplier_id=supplier,
-        reference="QTE5895", total_amount=12254.00, actor_id=actor,
+        reference="QTE7410", total_amount=14300.00, actor_id=actor,
     )
     charges.create_charge(
         db, project_id=project, supplier_id=supplier,
-        reference="P89250", total_amount=17444.89, actor_id=actor,
+        reference="P77120", total_amount=20360.89, actor_id=actor,
     )
     db.commit()
 
-    assert charges.outstanding_total(db, project) == pytest.approx(29698.89)
+    assert charges.outstanding_total(db, project) == pytest.approx(34660.89)
 
 
 def test_a_closed_charge_leaves_the_outstanding_total(db):
@@ -122,14 +122,14 @@ def test_a_closed_charge_leaves_the_outstanding_total(db):
     po = _purchase_order(db, project, supplier, actor)
     charge = charges.create_charge(
         db, project_id=project, supplier_id=supplier,
-        reference="QTE5895", total_amount=12254.00, actor_id=actor,
+        reference="QTE7410", total_amount=14300.00, actor_id=actor,
         purchase_order_id=po.id,
     )
     db.commit()
-    assert charges.outstanding_total(db, project) == pytest.approx(12254.00)
+    assert charges.outstanding_total(db, project) == pytest.approx(14300.00)
 
     invoice = _invoice(db, project, supplier, actor,
-                       number="INV-7781", total=12254.00, po_id=po.id)
+                       number="INV-7781", total=14300.00, po_id=po.id)
     charges.settle_against_invoice(db, charge, invoice, actor)
     db.commit()
 
@@ -143,11 +143,11 @@ def test_the_tax_invoice_closes_the_pro_forma(db):
     po = _purchase_order(db, project, supplier, actor)
     charge = charges.create_charge(
         db, project_id=project, supplier_id=supplier,
-        reference="QTE5895", total_amount=12254.00, actor_id=actor,
+        reference="QTE7410", total_amount=14300.00, actor_id=actor,
         purchase_order_id=po.id,
     )
     invoice = _invoice(db, project, supplier, actor,
-                       number="INV-7781", total=12254.00, po_id=po.id)
+                       number="INV-7781", total=14300.00, po_id=po.id)
     db.commit()
 
     found = charges.find_pending_for_invoice(db, invoice)
@@ -171,7 +171,7 @@ def test_a_charge_is_matched_on_the_order_not_the_amount(db):
     po = _purchase_order(db, project, supplier, actor)
     charges.create_charge(
         db, project_id=project, supplier_id=supplier,
-        reference="QTE5895", total_amount=12254.00, actor_id=actor,
+        reference="QTE7410", total_amount=14300.00, actor_id=actor,
         purchase_order_id=po.id,
     )
     invoice = _invoice(db, project, supplier, actor,
@@ -189,10 +189,10 @@ def test_an_invoice_without_an_order_closes_nothing(db):
     actor, project, supplier = _setup(db)
     charges.create_charge(
         db, project_id=project, supplier_id=supplier,
-        reference="QTE5895", total_amount=12254.00, actor_id=actor,
+        reference="QTE7410", total_amount=14300.00, actor_id=actor,
     )
     invoice = _invoice(db, project, supplier, actor,
-                       number="INV-9999", total=12254.00)
+                       number="INV-9999", total=14300.00)
     db.commit()
 
     assert charges.find_pending_for_invoice(db, invoice) is None
@@ -203,13 +203,13 @@ def test_a_charge_is_not_closed_twice(db):
     po = _purchase_order(db, project, supplier, actor)
     charge = charges.create_charge(
         db, project_id=project, supplier_id=supplier,
-        reference="QTE5895", total_amount=12254.00, actor_id=actor,
+        reference="QTE7410", total_amount=14300.00, actor_id=actor,
         purchase_order_id=po.id,
     )
     first = _invoice(db, project, supplier, actor,
-                     number="INV-1", total=12254.00, po_id=po.id)
+                     number="INV-1", total=14300.00, po_id=po.id)
     second = _invoice(db, project, supplier, actor,
-                      number="INV-2", total=12254.00, po_id=po.id)
+                      number="INV-2", total=14300.00, po_id=po.id)
     db.commit()
 
     charges.settle_against_invoice(db, charge, first, actor)
@@ -228,17 +228,17 @@ def test_a_second_invoice_on_the_same_order_finds_no_open_charge(db):
     po = _purchase_order(db, project, supplier, actor)
     charge = charges.create_charge(
         db, project_id=project, supplier_id=supplier,
-        reference="QTE5895", total_amount=12254.00, actor_id=actor,
+        reference="QTE7410", total_amount=14300.00, actor_id=actor,
         purchase_order_id=po.id,
     )
     first = _invoice(db, project, supplier, actor,
-                     number="INV-1", total=12254.00, po_id=po.id)
+                     number="INV-1", total=14300.00, po_id=po.id)
     db.commit()
     charges.settle_against_invoice(db, charge, first, actor)
     db.commit()
 
     second = _invoice(db, project, supplier, actor,
-                      number="INV-2", total=12254.00, po_id=po.id)
+                      number="INV-2", total=14300.00, po_id=po.id)
     db.commit()
     assert charges.find_pending_for_invoice(db, second) is None
 
@@ -249,14 +249,14 @@ def test_the_same_pro_forma_number_is_refused(db):
     actor, project, supplier = _setup(db)
     charges.create_charge(
         db, project_id=project, supplier_id=supplier,
-        reference="QTE5895", total_amount=12254.00, actor_id=actor,
+        reference="QTE7410", total_amount=14300.00, actor_id=actor,
     )
     db.commit()
 
     with pytest.raises(ConflictError):
         charges.create_charge(
             db, project_id=project, supplier_id=supplier,
-            reference="QTE5895", total_amount=12254.00, actor_id=actor,
+            reference="QTE7410", total_amount=14300.00, actor_id=actor,
         )
 
 
@@ -265,16 +265,16 @@ def test_the_same_number_from_a_different_supplier_is_fine(db):
     from tests.conftest import make_supplier
 
     actor, project, supplier = _setup(db)
-    other = uuid.UUID(make_supplier(db, name="Cretemix")["id"])
+    other = uuid.UUID(make_supplier(db, name="Vantage Readymix")["id"])
     db.commit()
 
     charges.create_charge(
         db, project_id=project, supplier_id=supplier,
-        reference="P89250", total_amount=12254.00, actor_id=actor,
+        reference="P77120", total_amount=14300.00, actor_id=actor,
     )
     charges.create_charge(
         db, project_id=project, supplier_id=other,
-        reference="P89250", total_amount=17444.89, actor_id=actor,
+        reference="P77120", total_amount=20360.89, actor_id=actor,
     )
     db.commit()
 
@@ -293,13 +293,13 @@ def test_the_database_refuses_a_duplicate_even_without_the_service(db):
     actor, project, supplier = _setup(db)
     charges.create_charge(
         db, project_id=project, supplier_id=supplier,
-        reference="QTE5895", total_amount=12254.00, actor_id=actor,
+        reference="QTE7410", total_amount=14300.00, actor_id=actor,
     )
     db.commit()
 
     db.add(ProvisionalCharge(
-        reference="QTE5895", supplier_id=supplier, project_id=project,
-        total_amount=Decimal("12254.00"), created_by=actor,
+        reference="QTE7410", supplier_id=supplier, project_id=project,
+        total_amount=Decimal("14300.00"), created_by=actor,
     ))
     with pytest.raises(IntegrityError):
         db.commit()
@@ -313,17 +313,17 @@ def test_a_charge_without_a_reference_is_refused(db):
     with pytest.raises(ValidationError):
         charges.create_charge(
             db, project_id=project, supplier_id=supplier,
-            reference="   ", total_amount=12254.00, actor_id=actor,
+            reference="   ", total_amount=14300.00, actor_id=actor,
         )
 
 
-@pytest.mark.parametrize("amount", [0, -1, -12254.00])
+@pytest.mark.parametrize("amount", [0, -1, -14300.00])
 def test_a_charge_of_zero_or_less_is_refused(db, amount):
     actor, project, supplier = _setup(db)
     with pytest.raises(ValidationError):
         charges.create_charge(
             db, project_id=project, supplier_id=supplier,
-            reference="QTE5895", total_amount=amount, actor_id=actor,
+            reference="QTE7410", total_amount=amount, actor_id=actor,
         )
 
 
@@ -331,14 +331,14 @@ def test_a_charge_of_zero_or_less_is_refused(db, amount):
 
 def test_a_paid_stamp_is_carried_but_settles_nothing(db):
     """
-    Document 1 of the batch: a Pinetown Build It pro-forma stamped PAID. The
+    Document 1 of the batch: a Lakeside Builders Merchant pro-forma stamped PAID. The
     claim is recorded; the charge stays pending, because a stamp is not a
     bank record.
     """
     actor, project, supplier = _setup(db)
     charge = charges.create_charge(
         db, project_id=project, supplier_id=supplier,
-        reference="QTE254210", total_amount=3699.50, actor_id=actor,
+        reference="QTE880114", total_amount=4120.50, actor_id=actor,
         payment_evidence_detected=True,
         payment_evidence_note="Payment evidence detected — verification required.",
     )
@@ -363,16 +363,16 @@ def test_two_pending_charges_on_one_order_close_neither(db):
     po = _purchase_order(db, project, supplier, actor)
     charges.create_charge(
         db, project_id=project, supplier_id=supplier,
-        reference="QTE5895-A", total_amount=6000.00, actor_id=actor,
+        reference="QTE7410-A", total_amount=7000.00, actor_id=actor,
         purchase_order_id=po.id,
     )
     charges.create_charge(
         db, project_id=project, supplier_id=supplier,
-        reference="QTE5895-B", total_amount=6254.00, actor_id=actor,
+        reference="QTE7410-B", total_amount=7300.00, actor_id=actor,
         purchase_order_id=po.id,
     )
     invoice = _invoice(db, project, supplier, actor,
-                       number="INV-7781", total=12254.00, po_id=po.id)
+                       number="INV-7781", total=14300.00, po_id=po.id)
     db.commit()
 
     assert charges.find_pending_for_invoice(db, invoice) is None
@@ -386,11 +386,11 @@ def test_one_pending_charge_on_an_order_still_closes(db):
     po = _purchase_order(db, project, supplier, actor)
     charge = charges.create_charge(
         db, project_id=project, supplier_id=supplier,
-        reference="QTE5895", total_amount=12254.00, actor_id=actor,
+        reference="QTE7410", total_amount=14300.00, actor_id=actor,
         purchase_order_id=po.id,
     )
     invoice = _invoice(db, project, supplier, actor,
-                       number="INV-7781", total=12254.00, po_id=po.id)
+                       number="INV-7781", total=14300.00, po_id=po.id)
     db.commit()
 
     found = charges.find_pending_for_invoice(db, invoice)

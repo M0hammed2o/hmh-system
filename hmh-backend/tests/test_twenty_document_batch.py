@@ -53,47 +53,47 @@ class Doc:
 BATCH: tuple[Doc, ...] = (
     Doc(
         "20261019110559.pdf",
-        """BUILD IT PINETOWN
-           VAT Reg No: 4290116892
+        """LAKESIDE BUILDERS MERCHANT
+           VAT Reg No: 4990000011
            PRO FORMA INVOICE
-           Document No: QTE254210  Date: 14/08/2026
+           Document No: QTE880114  Date: 14/08/2026
            Customer: MINERAT CONSTRUCTION & CIVILS
-           Total Due R 3 699.50
+           Total Due R 4 120.50
            PAID""",
-        T.PRO_FORMA_INVOICE, "Pinetown Build It", "3699.50",
+        T.PRO_FORMA_INVOICE, "Lakeside Builders Merchant", "4120.50",
         "provisional_charges", paid_stamp=True,
-        note="Pairs with PO-01. Supplier absent from production.",
+        note="Pairs with PO-101. Supplier absent from production.",
     ),
     Doc(
         "20261019110121.pdf",
         """MINERAT CONSTRUCTION & CIVILS
-           PURCHASE ORDER   Order No: PO-038
-           Supplier: FUEL UP
+           PURCHASE ORDER   Order No: PO-108
+           Supplier: TRACKSIDE FUELS
            500 Litres Diesel 50PPM
            Deliver to: dassenhoek
-           Total 13 575.00""",
-        T.PURCHASE_ORDER, "Fuel Up", "13575.00",
+           Total 15 880.00""",
+        T.PURCHASE_ORDER, "Trackside Fuels", "15880.00",
         "fuel_procurement",
         note="Fuel, not materials. Must never become warehouse stock.",
     ),
     Doc(
         "20261019110033.pdf",
-        """HUAXIN   STERKSPRUIT
+        """COASTAL CEMENT   HILLCREST
            PRO FORMA
-           SQ473889
-           3 407.77""",
-        T.PRO_FORMA_INVOICE, "Huaxin", "3407.77",
+           SQ441020
+           3 990.77""",
+        T.PRO_FORMA_INVOICE, "Coastal Cement", "3990.77",
         "provisional_charges",
         note="Rotated scan, barely legible.",
     ),
     Doc(
         "20261019105936.pdf",
         """MINERAT CONSTRUCTION & CIVILS
-           PURCHASE ORDER   Order No: PO-020
-           Supplier: J S SINGH GLAZZING
+           PURCHASE ORDER   Order No: PO-120
+           Supplier: CLEARVIEW GLAZING
            Site: A17 A175
-           Total 2 242.40""",
-        T.PURCHASE_ORDER, "J S Singh Glazzing", "2242.40",
+           Total 2 615.40""",
+        T.PURCHASE_ORDER, "Clearview Glazing", "2615.40",
         "purchase_orders",
         note="Supplier absent from production.",
     ),
@@ -101,163 +101,163 @@ BATCH: tuple[Doc, ...] = (
         "20261019105913.pdf",
         """NPC CEMENT
            TAX INVOICE
-           Invoice No: 91515003
-           VAT Reg No: 4120156789
-           Your Order: PO-012
-           TOTAL DUE 3 412.03""",
-        T.SUPPLIER_INVOICE, "NPC", "3412.03",
+           Invoice No: 90220114
+           VAT Reg No: 4990000044
+           Your Order: PO-112
+           TOTAL DUE 3 995.03""",
+        T.SUPPLIER_INVOICE, "NPC", "3995.03",
         "accounts_payable",
         note="A real liability.",
     ),
     Doc(
         "20261019105710.pdf",
-        """PROMINENT PAINTS
-           QUOTATION   QU07029334
+        """PINNACLE PAINTS
+           QUOTATION   QU08810220
            Site: A175 & A17
-           Total 453.27""",
-        T.QUOTATION, "Prominent Paints", "453.27", "procurement",
+           Total 528.27""",
+        T.QUOTATION, "Pinnacle Paints", "528.27", "procurement",
     ),
     Doc(
         "20261019105628.pdf",
         """MINERAT CONSTRUCTION & CIVILS
-           PURCHASE ORDER   Order No: PO-021
-           Supplier: AFRISTAR
+           PURCHASE ORDER   Order No: PO-121
+           Supplier: IRONWORKS TRADING
            Deliver to: a17 a175 dassenhoek
-           Total 8 484.82""",
-        T.PURCHASE_ORDER, "Afristar", "8484.82", "purchase_orders",
+           Total 9 910.82""",
+        T.PURCHASE_ORDER, "Ironworks Trading", "9910.82", "purchase_orders",
     ),
     Doc(
         "20261019105342.pdf",
-        """MIDLANDS
+        """RIVERSIDE
            QUOTATION
-           Quote No: BR1-QUT/66689801
+           Quote No: BR1-QUT/70110801
            Site: A17 & A175 DASSENHOEK
-           Total incl VAT 26 600.38""",
-        T.QUOTATION, "Midlands", "26600.38", "procurement",
+           Total incl VAT 31 050.38""",
+        T.QUOTATION, "Riverside", "31050.38", "procurement",
     ),
     Doc(
         "20261019105313.pdf",
         """MINERAT CONSTRUCTION & CIVILS
-           PURCHASE ORDER   Order No: PO-013
-           Supplier: YANE
+           PURCHASE ORDER   Order No: PO-113
+           Supplier: NORTHGATE PLUMBING
            Site: A17 A175
-           Total 10 500.00
+           Total 12 260.00
            PAID IN FULL""",
-        T.PURCHASE_ORDER, "Yane", "10500.00", "purchase_orders",
+        T.PURCHASE_ORDER, "Northgate Plumbing", "12260.00", "purchase_orders",
         paid_stamp=True,
     ),
     Doc(
         "20261019105237.pdf",
-        """MIDLANDS
+        """RIVERSIDE
            QUOTATION
-           Quote No: BR1-QUT/66901001
+           Quote No: BR1-QUT/70220901
            Dasenhoek
-           Total 13 884.98""",
-        T.QUOTATION, "Midlands", "13884.98", "procurement",
+           Total 16 210.98""",
+        T.QUOTATION, "Riverside", "16210.98", "procurement",
         note="Site name misspelt on the document.",
     ),
     Doc(
         "20261019105200.pdf",
         """MINERAT CONSTRUCTION & CIVILS
-           PURCHASE ORDER   Order No: PO-017
-           Supplier: KILLARNEY
+           PURCHASE ORDER   Order No: PO-117
+           Supplier: QUARRYSIDE
            Site: A17 A175 A599
-           Total 494.32""",
-        T.PURCHASE_ORDER, "Killarney", "494.32", "purchase_orders",
+           Total 577.32""",
+        T.PURCHASE_ORDER, "Quarryside", "577.32", "purchase_orders",
         note="Names lot A599, which does not exist at Dassenhoek.",
     ),
     Doc(
         "20261019104934.pdf",
-        """BUCO
-           QUOTE   Quotation Number: 1047739
+        """TIMBERLINE SUPPLY
+           QUOTE   Quotation Number: 1098220
            NO GOODS TO BE SUPPLIED
-           Total 3 742.56""",
-        T.QUOTATION, "Buco", "3742.56", "procurement",
+           Total 4 370.56""",
+        T.QUOTATION, "Timberline Supply", "4370.56", "procurement",
     ),
     Doc(
         "20261019104817.pdf",
-        """MIDLANDS
+        """RIVERSIDE
            QUOTATION
-           Quote No: BR1-QUT/65845902
+           Quote No: BR1-QUT/70330902
            A17/A175
-           Total 3 012.00""",
-        T.QUOTATION, "Midlands", "3012.00", "procurement",
+           Total 3 516.00""",
+        T.QUOTATION, "Riverside", "3516.00", "procurement",
     ),
     Doc(
         "20261019104650.pdf",
-        """STEELBAR
-           DELIVERY NOTE   No. 0084
+        """REDLINE STEEL
+           DELIVERY NOTE   No. 0151
            Dassenhoek
            Received in good order""",
-        T.DELIVERY_NOTE, "Steelbar", None, "goods_received",
+        T.DELIVERY_NOTE, "Redline Steel", None, "goods_received",
         note="Handwritten. The only document in the batch that may move stock.",
     ),
     Doc(
         "20261019104626.pdf",
         """MINERAT CONSTRUCTION & CIVILS
-           PURCHASE ORDER   Order No: PO-022
-           Supplier: SDS BLOCKS
+           PURCHASE ORDER   Order No: PO-122
+           Supplier: MASWELL BLOCKS
            Site: A175
-           Total 12 254.00
+           Total 14 300.00
            No Delivery note""",
-        T.PURCHASE_ORDER, "SDS Blocks", "12254.00", "purchase_orders",
+        T.PURCHASE_ORDER, "Maswell Blocks", "14300.00", "purchase_orders",
         note="Handwritten annotation: no delivery note received.",
     ),
     Doc(
         "20261019104607.pdf",
-        """SDS BRICK & BLOCK
-           PRO FORMA INVOICE   QTE5895
+        """MASWELL BRICK & BLOCK
+           PRO FORMA INVOICE   QTE7410
            This document is not a tax invoice.
            A17
-           TOTAL 12 254.00""",
-        T.PRO_FORMA_INVOICE, "SDS Brick & Block", "12254.00",
+           TOTAL 14 300.00""",
+        T.PRO_FORMA_INVOICE, "Maswell Brick & Block", "14300.00",
         "provisional_charges",
-        note="Same purchase as PO-022.",
+        note="Same purchase as PO-122.",
     ),
     Doc(
         "20261019104537.pdf",
-        """CRETEMIX (PTY) LTD
+        """VANTAGE READYMIX (PTY) LTD
            PROFORMA INVOICE
-           Invoice No: P89250   Date: 13/08/2026
-           VAT Reg: 4150271234
+           Invoice No: P77120   Date: 13/08/2026
+           VAT Reg: 4990000022
            Delivery to: DASSENHOEK
-           TOTAL 17 444.89""",
-        T.PRO_FORMA_INVOICE, "Cretemix", "17444.89",
+           TOTAL 20 360.89""",
+        T.PRO_FORMA_INVOICE, "Vantage Readymix", "20360.89",
         "provisional_charges",
-        note="Same amount as P89381. Second pour, or the same one twice?",
+        note="Same amount as P77255. Second pour, or the same one twice?",
     ),
     Doc(
         "20261019104502.pdf",
-        """CRETEMIX (PTY) LTD
+        """VANTAGE READYMIX (PTY) LTD
            PROFORMA INVOICE
-           Invoice No: P89381   Date: 24/08/2026
-           VAT Reg: 4150271234
+           Invoice No: P77255   Date: 24/08/2026
+           VAT Reg: 4990000022
            Delivery to: DASSENHOEK
-           TOTAL 17 444.89""",
-        T.PRO_FORMA_INVOICE, "Cretemix", "17444.89",
+           TOTAL 20 360.89""",
+        T.PRO_FORMA_INVOICE, "Vantage Readymix", "20360.89",
         "provisional_charges",
-        note="Same amount as P89250, eleven days later.",
+        note="Same amount as P77120, eleven days later.",
     ),
     Doc(
         "20261019110916.pdf",
         """MINERAT CONSTRUCTION & CIVILS
-           PURCHASE ORDER   Order No: PO-01
-           Supplier: BUILD IT
+           PURCHASE ORDER   Order No: PO-101
+           Supplier: LAKESIDE MERCHANT
            PICK UP
-           Total 3 699.55""",
-        T.PURCHASE_ORDER, "Build It", "3699.55", "purchase_orders",
-        note="Supplier absent from production. Pairs with QTE254210.",
+           Total 4 120.55""",
+        T.PURCHASE_ORDER, "Lakeside Merchant", "4120.55", "purchase_orders",
+        note="Supplier absent from production. Pairs with QTE880114.",
     ),
     Doc(
         "20261019110855.pdf",
-        """KILLARNEY
+        """QUARRYSIDE
            TAX INVOICE
            Invoice No: 85956
-           VAT Reg No: 4920145678
-           Your Order No: PO-017
-           TOTAL DUE 494.32""",
-        T.SUPPLIER_INVOICE, "Killarney", "494.32", "accounts_payable",
-        note="A real liability. Pairs with PO-017.",
+           VAT Reg No: 4990000033
+           Your Order No: PO-117
+           TOTAL DUE 577.32""",
+        T.SUPPLIER_INVOICE, "Quarryside", "577.32", "accounts_payable",
+        note="A real liability. Pairs with PO-117.",
     ),
 )
 
@@ -310,23 +310,23 @@ def test_each_document_reaches_the_right_module(doc):
 
 def test_exactly_two_documents_create_a_liability():
     """
-    Twenty documents, two payables: NPC 91515003 and Killarney 85956. If this
+    Twenty documents, two payables: NPC 90220114 and Quarryside 85956. If this
     number ever rises, something that is not a tax invoice has been let into
     Accounts Payable.
     """
     payables = [d for d in BATCH if d.destination == "accounts_payable"]
-    assert [d.supplier for d in payables] == ["NPC", "Killarney"]
-    assert sum(Decimal(d.amount) for d in payables) == Decimal("3906.35")
+    assert [d.supplier for d in payables] == ["NPC", "Quarryside"]
+    assert sum(Decimal(d.amount) for d in payables) == Decimal("4572.35")
 
 
 def test_exactly_one_document_moves_stock():
     """
-    The handwritten Steelbar note. Eight purchase orders describe goods that
+    The handwritten Redline Steel note. Eight purchase orders describe goods that
     were ordered; only this one is evidence that anything arrived.
     """
     movers = [d for d in BATCH if d.destination == "goods_received"]
     assert len(movers) == 1
-    assert movers[0].supplier == "Steelbar"
+    assert movers[0].supplier == "Redline Steel"
 
 
 def test_no_purchase_order_moves_stock():
@@ -339,7 +339,7 @@ def test_no_purchase_order_moves_stock():
 
 def test_the_fuel_order_leaves_the_materials_path(db):
     """
-    PO-038, 500 litres of 50PPM diesel. Routed as an ordinary purchase order
+    PO-108, 500 litres of 50PPM diesel. Routed as an ordinary purchase order
     it becomes a materials order, and the delivery that follows tries to put
     diesel into the warehouse as though it were cement.
     """
@@ -347,9 +347,9 @@ def test_the_fuel_order_leaves_the_materials_path(db):
 
     payload = DocumentExtractionPayload()
     payload.fields = {
-        "document_number": ExtractedField(value="PO-038", confidence=0.9),
-        "total_amount": ExtractedField(value="13575.00", confidence=0.9),
-        "supplier_name": ExtractedField(value="FUEL UP", confidence=0.9),
+        "document_number": ExtractedField(value="PO-108", confidence=0.9),
+        "total_amount": ExtractedField(value="15880.00", confidence=0.9),
+        "supplier_name": ExtractedField(value="TRACKSIDE FUELS", confidence=0.9),
     }
     payload.line_items = [
         ExtractedLineItem(description="500 Litres Diesel 50PPM", quantity="500",
@@ -368,7 +368,7 @@ def test_the_fuel_order_leaves_the_materials_path(db):
 
 def test_two_documents_carry_a_paid_stamp():
     stamped = [d for d in BATCH if d.paid_stamp]
-    assert {d.supplier for d in stamped} == {"Pinetown Build It", "Yane"}
+    assert {d.supplier for d in stamped} == {"Lakeside Builders Merchant", "Northgate Plumbing"}
 
 
 @pytest.mark.parametrize(
@@ -426,9 +426,9 @@ def test_the_three_same_purchase_pairs_are_present():
     as liabilities is the double charge the design exists to prevent.
     """
     pairs = [
-        ("20261019110916.pdf", "20261019110559.pdf"),  # PO-01    -> Build It pro-forma
-        ("20261019104626.pdf", "20261019104607.pdf"),  # PO-022   -> SDS pro-forma
-        ("20261019105200.pdf", "20261019110855.pdf"),  # PO-017   -> Killarney tax invoice
+        ("20261019110916.pdf", "20261019110559.pdf"),  # PO-101    -> Lakeside Merchant pro-forma
+        ("20261019104626.pdf", "20261019104607.pdf"),  # PO-122   -> Maswell pro-forma
+        ("20261019105200.pdf", "20261019110855.pdf"),  # PO-117   -> Quarryside tax invoice
     ]
     by_name = {d.file_name: d for d in BATCH}
     for order_file, follow_up in pairs:
@@ -442,7 +442,7 @@ def test_the_three_same_purchase_pairs_are_present():
 
 def test_only_the_killarney_pair_ends_in_a_payable():
     """
-    Of the three pairs, only Killarney produced an actual tax invoice. The
+    Of the three pairs, only Quarryside produced an actual tax invoice. The
     other two stop at a pending charge, because no supplier has invoiced yet.
     """
     by_name = {d.file_name: d for d in BATCH}
@@ -457,9 +457,9 @@ def test_the_two_cretemix_proformas_carry_the_same_amount():
     days apart. The system must raise this rather than resolve it, which
     test_duplicate_proforma_amount_is_questioned covers.
     """
-    cretemix = [d for d in BATCH if d.supplier == "Cretemix"]
+    cretemix = [d for d in BATCH if d.supplier == "Vantage Readymix"]
     assert len(cretemix) == 2
-    assert cretemix[0].amount == cretemix[1].amount == "17444.89"
+    assert cretemix[0].amount == cretemix[1].amount == "20360.89"
     assert cretemix[0].text != cretemix[1].text
 
 
@@ -467,7 +467,7 @@ def test_the_two_cretemix_proformas_carry_the_same_amount():
 
 def test_lot_a599_is_named_by_a_document_and_does_not_exist():
     """
-    PO-017 names three lots: A17, A175 and A599. Dassenhoek has the first
+    PO-117 names three lots: A17, A175 and A599. Dassenhoek has the first
     two. A599 is not a lot anybody can allocate to, and production
     reconciliation confirmed it is absent.
 
@@ -534,7 +534,7 @@ def _stub_document(db, doc_type: T, file_name: str):
 # ── 6. Stock waits for a person ───────────────────────────────────────────────
 
 def _receipt_document(db, *, reviewed: bool, confidence: float = 0.4):
-    """The Steelbar note: handwritten, with a supplier and project set."""
+    """The Redline Steel note: handwritten, with a supplier and project set."""
     from datetime import datetime, timezone
 
     from app.models.ai_import import AIImportDocument
@@ -543,7 +543,7 @@ def _receipt_document(db, *, reviewed: bool, confidence: float = 0.4):
 
     owner = make_user(db, role="OWNER")
     project = make_project(db, owner_id=owner["id"])
-    supplier = make_supplier(db, name="Steelbar")
+    supplier = make_supplier(db, name="Redline Steel")
     db.commit()
 
     document = _stub_document(db, T.DELIVERY_NOTE, "20261019104650.pdf")
@@ -619,7 +619,7 @@ def test_no_other_type_is_held_merely_for_being_unreviewed(db):
 
     owner = make_user(db, role="OWNER")
     project = make_project(db, owner_id=owner["id"])
-    supplier = make_supplier(db, name="Midlands")
+    supplier = make_supplier(db, name="Riverside")
     db.commit()
 
     document = _stub_document(db, T.QUOTATION, "quote.pdf")
@@ -630,6 +630,6 @@ def test_no_other_type_is_held_merely_for_being_unreviewed(db):
     payload = DocumentExtractionPayload()
     payload.fields = {
         "document_number": ExtractedField(value="BR1-QUT/1", confidence=0.9),
-        "total_amount": ExtractedField(value="26600.38", confidence=0.9),
+        "total_amount": ExtractedField(value="31050.38", confidence=0.9),
     }
     assert routing.route(db, document, payload).action == routing.CREATE

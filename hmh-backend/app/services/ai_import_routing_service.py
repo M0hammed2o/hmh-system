@@ -331,8 +331,8 @@ def _sibling_with_same_amount(
     Another document in the same batch, same type and supplier, for the same
     money.
 
-    Two Cretemix pro-formas in the real batch carry identical totals of
-    R17 444.89 under different numbers and dates. One reading is a second
+    Two Vantage Readymix pro-formas in the real batch carry identical totals of
+    R20 360.89 under different numbers and dates. One reading is a second
     pour; the other is the same pour scanned twice. Nothing on the paper
     distinguishes them, so this never decides — it raises the question.
     """

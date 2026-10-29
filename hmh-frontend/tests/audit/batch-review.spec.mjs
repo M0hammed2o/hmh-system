@@ -86,7 +86,7 @@ test("the manifest lists the batch with its destinations", async ({ page }) => {
 test("a pro-forma is not shown heading for Accounts Payable", async ({ page }) => {
   await openBatchReview(page);
 
-  const row = rowFor(page, "proforma-readymix-P89250.pdf");
+  const row = rowFor(page, "proforma-readymix-P77120.pdf");
   await expect(row).toBeVisible();
 
   // The destination cell, not the whole row: the row legitimately contains
@@ -153,7 +153,7 @@ test("the project selector is populated", async ({ page }) => {
 test("a document with no supplier asks for one", async ({ page }) => {
   await openBatchReview(page);
 
-  const row = rowFor(page, "proforma-merchant-QTE254210.pdf");
+  const row = rowFor(page, "proforma-merchant-QTE880114.pdf");
   await expect(row).toContainText("Needs review");
   await expect(row).toContainText(/supplier is not linked/i);
   // What the document said is still shown, so the reader can match it up.
@@ -164,9 +164,9 @@ test("a document with no supplier asks for one", async ({ page }) => {
 test("two pro-formas for the same amount are questioned, not resolved", async ({ page }) => {
   await openBatchReview(page);
 
-  const row = rowFor(page, "proforma-readymix-P89381.pdf");
+  const row = rowFor(page, "proforma-readymix-P77255.pdf");
   await expect(row).toContainText(/same amount/i);
-  await expect(row).toContainText(/proforma-readymix-P89250\.pdf/);
+  await expect(row).toContainText(/proforma-readymix-P77120\.pdf/);
   await row.screenshot({ path: `${SHOTS}/07-duplicate-amount-row.png` });
 });
 
@@ -188,7 +188,7 @@ test("the summary counts liabilities and stock separately", async ({ page }) => 
 test("correcting the type changes the destination", async ({ page }) => {
   await openBatchReview(page);
 
-  const row = rowFor(page, "proforma-coastal-SQ473889.pdf");
+  const row = rowFor(page, "proforma-coastal-SQ441020.pdf");
   await expect(row).toContainText("Pending supplier charges");
   await page.screenshot({ path: `${SHOTS}/09-before-correction.png`, fullPage: true });
 

@@ -28,30 +28,30 @@ def classify(text: str) -> T:
 
 # ── Pro-formas: the dangerous case ───────────────────────────────────────────
 
-# Pinetown Build It, QTE254210, R3 699.50. Pairs with purchase order PO-01.
-BUILD_IT_PROFORMA = """
-    BUILD IT PINETOWN
-    VAT Reg No: 4290116892
+# Lakeside Builders Merchant, QTE880114, R4 120.50. Pairs with purchase order PO-101.
+MERCHANT_PROFORMA = """
+    LAKESIDE BUILDERS MERCHANT
+    VAT Reg No: 4990000011
     PRO FORMA INVOICE
-    Document No: QTE254210
+    Document No: QTE880114
     Date: 2026-08-14
     Customer: MINERAT CONSTRUCTION & CIVILS
-    Total Due R 3 699.50
+    Total Due R 4 120.50
     Banking details for payment
 """
 
-# Cretemix P89250. The scan is clean; the words are the whole problem.
-CRETEMIX_PROFORMA = """
-    CRETEMIX (PTY) LTD
+# Vantage Readymix P77120. The scan is clean; the words are the whole problem.
+READYMIX_PROFORMA = """
+    VANTAGE READYMIX (PTY) LTD
     PROFORMA INVOICE
-    Invoice No: P89250
-    VAT Reg: 4150271234
+    Invoice No: P77120
+    VAT Reg: 4990000022
     Delivery to: DASSENHOEK
-    TOTAL 17 444.89
+    TOTAL 20 360.89
 """
 
 
-@pytest.mark.parametrize("text", [BUILD_IT_PROFORMA, CRETEMIX_PROFORMA])
+@pytest.mark.parametrize("text", [MERCHANT_PROFORMA, READYMIX_PROFORMA])
 def test_a_proforma_is_not_filed_as_a_tax_invoice(text):
     """
     The regression that the merge of the two branches would otherwise
@@ -60,7 +60,7 @@ def test_a_proforma_is_not_filed_as_a_tax_invoice(text):
     assert classify(text) is not T.SUPPLIER_INVOICE
 
 
-@pytest.mark.parametrize("text", [BUILD_IT_PROFORMA, CRETEMIX_PROFORMA])
+@pytest.mark.parametrize("text", [MERCHANT_PROFORMA, READYMIX_PROFORMA])
 def test_a_proforma_is_recognised_as_a_proforma(text):
     assert classify(text) is T.PRO_FORMA_INVOICE
 
@@ -73,29 +73,29 @@ def test_proforma_beats_tax_invoice_even_when_both_phrases_appear():
     """
     text = """
         PRO FORMA INVOICE
-        Invoice No: QTE5895
+        Invoice No: QTE7410
         This document is not a tax invoice. A tax invoice will be issued on payment.
-        VAT Reg No: 4030189234
-        TOTAL 12 254.00
+        VAT Reg No: 4990000055
+        TOTAL 14 300.00
     """
     assert classify(text) is T.PRO_FORMA_INVOICE
 
 
 # ── Quotations ───────────────────────────────────────────────────────────────
 
-# Midlands, BR1-QUT/66689801, R26 600.38.
-MIDLANDS_QUOTE = """
-    MIDLANDS HARDWARE
+# Riverside, BR1-QUT/70110801, R31 050.38.
+RIVERSIDE_QUOTE = """
+    RIVERSIDE HARDWARE
     QUOTATION
-    Quote No: BR1-QUT/66689801
+    Quote No: BR1-QUT/70110801
     Valid for 30 days
     Site: A17 & A175 DASSENHOEK
-    Total incl VAT 26 600.38
+    Total incl VAT 31 050.38
 """
 
 
 def test_a_quotation_is_recognised():
-    assert classify(MIDLANDS_QUOTE) is T.QUOTATION
+    assert classify(RIVERSIDE_QUOTE) is T.QUOTATION
 
 
 def test_a_quotation_is_not_an_order():
@@ -103,21 +103,21 @@ def test_a_quotation_is_not_an_order():
     A quotation commits nobody. Treating one as a purchase order would show
     committed spend against the project that was never authorised.
     """
-    assert classify(MIDLANDS_QUOTE) is not T.PURCHASE_ORDER
+    assert classify(RIVERSIDE_QUOTE) is not T.PURCHASE_ORDER
 
 
 def test_the_buco_quote_that_says_no_goods_to_be_supplied():
     """
-    Buco, R3 742.56, with "NO GOODS TO BE SUPPLIED" written across it. It is
+    Timberline Supply, R4 370.56, with "NO GOODS TO BE SUPPLIED" written across it. It is
     still a quotation — the annotation is a reason not to act on it, which is
     a human decision, not a classification.
     """
     text = """
-        BUCO
+        TIMBERLINE SUPPLY
         QUOTE
-        Quotation Number: 1047739
+        Quotation Number: 1098220
         NO GOODS TO BE SUPPLIED
-        Total 3 742.56
+        Total 4 370.56
     """
     assert classify(text) is T.QUOTATION
 
@@ -125,27 +125,27 @@ def test_the_buco_quote_that_says_no_goods_to_be_supplied():
 # ── The types that already worked must keep working ──────────────────────────
 
 def test_a_real_tax_invoice_is_still_a_tax_invoice():
-    """Killarney 85956, R494.32 — a genuine liability. #11's pair."""
+    """Quarryside 85956, R577.32 — a genuine liability. #11's pair."""
     text = """
-        KILLARNEY CIVILS
+        QUARRYSIDE AGGREGATES
         TAX INVOICE
         Invoice No: 85956
-        VAT Reg No: 4920145678
-        Your Order No: PO-017
-        TOTAL DUE 494.32
+        VAT Reg No: 4990000033
+        Your Order No: PO-117
+        TOTAL DUE 577.32
     """
     assert classify(text) is T.SUPPLIER_INVOICE
 
 
 def test_a_purchase_order_is_still_a_purchase_order():
-    """Minerat PO-021 to Afristar, R8 484.82."""
+    """Minerat PO-121 to Ironworks Trading, R9 910.82."""
     text = """
         MINERAT CONSTRUCTION & CIVILS
         PURCHASE ORDER
-        Order No: PO-021
-        Supplier: AFRISTAR
+        Order No: PO-121
+        Supplier: IRONWORKS TRADING
         Deliver to: a17 a175 dassenhoek
-        Total 8 484.82
+        Total 9 910.82
     """
     assert classify(text) is T.PURCHASE_ORDER
 
@@ -156,9 +156,9 @@ def test_the_handwritten_steelbar_delivery_note():
     on a printed book page, so the text that survives OCR is sparse.
     """
     text = """
-        STEELBAR
+        REDLINE STEEL
         DELIVERY NOTE
-        No. 0084
+        No. 0151
         Dassenhoek
         Received in good order
     """
@@ -178,7 +178,7 @@ def test_an_unreadable_scan_stays_unknown():
 
 def test_confidence_is_never_full_from_keywords_alone():
     """A keyword match is evidence, not a reading of the document."""
-    _, confidence = _classify_from_text(MIDLANDS_QUOTE)
+    _, confidence = _classify_from_text(RIVERSIDE_QUOTE)
     assert 0.0 < confidence <= 0.75
 
 
@@ -192,15 +192,15 @@ def test_confidence_is_never_full_from_keywords_alone():
 
 def test_an_order_annotated_about_a_missing_delivery_note_is_still_an_order():
     """
-    PO-022 to SDS Blocks, R12 254.00, with "No Delivery note" written on it
+    PO-122 to Maswell Blocks, R14 300.00, with "No Delivery note" written on it
     by hand. Read as a delivery note it receives 12 254 rands of block into
     stock — goods the annotation explicitly says never arrived.
     """
     text = """
         MINERAT CONSTRUCTION & CIVILS
-        PURCHASE ORDER   Order No: PO-022
-        Supplier: SDS BLOCKS
-        Total 12 254.00
+        PURCHASE ORDER   Order No: PO-122
+        Supplier: MASWELL BLOCKS
+        Total 14 300.00
         No Delivery note
     """
     assert classify(text) is T.PURCHASE_ORDER
@@ -213,9 +213,9 @@ def test_a_delivery_note_citing_its_order_is_still_a_delivery_note():
     is delivering against.
     """
     text = """
-        AFRISTAR
+        IRONWORKS TRADING
         DELIVERY NOTE   No. 4471
-        Your Purchase Order: PO-021
+        Your Purchase Order: PO-121
         Received in good order
     """
     assert classify(text) is T.DELIVERY_NOTE
@@ -223,9 +223,9 @@ def test_a_delivery_note_citing_its_order_is_still_a_delivery_note():
 
 def test_an_outstanding_tax_invoice_note_does_not_make_a_quote_an_invoice():
     text = """
-        MIDLANDS
-        QUOTATION   Quote No: BR1-QUT/65845902
+        RIVERSIDE
+        QUOTATION   Quote No: BR1-QUT/70330902
         Tax invoice outstanding until payment is received.
-        Total 3 012.00
+        Total 3 516.00
     """
     assert classify(text) is T.QUOTATION

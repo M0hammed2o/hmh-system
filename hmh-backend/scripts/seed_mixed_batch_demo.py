@@ -50,34 +50,34 @@ def _now():
 
 # (file name, type, supplier, reference, total, paid stamp, line description)
 DOCUMENTS = [
-    ("quote-paints-QU07029334.pdf",    T.QUOTATION,          "Pinnacle Paints",      "QU07029334",        "453.27",   False, "Exterior PVA 20L"),
-    ("quote-hardware-66689801.pdf",    T.QUOTATION,          "Riverside Hardware",   "BR1-QUT/66689801",  "26600.38", False, "Assorted fixings"),
-    ("quote-hardware-66901001.pdf",    T.QUOTATION,          "Riverside Hardware",   "BR1-QUT/66901001",  "13884.98", False, "Roof sheeting"),
-    ("quote-hardware-65845902.pdf",    T.QUOTATION,          "Riverside Hardware",   "BR1-QUT/65845902",  "3012.00",  False, "Door frames"),
-    ("quote-timber-1047739.pdf",       T.QUOTATION,          "Timberline Supply",    "1047739",           "3742.56",  False, "Shutter ply 16mm"),
+    ("quote-paints-QU08810220.pdf",    T.QUOTATION,          "Pinnacle Paints",      "QU08810220",        "528.27",   False, "Exterior PVA 20L"),
+    ("quote-hardware-66689801.pdf",    T.QUOTATION,          "Riverside Hardware",   "BR1-QUT/70110801",  "31050.38", False, "Assorted fixings"),
+    ("quote-hardware-66901001.pdf",    T.QUOTATION,          "Riverside Hardware",   "BR1-QUT/70220901",  "16210.98", False, "Roof sheeting"),
+    ("quote-hardware-65845902.pdf",    T.QUOTATION,          "Riverside Hardware",   "BR1-QUT/70330902",  "3516.00",  False, "Door frames"),
+    ("quote-timber-1098220.pdf",       T.QUOTATION,          "Timberline Supply",    "1098220",           "4370.56",  False, "Shutter ply 16mm"),
 
-    ("po-005-glazing.pdf",             T.PURCHASE_ORDER,     "Clearview Glazing",    "PO-005",            "2242.40",  False, "Window panes 4mm"),
-    ("po-006-steel.pdf",               T.PURCHASE_ORDER,     "Ironworks Trading",    "PO-006",            "8484.82",  False, "Rebar Y12"),
-    ("po-007-plumbing.pdf",            T.PURCHASE_ORDER,     "Northgate Plumbing",   "PO-007",            "10500.00", True,  "Soil pipe 110mm"),
-    ("po-008-aggregate.pdf",           T.PURCHASE_ORDER,     "Quarryside Aggregates", "PO-008",           "494.32",   False, "Crusher run G5"),
-    ("po-009-blocks.pdf",              T.PURCHASE_ORDER,     "Maswell Blocks",       "PO-009",            "12254.00", False, "Maxi brick"),
-    ("po-010-pickup.pdf",              T.PURCHASE_ORDER,     "Lakeside Builders Merchant", "PO-010",      "3699.55",  False, "Cement 42.5N"),
-    ("po-011-formwork.pdf",            T.PURCHASE_ORDER,     "Timberline Supply",    "PO-011",            "6110.00",  False, "Formwork props"),
+    ("po-005-glazing.pdf",             T.PURCHASE_ORDER,     "Clearview Glazing",    "PO-005",            "2615.40",  False, "Window panes 4mm"),
+    ("po-006-steel.pdf",               T.PURCHASE_ORDER,     "Ironworks Trading",    "PO-006",            "9910.82",  False, "Rebar Y12"),
+    ("po-007-plumbing.pdf",            T.PURCHASE_ORDER,     "Northgate Plumbing",   "PO-007",            "12260.00", True,  "Soil pipe 110mm"),
+    ("po-008-aggregate.pdf",           T.PURCHASE_ORDER,     "Quarryside Aggregates", "PO-008",           "577.32",   False, "Crusher run G5"),
+    ("po-009-blocks.pdf",              T.PURCHASE_ORDER,     "Maswell Blocks",       "PO-009",            "14300.00", False, "Maxi brick"),
+    ("po-010-pickup.pdf",              T.PURCHASE_ORDER,     "Lakeside Builders Merchant", "PO-1010",      "4120.55",  False, "Cement 42.5N"),
+    ("po-011-formwork.pdf",            T.PURCHASE_ORDER,     "Timberline Supply",    "PO-1011",            "6110.00",  False, "Formwork props"),
     # Routed to fuel management by its line items, not by its type.
-    ("po-012-diesel.pdf",              T.PURCHASE_ORDER,     "Trackside Fuels",      "PO-012",            "13575.00", False, "500 Litres Diesel 50PPM"),
+    ("po-012-diesel.pdf",              T.PURCHASE_ORDER,     "Trackside Fuels",      "PO-112",            "15880.00", False, "500 Litres Diesel 50PPM"),
 
-    ("proforma-merchant-QTE254210.pdf", T.PRO_FORMA_INVOICE, "Lakeside Builders Merchant", "QTE254210",   "3699.50",  True,  "Cement 42.5N"),
-    ("proforma-blocks-QTE5895.pdf",    T.PRO_FORMA_INVOICE,  "Maswell Blocks",       "QTE5895",           "12254.00", False, "Maxi brick"),
-    ("proforma-readymix-P89250.pdf",   T.PRO_FORMA_INVOICE,  "Vantage Readymix",     "P89250",            "17444.89", False, "25MPa concrete"),
-    # Deliberately the same amount as P89250 under a different number: the
+    ("proforma-merchant-QTE880114.pdf", T.PRO_FORMA_INVOICE, "Lakeside Builders Merchant", "QTE880114",   "4120.50",  True,  "Cement 42.5N"),
+    ("proforma-blocks-QTE7410.pdf",    T.PRO_FORMA_INVOICE,  "Maswell Blocks",       "QTE7410",           "14300.00", False, "Maxi brick"),
+    ("proforma-readymix-P77120.pdf",   T.PRO_FORMA_INVOICE,  "Vantage Readymix",     "P77120",            "20360.89", False, "25MPa concrete"),
+    # Deliberately the same amount as P77120 under a different number: the
     # screen must raise it, not resolve it.
-    ("proforma-readymix-P89381.pdf",   T.PRO_FORMA_INVOICE,  "Vantage Readymix",     "P89381",            "17444.89", False, "25MPa concrete"),
-    ("proforma-coastal-SQ473889.pdf",  T.PRO_FORMA_INVOICE,  "Coastal Cement",       "SQ473889",          "3407.77",  False, "Cement 32.5N"),
+    ("proforma-readymix-P77255.pdf",   T.PRO_FORMA_INVOICE,  "Vantage Readymix",     "P77255",            "20360.89", False, "25MPa concrete"),
+    ("proforma-coastal-SQ441020.pdf",  T.PRO_FORMA_INVOICE,  "Coastal Cement",       "SQ441020",          "3990.77",  False, "Cement 32.5N"),
 
-    ("invoice-cement-91515003.pdf",    T.SUPPLIER_INVOICE,   "Coastal Cement",       "91515003",          "3412.03",  False, "Cement 32.5N"),
-    ("invoice-aggregate-85956.pdf",    T.SUPPLIER_INVOICE,   "Quarryside Aggregates", "85956",            "494.32",   False, "Crusher run G5"),
+    ("invoice-cement-90220114.pdf",    T.SUPPLIER_INVOICE,   "Coastal Cement",       "90220114",          "3995.03",  False, "Cement 32.5N"),
+    ("invoice-aggregate-85956.pdf",    T.SUPPLIER_INVOICE,   "Quarryside Aggregates", "85956",            "577.32",   False, "Crusher run G5"),
 
-    ("delivery-note-0084.pdf",         T.DELIVERY_NOTE,      "Ironworks Trading",    "0084",              None,       False, "Rebar Y12"),
+    ("delivery-note-0151.pdf",         T.DELIVERY_NOTE,      "Ironworks Trading",    "0151",              None,       False, "Rebar Y12"),
 ]
 
 
@@ -124,10 +124,10 @@ def _seed_settled_charge(db, project, suppliers, actor) -> None:
     # duplicates of these rows, and the Batch Review screen would have
     # nothing left to demonstrate.
     for reference, name, amount in (
-        ("P88120",   "Vantage Readymix",      17444.89),
-        ("P88121",   "Vantage Readymix",      17444.89),
-        ("QTE5410",  "Maswell Blocks",        12254.00),
-        ("SQ470880", "Coastal Cement",         3407.77),
+        ("P88120",   "Vantage Readymix",      20360.89),
+        ("P88121",   "Vantage Readymix",      20360.89),
+        ("QTE5410",  "Maswell Blocks",        14300.00),
+        ("SQ470880", "Coastal Cement",         3990.77),
     ):
         charges.create_charge(
             db, project_id=project.id, supplier_id=suppliers[name].id,

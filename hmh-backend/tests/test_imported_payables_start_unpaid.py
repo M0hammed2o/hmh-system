@@ -3,7 +3,7 @@ An imported supplier liability starts unpaid, and stays that way until
 somebody records a payment.
 
 Two documents in the batch of twenty arrived stamped PAID — a Pinetown Build
-It pro-forma and Minerat's own PO-013 to Yane. A stamp is a claim made by
+It pro-forma and Minerat's own PO-113 to Northgate Plumbing. A stamp is a claim made by
 whoever held it. It may mean the money left the bank, or that somebody
 intended to pay, or that a stamp and a pile of paper ended up on the same
 desk. Only the bank knows, and the system's record of the bank is a Payment
@@ -30,7 +30,7 @@ def _setup(db):
 
     owner = make_user(db, role="OWNER")
     project = make_project(db, owner_id=owner["id"])
-    supplier = make_supplier(db, name="Killarney Civils")
+    supplier = make_supplier(db, name="Quarryside Aggregates")
     db.commit()
     return (
         owner,
@@ -79,7 +79,7 @@ def _document(db, owner, project_id, supplier_id, *, paid_stamp=False):
 
 
 def _post_invoice(db, owner, project_id, supplier_id, *, paid_stamp=False,
-                  number="85956", total="494.32"):
+                  number="85956", total="577.32"):
     from app.models.invoice import Invoice
     from app.models.user import User
 
@@ -95,7 +95,7 @@ def _post_invoice(db, owner, project_id, supplier_id, *, paid_stamp=False,
 # ── Unpaid on arrival ─────────────────────────────────────────────────────────
 
 def test_an_imported_invoice_starts_unpaid(db):
-    """Killarney 85956, R494.32 — a real liability from the batch."""
+    """Quarryside 85956, R577.32 — a real liability from the batch."""
     owner, project_id, supplier_id = _setup(db)
     invoice = _post_invoice(db, owner, project_id, supplier_id)
 
@@ -160,7 +160,7 @@ def test_a_partial_payment_is_recorded_as_partial(db):
     """
     owner, project_id, supplier_id = _setup(db)
     invoice = _post_invoice(db, owner, project_id, supplier_id,
-                            number="91515003", total="3412.03")
+                            number="90220114", total="3995.03")
 
     _pay(db, invoice, project_id, supplier_id, owner, 1500.00)
     db.commit()
@@ -172,10 +172,10 @@ def test_a_partial_payment_is_recorded_as_partial(db):
 def test_the_balance_settles_the_invoice(db):
     owner, project_id, supplier_id = _setup(db)
     invoice = _post_invoice(db, owner, project_id, supplier_id,
-                            number="91515003", total="3412.03")
+                            number="90220114", total="3995.03")
 
     _pay(db, invoice, project_id, supplier_id, owner, 1500.00, reference="FNB-1")
-    _pay(db, invoice, project_id, supplier_id, owner, 1912.03, reference="FNB-2")
+    _pay(db, invoice, project_id, supplier_id, owner, 2495.03, reference="FNB-2")
     db.commit()
     db.refresh(invoice)
 
@@ -190,7 +190,7 @@ def test_a_payment_keeps_its_date_method_and_reference(db):
     invoice = _post_invoice(db, owner, project_id, supplier_id)
 
     payment = _pay(
-        db, invoice, project_id, supplier_id, owner, 494.32,
+        db, invoice, project_id, supplier_id, owner, 577.32,
         method="EFT", reference="FNB-884213", when=date(2026, 8, 22),
     )
     db.commit()
@@ -198,7 +198,7 @@ def test_a_payment_keeps_its_date_method_and_reference(db):
     assert payment.payment_method == "EFT"
     assert payment.payment_reference == "FNB-884213"
     assert payment.payment_date == date(2026, 8, 22)
-    assert float(payment.amount_paid) == pytest.approx(494.32)
+    assert float(payment.amount_paid) == pytest.approx(577.32)
 
 
 def test_status_follows_the_payments_not_the_document(db):
@@ -210,7 +210,7 @@ def test_status_follows_the_payments_not_the_document(db):
     invoice = _post_invoice(db, owner, project_id, supplier_id, paid_stamp=True)
     assert invoice.status is not RecordStatus.PAID
 
-    _pay(db, invoice, project_id, supplier_id, owner, 494.32)
+    _pay(db, invoice, project_id, supplier_id, owner, 577.32)
     db.commit()
     db.refresh(invoice)
     assert invoice.status is RecordStatus.PAID
@@ -246,7 +246,7 @@ def test_an_invoice_with_an_unreadable_total_is_refused(db):
         posting.post_document(db, document, _payload(document_number="85956"), actor)
 
 
-@pytest.mark.parametrize("total", ["0", "0.00", "-494.32"])
+@pytest.mark.parametrize("total", ["0", "0.00", "-577.32"])
 def test_a_zero_or_negative_total_is_refused(db, total):
     from app.models.user import User
 

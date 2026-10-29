@@ -102,7 +102,7 @@ def test_the_manifest_lists_every_document(db, client):
         {"file_name": "a.pdf", "type": T.QUOTATION,
          "fields": {"document_number": "BR1-QUT/1", "total_amount": "100.00"}},
         {"file_name": "b.pdf", "type": T.PURCHASE_ORDER,
-         "fields": {"document_number": "PO-021", "total_amount": "200.00"}},
+         "fields": {"document_number": "PO-121", "total_amount": "200.00"}},
     ])
 
     res = client.get(f"/api/v1/ai-import/batches/{batch.id}/manifest", headers=headers)
@@ -117,7 +117,7 @@ def test_each_row_says_where_it_goes_and_what_it_would_do(db, client):
     owner, headers = _owner(db, client)
     batch, _ = _batch_with(db, owner, [
         {"file_name": "proforma.pdf", "type": T.PRO_FORMA_INVOICE,
-         "fields": {"document_number": "P89250", "total_amount": "17444.89"}},
+         "fields": {"document_number": "P77120", "total_amount": "20360.89"}},
     ])
 
     res = client.get(f"/api/v1/ai-import/batches/{batch.id}/manifest", headers=headers)
@@ -159,7 +159,7 @@ def test_the_summary_counts_what_matters(db, client):
         {"file_name": "q2.pdf", "type": T.QUOTATION,
          "fields": {"document_number": "Q2", "total_amount": "20.00"}},
         {"file_name": "inv.pdf", "type": T.SUPPLIER_INVOICE,
-         "fields": {"document_number": "85956", "total_amount": "494.32"}},
+         "fields": {"document_number": "85956", "total_amount": "577.32"}},
     ])
 
     data = client.get(
@@ -175,13 +175,13 @@ def test_the_summary_counts_what_matters(db, client):
 def test_a_document_without_a_supplier_needs_review(db, client):
     """
     Two of the twenty name suppliers that do not exist in the system — Build
-    It and J S Singh Glazzing. Nothing can be filed against a name alone.
+    It and Clearview Glazing. Nothing can be filed against a name alone.
     """
     owner, headers = _owner(db, client)
     batch, _ = _batch_with(db, owner, [
         {"file_name": "po01.pdf", "type": T.PURCHASE_ORDER,
-         "fields": {"document_number": "PO-01", "supplier_name": "BUILD IT",
-                    "total_amount": "3699.55"}},
+         "fields": {"document_number": "PO-101", "supplier_name": "LAKESIDE MERCHANT",
+                    "total_amount": "4120.55"}},
     ])
 
     row = client.get(
@@ -191,7 +191,7 @@ def test_a_document_without_a_supplier_needs_review(db, client):
     assert row["routing"]["action"] == "REVIEW"
     assert any("supplier is not linked" in n for n in row["routing"]["review_notes"])
     # What the document said is still reported, so the reader can match it up.
-    assert row["supplier_name"] == "BUILD IT"
+    assert row["supplier_name"] == "LAKESIDE MERCHANT"
 
 
 def test_payment_evidence_is_surfaced_without_settling_anything(db, client):
@@ -200,7 +200,7 @@ def test_payment_evidence_is_surfaced_without_settling_anything(db, client):
     owner, headers = _owner(db, client)
     batch, _ = _batch_with(db, owner, [
         {"file_name": "paid.pdf", "type": T.PRO_FORMA_INVOICE, "paid": True,
-         "fields": {"document_number": "QTE254210", "total_amount": "3699.50"}},
+         "fields": {"document_number": "QTE880114", "total_amount": "4120.50"}},
     ])
     payments_before = db.query(Payment).count()
 
@@ -318,10 +318,10 @@ def test_the_duplicate_check_reads_the_extraction_in_force(db, client):
     batch, documents = _batch_with(db, owner, [
         {"file_name": "p89250.pdf", "type": T.PRO_FORMA_INVOICE,
          "supplier_id": supplier_id,
-         "fields": {"document_number": "P89250", "total_amount": "17444.89"}},
+         "fields": {"document_number": "P77120", "total_amount": "20360.89"}},
         {"file_name": "p89381.pdf", "type": T.PRO_FORMA_INVOICE,
          "supplier_id": supplier_id,
-         "fields": {"document_number": "P89381", "total_amount": "17444.89"}},
+         "fields": {"document_number": "P77255", "total_amount": "20360.89"}},
     ])
 
     # Supersede the first document's reading with a different total, the way
@@ -336,7 +336,7 @@ def test_the_duplicate_check_reads_the_extraction_in_force(db, client):
         document_id=documents[0].id, created_at=_now(),
         schema_version="1.0", prompt_version="1.1", provider="test",
         extraction_mode="text",
-        fields={"document_number": {"value": "P89250", "page": 1,
+        fields={"document_number": {"value": "P77120", "page": 1,
                                     "confidence": 0.9, "source": "manual"},
                 "total_amount": {"value": "9000.00", "page": 1,
                                  "confidence": 1.0, "source": "manual"}},

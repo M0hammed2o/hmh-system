@@ -31,7 +31,7 @@ def _with_lines(*descriptions):
 # ── Bulk fuel ─────────────────────────────────────────────────────────────────
 
 @pytest.mark.parametrize("description", [
-    "500 Litres Diesel 50PPM",          # PO-038, the real one
+    "500 Litres Diesel 50PPM",          # PO-108, the real one
     "500 litres diesel delivered to tank",
     "Petrol 95 unleaded 200 litres",
     "Paraffin 20 litre drum",

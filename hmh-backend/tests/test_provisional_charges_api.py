@@ -53,14 +53,14 @@ def test_pending_charges_are_listed(db, client):
     owner, headers = _owner(db, client)
     project_id, supplier_id = _project_and_supplier(db, owner)
     _charge(db, project_id, supplier_id, uuid.UUID(owner["id"]),
-            reference="P89250", total=17444.89)
+            reference="P77120", total=20360.89)
 
     res = client.get(
         f"/api/v1/projects/{project_id}/provisional-charges/", headers=headers,
     )
     assert res.status_code == 200, res.text
     rows = res.json()["data"]
-    assert [r["reference"] for r in rows] == ["P89250"]
+    assert [r["reference"] for r in rows] == ["P77120"]
     assert rows[0]["status"] == "PENDING"
     assert rows[0]["supplier_name"] == "Vantage Readymix"
 
@@ -73,16 +73,16 @@ def test_the_summary_says_what_the_number_means(db, client):
     owner, headers = _owner(db, client)
     project_id, supplier_id = _project_and_supplier(db, owner)
     _charge(db, project_id, supplier_id, uuid.UUID(owner["id"]),
-            reference="P89250", total=17444.89)
+            reference="P77120", total=20360.89)
     _charge(db, project_id, supplier_id, uuid.UUID(owner["id"]),
-            reference="QTE5895", total=12254.00, paid=True)
+            reference="QTE7410", total=14300.00, paid=True)
 
     data = client.get(
         f"/api/v1/projects/{project_id}/provisional-charges/summary", headers=headers,
     ).json()["data"]
 
     assert data["pending_count"] == 2
-    assert data["pending_total"] == pytest.approx(29698.89)
+    assert data["pending_total"] == pytest.approx(34660.89)
     assert data["payment_evidence_count"] == 1
     assert "not owed" in data["meaning"]
     assert "Accounts Payable" in data["meaning"]
@@ -98,11 +98,11 @@ def test_a_closed_charge_leaves_the_pending_list(db, client):
     owner, headers = _owner(db, client)
     project_id, supplier_id = _project_and_supplier(db, owner)
     charge = _charge(db, project_id, supplier_id, uuid.UUID(owner["id"]),
-                     reference="QTE5895", total=12254.00)
+                     reference="QTE7410", total=14300.00)
 
     invoice = Invoice(
         invoice_number="INV-7781", supplier_id=supplier_id, project_id=project_id,
-        total_amount=12254.00, status=RecordStatus.DRAFT,
+        total_amount=14300.00, status=RecordStatus.DRAFT,
         captured_by=uuid.UUID(owner["id"]),
         captured_at=datetime.now(timezone.utc),
     )
@@ -135,7 +135,7 @@ def test_a_pending_charge_never_appears_among_invoices(db, client):
     owner, headers = _owner(db, client)
     project_id, supplier_id = _project_and_supplier(db, owner)
     _charge(db, project_id, supplier_id, uuid.UUID(owner["id"]),
-            reference="P89250", total=17444.89)
+            reference="P77120", total=20360.89)
 
     res = client.get(f"/api/v1/projects/{project_id}/invoices/", headers=headers)
     assert res.status_code == 200
@@ -148,7 +148,7 @@ def test_a_charge_can_be_withdrawn_with_a_reason(db, client):
     owner, headers = _owner(db, client)
     project_id, supplier_id = _project_and_supplier(db, owner)
     charge = _charge(db, project_id, supplier_id, uuid.UUID(owner["id"]),
-                     reference="QTE5895", total=12254.00)
+                     reference="QTE7410", total=14300.00)
 
     res = client.post(
         f"/api/v1/provisional-charges/{charge.id}/cancel",
@@ -169,7 +169,7 @@ def test_cancelling_requires_a_reason(db, client):
     owner, headers = _owner(db, client)
     project_id, supplier_id = _project_and_supplier(db, owner)
     charge = _charge(db, project_id, supplier_id, uuid.UUID(owner["id"]),
-                     reference="QTE5895", total=12254.00)
+                     reference="QTE7410", total=14300.00)
 
     res = client.post(
         f"/api/v1/provisional-charges/{charge.id}/cancel",
@@ -189,10 +189,10 @@ def test_an_invoiced_charge_cannot_be_cancelled(db, client):
     owner, headers = _owner(db, client)
     project_id, supplier_id = _project_and_supplier(db, owner)
     charge = _charge(db, project_id, supplier_id, uuid.UUID(owner["id"]),
-                     reference="QTE5895", total=12254.00)
+                     reference="QTE7410", total=14300.00)
     invoice = Invoice(
         invoice_number="INV-7781", supplier_id=supplier_id, project_id=project_id,
-        total_amount=12254.00, status=RecordStatus.DRAFT,
+        total_amount=14300.00, status=RecordStatus.DRAFT,
         captured_by=uuid.UUID(owner["id"]),
         captured_at=datetime.now(timezone.utc),
     )
@@ -232,7 +232,7 @@ def test_the_matched_order_is_named_not_just_referenced(db, client):
     project_id, supplier_id = _project_and_supplier(db, owner)
 
     po = PurchaseOrder(
-        po_number="PO-022", project_id=project_id, supplier_id=supplier_id,
+        po_number="PO-122", project_id=project_id, supplier_id=supplier_id,
         po_date=date.today(), status=RecordStatus.DRAFT,
         created_by=uuid.UUID(owner["id"]),
     )
@@ -242,7 +242,7 @@ def test_the_matched_order_is_named_not_just_referenced(db, client):
     from app.services import provisional_charge_service as charges
     charges.create_charge(
         db, project_id=project_id, supplier_id=supplier_id,
-        reference="QTE5895", total_amount=12254.00,
+        reference="QTE7410", total_amount=14300.00,
         actor_id=uuid.UUID(owner["id"]), purchase_order_id=po.id,
     )
     db.commit()
@@ -250,4 +250,4 @@ def test_the_matched_order_is_named_not_just_referenced(db, client):
     row = client.get(
         f"/api/v1/projects/{project_id}/provisional-charges/", headers=headers,
     ).json()["data"][0]
-    assert row["purchase_order_number"] == "PO-022"
+    assert row["purchase_order_number"] == "PO-122"

@@ -12,9 +12,9 @@ real tax invoice arrives for the same goods the business owes it twice.
 
 The batch contains exactly that chain three times over:
 
-    PO-01  BUILD IT        R3 699.55  ->  Pinetown Build It pro-forma QTE254210
-    PO-022 SDS BLOCKS      R12 254.00 ->  SDS pro-forma QTE5895
-    PO-017 KILLARNEY       R494.32    ->  Killarney TAX INVOICE 85956
+    PO-101  LAKESIDE MERCHANT        R4 120.55  ->  Lakeside Builders Merchant pro-forma QTE880114
+    PO-122 MASWELL BLOCKS      R14 300.00 ->  Maswell pro-forma QTE7410
+    PO-117 QUARRYSIDE       R577.32    ->  Quarryside TAX INVOICE 85956
 
 One purchase each. One liability each — and only when the tax invoice comes.
 
@@ -136,17 +136,17 @@ def _payload(**fields):
 
 
 def test_a_quotation_is_recorded_as_a_price_offer(db):
-    """Midlands BR1-QUT/66689801, R26 600.38 — document 8 of the batch."""
+    """Riverside BR1-QUT/70110801, R31 050.38 — document 8 of the batch."""
     from app.models.quotation import Quotation
     from app.models.user import User
 
     owner_user, project_id, make_sup = _context(db)
-    supplier_id = make_sup("Midlands Hardware")
+    supplier_id = make_sup("Riverside Hardware")
     doc = _document(db, owner_user, T.QUOTATION,
                     project_id=project_id, supplier_id=supplier_id)
     payload = _payload(
-        document_number="BR1-QUT/66689801",
-        total_amount="26600.38",
+        document_number="BR1-QUT/70110801",
+        total_amount="31050.38",
         subtotal_amount="23130.77",
         vat_amount="3469.61",
         issue_date="2026-08-12",
@@ -157,11 +157,11 @@ def test_a_quotation_is_recorded_as_a_price_offer(db):
 
     quote = (
         db.query(Quotation)
-        .filter(Quotation.quote_number == "BR1-QUT/66689801")
+        .filter(Quotation.quote_number == "BR1-QUT/70110801")
         .one()
     )
     assert quote.supplier_id == supplier_id
-    assert Decimal(str(quote.gross_amount)) == Decimal("26600.38")
+    assert Decimal(str(quote.gross_amount)) == Decimal("31050.38")
 
 
 def test_a_quotation_creates_no_liability_and_no_stock(db):
@@ -171,10 +171,10 @@ def test_a_quotation_creates_no_liability_and_no_stock(db):
     from app.models.user import User
 
     owner_user, project_id, make_sup = _context(db)
-    supplier_id = make_sup("Prominent Paints")
+    supplier_id = make_sup("Pinnacle Paints")
     doc = _document(db, owner_user, T.QUOTATION,
                     project_id=project_id, supplier_id=supplier_id)
-    payload = _payload(document_number="QU07029334", total_amount="453.27")
+    payload = _payload(document_number="QU08810220", total_amount="528.27")
 
     invoices_before = db.query(Invoice).count()
     stock_before = db.query(StockLedger).count()
@@ -191,36 +191,36 @@ def test_the_same_quotation_is_not_recorded_twice(db):
     from app.models.user import User
 
     owner_user, project_id, make_sup = _context(db)
-    supplier_id = make_sup("Buco")
+    supplier_id = make_sup("Timberline Supply")
     actor = db.get(User, uuid.UUID(owner_user["id"]))
 
     first = _document(db, owner_user, T.QUOTATION, project_id=project_id,
                       supplier_id=supplier_id, file_name="a.pdf")
     posting.post_document(db, first, _payload(
-        document_number="1047739", total_amount="3742.56"), actor)
+        document_number="1098220", total_amount="4370.56"), actor)
 
     second = _document(db, owner_user, T.QUOTATION, project_id=project_id,
                        supplier_id=supplier_id, file_name="b.pdf")
     with pytest.raises(posting.PostingRefused):
         posting.post_document(db, second, _payload(
-            document_number="1047739", total_amount="3742.56"), actor)
+            document_number="1098220", total_amount="4370.56"), actor)
 
-    assert db.query(Quotation).filter(Quotation.quote_number == "1047739").count() == 1
+    assert db.query(Quotation).filter(Quotation.quote_number == "1098220").count() == 1
 
 
 # ── Posting a pro-forma ──────────────────────────────────────────────────────
 
 def test_a_proforma_becomes_a_pending_charge_not_a_payable(db):
-    """Cretemix P89250, R17 444.89 — document 17 of the batch."""
+    """Vantage Readymix P77120, R20 360.89 — document 17 of the batch."""
     from app.models.invoice import Invoice
     from app.models.provisional_charge import ProvisionalCharge
     from app.models.user import User
 
     owner_user, project_id, make_sup = _context(db)
-    supplier_id = make_sup("Cretemix")
+    supplier_id = make_sup("Vantage Readymix")
     doc = _document(db, owner_user, T.PRO_FORMA_INVOICE,
                     project_id=project_id, supplier_id=supplier_id)
-    payload = _payload(document_number="P89250", total_amount="17444.89")
+    payload = _payload(document_number="P77120", total_amount="20360.89")
 
     invoices_before = db.query(Invoice).count()
 
@@ -228,9 +228,9 @@ def test_a_proforma_becomes_a_pending_charge_not_a_payable(db):
     posting.post_document(db, doc, payload, actor)
 
     charge = db.query(ProvisionalCharge).filter(
-        ProvisionalCharge.reference == "P89250").one()
+        ProvisionalCharge.reference == "P77120").one()
     assert charge.status is ProvisionalChargeStatus.PENDING
-    assert Decimal(str(charge.total_amount)) == Decimal("17444.89")
+    assert Decimal(str(charge.total_amount)) == Decimal("20360.89")
 
     assert db.query(Invoice).count() == invoices_before, (
         "a pro-forma created an Accounts Payable entry"
@@ -242,10 +242,10 @@ def test_a_proforma_moves_no_stock(db):
     from app.models.user import User
 
     owner_user, project_id, make_sup = _context(db)
-    supplier_id = make_sup("SDS Brick and Block")
+    supplier_id = make_sup("Maswell Brick and Block")
     doc = _document(db, owner_user, T.PRO_FORMA_INVOICE,
                     project_id=project_id, supplier_id=supplier_id)
-    payload = _payload(document_number="QTE5895", total_amount="12254.00")
+    payload = _payload(document_number="QTE7410", total_amount="14300.00")
 
     stock_before = db.query(StockLedger).count()
     actor = db.get(User, uuid.UUID(owner_user["id"]))
@@ -261,22 +261,22 @@ def test_the_same_proforma_is_not_recorded_twice(db):
     from app.models.user import User
 
     owner_user, project_id, make_sup = _context(db)
-    supplier_id = make_sup("Pinetown Build It")
+    supplier_id = make_sup("Lakeside Builders Merchant")
     actor = db.get(User, uuid.UUID(owner_user["id"]))
 
     first = _document(db, owner_user, T.PRO_FORMA_INVOICE, project_id=project_id,
                       supplier_id=supplier_id, file_name="a.pdf")
     posting.post_document(db, first, _payload(
-        document_number="QTE254210", total_amount="3699.50"), actor)
+        document_number="QTE880114", total_amount="4120.50"), actor)
 
     second = _document(db, owner_user, T.PRO_FORMA_INVOICE, project_id=project_id,
                        supplier_id=supplier_id, file_name="b.pdf")
     with pytest.raises(posting.PostingRefused):
         posting.post_document(db, second, _payload(
-            document_number="QTE254210", total_amount="3699.50"), actor)
+            document_number="QTE880114", total_amount="4120.50"), actor)
 
     assert db.query(ProvisionalCharge).filter(
-        ProvisionalCharge.reference == "QTE254210").count() == 1
+        ProvisionalCharge.reference == "QTE880114").count() == 1
 
 
 def test_a_proforma_without_a_number_is_refused(db):
@@ -287,13 +287,13 @@ def test_a_proforma_without_a_number_is_refused(db):
     from app.models.user import User
 
     owner_user, project_id, make_sup = _context(db)
-    supplier_id = make_sup("Huaxin")
+    supplier_id = make_sup("Coastal Cement")
     doc = _document(db, owner_user, T.PRO_FORMA_INVOICE,
                     project_id=project_id, supplier_id=supplier_id)
     actor = db.get(User, uuid.UUID(owner_user["id"]))
 
     with pytest.raises(posting.PostingRefused):
-        posting.post_document(db, doc, _payload(total_amount="3407.77"), actor)
+        posting.post_document(db, doc, _payload(total_amount="3990.77"), actor)
 
 
 # ── Nothing else changed ─────────────────────────────────────────────────────
