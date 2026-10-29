@@ -81,6 +81,55 @@ DOCUMENTS = [
 ]
 
 
+def _seed_settled_charge(db, project, suppliers, actor) -> None:
+    """
+    One pro-forma that has already been superseded by its tax invoice.
+
+    Exists so the Pending Supplier Charges screen can be seen in all three
+    of its states rather than only the open one. The reconciliation itself
+    is driven by the real service, so what the screen shows is produced the
+    same way production would produce it.
+    """
+    from datetime import date
+
+    from app.models.enums import RecordStatus
+    from app.models.invoice import Invoice
+    from app.models.purchase_order import PurchaseOrder
+    from app.services import provisional_charge_service as charges
+
+    supplier = suppliers["Maswell Blocks"]
+
+    po = PurchaseOrder(
+        po_number="PO-DEMO-009", project_id=project.id, supplier_id=supplier.id,
+        po_date=date(2026, 8, 10), status=RecordStatus.APPROVED,
+        created_by=actor.id, created_at=_now(), updated_at=_now(),
+    )
+    db.add(po)
+    db.flush()
+
+    charge = charges.create_charge(
+        db, project_id=project.id, supplier_id=supplier.id,
+        reference="QTE5721", total_amount=8140.00, actor_id=actor.id,
+        issue_date=date(2026, 8, 11), purchase_order_id=po.id,
+        notes="Demo row: already settled, to show the closed state.",
+    )
+
+    invoice = Invoice(
+        invoice_number="MB-44120", supplier_id=supplier.id, project_id=project.id,
+        purchase_order_id=po.id, invoice_date=date(2026, 8, 26),
+        total_amount=8140.00, status=RecordStatus.DRAFT,
+        captured_by=actor.id, captured_at=_now(),
+    )
+    db.add(invoice)
+    db.flush()
+
+    # Through the service, not by setting columns: the closure has to happen
+    # the way it happens in production or the screen is showing a fiction.
+    settled = charges.find_pending_for_invoice(db, invoice)
+    assert settled is not None and settled.id == charge.id
+    charges.settle_against_invoice(db, settled, invoice, actor.id)
+
+
 def main() -> int:
     url = os.environ.get("DATABASE_URL", "")
     if "127.0.0.1" not in url and "localhost" not in url:
@@ -185,6 +234,9 @@ def main() -> int:
                 is_current=True,
                 created_at=_now(),
             ))
+
+        db.flush()
+        _seed_settled_charge(db, project, existing, actor)
 
         db.commit()
         print(f"Seeded batch {batch.reference} with {len(DOCUMENTS)} documents "

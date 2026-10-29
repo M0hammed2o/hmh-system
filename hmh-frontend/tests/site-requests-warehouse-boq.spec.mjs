@@ -1,4 +1,4 @@
-import { expect, test } from "playwright/test";
+import { expect, test } from "./support/local-only.mjs";
 
 // Client review 2026-09-15:
 //  1. Site Clerk picks a supplier per BOQ material request line (BOQ default preselected).

@@ -529,3 +529,107 @@ def _stub_document(db, doc_type: T, file_name: str):
     db.add(document)
     db.commit()
     return document
+
+
+# ── 6. Stock waits for a person ───────────────────────────────────────────────
+
+def _receipt_document(db, *, reviewed: bool, confidence: float = 0.4):
+    """The Steelbar note: handwritten, with a supplier and project set."""
+    from datetime import datetime, timezone
+
+    from app.models.ai_import import AIImportDocument
+    from app.schemas.ai_import import DocumentExtractionPayload, ExtractedLineItem
+    from tests.conftest import make_project, make_supplier, make_user
+
+    owner = make_user(db, role="OWNER")
+    project = make_project(db, owner_id=owner["id"])
+    supplier = make_supplier(db, name="Steelbar")
+    db.commit()
+
+    document = _stub_document(db, T.DELIVERY_NOTE, "20261019104650.pdf")
+    document.project_id = uuid.UUID(project["id"])
+    document.supplier_id = uuid.UUID(supplier["id"])
+    if reviewed:
+        document.reviewed_by = uuid.UUID(owner["id"])
+        document.reviewed_at = datetime.now(timezone.utc)
+    db.commit()
+
+    payload = DocumentExtractionPayload()
+    payload.line_items = [
+        ExtractedLineItem(description="Rebar Y12", quantity="40", unit="ea",
+                          confidence=confidence),
+    ]
+    return document, payload
+
+
+def test_the_handwritten_delivery_note_waits_for_a_person(db):
+    """
+    Item under test: a receipt may not import itself. Stock is the one thing
+    here that is physically wrong if it is wrong — materials on the system
+    that are not on site, surfacing weeks later as an unexplained shortage.
+    """
+    document, payload = _receipt_document(db, reviewed=False)
+    verdict = routing.route(db, document, payload)
+
+    assert verdict.action == routing.REVIEW
+    assert "confirmed by a person" in verdict.reason
+
+
+def test_a_badly_read_quantity_is_named(db):
+    """
+    "Needs review" without saying why invites a rubber stamp. The line whose
+    quantity could not be read confidently is named.
+    """
+    document, payload = _receipt_document(db, reviewed=False, confidence=0.4)
+    verdict = routing.route(db, document, payload)
+
+    assert any("not read confidently" in n for n in verdict.review_notes)
+    assert any("Rebar Y12" in n for n in verdict.review_notes)
+
+
+def test_a_confidently_read_receipt_still_waits(db):
+    """
+    A clean scan is not a confirmation. Only a person is.
+    """
+    document, payload = _receipt_document(db, reviewed=False, confidence=0.98)
+    verdict = routing.route(db, document, payload)
+
+    assert verdict.action == routing.REVIEW
+    # ...but it does not invent a quantity problem that is not there.
+    assert not any("not read confidently" in n for n in verdict.review_notes)
+
+
+def test_once_a_person_has_reviewed_it_the_receipt_may_import(db):
+    """The hold is a gate, not a wall: confirming it opens the path."""
+    document, payload = _receipt_document(db, reviewed=True, confidence=0.98)
+    verdict = routing.route(db, document, payload)
+
+    assert verdict.action in (routing.CREATE, routing.LINK_EXISTING)
+    assert verdict.destination is routing.GOODS_RECEIVED
+
+
+def test_no_other_type_is_held_merely_for_being_unreviewed(db):
+    """
+    The hold is specific to stock. Holding everything would make review
+    meaningless and nothing would ever import.
+    """
+    from app.schemas.ai_import import DocumentExtractionPayload, ExtractedField
+
+    from tests.conftest import make_project, make_supplier, make_user
+
+    owner = make_user(db, role="OWNER")
+    project = make_project(db, owner_id=owner["id"])
+    supplier = make_supplier(db, name="Midlands")
+    db.commit()
+
+    document = _stub_document(db, T.QUOTATION, "quote.pdf")
+    document.project_id = uuid.UUID(project["id"])
+    document.supplier_id = uuid.UUID(supplier["id"])
+    db.commit()
+
+    payload = DocumentExtractionPayload()
+    payload.fields = {
+        "document_number": ExtractedField(value="BR1-QUT/1", confidence=0.9),
+        "total_amount": ExtractedField(value="26600.38", confidence=0.9),
+    }
+    assert routing.route(db, document, payload).action == routing.CREATE

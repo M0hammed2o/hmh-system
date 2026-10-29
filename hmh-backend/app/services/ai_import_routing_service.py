@@ -215,6 +215,26 @@ def _mentions_fuel(payload: DocumentExtractionPayload) -> bool:
     return _is_bulk_fuel(header)
 
 
+# Confidence below which a read quantity is not something to move stock on.
+# Handwriting on a carbon-copy delivery book rarely scores above this.
+_QUANTITY_CONFIDENCE_FLOOR = 0.75
+
+
+def _unconfident_lines(payload: DocumentExtractionPayload) -> list[str]:
+    """Line descriptions whose reading was not confident."""
+    weak: list[str] = []
+    for item in (payload.line_items or []):
+        confidence = (
+            item.get("confidence") if isinstance(item, dict)
+            else getattr(item, "confidence", None)
+        )
+        if confidence is None:
+            continue
+        if float(confidence) < _QUANTITY_CONFIDENCE_FLOOR:
+            weak.append(str(_line_description(item) or "an unnamed line"))
+    return weak
+
+
 # ── Routing verdict ───────────────────────────────────────────────────────────
 
 @dataclass
@@ -497,6 +517,40 @@ def route(
             "it has been paid; that claim is recorded as evidence only and does not "
             "mark anything as settled. Check it against the bank, then capture the "
             "payment against the invoice it pays."
+        )
+
+    # ── Anything that moves stock waits for a person ─────────────────────────
+    #
+    # Stock is the one thing here that is physically wrong if it is wrong: a
+    # receipt posted from a misread quantity puts materials on the system
+    # that are not on site, and the error surfaces weeks later as a shortage
+    # nobody can explain. The batch's only delivery note is handwritten on a
+    # carbon-copy book, which is exactly the case that must not be automatic.
+    #
+    # So a receipt is REVIEW until somebody has actually looked at it. The
+    # signal is document.reviewed_by — set when a person marks the document
+    # reviewed, which is the point at which they have confirmed the materials
+    # and the quantities.
+    if doc_type in (
+        AIImportDocumentType.DELIVERY_NOTE,
+        AIImportDocumentType.GOODS_RECEIVED_NOTE,
+    ) and document.reviewed_by is None:
+        weak = _unconfident_lines(payload)
+        if weak:
+            notes.append(
+                "The quantities on this delivery were not read confidently: "
+                + ", ".join(weak[:4])
+                + ". Check them against the goods before confirming."
+            )
+        return RoutingVerdict(
+            destination=destination,
+            action=REVIEW,
+            reason="Receiving goods increases stock, so the materials and "
+                   "quantities must be confirmed by a person first. Mark this "
+                   "document reviewed once you have checked it against what "
+                   "actually arrived.",
+            linked_label=linked_label, linked_type=linked_type, linked_id=linked_id,
+            review_notes=notes,
         )
 
     missing_context = any(

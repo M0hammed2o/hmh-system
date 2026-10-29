@@ -7,7 +7,7 @@ export default defineConfig({
   // its own config. Sweeping them in here would point the audit specs at
   // whatever this preview happens to serve, which at one point meant posting
   // a local test login at production.
-  testIgnore: ["audit/**", "production/**", "verify/**"],
+  testIgnore: ["audit/**", "production/**", "verify/**", "support/**"],
   timeout: 30_000,
   fullyParallel: false,
   use: {
@@ -16,9 +16,23 @@ export default defineConfig({
     trace: "retain-on-failure",
   },
   webServer: {
-    command: "npm run preview -- --host 127.0.0.1 --port 4173",
+    // Built and served through vite.config.demo.mjs, not `npm run preview`.
+    //
+    // `npm run preview` serves dist/, and dist/ is whatever was built last -
+    // normally a production build, because `npm run build` loads
+    // .env.production. This suite was therefore driving a bundle addressed to
+    // the live Render backend while appearing to be entirely local. The demo
+    // config pins the API base URL at build time and refuses to build against
+    // anything that is not localhost.
+    //
+    // The specs also import `test` from tests/support/local-only.mjs, which
+    // aborts any request that leaves the machine. Two independent guards,
+    // because the build one only holds while everyone remembers to use it.
+    command:
+      "npx vite build --config vite.config.demo.mjs && " +
+      "npx vite preview --config vite.config.demo.mjs --host 127.0.0.1 --port 4173",
     url: "http://127.0.0.1:4173/login",
     reuseExistingServer: false,
-    timeout: 30_000,
+    timeout: 120_000,
   },
 });

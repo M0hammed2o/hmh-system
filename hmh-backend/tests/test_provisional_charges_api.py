@@ -216,3 +216,38 @@ def test_the_routes_require_authentication(db, client):
     assert client.get(
         f"/api/v1/projects/{project_id}/provisional-charges/"
     ).status_code in (401, 403)
+
+
+def test_the_matched_order_is_named_not_just_referenced(db, client):
+    """
+    A screen showing a UUID for "matched order" has not told anybody which
+    order it matched.
+    """
+    from datetime import date
+
+    from app.models.enums import RecordStatus
+    from app.models.purchase_order import PurchaseOrder
+
+    owner, headers = _owner(db, client)
+    project_id, supplier_id = _project_and_supplier(db, owner)
+
+    po = PurchaseOrder(
+        po_number="PO-022", project_id=project_id, supplier_id=supplier_id,
+        po_date=date.today(), status=RecordStatus.DRAFT,
+        created_by=uuid.UUID(owner["id"]),
+    )
+    db.add(po)
+    db.flush()
+
+    from app.services import provisional_charge_service as charges
+    charges.create_charge(
+        db, project_id=project_id, supplier_id=supplier_id,
+        reference="QTE5895", total_amount=12254.00,
+        actor_id=uuid.UUID(owner["id"]), purchase_order_id=po.id,
+    )
+    db.commit()
+
+    row = client.get(
+        f"/api/v1/projects/{project_id}/provisional-charges/", headers=headers,
+    ).json()["data"][0]
+    assert row["purchase_order_number"] == "PO-022"

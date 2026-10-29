@@ -42,6 +42,11 @@ def _serialise(charge) -> dict:
         "purchase_order_id": (
             str(charge.purchase_order_id) if charge.purchase_order_id else None
         ),
+        # The number, not just the id: a screen that shows a UUID for "matched
+        # order" has not told anybody which order it matched.
+        "purchase_order_number": (
+            charge.purchase_order.po_number if charge.purchase_order else None
+        ),
         "quotation_id": str(charge.quotation_id) if charge.quotation_id else None,
         "issue_date": charge.issue_date.isoformat() if charge.issue_date else None,
         "due_date": charge.due_date.isoformat() if charge.due_date else None,
