@@ -131,7 +131,8 @@ test("pro-formas do not appear among the invoices", async ({ page }) => {
    */
   await page.goto("/payments");
   await page.waitForLoadState("networkidle");
-  await page.getByRole("button", { name: /^Invoices$/i }).click();
+  // "Invoices 1" — the tab carries a count badge, so the name is a prefix.
+  await page.getByRole("button", { name: /^Invoices\b/i }).click();
   await page.waitForTimeout(1500);
 
   const body = await page.locator("body").innerText();
