@@ -73,6 +73,12 @@ class Settings(BaseSettings):
 
     # AI / LLM
     ANTHROPIC_API_KEY: str = ""   # Anthropic Claude API key for AI OCR field extraction (Phase 6A)
+    # Only needed when the API key belongs to the organisation rather than to
+    # one workspace. Such a key is refused with HTTP 400 "not scoped to a
+    # workspace" unless every request names the workspace to bill and apply
+    # limits against. A key created inside a workspace needs nothing here.
+    # Set in the Render dashboard; never committed.
+    ANTHROPIC_WORKSPACE_ID: str = ""
 
     # OCR provider: "local" (pytesseract), "google_vision", or "disabled"
     OCR_PROVIDER: str = "local"

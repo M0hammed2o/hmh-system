@@ -18,6 +18,7 @@ import {
   Inbox, Loader2, RefreshCw, ScanLine, Upload, XCircle,
 } from "lucide-react";
 
+import { cn } from "@/lib/utils";
 import { PageHeader } from "@/components/shared/PageHeader";
 import { StatCard } from "@/components/shared/StatCard";
 import { EmptyState } from "@/components/shared/EmptyState";
@@ -247,29 +248,66 @@ function UploadPanel({
         </div>
       )}
 
-      {result && (
-        <div className="bg-card border border-border rounded-xl p-4 space-y-2 text-sm">
-          <p className="flex items-center gap-2 font-medium">
-            <CheckCircle2 className="w-4 h-4 text-green-600" />
-            {result.accepted} document(s) received and queued for reading.
-          </p>
-          {result.duplicates > 0 && (
-            <p className="text-muted-foreground flex items-center gap-2">
-              <Copy className="w-4 h-4" />
-              {result.duplicates} were already uploaded before and were not read again.
-            </p>
-          )}
-          {result.rejected.map((r) => (
-            <p key={r.file_name} className="text-destructive flex items-start gap-2">
-              <XCircle className="w-4 h-4 mt-0.5 shrink-0" />
-              <span><strong>{r.file_name}</strong> — {r.reason}</span>
-            </p>
-          ))}
-          <p className="text-muted-foreground pt-1">
-            Reading happens in the background. Open the Documents tab to follow progress.
-          </p>
-        </div>
-      )}
+      {result && (() => {
+        // A document only counts as received once its file is stored. When
+        // nothing was stored there is nothing to read, and saying so plainly
+        // matters more than a tidy banner: an earlier version showed a green
+        // tick over "0 document(s) received" and promised background
+        // processing, so a failed upload looked like a successful one.
+        const nothingStored = result.accepted === 0;
+        const someFailed = result.rejected.length > 0;
+
+        return (
+          <div
+            className={cn(
+              "border rounded-xl p-4 space-y-2 text-sm",
+              nothingStored && someFailed
+                ? "bg-destructive/5 border-destructive/30"
+                : someFailed
+                  ? "bg-amber-500/5 border-amber-500/30"
+                  : "bg-card border-border",
+            )}
+          >
+            {nothingStored && someFailed ? (
+              <p className="flex items-center gap-2 font-medium text-destructive">
+                <XCircle className="w-4 h-4" />
+                Upload failed — nothing was stored, and nothing will be read.
+              </p>
+            ) : (
+              <p className="flex items-center gap-2 font-medium">
+                <CheckCircle2 className="w-4 h-4 text-green-600" />
+                {result.accepted} document(s) received and queued for reading.
+              </p>
+            )}
+
+            {result.duplicates > 0 && (
+              <p className="text-muted-foreground flex items-center gap-2">
+                <Copy className="w-4 h-4" />
+                {result.duplicates} were already uploaded before and were not read again.
+              </p>
+            )}
+
+            {result.rejected.map((r) => (
+              <p key={r.file_name} className="text-destructive flex items-start gap-2">
+                <XCircle className="w-4 h-4 mt-0.5 shrink-0" />
+                <span><strong>{r.file_name}</strong> — {r.reason}</span>
+              </p>
+            ))}
+
+            {nothingStored && someFailed ? (
+              <p className="text-muted-foreground pt-1">
+                Nothing reached the Documents tab, so these will not appear in stock
+                or on a BOQ. Correct the problem above and upload again, or send this
+                message to whoever administers the system.
+              </p>
+            ) : (
+              <p className="text-muted-foreground pt-1">
+                Reading happens in the background. Open the Documents tab to follow progress.
+              </p>
+            )}
+          </div>
+        );
+      })()}
 
       <Button onClick={submit} disabled={busy || files.length === 0} className="w-full sm:w-auto">
         {busy ? (

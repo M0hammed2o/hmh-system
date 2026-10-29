@@ -25,6 +25,7 @@ import {
   IN_FLIGHT_STATUSES,
   type DocumentType,
   type ImportDocumentDetail,
+  type DocumentPipeline,
 } from "@/api/aiImport";
 import type { Project } from "@/api/projects";
 import type { Supplier } from "@/api/suppliers";
@@ -94,6 +95,63 @@ function FieldRow({
 }
 
 // ── Detail drawer ─────────────────────────────────────────────────────────────
+
+
+/**
+ * What has actually happened to this document, in plain words.
+ *
+ * Posting a delivery note writes a goods receipt into the PROJECT
+ * WAREHOUSE. Putting those materials against a BOQ lot is a separate,
+ * deliberate step — nobody should guess which lot consumed which bag of
+ * cement. Until this banner existed, a correctly posted delivery that was
+ * simply awaiting allocation looked like a lost one.
+ */
+function PipelineBanner({ pipeline }: { pipeline: DocumentPipeline }) {
+  const awaiting = pipeline.stage === "IN_PROJECT_WAREHOUSE"
+    || pipeline.stage === "PARTIALLY_ALLOCATED";
+  const bad = pipeline.stage === "FAILED" || pipeline.stage === "REJECTED";
+  const done = pipeline.stage === "ALLOCATED_TO_LOT";
+
+  return (
+    <div
+      className={
+        "mt-2 rounded-lg border px-3 py-2 text-sm " +
+        (bad
+          ? "border-destructive/30 bg-destructive/5 text-destructive"
+          : awaiting
+            ? "border-amber-500/30 bg-amber-500/5"
+            : done
+              ? "border-emerald-500/30 bg-emerald-500/5"
+              : "border-border bg-muted/40")
+      }
+    >
+      <p className="font-medium">{pipeline.label}</p>
+      <p className="text-muted-foreground">{pipeline.detail}</p>
+
+      {pipeline.receiving.received_qty > 0 && (
+        <p className="text-xs text-muted-foreground mt-1 tabular-nums">
+          received {pipeline.receiving.received_qty.toLocaleString()}
+          {" · "}allocated to a lot {pipeline.receiving.allocated_qty.toLocaleString()}
+          {" · "}still in the warehouse {pipeline.receiving.awaiting_allocation_qty.toLocaleString()}
+        </p>
+      )}
+
+      {pipeline.next_action && (
+        <p className="mt-1.5 flex items-center gap-1.5">
+          <span className="text-muted-foreground">Next:</span>
+          <span>{pipeline.next_action}</span>
+          {awaiting && (
+            // The existing warehouse workflow, with its allocation and
+            // overrun safeguards — not a second path around them.
+            <a href="/project-warehouse" className="text-primary hover:underline">
+              Open Project Warehouse
+            </a>
+          )}
+        </p>
+      )}
+    </div>
+  );
+}
 
 export function AIDocumentImportDetail({
   documentId,
@@ -214,6 +272,7 @@ export function AIDocumentImportDetail({
               <FileText className="w-4 h-4 text-muted-foreground shrink-0" />
               <h3 className="font-semibold truncate">{doc?.file_name ?? "Document"}</h3>
               {doc && <DocumentStatusBadge status={doc.status} />}
+              {doc?.pipeline && <PipelineBanner pipeline={doc.pipeline} />}
               {doc && <OutcomeBadge outcome={doc.processing_outcome} />}
               {doc?.is_legacy && (
                 <span className="text-xs px-2 py-0.5 rounded-full bg-purple-100 text-purple-700">
