@@ -299,3 +299,55 @@ def test_the_manifest_requires_authentication(db, client):
     ])
     res = client.get(f"/api/v1/ai-import/batches/{batch.id}/manifest")
     assert res.status_code in (401, 403)
+
+
+def test_the_duplicate_check_reads_the_extraction_in_force(db, client):
+    """
+    A document can carry several extractions — a re-read after a failure, or
+    a human correction. Only one is in force, and it is not always the most
+    recent row. Comparing against a superseded total would either miss a
+    duplicate or invent one.
+    """
+    from app.models.ai_import import AIImportExtraction
+
+    owner, headers = _owner(db, client)
+    from tests.conftest import make_supplier
+    supplier_id = uuid.UUID(make_supplier(db, name="Vantage Readymix")["id"])
+    db.commit()
+
+    batch, documents = _batch_with(db, owner, [
+        {"file_name": "p89250.pdf", "type": T.PRO_FORMA_INVOICE,
+         "supplier_id": supplier_id,
+         "fields": {"document_number": "P89250", "total_amount": "17444.89"}},
+        {"file_name": "p89381.pdf", "type": T.PRO_FORMA_INVOICE,
+         "supplier_id": supplier_id,
+         "fields": {"document_number": "P89381", "total_amount": "17444.89"}},
+    ])
+
+    # Supersede the first document's reading with a different total, the way
+    # a correction would: the old row stays, flagged not current.
+    old = (
+        db.query(AIImportExtraction)
+        .filter(AIImportExtraction.document_id == documents[0].id)
+        .one()
+    )
+    old.is_current = False
+    db.add(AIImportExtraction(
+        document_id=documents[0].id, created_at=_now(),
+        schema_version="1.0", prompt_version="1.1", provider="test",
+        extraction_mode="text",
+        fields={"document_number": {"value": "P89250", "page": 1,
+                                    "confidence": 0.9, "source": "manual"},
+                "total_amount": {"value": "9000.00", "page": 1,
+                                 "confidence": 1.0, "source": "manual"}},
+        line_items=[], is_current=True,
+    ))
+    db.commit()
+
+    rows = client.get(
+        f"/api/v1/ai-import/batches/{batch.id}/manifest", headers=headers,
+    ).json()["data"]["rows"]
+    second = next(r for r in rows if r["file_name"] == "p89381.pdf")
+
+    # The totals no longer match, so the question must not be raised.
+    assert not any("same amount" in n for n in second["routing"]["review_notes"])

@@ -61,3 +61,8 @@ hmh_system_backup_*.sql
 # Live production evidence: captured against the real site, kept out of
 # the public repository. See docs/testing/HMH_LIVE_PRODUCTION_AUDIT.md.
 docs/testing/live-production-screenshots/
+
+# Local demo stack build output for browser testing (see
+# scripts/seed_mixed_batch_demo.py). Never committed: it is a full
+# application bundle rebuilt on demand.
+hmh-frontend/dist-demo/

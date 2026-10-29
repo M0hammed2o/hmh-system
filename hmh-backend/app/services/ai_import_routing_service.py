@@ -33,7 +33,7 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
-from app.models.ai_import import AIImportDocument
+from app.models.ai_import import AIImportDocument, AIImportExtraction
 from app.models.enums import (
     AIImportDocumentStatus,
     AIImportDocumentType,
@@ -282,7 +282,17 @@ def _sibling_with_same_amount(
         .all()
     )
     for sibling in siblings:
-        extraction = sibling.extractions[-1] if sibling.extractions else None
+        # is_current, not the newest by date. A re-extraction or a human
+        # correction can leave a later row that is not the one in force, and
+        # reading the wrong one would compare against a superseded total.
+        extraction = (
+            db.query(AIImportExtraction)
+            .filter(
+                AIImportExtraction.document_id == sibling.id,
+                AIImportExtraction.is_current.is_(True),
+            )
+            .first()
+        )
         if extraction is None:
             continue
         raw = (extraction.fields or {}).get("total_amount")
