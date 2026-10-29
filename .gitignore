@@ -70,5 +70,6 @@ hmh-frontend/dist-demo/
 # Screenshots of the live system contain real fleet, supplier and financial
 # data. This repository is public: they are never committed. Screenshots of
 # the local fictional demo seed, under docs/testing/screenshots/, are fine.
+# See docs/SECURITY_INCIDENT_2026-10-29_SCREENSHOTS.md.
+# The repository-root path is already covered above.
 hmh-frontend/docs/testing/live-production-screenshots/
-docs/testing/live-production-screenshots/
