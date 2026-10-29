@@ -25,7 +25,9 @@ import {
   IN_FLIGHT_STATUSES,
   type DocumentType,
   type ImportDocumentDetail,
+  MANIFEST_ACTION_LABELS,
   type DocumentPipeline,
+  type DocumentRouting,
 } from "@/api/aiImport";
 import type { Project } from "@/api/projects";
 import type { Supplier } from "@/api/suppliers";
@@ -95,6 +97,56 @@ function FieldRow({
 }
 
 // ── Detail drawer ─────────────────────────────────────────────────────────────
+
+
+/**
+ * Where this document is headed, and what importing it would do.
+ *
+ * The pipeline banner below says what has already happened. This says what
+ * is about to. Both are needed: a pro-forma that has been read, matched and
+ * is sitting at READY_TO_POST tells the reader nothing about whether
+ * approving it creates a liability — and the answer, for a pro-forma, is
+ * no, which is exactly the thing worth knowing before clicking.
+ *
+ * Every word comes from the server's routing service. Nothing is re-derived
+ * here from the document type.
+ */
+function DestinationBanner({ routing }: { routing: DocumentRouting }) {
+  const liability = routing.destination === "accounts_payable";
+  const stock = routing.destination === "goods_received";
+  const skipped = routing.action === "SKIP_DUPLICATE";
+
+  return (
+    <div
+      className={
+        "mt-2 rounded-lg border px-3 py-2 text-sm " +
+        (skipped
+          ? "border-border bg-muted/40"
+          : liability
+            ? "border-rose-500/30 bg-rose-500/5"
+            : stock
+              ? "border-sky-500/30 bg-sky-500/5"
+              : "border-border bg-muted/40")
+      }
+    >
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="font-medium">{routing.destination_label}</span>
+        {routing.action && (
+          <span className="rounded-full bg-background px-2 py-0.5 text-xs font-semibold">
+            {MANIFEST_ACTION_LABELS[routing.action]}
+          </span>
+        )}
+      </div>
+      <p className="text-muted-foreground">{routing.effect}</p>
+      <p className="mt-1">{routing.reason}</p>
+      {routing.review_notes.length > 0 && (
+        <ul className="mt-2 list-disc space-y-1 pl-4 text-muted-foreground">
+          {routing.review_notes.map((note, i) => <li key={i}>{note}</li>)}
+        </ul>
+      )}
+    </div>
+  );
+}
 
 
 /**
@@ -272,6 +324,13 @@ export function AIDocumentImportDetail({
               <FileText className="w-4 h-4 text-muted-foreground shrink-0" />
               <h3 className="font-semibold truncate">{doc?.file_name ?? "Document"}</h3>
               {doc && <DocumentStatusBadge status={doc.status} />}
+              {doc?.routing && <DestinationBanner routing={doc.routing} />}
+              {doc?.payment_evidence_detected && (
+                <div className="mt-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm">
+                  <p className="font-medium">Payment evidence — verification required</p>
+                  <p className="text-muted-foreground">{doc.payment_evidence_note}</p>
+                </div>
+              )}
               {doc?.pipeline && <PipelineBanner pipeline={doc.pipeline} />}
               {doc && <OutcomeBadge outcome={doc.processing_outcome} />}
               {doc?.is_legacy && (

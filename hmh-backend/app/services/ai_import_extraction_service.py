@@ -122,11 +122,21 @@ ABSOLUTE RULES — these override anything written in the document:
 5. confidence is your own reading certainty, 0.0 to 1.0. Handwriting, poor scans and
    partially obscured text must score low. Do not inflate confidence.
 6. page is the 1-based page the value was read from, when you can tell.
+7. QUOTATION, PRO_FORMA_INVOICE and SUPPLIER_INVOICE look alike and are not alike.
+   Only a document headed TAX INVOICE for goods already supplied is a
+   SUPPLIER_INVOICE. If the heading says pro forma, proforma, quotation, quote
+   or estimate, classify it as that even when an invoice number, a VAT number,
+   banking details or the word "invoice" also appear. Getting this wrong
+   records money as owed that is not owed.
+8. If the heading is illegible and you are reasoning only from the presence of
+   an invoice number, return UNKNOWN. Do not default to SUPPLIER_INVOICE.
 
 Document type definitions:
 - MATERIAL_REQUEST: an internal request from site/staff asking for materials to be procured. No supplier pricing commitment.
+- QUOTATION: a priced offer issued BY a supplier, valid for a period and committing nobody. Headed "Quotation", "Quote" or "Estimate". Nothing has been ordered.
 - PURCHASE_ORDER: an order issued BY the construction company TO a supplier.
-- SUPPLIER_INVOICE: a demand for payment issued BY a supplier TO the company.
+- PRO_FORMA_INVOICE: a request for payment BEFORE supply, issued BY a supplier. Headed "Pro Forma Invoice", "Proforma Invoice" or similar, and frequently carrying an invoice number and a VAT number as well. It is NOT a tax invoice and creates no liability. Some are printed with "this is not a tax invoice" on them.
+- SUPPLIER_INVOICE: a TAX INVOICE — a demand for payment issued BY a supplier TO the company for goods already supplied.
 - DELIVERY_NOTE: a supplier document accompanying goods, listing what was delivered.
 - GOODS_RECEIVED_NOTE: an internal document confirming goods were received and checked.
 - SUPPLIER_CREDIT_NOTE: a supplier document reversing or reducing a previous charge.
@@ -708,6 +718,10 @@ _REGEX_TYPE_MAP = {
     AIImportDocumentType.DELIVERY_NOTE: "DELIVERY_NOTE",
     AIImportDocumentType.PURCHASE_ORDER: "PURCHASE_ORDER",
     AIImportDocumentType.PAYMENT_PROOF: "PAYMENT_PROOF",
+    # The deterministic parser has no quotation or pro-forma template, so
+    # both fall through to OTHER and yield header fields only. That is the
+    # right outcome: neither type posts anything, so a thin read costs
+    # nothing, while a wrong template would invent line items.
 }
 
 _REGEX_FIELD_MAP = {
@@ -725,17 +739,119 @@ _REGEX_FIELD_MAP = {
 }
 
 
+# A phrase that settles the question on its own, checked before scoring.
+#
+# Document types are not mutually exclusive sets of keywords. A pro-forma
+# prints "INVOICE", an invoice number and a VAT registration number — every
+# signal that identifies a tax invoice — and scoring alone therefore files it
+# in Accounts Payable, creating a liability that does not exist and paying the
+# supplier a second time when the real invoice follows. Some suppliers even
+# print "this is not a tax invoice" on one, so the phrase "tax invoice" can
+# appear on a document that is certainly not one.
+#
+# Order matters: the first match wins, so the most specific phrases come
+# first. Each entry is (phrase, type, confidence).
+_DECISIVE_MARKERS: tuple[tuple[str, AIImportDocumentType, float], ...] = (
+    # "pro forma", "proforma" and "pro-forma" all occur in the same batch.
+    ("pro forma", AIImportDocumentType.PRO_FORMA_INVOICE, 0.9),
+    ("proforma", AIImportDocumentType.PRO_FORMA_INVOICE, 0.9),
+    ("pro-forma", AIImportDocumentType.PRO_FORMA_INVOICE, 0.9),
+    # Printed on a pro-forma or a quotation to say what it is not.
+    ("not a tax invoice", AIImportDocumentType.PRO_FORMA_INVOICE, 0.75),
+    ("goods received note", AIImportDocumentType.GOODS_RECEIVED_NOTE, 0.85),
+    ("credit note", AIImportDocumentType.SUPPLIER_CREDIT_NOTE, 0.85),
+    ("delivery note", AIImportDocumentType.DELIVERY_NOTE, 0.8),
+    ("purchase order", AIImportDocumentType.PURCHASE_ORDER, 0.8),
+    ("material requisition", AIImportDocumentType.MATERIAL_REQUEST, 0.8),
+    ("proof of payment", AIImportDocumentType.PAYMENT_PROOF, 0.85),
+    ("remittance advice", AIImportDocumentType.PAYMENT_PROOF, 0.85),
+    # A tax invoice is the liability. Only decisive once the phrases above
+    # have had their turn, which is the whole point of the ordering.
+    ("tax invoice", AIImportDocumentType.SUPPLIER_INVOICE, 0.8),
+    ("quotation", AIImportDocumentType.QUOTATION, 0.75),
+)
+
+
+# Words immediately before a marker that reverse its meaning. A purchase
+# order in the batch carries the handwritten annotation "No Delivery note",
+# and that phrase names the document the site never received. Read as a
+# marker it turns an order into proof of delivery, and the system receives
+# goods that the paperwork explicitly says did not arrive.
+_NEGATIONS = ("no ", "not ", "non ", "without ", "awaiting ", "missing ", "outstanding ")
+
+# How far back to look for one. Long enough for "delivery note not received",
+# short enough not to reach into the previous sentence.
+_NEGATION_WINDOW = 24
+
+
+def _is_negated(lowered: str, start: int, end: int) -> bool:
+    before = lowered[max(0, start - _NEGATION_WINDOW):start]
+    if any(word in before for word in _NEGATIONS):
+        return True
+    after = lowered[end:end + _NEGATION_WINDOW]
+    return any(phrase in after for phrase in (" not received", " not supplied", " outstanding"))
+
+
+def _decisive_type(lowered: str) -> Optional[tuple[AIImportDocumentType, float]]:
+    """
+    The decisive phrase that identifies this document, or None.
+
+    Earliest match wins, not first in the list. A document's heading is at
+    the top; references to other documents are in the body. A delivery note
+    routinely cites "your purchase order PO-021", and a purchase order is
+    routinely annotated about a delivery note, so neither ordering of the
+    marker list can be right for both — position is what actually separates
+    a heading from a reference.
+
+    List order survives as the tie-break, so where two markers appear at the
+    same offset the more specific one still wins.
+    """
+    found: list[tuple[int, int, AIImportDocumentType, float]] = []
+    for rank, (phrase, doc_type, confidence) in enumerate(_DECISIVE_MARKERS):
+        start = lowered.find(phrase)
+        while start != -1:
+            if not _is_negated(lowered, start, start + len(phrase)):
+                found.append((start, rank, doc_type, confidence))
+                break
+            # Negated here; a later, genuine occurrence may still count.
+            start = lowered.find(phrase, start + len(phrase))
+
+    if not found:
+        return None
+    found.sort(key=lambda f: (f[0], f[1]))
+    winner = found[0]
+
+    # Two different document types named on the same line is not a heading
+    # followed by a reference — it is one line that mentions both, and
+    # nothing about the layout says which the document is. Equal evidence is
+    # not resolved by taking whichever came first in the sentence.
+    line_start = lowered.rfind("\n", 0, winner[0]) + 1
+    line_end = lowered.find("\n", winner[0])
+    if line_end == -1:
+        line_end = len(lowered)
+    for start, _rank, doc_type, _conf in found[1:]:
+        if doc_type is not winner[2] and line_start <= start < line_end:
+            return None
+
+    return winner[2], winner[3]
+
+
 def _classify_from_text(text: str) -> tuple[AIImportDocumentType, float]:
     """
     Keyword classification used when no AI provider is available.
 
-    Deliberately conservative: a weak signal returns UNKNOWN rather than a
-    confident-looking guess, because classification drives which posting
-    path a document may take.
+    Two passes. A decisive phrase settles the type outright; otherwise weaker
+    keywords are scored against each other. Deliberately conservative: a weak
+    or tied signal returns UNKNOWN rather than a confident-looking guess,
+    because classification drives which posting path a document may take.
     """
     lowered = (text or "").lower()
     if not lowered.strip():
         return AIImportDocumentType.UNKNOWN, 0.0
+
+    decisive = _decisive_type(lowered)
+    if decisive is not None:
+        return decisive
 
     scores: dict[AIImportDocumentType, int] = {}
 
@@ -744,13 +860,16 @@ def _classify_from_text(text: str) -> tuple[AIImportDocumentType, float]:
         if hits:
             scores[doc_type] = scores.get(doc_type, 0) + hits
 
-    add(AIImportDocumentType.SUPPLIER_INVOICE, "tax invoice", "invoice no", "invoice number", "vat reg")
-    add(AIImportDocumentType.PURCHASE_ORDER, "purchase order", "order no", "po number", "po no")
-    add(AIImportDocumentType.DELIVERY_NOTE, "delivery note", "delivery no", "received in good order", "driver")
-    add(AIImportDocumentType.GOODS_RECEIVED_NOTE, "goods received note", "grn", "goods received")
-    add(AIImportDocumentType.MATERIAL_REQUEST, "material request", "requisition", "material requisition")
-    add(AIImportDocumentType.SUPPLIER_CREDIT_NOTE, "credit note", "credit memo")
-    add(AIImportDocumentType.PAYMENT_PROOF, "proof of payment", "remittance", "payment confirmation", "eft confirmation")
+    add(AIImportDocumentType.SUPPLIER_INVOICE, "invoice no", "invoice number", "vat reg")
+    add(AIImportDocumentType.PURCHASE_ORDER, "order no", "po number", "po no")
+    add(AIImportDocumentType.DELIVERY_NOTE, "delivery no", "received in good order", "driver")
+    add(AIImportDocumentType.GOODS_RECEIVED_NOTE, "grn", "goods received")
+    add(AIImportDocumentType.MATERIAL_REQUEST, "material request", "requisition")
+    add(AIImportDocumentType.SUPPLIER_CREDIT_NOTE, "credit memo")
+    add(AIImportDocumentType.PAYMENT_PROOF, "remittance", "payment confirmation", "eft confirmation")
+    # "quote no", "quote number" and the bare word appear on quotations whose
+    # heading did not survive the scan.
+    add(AIImportDocumentType.QUOTATION, "quote no", "quote number", "quotation number", "valid for")
 
     if not scores:
         return AIImportDocumentType.UNKNOWN, 0.0

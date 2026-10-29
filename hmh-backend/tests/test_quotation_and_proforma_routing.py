@@ -2,9 +2,8 @@
 Quotations and pro-forma invoices must not become liabilities.
 
 Drawn from a real batch of 20 HMH documents for Minerat Construction &
-Civils, Dassenhoek. Half of them are quotations or pro-formas, and the
-engine had a type for neither — so both were headed for SUPPLIER_INVOICE or
-UNKNOWN.
+Civils, Dassenhoek. Half of them are quotations or pro-formas, and the engine
+had a type for neither — so both were headed for SUPPLIER_INVOICE or UNKNOWN.
 
 SUPPLIER_INVOICE is the dangerous one. A pro-forma says "Invoice" across the
 top while being a request for payment in advance. Booking one as a supplier
@@ -18,14 +17,25 @@ The batch contains exactly that chain three times over:
     PO-017 KILLARNEY       R494.32    ->  Killarney TAX INVOICE 85956
 
 One purchase each. One liability each — and only when the tax invoice comes.
+
+An earlier pass refused to post either type at all, because the system had
+nowhere to put them. They now have destinations of their own: a quotation
+becomes a Quotation in Procurement, a pro-forma becomes a pending charge
+outside Accounts Payable. The property these tests defend is unchanged, and
+is the one the business cares about — neither type may create a payable or
+move stock. What changed is that the document is no longer thrown away in
+order to achieve it.
 """
 
 import uuid
+from decimal import Decimal
 
 import pytest
 
 from app.models.enums import AIImportDocumentType as T
+from app.models.enums import ProvisionalChargeStatus
 from app.services import ai_import_posting_service as posting
+from app.services import ai_import_routing_service as routing
 
 
 # ── The types exist at all ───────────────────────────────────────────────────
@@ -40,108 +50,253 @@ def test_a_proforma_has_its_own_type_distinct_from_a_tax_invoice():
     assert T.PRO_FORMA_INVOICE is not T.SUPPLIER_INVOICE
 
 
-# ── Neither may post ─────────────────────────────────────────────────────────
+# ── Each goes somewhere, and somewhere different ─────────────────────────────
 
-@pytest.mark.parametrize("doc_type", [T.QUOTATION, T.PRO_FORMA_INVOICE])
-def test_neither_type_has_a_posting_path(doc_type):
-    assert doc_type in posting._UNSUPPORTED
+def test_a_quotation_is_routed_to_procurement():
+    assert routing.destination_for(T.QUOTATION) is routing.PROCUREMENT
 
 
-def test_the_quotation_refusal_explains_itself():
+def test_a_proforma_is_routed_outside_accounts_payable():
     """
-    "Not supported" would invite someone to reclassify it as an invoice to
-    force it through. The message has to say what a quotation is and what to
-    do instead.
+    The whole point. A pro-forma is a pending charge, and Accounts Payable
+    must not be able to see it.
     """
-    message = posting._UNSUPPORTED[T.QUOTATION].lower()
-    assert "price offer" in message
-    assert "purchase order" in message
+    destination = routing.destination_for(T.PRO_FORMA_INVOICE)
+    assert destination is routing.PROVISIONAL_CHARGES
+    assert destination is not routing.ACCOUNTS_PAYABLE
 
 
-def test_the_proforma_refusal_names_the_double_counting_risk():
-    message = posting._UNSUPPORTED[T.PRO_FORMA_INVOICE].lower()
-    assert "tax invoice" in message
-    assert "again" in message or "twice" in message
+def test_only_a_tax_invoice_reaches_accounts_payable():
+    payable_types = [
+        t for t in T if routing.destination_for(t) is routing.ACCOUNTS_PAYABLE
+    ]
+    assert payable_types == [T.SUPPLIER_INVOICE]
 
 
-@pytest.mark.parametrize("doc_type", [T.QUOTATION, T.PRO_FORMA_INVOICE])
-def test_posting_is_refused_rather_than_silently_skipped(db, doc_type):
-    """
-    A silent skip would leave the document looking posted. It must refuse
-    loudly, so the operator knows the liability was never created.
-    """
-    from app.models.ai_import import AIImportBatch, AIImportDocument
-    from app.models.enums import AIImportDocumentStatus
-    from app.models.user import User
-    from app.services.ai_import_extraction_service import DocumentExtractionPayload
-    from tests.conftest import make_user
+def test_only_receipts_reach_stock():
+    stock_types = {
+        t for t in T if routing.destination_for(t) is routing.GOODS_RECEIVED
+    }
+    assert stock_types == {T.DELIVERY_NOTE, T.GOODS_RECEIVED_NOTE}
+
+
+# ── Posting a quotation ──────────────────────────────────────────────────────
+
+def _context(db):
+    """An owner, a project and a supplier factory, from conftest's helpers."""
+    from tests.conftest import make_project, make_supplier, make_user
 
     owner = make_user(db, role="OWNER")
+    project = make_project(db, owner_id=owner["id"])
+    db.commit()
+
+    def supplier(name):
+        record = make_supplier(db, name=name)
+        db.commit()
+        return uuid.UUID(record["id"])
+
+    return owner, uuid.UUID(project["id"]), supplier
+
+
+def _document(db, owner, doc_type, *, project_id=None, supplier_id=None,
+              file_name="doc.pdf"):
+    from app.models.ai_import import AIImportBatch, AIImportDocument
+    from app.models.enums import AIImportDocumentStatus
+
     batch = AIImportBatch(reference=f"T-{uuid.uuid4().hex[:6]}",
                           uploaded_by=uuid.UUID(owner["id"]))
     db.add(batch)
     db.flush()
     doc = AIImportDocument(
-        batch_id=batch.id, file_name="20261019104537.pdf",
-        stored_path="supabase://ai_import/x/doc.pdf",
+        batch_id=batch.id, file_name=file_name,
+        stored_path=f"supabase://ai_import/x/{uuid.uuid4().hex}.pdf",
         mime_type="application/pdf", file_size_bytes=1000,
         checksum_sha256=uuid.uuid4().hex * 2,
         status=AIImportDocumentStatus.READY_TO_POST,
         document_type=doc_type,
+        project_id=project_id,
+        supplier_id=supplier_id,
         uploaded_by=uuid.UUID(owner["id"]),
     )
     db.add(doc)
     db.commit()
-
-    actor = db.get(User, uuid.UUID(owner["id"]))
-    with pytest.raises(posting.PostingRefused):
-        posting.post_document(db, doc, DocumentExtractionPayload(), actor)
-
-    db.refresh(doc)
-    assert doc.status != AIImportDocumentStatus.POSTED
+    return doc
 
 
-@pytest.mark.parametrize("doc_type", [T.QUOTATION, T.PRO_FORMA_INVOICE])
-def test_a_refused_document_creates_no_invoice_and_no_stock(db, doc_type):
+def _payload(**fields):
+    """An extraction payload carrying the named fields at full confidence."""
+    from app.schemas.ai_import import DocumentExtractionPayload, ExtractedField
+
+    payload = DocumentExtractionPayload()
+    payload.fields = {
+        name: ExtractedField(value=str(value), page=1, confidence=0.95)
+        for name, value in fields.items()
+    }
+    return payload
+
+
+def test_a_quotation_is_recorded_as_a_price_offer(db):
+    """Midlands BR1-QUT/66689801, R26 600.38 — document 8 of the batch."""
+    from app.models.quotation import Quotation
+    from app.models.user import User
+
+    owner_user, project_id, make_sup = _context(db)
+    supplier_id = make_sup("Midlands Hardware")
+    doc = _document(db, owner_user, T.QUOTATION,
+                    project_id=project_id, supplier_id=supplier_id)
+    payload = _payload(
+        document_number="BR1-QUT/66689801",
+        total_amount="26600.38",
+        subtotal_amount="23130.77",
+        vat_amount="3469.61",
+        issue_date="2026-08-12",
+    )
+
+    actor = db.get(User, uuid.UUID(owner_user["id"]))
+    posting.post_document(db, doc, payload, actor)
+
+    quote = (
+        db.query(Quotation)
+        .filter(Quotation.quote_number == "BR1-QUT/66689801")
+        .one()
+    )
+    assert quote.supplier_id == supplier_id
+    assert Decimal(str(quote.gross_amount)) == Decimal("26600.38")
+
+
+def test_a_quotation_creates_no_liability_and_no_stock(db):
     """The property the business cares about, stated directly."""
-    from app.models.ai_import import AIImportBatch, AIImportDocument
-    from app.models.enums import AIImportDocumentStatus
     from app.models.invoice import Invoice
     from app.models.stock import StockLedger
     from app.models.user import User
-    from app.services.ai_import_extraction_service import DocumentExtractionPayload
-    from tests.conftest import make_user
 
-    owner = make_user(db, role="OWNER")
-    batch = AIImportBatch(reference=f"T-{uuid.uuid4().hex[:6]}",
-                          uploaded_by=uuid.UUID(owner["id"]))
-    db.add(batch)
-    db.flush()
-    doc = AIImportDocument(
-        batch_id=batch.id, file_name="proforma.pdf",
-        stored_path="supabase://ai_import/x/p.pdf",
-        mime_type="application/pdf", file_size_bytes=1000,
-        checksum_sha256=uuid.uuid4().hex * 2,
-        status=AIImportDocumentStatus.READY_TO_POST,
-        document_type=doc_type,
-        uploaded_by=uuid.UUID(owner["id"]),
-    )
-    db.add(doc)
-    db.commit()
+    owner_user, project_id, make_sup = _context(db)
+    supplier_id = make_sup("Prominent Paints")
+    doc = _document(db, owner_user, T.QUOTATION,
+                    project_id=project_id, supplier_id=supplier_id)
+    payload = _payload(document_number="QU07029334", total_amount="453.27")
 
     invoices_before = db.query(Invoice).count()
     stock_before = db.query(StockLedger).count()
 
-    actor = db.get(User, uuid.UUID(owner["id"]))
-    with pytest.raises(posting.PostingRefused):
-        posting.post_document(db, doc, DocumentExtractionPayload(), actor)
-    db.rollback()
+    actor = db.get(User, uuid.UUID(owner_user["id"]))
+    posting.post_document(db, doc, payload, actor)
 
     assert db.query(Invoice).count() == invoices_before, "a liability was created"
     assert db.query(StockLedger).count() == stock_before, "stock moved"
 
 
-# ── Only the right things post ───────────────────────────────────────────────
+def test_the_same_quotation_is_not_recorded_twice(db):
+    from app.models.quotation import Quotation
+    from app.models.user import User
+
+    owner_user, project_id, make_sup = _context(db)
+    supplier_id = make_sup("Buco")
+    actor = db.get(User, uuid.UUID(owner_user["id"]))
+
+    first = _document(db, owner_user, T.QUOTATION, project_id=project_id,
+                      supplier_id=supplier_id, file_name="a.pdf")
+    posting.post_document(db, first, _payload(
+        document_number="1047739", total_amount="3742.56"), actor)
+
+    second = _document(db, owner_user, T.QUOTATION, project_id=project_id,
+                       supplier_id=supplier_id, file_name="b.pdf")
+    with pytest.raises(posting.PostingRefused):
+        posting.post_document(db, second, _payload(
+            document_number="1047739", total_amount="3742.56"), actor)
+
+    assert db.query(Quotation).filter(Quotation.quote_number == "1047739").count() == 1
+
+
+# ── Posting a pro-forma ──────────────────────────────────────────────────────
+
+def test_a_proforma_becomes_a_pending_charge_not_a_payable(db):
+    """Cretemix P89250, R17 444.89 — document 17 of the batch."""
+    from app.models.invoice import Invoice
+    from app.models.provisional_charge import ProvisionalCharge
+    from app.models.user import User
+
+    owner_user, project_id, make_sup = _context(db)
+    supplier_id = make_sup("Cretemix")
+    doc = _document(db, owner_user, T.PRO_FORMA_INVOICE,
+                    project_id=project_id, supplier_id=supplier_id)
+    payload = _payload(document_number="P89250", total_amount="17444.89")
+
+    invoices_before = db.query(Invoice).count()
+
+    actor = db.get(User, uuid.UUID(owner_user["id"]))
+    posting.post_document(db, doc, payload, actor)
+
+    charge = db.query(ProvisionalCharge).filter(
+        ProvisionalCharge.reference == "P89250").one()
+    assert charge.status is ProvisionalChargeStatus.PENDING
+    assert Decimal(str(charge.total_amount)) == Decimal("17444.89")
+
+    assert db.query(Invoice).count() == invoices_before, (
+        "a pro-forma created an Accounts Payable entry"
+    )
+
+
+def test_a_proforma_moves_no_stock(db):
+    from app.models.stock import StockLedger
+    from app.models.user import User
+
+    owner_user, project_id, make_sup = _context(db)
+    supplier_id = make_sup("SDS Brick and Block")
+    doc = _document(db, owner_user, T.PRO_FORMA_INVOICE,
+                    project_id=project_id, supplier_id=supplier_id)
+    payload = _payload(document_number="QTE5895", total_amount="12254.00")
+
+    stock_before = db.query(StockLedger).count()
+    actor = db.get(User, uuid.UUID(owner_user["id"]))
+    posting.post_document(db, doc, payload, actor)
+    assert db.query(StockLedger).count() == stock_before
+
+
+def test_the_same_proforma_is_not_recorded_twice(db):
+    """
+    Two scans of the same request for payment are one request for payment.
+    """
+    from app.models.provisional_charge import ProvisionalCharge
+    from app.models.user import User
+
+    owner_user, project_id, make_sup = _context(db)
+    supplier_id = make_sup("Pinetown Build It")
+    actor = db.get(User, uuid.UUID(owner_user["id"]))
+
+    first = _document(db, owner_user, T.PRO_FORMA_INVOICE, project_id=project_id,
+                      supplier_id=supplier_id, file_name="a.pdf")
+    posting.post_document(db, first, _payload(
+        document_number="QTE254210", total_amount="3699.50"), actor)
+
+    second = _document(db, owner_user, T.PRO_FORMA_INVOICE, project_id=project_id,
+                       supplier_id=supplier_id, file_name="b.pdf")
+    with pytest.raises(posting.PostingRefused):
+        posting.post_document(db, second, _payload(
+            document_number="QTE254210", total_amount="3699.50"), actor)
+
+    assert db.query(ProvisionalCharge).filter(
+        ProvisionalCharge.reference == "QTE254210").count() == 1
+
+
+def test_a_proforma_without_a_number_is_refused(db):
+    """
+    Without the supplier's own reference the same request cannot be
+    recognised on its second scan, so there is no duplicate protection left.
+    """
+    from app.models.user import User
+
+    owner_user, project_id, make_sup = _context(db)
+    supplier_id = make_sup("Huaxin")
+    doc = _document(db, owner_user, T.PRO_FORMA_INVOICE,
+                    project_id=project_id, supplier_id=supplier_id)
+    actor = db.get(User, uuid.UUID(owner_user["id"]))
+
+    with pytest.raises(posting.PostingRefused):
+        posting.post_document(db, doc, _payload(total_amount="3407.77"), actor)
+
+
+# ── Nothing else changed ─────────────────────────────────────────────────────
 
 def test_a_tax_invoice_still_has_a_posting_path():
     """The change must not have shut the real liability out."""
@@ -150,6 +305,7 @@ def test_a_tax_invoice_still_has_a_posting_path():
 
 @pytest.mark.parametrize("doc_type", [
     T.PURCHASE_ORDER, T.DELIVERY_NOTE, T.GOODS_RECEIVED_NOTE, T.MATERIAL_REQUEST,
+    T.QUOTATION, T.PRO_FORMA_INVOICE,
 ])
 def test_the_working_types_are_untouched(doc_type):
     assert doc_type not in posting._UNSUPPORTED
@@ -162,4 +318,4 @@ def test_a_purchase_order_is_not_treated_as_a_receipt():
     must never move stock.
     """
     assert T.PURCHASE_ORDER is not T.DELIVERY_NOTE
-    assert T.PURCHASE_ORDER not in (T.DELIVERY_NOTE, T.GOODS_RECEIVED_NOTE)
+    assert routing.destination_for(T.PURCHASE_ORDER) is not routing.GOODS_RECEIVED

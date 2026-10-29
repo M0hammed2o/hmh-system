@@ -44,6 +44,7 @@ from app.models.document_extraction import (
 )
 from app.models.boq_adjustment import BOQAdjustment
 from app.models.mr_email_log import MREmailLog
+from app.models.provisional_charge import ProvisionalCharge
 from app.models.quotation import Quotation
 from app.models.procurement_reconciliation import ProcurementReconciliation
 from app.models.work_done import SubcontractorWorkDone
@@ -140,6 +141,7 @@ __all__ = [
     "ExpenseRecord",
     "BOQAdjustment",
     "MREmailLog",
+    "ProvisionalCharge",
     "Quotation",
     "ProcurementReconciliation",
     "SubcontractorWorkDone",

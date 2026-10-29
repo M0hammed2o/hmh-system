@@ -289,6 +289,20 @@ class ReconciliationStatus(str, enum.Enum):
     REJECTED          = "REJECTED"
 
 
+class ProvisionalChargeStatus(str, enum.Enum):
+    """
+    Lifecycle of a supplier's request for payment in advance.
+
+    PENDING is not a liability. It becomes one only when the supplier issues
+    the tax invoice, at which point the charge moves to INVOICED and points
+    at that invoice — which is how the same purchase is prevented from being
+    counted in Accounts Payable twice.
+    """
+    PENDING   = "PENDING"
+    INVOICED  = "INVOICED"
+    CANCELLED = "CANCELLED"
+
+
 class QuotationStatus(str, enum.Enum):
     DRAFT    = "DRAFT"
     SENT     = "SENT"

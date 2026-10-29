@@ -16,7 +16,9 @@ import client from "./client";
 
 export type DocumentType =
   | "MATERIAL_REQUEST"
+  | "QUOTATION"
   | "PURCHASE_ORDER"
+  | "PRO_FORMA_INVOICE"
   | "SUPPLIER_INVOICE"
   | "DELIVERY_NOTE"
   | "GOODS_RECEIVED_NOTE"
@@ -46,8 +48,13 @@ export type MatchStatus = "PROPOSED" | "CONFIRMED" | "REJECTED" | "AMBIGUOUS";
 
 export const DOCUMENT_TYPE_LABELS: Record<DocumentType, string> = {
   MATERIAL_REQUEST:     "Material Request",
+  QUOTATION:            "Quotation",
   PURCHASE_ORDER:       "Purchase Order",
-  SUPPLIER_INVOICE:     "Supplier Invoice",
+  // Named in full. "Pro-forma" alone gets read as a kind of invoice by
+  // somebody skimming a list of twenty, which is the mistake that books a
+  // liability that does not exist.
+  PRO_FORMA_INVOICE:    "Pro-forma (not a tax invoice)",
+  SUPPLIER_INVOICE:     "Tax Invoice",
   DELIVERY_NOTE:        "Delivery Note",
   GOODS_RECEIVED_NOTE:  "Goods Received Note",
   SUPPLIER_CREDIT_NOTE: "Credit Note",
@@ -223,6 +230,76 @@ export interface DocumentPipeline {
   receiving: ReceivingProgress;
 }
 
+/**
+ * What importing a document would do, and where the record would land.
+ *
+ * Mirrors ai_import_routing_service on the backend, which is the single
+ * source of truth. Nothing here re-derives a destination or an action from
+ * the document type: a screen that works it out for itself is a screen that
+ * will eventually disagree with what the server actually does.
+ */
+export type ManifestAction =
+  | "CREATE"
+  | "LINK_EXISTING"
+  | "REVIEW"
+  | "SKIP_DUPLICATE";
+
+export const MANIFEST_ACTION_LABELS: Record<ManifestAction, string> = {
+  CREATE:         "Create",
+  LINK_EXISTING:  "Link to existing",
+  REVIEW:         "Needs review",
+  SKIP_DUPLICATE: "Skip — duplicate",
+};
+
+export interface DocumentRouting {
+  destination: string;
+  destination_label: string;
+  /** Plain-language consequence of importing, shown next to the action. */
+  effect: string;
+  action: ManifestAction | null;
+  reason: string;
+  linked_label: string | null;
+  linked_type: string | null;
+  linked_id: string | null;
+  /** Questions a person must settle before approving. */
+  review_notes: string[];
+}
+
+export interface ManifestRow {
+  document_id: string;
+  file_name: string;
+  document_type: DocumentType;
+  document_type_confirmed: boolean;
+  classification_confidence: number;
+  status: DocumentStatus;
+  supplier_id: string | null;
+  supplier_name: string | null;
+  project_id: string | null;
+  reference: string | null;
+  total_amount: string | null;
+  payment_evidence_detected: boolean;
+  payment_evidence_note: string | null;
+  routing: DocumentRouting;
+  can_post: boolean;
+}
+
+export interface BatchManifest {
+  batch: {
+    id: string;
+    reference: string;
+    status: string;
+    document_count: number;
+  };
+  rows: ManifestRow[];
+  summary: {
+    by_action: Record<string, number>;
+    by_destination: Record<string, number>;
+    payment_evidence_count: number;
+    needs_review_count: number;
+    duplicate_count: number;
+  };
+}
+
 export interface ImportDocument {
   id: string;
   batch_id: string;
@@ -253,6 +330,10 @@ export interface ImportDocument {
   rejection_reason: string | null;
   uploaded_by: string;
   created_at: string | null;
+  routing: DocumentRouting;
+  /** A PAID stamp on the paperwork. A claim awaiting verification, never a settlement. */
+  payment_evidence_detected: boolean;
+  payment_evidence_note: string | null;
   can_post: boolean;
 }
 
@@ -372,6 +453,20 @@ export const aiImportApi = {
 
   getBatch: async (id: string): Promise<ImportBatch> => {
     const res = await client.get<{ data: ImportBatch }>(`/ai-import/batches/${id}`);
+    return res.data.data;
+  },
+
+  /**
+   * What importing this batch would do, document by document.
+   *
+   * Read-only, and safe to poll while the batch is still processing: rows
+   * for documents that have not been extracted yet come back with a null
+   * action rather than being omitted.
+   */
+  getBatchManifest: async (id: string): Promise<BatchManifest> => {
+    const res = await client.get<{ data: BatchManifest }>(
+      `/ai-import/batches/${id}/manifest`,
+    );
     return res.data.data;
   },
 

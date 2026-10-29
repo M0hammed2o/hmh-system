@@ -73,6 +73,10 @@ def ensure_tables():
         "ai_import_job_status_enum": (
             "'PENDING', 'RUNNING', 'COMPLETED', 'FAILED', 'DEAD'"
         ),
+        # Mirrors alembic 0081.
+        "provisional_charge_status_enum": (
+            "'PENDING', 'INVOICED', 'CANCELLED'"
+        ),
     }
     with engine.begin() as conn:
         for _name, _labels in _AI_IMPORT_ENUMS.items():
