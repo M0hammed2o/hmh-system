@@ -169,7 +169,8 @@ def find_pending_for_invoice(db: Session, invoice: Invoice) -> Optional[Provisio
     """
     if invoice.purchase_order_id is None:
         return None
-    return (
+
+    candidates = (
         db.query(ProvisionalCharge)
         .filter(
             ProvisionalCharge.purchase_order_id == invoice.purchase_order_id,
@@ -177,8 +178,16 @@ def find_pending_for_invoice(db: Session, invoice: Invoice) -> Optional[Provisio
             ProvisionalCharge.status == ProvisionalChargeStatus.PENDING,
         )
         .order_by(ProvisionalCharge.created_at.asc())
-        .first()
+        .all()
     )
+    if len(candidates) != 1:
+        # None to close, or more than one and no way to tell which. Closing
+        # an arbitrary one would mark a request as invoiced that was not,
+        # and leave the real one pending — so both stay open and visible for
+        # a person to settle. Under-closing is recoverable; a wrong closure
+        # hides itself.
+        return None
+    return candidates[0]
 
 
 def settle_against_invoice(

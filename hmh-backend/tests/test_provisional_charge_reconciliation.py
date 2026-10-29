@@ -347,3 +347,51 @@ def test_a_paid_stamp_is_carried_but_settles_nothing(db):
     assert charge.payment_evidence_detected is True
     assert charge.status is ProvisionalChargeStatus.PENDING
     assert charge.settled_by_invoice_id is None
+
+
+def test_two_pending_charges_on_one_order_close_neither(db):
+    """
+    A supplier can send two pro-formas against the same order — a deposit
+    and a balance, or a revised request. When the tax invoice arrives there
+    is no way to tell which it settles.
+
+    Closing an arbitrary one would mark a request as invoiced that was not,
+    and leave the real one pending. Both stay open instead: under-closing is
+    visible and recoverable, a wrong closure hides itself.
+    """
+    actor, project, supplier = _setup(db)
+    po = _purchase_order(db, project, supplier, actor)
+    charges.create_charge(
+        db, project_id=project, supplier_id=supplier,
+        reference="QTE5895-A", total_amount=6000.00, actor_id=actor,
+        purchase_order_id=po.id,
+    )
+    charges.create_charge(
+        db, project_id=project, supplier_id=supplier,
+        reference="QTE5895-B", total_amount=6254.00, actor_id=actor,
+        purchase_order_id=po.id,
+    )
+    invoice = _invoice(db, project, supplier, actor,
+                       number="INV-7781", total=12254.00, po_id=po.id)
+    db.commit()
+
+    assert charges.find_pending_for_invoice(db, invoice) is None
+    assert len(charges.list_charges(
+        db, project, status=ProvisionalChargeStatus.PENDING)) == 2
+
+
+def test_one_pending_charge_on_an_order_still_closes(db):
+    """The unambiguous case must keep working."""
+    actor, project, supplier = _setup(db)
+    po = _purchase_order(db, project, supplier, actor)
+    charge = charges.create_charge(
+        db, project_id=project, supplier_id=supplier,
+        reference="QTE5895", total_amount=12254.00, actor_id=actor,
+        purchase_order_id=po.id,
+    )
+    invoice = _invoice(db, project, supplier, actor,
+                       number="INV-7781", total=12254.00, po_id=po.id)
+    db.commit()
+
+    found = charges.find_pending_for_invoice(db, invoice)
+    assert found is not None and found.id == charge.id
