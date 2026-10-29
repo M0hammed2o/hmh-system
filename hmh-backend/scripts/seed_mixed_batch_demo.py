@@ -114,6 +114,28 @@ def _seed_settled_charge(db, project, suppliers, actor) -> None:
         notes="Demo row: already settled, to show the closed state.",
     )
 
+    # The open requests the pro-forma documents in this batch would produce
+    # once imported. Created directly so the screen has something to show
+    # without the batch having been posted — the two are separate concerns,
+    # and a seed that required posting would leave the Batch Review screen
+    # with nothing left to review.
+    # References deliberately different from the pro-forma documents in the
+    # batch. If they matched, those documents would correctly be flagged as
+    # duplicates of these rows, and the Batch Review screen would have
+    # nothing left to demonstrate.
+    for reference, name, amount in (
+        ("P88120",   "Vantage Readymix",      17444.89),
+        ("P88121",   "Vantage Readymix",      17444.89),
+        ("QTE5410",  "Maswell Blocks",        12254.00),
+        ("SQ470880", "Coastal Cement",         3407.77),
+    ):
+        charges.create_charge(
+            db, project_id=project.id, supplier_id=suppliers[name].id,
+            reference=reference, total_amount=amount, actor_id=actor.id,
+            issue_date=date(2026, 8, 14),
+            notes="Demo row: an open request awaiting the supplier's invoice.",
+        )
+
     invoice = Invoice(
         invoice_number="MB-44120", supplier_id=supplier.id, project_id=project.id,
         purchase_order_id=po.id, invoice_date=date(2026, 8, 26),

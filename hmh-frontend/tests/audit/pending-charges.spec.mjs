@@ -7,7 +7,10 @@
  * liability today and doubles it when the real invoice arrives.
  *
  * Runs against the local demo stack, whose suppliers, project and document
- * numbers are all fictional. `test` is imported from the local-only guard,
+ * numbers are all fictional. It expects a FRESHLY SEEDED batch: re-run
+ * scripts/seed_mixed_batch_demo.py against an empty database first. Running
+ * scripts/verify_mixed_batch_workflow.py posts most of the documents, which
+ * legitimately changes what these screens show. `test` is imported from the local-only guard,
  * which aborts any request that would leave the machine.
  */
 
@@ -49,8 +52,10 @@ test("the tab exists beside the payables tabs", async ({ page }) => {
   await page.goto("/payments");
   await page.waitForLoadState("networkidle");
 
+  // The tab buttons carry a count badge, so their accessible name is
+  // "Invoices 3" rather than "Invoices". Anchor the start, not the end.
   for (const label of ["Payments", "Invoices", "Outstanding", "Pending Charges"]) {
-    await expect(page.getByRole("button", { name: new RegExp(`^${label}$`, "i") }))
+    await expect(page.getByRole("button", { name: new RegExp(`^${label}\\b`, "i") }))
       .toBeVisible();
   }
 });
@@ -81,9 +86,10 @@ test("the screen says the total is not owed", async ({ page }) => {
 test("an open request shows its supplier, reference and amount", async ({ page }) => {
   await openPendingCharges(page);
 
-  const row = page.locator("table tbody tr", { hasText: "P89250" });
+  const row = page.locator("table tbody tr", { hasText: "P88120" });
   await expect(row).toContainText("Vantage Readymix");
-  await expect(row).toContainText(/17 ?444[,.]89/);
+  // en-ZA groups thousands with U+00A0, not an ordinary space.
+  await expect(row).toContainText(/17[\s\u00a0]?444[,.]89/);
   await expect(row).toContainText(/Awaiting invoice/i);
   await expect(row).toContainText(/Not yet issued/i);
   await row.screenshot({ path: `${SHOTS}/03-open-request.png` });
@@ -107,11 +113,15 @@ test("a settled request names the invoice that closed it", async ({ page }) => {
 test("a settled request is not counted as outstanding", async ({ page }) => {
   await openPendingCharges(page);
 
-  // Four open requests; the fifth is closed and must not be in the total.
+  // Four open requests; the fifth is closed and must not be among them.
+  // Counted from the table rather than from the tile: the rows are the
+  // thing being asserted about, and a tile's markup is not a contract.
   await expect(page.getByText("Open requests")).toBeVisible();
-  const openCount = page.locator("div", { hasText: /^Open requests$/ })
-    .locator("xpath=preceding-sibling::div[1]");
-  await expect(openCount).toHaveText("4");
+  await expect(page.locator("table tbody tr")).toHaveCount(4);
+
+  // The settled one is there, just not by default.
+  await page.getByRole("button", { name: /settled or withdrawn/i }).click();
+  await expect(page.locator("table tbody tr")).toHaveCount(5);
 });
 
 test("pro-formas do not appear among the invoices", async ({ page }) => {
@@ -125,7 +135,7 @@ test("pro-formas do not appear among the invoices", async ({ page }) => {
   await page.waitForTimeout(1500);
 
   const body = await page.locator("body").innerText();
-  for (const reference of ["P89250", "P89381", "QTE5895", "SQ473889"]) {
+  for (const reference of ["P88120", "P88121", "QTE5410", "SQ470880"]) {
     expect(body, `pro-forma ${reference} is showing on the Invoices tab`)
       .not.toContain(reference);
   }
@@ -135,7 +145,7 @@ test("pro-formas do not appear among the invoices", async ({ page }) => {
 test("withdrawing a request asks why", async ({ page }) => {
   await openPendingCharges(page);
 
-  const row = page.locator("table tbody tr", { hasText: "SQ473889" });
+  const row = page.locator("table tbody tr", { hasText: "SQ470880" });
   await row.getByRole("button", { name: /withdraw/i }).click();
 
   const confirm = page.getByRole("button", { name: /^Withdraw request$/i });
