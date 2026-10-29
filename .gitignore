@@ -66,3 +66,9 @@ docs/testing/live-production-screenshots/
 # scripts/seed_mixed_batch_demo.py). Never committed: it is a full
 # application bundle rebuilt on demand.
 hmh-frontend/dist-demo/
+
+# Screenshots of the live system contain real fleet, supplier and financial
+# data. This repository is public: they are never committed. Screenshots of
+# the local fictional demo seed, under docs/testing/screenshots/, are fine.
+hmh-frontend/docs/testing/live-production-screenshots/
+docs/testing/live-production-screenshots/
