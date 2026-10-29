@@ -201,6 +201,13 @@ guessed allocation impossible:
 - An imported receipt lands in the **project warehouse**. Supplying a lot at
   posting time is *rejected*, not ignored — allocation is a separate,
   deliberate step on the warehouse screen.
+- **A receipt is held for review until a person confirms it.** Stock is the
+  one thing here that is physically wrong if it is wrong: a receipt posted
+  from a misread quantity puts materials on the system that are not on site,
+  and the error surfaces weeks later as a shortage nobody can explain. The
+  batch's only delivery note is handwritten on a carbon-copy book. Any line
+  whose quantity was not read confidently is named, because "needs review"
+  without saying why invites a rubber stamp.
 - PO-017 names lot **A599**. Dassenhoek has A17 and A175; production
   reconciliation confirmed A599 does not exist. Nothing allocates to it,
   because nothing allocates to any lot at import.
@@ -222,7 +229,59 @@ Nothing on the screen writes anything. Approval still happens per document.
 
 ---
 
-## 8. Known gaps
+## 8. What the real scans actually contain
+
+Measured, not assumed. All twenty documents were run through the real
+extraction path with `scripts/verify_real_document_extraction.py`:
+
+| | |
+|---|---|
+| Documents with a text layer | **0 of 20** |
+| Characters extracted by the deterministic parser | **0** |
+| Classified correctly without the AI reader | **0** |
+| **Misclassified** | **0** |
+| Pro-formas misread as tax invoices | **0** |
+| Documents wrongly read as a goods receipt | **0** |
+
+Every one is a photograph. `pypdf` reports one page holding three to five
+embedded images and no text, and the OCR fallback refuses them ("Bad image
+data").
+
+Two things follow, and they pull in opposite directions.
+
+**The safety properties hold on real paperwork.** Nothing is guessed. Every
+document returns `UNKNOWN`, which routes to review, so no liability is
+invented and no stock moves. The expensive failure — a pro-forma booked as a
+tax invoice — does not occur, because nothing is classified at all.
+
+**The capability is zero without the AI reader.** The deterministic parser
+cannot read any of this company's paperwork, so it is a safety net and not a
+fallback. Classification is verified against transcribed text, which is what
+the vision model would return; the step that turns a photograph into that
+text is **not verified** and cannot be until the Anthropic workspace key
+exists.
+
+---
+
+## 9. Pending Supplier Charges
+
+**Payments → Pending Charges.** A tab beside the payables tabs, never inside
+them. Each row shows the supplier, the reference, the amount, the matched
+purchase order by number, the status, and the tax invoice that closed it if
+one has arrived.
+
+The panel loads its own figures and contributes nothing to the outstanding
+totals on the other tabs. It states, in the server's own words, that its
+total is not owed — because a bare number on a finance screen gets added to
+the other numbers on the same screen.
+
+Withdrawing a request requires a reason. A charge that simply vanished
+leaves nobody able to say later whether the supplier was refused, paid or
+forgotten.
+
+---
+
+## 10. Known gaps
 
 | Gap | Status |
 |---|---|
