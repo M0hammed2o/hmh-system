@@ -47,10 +47,12 @@ from app.models.enums import (
     AuditAction,
     DeliveryDestination,
     MRPriority,
+    QuotationStatus,
 )
 from app.models.user import User
 from app.schemas.ai_import import DocumentExtractionPayload
 from app.services import ai_import_matching_service as matching
+from app.services import ai_import_routing_service as routing
 from app.services import audit_service
 
 logger = get_logger(__name__)
@@ -767,7 +769,7 @@ def post_supplier_invoice(
     by a supplier is a claim, not a settlement record.
     """
     from app.schemas.invoice import InvoiceCreate
-    from app.services import invoice_service
+    from app.services import invoice_service, provisional_charge_service
 
     project_id = _require(document.project_id, "The project for this invoice is not set.")
     supplier_id = _require(
@@ -851,6 +853,20 @@ def post_supplier_invoice(
         raise
 
     _attach_source(db, document, AttachmentEntity.INVOICE, invoice.id)
+
+    # ── Close the pro-forma this invoice supersedes ──────────────────────────
+    # The supplier asked for the money in advance, and is now invoicing for
+    # the same purchase. Leaving the pending charge open would show the
+    # business the same spend in two places — once as pending, once as owed —
+    # which is the double count the provisional_charges table exists to stop.
+    # Matched on the purchase order; see provisional_charge_service for why
+    # neither the amount nor the supplier alone is a safe key.
+    settled_charge = provisional_charge_service.find_pending_for_invoice(db, invoice)
+    if settled_charge is not None:
+        provisional_charge_service.settle_against_invoice(
+            db, settled_charge, invoice, actor.id,
+        )
+
     audit_service.write_event(
         db, AuditAction.CREATE, "ai_import_invoice", actor.id, invoice.id,
         after_value={
@@ -859,6 +875,7 @@ def post_supplier_invoice(
             "purchase_order_id": str(data.purchase_order_id) if data.purchase_order_id else None,
             "source_document": str(document.id),
             "is_legacy": document.is_legacy,
+            "settled_provisional_charge": str(settled_charge.id) if settled_charge else None,
         },
         notes="Supplier liability recorded from an imported invoice. Payment status remains "
               "derived from recorded payments.",
@@ -866,9 +883,226 @@ def post_supplier_invoice(
     return _complete(db, posting, invoice.id, invoice.invoice_number)
 
 
+def post_quotation(
+    db: Session,
+    document: AIImportDocument,
+    payload: DocumentExtractionPayload,
+    actor: User,
+) -> AIImportPosting:
+    """
+    File a supplier's price offer in Procurement.
+
+    A quotation commits nobody and creates no liability, so this records the
+    offer and nothing else: no stock, no payable, no committed spend. Its
+    value is that the price becomes searchable and linked to the supplier and
+    project, so the purchase order raised from it can be compared against
+    what was actually quoted.
+
+    Duplicate quote numbers are refused by quotation_service, which owns the
+    uniqueness rule.
+    """
+    from app.schemas.quotation import QuotationCreate
+    from app.services import quotation_service
+
+    project_id = _require(document.project_id, "The project for this quotation is not set.")
+    supplier_id = _require(
+        document.supplier_id,
+        "The supplier for this quotation is not set. Link or create the supplier first.",
+    )
+    quote_number = _require(
+        payload.value("document_number"),
+        "The quotation number could not be read. It is required so the same quote is "
+        "not recorded twice and so a purchase order can cite it.",
+    )
+
+    gross = _as_float(payload.value("total_amount"))
+    if gross is None:
+        raise PostingRefused(
+            "The quotation total could not be read, so there is no price to record."
+        )
+
+    data = QuotationCreate(
+        quote_number=str(quote_number).strip(),
+        supplier_id=supplier_id,
+        project_id=project_id,
+        # RECEIVED, not DRAFT: the supplier has sent it. Nobody has accepted
+        # it, which is what APPROVED would mean.
+        status=QuotationStatus.RECEIVED,
+        quote_date=_as_date(payload.value("issue_date")),
+        expiry_date=_as_date(payload.value("due_date")),
+        net_amount=_as_float(payload.value("subtotal_amount")) or 0.0,
+        vat_amount=_as_float(payload.value("vat_amount")) or 0.0,
+        gross_amount=gross,
+        vat_rate_used=_as_float(payload.value("vat_rate")) or 15.0,
+        notes=_legacy_note(document, payload),
+    )
+
+    snapshot = {
+        "type": "quotation",
+        "quote_number": data.quote_number,
+        "gross_amount": gross,
+        "supplier_id": str(supplier_id),
+    }
+    _rows_before = _written_row_count(db, "quotation", project_id)
+    posting = _claim(db, document, "quotation", actor.id, snapshot)
+    try:
+        quotation = quotation_service.create_quotation(db, data, actor.id)
+    except ConflictError as exc:
+        _release(
+            db, posting.id, str(exc),
+            entity_type=posting.entity_type,
+            project_id=project_id,
+            count_before=_rows_before,
+        )
+        raise PostingRefused(
+            f"Quotation {data.quote_number} is already recorded, so a second copy "
+            f"was not created."
+        ) from exc
+    except _PRE_WRITE_ERRORS as exc:
+        _release(
+            db, posting.id, str(exc),
+            entity_type=posting.entity_type,
+            project_id=project_id,
+            count_before=_rows_before,
+        )
+        raise
+    except Exception:
+        logger.exception(
+            "ai_import posting failed after the claim was taken; claim left "
+            "in place for document=%s", document.id,
+        )
+        raise
+
+    _attach_source(db, document, AttachmentEntity.SUPPLIER, supplier_id)
+    audit_service.write_event(
+        db, AuditAction.CREATE, "ai_import_quotation", actor.id, quotation.id,
+        after_value={
+            "quote_number": quotation.quote_number,
+            "gross_amount": float(quotation.gross_amount),
+            "source_document": str(document.id),
+        },
+        notes="Supplier price offer recorded from an imported quotation. No liability "
+              "and no committed spend: a quotation commits nobody.",
+    )
+    return _complete(db, posting, quotation.id, quotation.quote_number)
+
+
+def post_provisional_charge(
+    db: Session,
+    document: AIImportDocument,
+    payload: DocumentExtractionPayload,
+    actor: User,
+) -> AIImportPosting:
+    """
+    Record a pro-forma as a pending supplier charge, outside Accounts Payable.
+
+    A pro-forma asks for payment before supply. The money is not owed yet, so
+    writing it to Accounts Payable would overstate what is owed today and
+    double it tomorrow when the supplier issues the tax invoice for the same
+    goods. It is held in provisional_charges instead, linked to its order, and
+    closed automatically when that invoice is recorded.
+
+    A PAID stamp on the document is carried across as evidence requiring
+    verification. It settles nothing.
+    """
+    from app.services import provisional_charge_service
+
+    project_id = _require(document.project_id, "The project for this pro-forma is not set.")
+    supplier_id = _require(
+        document.supplier_id,
+        "The supplier for this pro-forma is not set. Link or create the supplier first.",
+    )
+    reference = _require(
+        payload.value("document_number"),
+        "The pro-forma number could not be read. It is required so the same request "
+        "for payment is not recorded twice.",
+    )
+
+    total = _as_float(payload.value("total_amount"))
+    if total is None:
+        raise PostingRefused(
+            "The pro-forma total could not be read, so there is no amount to record."
+        )
+    if total <= 0:
+        raise PostingRefused(
+            f"The pro-forma total reads as {total}. Check the extracted value — a "
+            f"charge is not recorded from a zero or negative figure."
+        )
+
+    po_match = matching.best_match(db, document.id, "purchase_order")
+
+    snapshot = {
+        "type": "provisional_charge",
+        "reference": str(reference).strip(),
+        "total_amount": total,
+        "supplier_id": str(supplier_id),
+    }
+    _rows_before = _written_row_count(db, "provisional_charge", project_id)
+    posting = _claim(db, document, "provisional_charge", actor.id, snapshot)
+    try:
+        charge = provisional_charge_service.create_charge(
+            db,
+            project_id=project_id,
+            supplier_id=supplier_id,
+            reference=str(reference).strip(),
+            total_amount=total,
+            actor_id=actor.id,
+            subtotal_amount=_as_float(payload.value("subtotal_amount")),
+            vat_amount=_as_float(payload.value("vat_amount")),
+            issue_date=_as_date(payload.value("issue_date")),
+            due_date=_as_date(payload.value("due_date")),
+            purchase_order_id=po_match.target_id if po_match else None,
+            payment_evidence_detected=document.payment_evidence_detected,
+            payment_evidence_note=document.payment_evidence_note,
+            notes=_legacy_note(document, payload),
+        )
+        db.commit()
+    except ConflictError as exc:
+        _release(
+            db, posting.id, str(exc),
+            entity_type=posting.entity_type,
+            project_id=project_id,
+            count_before=_rows_before,
+        )
+        raise PostingRefused(str(exc)) from exc
+    except _PRE_WRITE_ERRORS as exc:
+        _release(
+            db, posting.id, str(exc),
+            entity_type=posting.entity_type,
+            project_id=project_id,
+            count_before=_rows_before,
+        )
+        raise
+    except Exception:
+        logger.exception(
+            "ai_import posting failed after the claim was taken; claim left "
+            "in place for document=%s", document.id,
+        )
+        raise
+
+    _attach_source(db, document, AttachmentEntity.SUPPLIER, supplier_id)
+    audit_service.write_event(
+        db, AuditAction.CREATE, "ai_import_provisional_charge", actor.id, charge.id,
+        after_value={
+            "reference": charge.reference,
+            "total_amount": float(charge.total_amount),
+            "purchase_order_id": str(charge.purchase_order_id) if charge.purchase_order_id else None,
+            "source_document": str(document.id),
+        },
+        notes="Pro-forma recorded as a pending supplier charge. Accounts Payable is "
+              "unchanged: the liability is created when the tax invoice arrives.",
+    )
+    return _complete(db, posting, charge.id, charge.reference)
+
+
 # ── Unsupported postings ──────────────────────────────────────────────────────
 
 _UNSUPPORTED: dict[AIImportDocumentType, str] = {
+    # QUOTATION and PRO_FORMA_INVOICE used to be refused here, because the
+    # system had nowhere to put either. They now have destinations of their
+    # own — Procurement and provisional_charges — so they post, and neither
+    # touches Accounts Payable or stock. See post_quotation and
+    # post_provisional_charge above.
     AIImportDocumentType.SUPPLIER_CREDIT_NOTE: (
         "This system has no credit note record, so a credit cannot be posted against the "
         "supplier balance. The credit note is stored as evidence and linked to the invoice "
@@ -922,8 +1156,27 @@ def post_document(
     if doc_type in _UNSUPPORTED:
         raise PostingRefused(_UNSUPPORTED[doc_type])
 
+    # Fuel is measured in litres against a storage location, not in warehouse
+    # stock. A fuel order posted down the materials path creates a materials
+    # purchase order, and the delivery that follows tries to receive 500
+    # litres of diesel into the warehouse as though it were cement. The
+    # document does not name a storage location, and guessing one would put
+    # the fuel in the wrong tank, so this refuses rather than improvises.
+    if doc_type == AIImportDocumentType.PURCHASE_ORDER and routing._mentions_fuel(payload):
+        raise PostingRefused(
+            "This order is for fuel, which is tracked in litres against a storage "
+            "location rather than as warehouse stock. Capture it on the fuel screen "
+            "against the storage location it was delivered into — the document does "
+            "not say which one, and putting it in the wrong tank corrupts the fuel "
+            "reconciliation."
+        )
+
     if doc_type == AIImportDocumentType.MATERIAL_REQUEST:
         posting = post_material_request(db, document, payload, actor)
+    elif doc_type == AIImportDocumentType.QUOTATION:
+        posting = post_quotation(db, document, payload, actor)
+    elif doc_type == AIImportDocumentType.PRO_FORMA_INVOICE:
+        posting = post_provisional_charge(db, document, payload, actor)
     elif doc_type == AIImportDocumentType.PURCHASE_ORDER:
         posting = post_purchase_order(db, document, payload, actor)
     elif doc_type in (AIImportDocumentType.DELIVERY_NOTE, AIImportDocumentType.GOODS_RECEIVED_NOTE):
@@ -969,6 +1222,8 @@ _POSTED_ENTITY_MODELS: dict[str, str] = {
     "purchase_order":   "app.models.purchase_order:PurchaseOrder",
     "goods_receipt":    "app.models.delivery:Delivery",
     "invoice":          "app.models.invoice:Invoice",
+    "quotation":           "app.models.quotation:Quotation",
+    "provisional_charge":  "app.models.provisional_charge:ProvisionalCharge",
 }
 
 
@@ -983,7 +1238,8 @@ def _load_entity_model(entity_type: str):
 
 
 def _entity_label(entity) -> str:
-    for attr in ("invoice_number", "po_number", "request_number", "delivery_number"):
+    for attr in ("invoice_number", "po_number", "request_number", "delivery_number",
+                 "quote_number", "reference"):
         value = getattr(entity, attr, None)
         if value:
             return str(value)

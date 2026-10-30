@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PageHeader } from "@/components/shared/PageHeader";
 import { Tabs } from "@/components/shared/Tabs";
+import { PendingChargesPanel } from "@/components/payments/PendingChargesPanel";
 import { StatCard } from "@/components/shared/StatCard";
 import { Modal } from "@/components/shared/Modal";
 import { projectsApi, type Project } from "@/api/projects";
@@ -776,6 +777,10 @@ export default function PaymentsPage() {
     { key: "payments", label: "Payments" },
     { key: "invoices", label: "Invoices" },
     { key: "outstanding", label: "Outstanding" },
+    // Next to the payables, never inside them. A pro-forma is a request for
+    // payment in advance: not owed, and not part of any figure on the other
+    // three tabs. Its own tab is what keeps the two from being added up.
+    { key: "pending_charges", label: "Pending Charges" },
     { key: "labour", label: "Labour" },
   ];
 
@@ -783,7 +788,11 @@ export default function PaymentsPage() {
     { ...PAGE_TABS_EXTRA[0], count: payments.length },
     { ...PAGE_TABS_EXTRA[1], count: invoices.length },
     { ...PAGE_TABS_EXTRA[2], count: outstanding?.outstanding_invoices.length ?? 0 },
-    { ...PAGE_TABS_EXTRA[3], count: labourJcs.length },
+    // Deliberately uncounted here: the count is loaded by the panel itself,
+    // and a number beside "Invoices" that silently included pro-formas is
+    // precisely the confusion this tab exists to prevent.
+    PAGE_TABS_EXTRA[3],
+    { ...PAGE_TABS_EXTRA[4], count: labourJcs.length },
   ];
 
   return (
@@ -1201,6 +1210,13 @@ export default function PaymentsPage() {
           </div>
         </div>
       ) : null}
+
+      {/* ── Pending supplier charges ── */}
+      {/* Its own panel, loading its own figures. Nothing here feeds the
+          payables totals above, which is the whole reason it is separate. */}
+      {tab === "pending_charges" && selectedProjectId && (
+        <PendingChargesPanel projectId={selectedProjectId} />
+      )}
 
       {/* ── Labour tab ── */}
       {tab === "labour" && (

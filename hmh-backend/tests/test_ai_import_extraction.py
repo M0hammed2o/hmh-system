@@ -267,7 +267,11 @@ def test_fenced_json_is_parsed():
 def test_keyword_classifier_identifies_clear_documents(text, expected):
     doc_type, confidence = extraction._classify_from_text(text)
     assert doc_type == expected
-    assert 0 < confidence <= 0.75   # never claims certainty
+    # Never certain, but a document headed TAX INVOICE is not a weak signal
+    # either. The ceiling was 0.75 when every match was a loose keyword hit;
+    # a heading on its own line now scores higher than a word in the body,
+    # which is what lets a pro-forma outrank the invoice number printed on it.
+    assert 0 < confidence < 1.0
 
 
 def test_keyword_classifier_returns_unknown_rather_than_guessing():

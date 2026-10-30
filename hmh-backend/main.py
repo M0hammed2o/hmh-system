@@ -82,6 +82,9 @@ from app.api.v1.purchase_orders import project_po_router, po_router
 from app.api.v1.deliveries import project_delivery_router, delivery_router
 from app.api.v1.stock import router as stock_router
 from app.api.v1.invoices import project_invoice_router, invoice_router
+from app.api.v1.provisional_charges import (
+    project_provisional_router, provisional_router,
+)
 from app.api.v1.payments import project_payment_router, payment_router
 from app.api.v1.alerts import router as alerts_router
 from app.api.v1.dashboard import router as dashboard_router
@@ -308,6 +311,11 @@ app.include_router(delivery_router, prefix="/api/v1")
 app.include_router(stock_router, prefix="/api/v1")
 app.include_router(project_invoice_router, prefix="/api/v1")
 app.include_router(invoice_router, prefix="/api/v1")
+# Pending supplier charges are routed separately from invoices on purpose:
+# they are not payables, and an endpoint that can return both is one whose
+# results eventually get summed into an Accounts Payable total.
+app.include_router(project_provisional_router, prefix="/api/v1")
+app.include_router(provisional_router, prefix="/api/v1")
 app.include_router(project_payment_router, prefix="/api/v1")
 app.include_router(payment_router, prefix="/api/v1")
 app.include_router(alerts_router, prefix="/api/v1")

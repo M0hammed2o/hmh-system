@@ -289,6 +289,20 @@ class ReconciliationStatus(str, enum.Enum):
     REJECTED          = "REJECTED"
 
 
+class ProvisionalChargeStatus(str, enum.Enum):
+    """
+    Lifecycle of a supplier's request for payment in advance.
+
+    PENDING is not a liability. It becomes one only when the supplier issues
+    the tax invoice, at which point the charge moves to INVOICED and points
+    at that invoice — which is how the same purchase is prevented from being
+    counted in Accounts Payable twice.
+    """
+    PENDING   = "PENDING"
+    INVOICED  = "INVOICED"
+    CANCELLED = "CANCELLED"
+
+
 class QuotationStatus(str, enum.Enum):
     DRAFT    = "DRAFT"
     SENT     = "SENT"
@@ -512,7 +526,13 @@ class AIImportDocumentType(str, enum.Enum):
     nothing else in the pipeline needs to change.
     """
     MATERIAL_REQUEST     = "MATERIAL_REQUEST"
+    # A price offer. Commits nobody: no liability, no stock, no payment.
+    QUOTATION            = "QUOTATION"
     PURCHASE_ORDER       = "PURCHASE_ORDER"
+    # A request for payment before supply. It says "Invoice" across the top
+    # and is not one — booking it as a supplier invoice creates a liability
+    # that does not exist, and doubles it when the tax invoice arrives.
+    PRO_FORMA_INVOICE    = "PRO_FORMA_INVOICE"
     SUPPLIER_INVOICE     = "SUPPLIER_INVOICE"
     DELIVERY_NOTE        = "DELIVERY_NOTE"
     GOODS_RECEIVED_NOTE  = "GOODS_RECEIVED_NOTE"

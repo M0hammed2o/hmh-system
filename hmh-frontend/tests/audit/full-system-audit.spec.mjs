@@ -9,7 +9,7 @@
  *   npx playwright test tests/audit --config=playwright.audit.config.mjs
  */
 
-import { expect, test } from "playwright/test";
+import { expect, test } from "../support/local-only.mjs";
 import { mkdirSync } from "node:fs";
 
 const SHOTS = "docs/testing/screenshots";

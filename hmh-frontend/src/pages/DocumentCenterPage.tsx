@@ -56,7 +56,8 @@ export default function DocumentCenterPage() {
 
   // Load projects on mount
   useEffect(() => {
-    projectsApi.list(1, 200).then((r) => {
+    // 100 is the API's maximum; 200 returns 422 and the list comes back empty.
+    projectsApi.list(1, 100).then((r) => {
       setProjects(r.items);
       if (r.items.length > 0) setProjectId(r.items[0].id);
     }).catch(() => {});

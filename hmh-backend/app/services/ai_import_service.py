@@ -536,6 +536,68 @@ def _extraction_failure_reason(payload) -> str:
     )
 
 
+# ── Payment evidence ──────────────────────────────────────────────────────────
+
+# Phrases that claim the document has been paid. Half of them arrive as a
+# rubber stamp across the total, the rest handwritten beside it.
+#
+# None of this is proof. A stamp says somebody believed it was paid, or
+# intended to pay it, or was handed a stamp and a pile of paper. The bank
+# statement is proof. So the claim is recorded and surfaced for verification,
+# and it never touches payment status — which stays derived from Payment rows
+# by payment_service, exactly as before.
+_PAYMENT_EVIDENCE_PATTERNS: tuple[tuple[str, str], ...] = (
+    (r"\bpaid\s+in\s+full\b", "marked 'paid in full'"),
+    (r"\bfully\s+paid\b", "marked 'fully paid'"),
+    (r"\bpaid\s+cash\b", "marked 'paid cash'"),
+    (r"\bcash\s+paid\b", "marked 'cash paid'"),
+    (r"\bpaid\s+by\s+eft\b", "marked 'paid by EFT'"),
+    (r"\bproof\s+of\s+payment\s+attached\b", "states proof of payment is attached"),
+    (r"\bpayment\s+received\b", "marked 'payment received'"),
+    (r"\bsettled\b", "marked 'settled'"),
+    # A bare PAID stamp. Anchored to avoid matching "unpaid", "prepaid" or
+    # the "PAID" inside a longer word.
+    (r"(?<![a-z])paid(?![a-z])", "stamped or marked 'paid'"),
+)
+
+
+def detect_payment_evidence(payload) -> tuple[bool, Optional[str]]:
+    """
+    Did this document claim it has been paid?
+
+    Returns (detected, note). The note names what was seen, in the document's
+    own words, so the person checking it against the bank knows what they are
+    verifying rather than being told only that "something" was found.
+    """
+    haystack = " ".join(
+        part for part in (
+            payload.raw_text or "",
+            payload.value("notes") or "",
+            payload.value("payment_terms") or "",
+        ) if part
+    ).lower()
+    if not haystack.strip():
+        return False, None
+
+    seen: list[str] = []
+    for pattern, description in _PAYMENT_EVIDENCE_PATTERNS:
+        if re.search(pattern, haystack):
+            seen.append(description)
+
+    if not seen:
+        return False, None
+
+    # "Paid in full" also matches the bare "paid" rule; the specific phrase is
+    # the useful one, so only the first is reported.
+    return True, (
+        f"Payment evidence detected — verification required. The document is "
+        f"{seen[0]}. This is a claim printed on the paperwork, not a bank record: "
+        f"nothing has been marked as paid. Verify it against the bank, then capture "
+        f"the payment so the status comes from a real payment record."
+    )
+
+
+
 def process_document(db: Session, document: AIImportDocument) -> AIImportDocument:
     """
     Run the full pipeline for one document: extract, classify, match, decide.
@@ -596,6 +658,12 @@ def process_document(db: Session, document: AIImportDocument) -> AIImportDocumen
     document.status = AIImportDocumentStatus.CLASSIFIED
 
     _store_extraction(db, document, payload)
+
+    # A PAID stamp is recorded as a claim awaiting verification. It never
+    # marks anything as settled — see detect_payment_evidence.
+    document.payment_evidence_detected, document.payment_evidence_note = (
+        detect_payment_evidence(payload)
+    )
 
     document.status = AIImportDocumentStatus.MATCHING
     matching.rematch_document(db, document, payload)

@@ -1,4 +1,4 @@
-import { expect, test } from "playwright/test";
+import { expect, test } from "./support/local-only.mjs";
 
 const user = { id: "00000000-0000-0000-0000-000000000001", full_name: "Notification User",
   email: "notify@example.test", phone: null, role: "OFFICE_ADMIN", is_active: true,

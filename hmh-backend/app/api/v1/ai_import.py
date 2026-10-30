@@ -56,6 +56,7 @@ from app.schemas.common import ApiSuccess
 from app.services import ai_import_extraction_service as extraction
 from app.services import ai_import_receiving_service
 from app.services import ai_import_matching_service as matching
+from app.services import ai_import_routing_service as routing
 from app.services import ai_import_policy_service as policy
 from app.services import ai_import_posting_service as posting_service
 from app.services import ai_import_posting_service as ai_import_posting_service
@@ -143,6 +144,33 @@ def _visible_documents(db, user):
 
 # ── Serialisation ─────────────────────────────────────────────────────────────
 
+def _routing_dict(db, document: AIImportDocument) -> dict:
+    """
+    The routing verdict for one document, tolerant of an unprocessed one.
+
+    A document that has not been extracted yet has no payload to reason over.
+    That is an ordinary state right after upload, not an error, so it reports
+    the destination its type implies and no action rather than failing the
+    whole listing.
+    """
+    record = ai_import_service.current_extraction(db, document.id)
+    if record is None:
+        destination = routing.destination_for(document.document_type)
+        return {
+            "destination": destination.key,
+            "destination_label": destination.label,
+            "effect": destination.effect,
+            "action": None,
+            "reason": "Not yet extracted, so there is nothing to route.",
+            "linked_label": None,
+            "linked_type": None,
+            "linked_id": None,
+            "review_notes": [],
+        }
+    payload = ai_import_service.working_payload(db, document)
+    return routing.route(db, document, payload).as_dict()
+
+
 def _document_dict(db, document: AIImportDocument, *, detail: bool = False) -> dict:
     data = {
         "id": str(document.id),
@@ -178,6 +206,14 @@ def _document_dict(db, document: AIImportDocument, *, detail: bool = False) -> d
         # be posted and still be sitting in the project warehouse, nowhere
         # near a BOQ lot.
         "pipeline": ai_import_receiving_service.pipeline_stage(db, document),
+        # Where this document is headed and what importing it would do. The
+        # review screen and the manifest both read this, so the two can never
+        # tell the operator different stories about the same document.
+        "routing": _routing_dict(db, document),
+        # A PAID stamp is a claim, never a settlement. Surfaced so it can be
+        # verified against the bank rather than silently discarded.
+        "payment_evidence_detected": document.payment_evidence_detected,
+        "payment_evidence_note": document.payment_evidence_note,
         "can_post": bool(
             document.processing_outcome is not None
             and document.status == AIImportDocumentStatus.READY_TO_POST
@@ -398,6 +434,82 @@ def get_batch(batch_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
 
 
 # ── Documents ─────────────────────────────────────────────────────────────────
+
+@router.get("/batches/{batch_id}/manifest", response_model=ApiSuccess[dict], dependencies=[IMPORT_VIEWERS])
+def get_batch_manifest(batch_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
+    """
+    What importing this batch would actually do, document by document.
+
+    The point of the manifest is that it is readable before anything is
+    written. Twenty mixed documents produce twenty different consequences —
+    one moves stock, two create a liability, the rest create nothing — and
+    approving them one screen at a time gives nobody a view of the whole.
+
+    Read-only: it decides nothing and writes nothing.
+    """
+    batch = ai_import_service.get_batch(db, batch_id)
+    _assert_batch_access(db, current_user, batch)
+
+    documents = sorted(batch.documents, key=lambda d: d.file_name)
+
+    rows: list[dict] = []
+    for document in documents:
+        record = ai_import_service.current_extraction(db, document.id)
+        payload = (
+            ai_import_service.working_payload(db, document) if record is not None else None
+        )
+        verdict = _routing_dict(db, document)
+        rows.append({
+            "document_id": str(document.id),
+            "file_name": document.file_name,
+            "document_type": document.document_type.value,
+            "document_type_confirmed": document.document_type_confirmed_by is not None,
+            "classification_confidence": float(document.classification_confidence or 0),
+            "status": document.status.value,
+            "supplier_id": str(document.supplier_id) if document.supplier_id else None,
+            "supplier_name": (payload.value("supplier_name") if payload else None),
+            "project_id": str(document.project_id) if document.project_id else None,
+            "reference": (payload.value("document_number") if payload else None),
+            "total_amount": (payload.value("total_amount") if payload else None),
+            "payment_evidence_detected": document.payment_evidence_detected,
+            "payment_evidence_note": document.payment_evidence_note,
+            "routing": verdict,
+            "can_post": bool(
+                document.processing_outcome is not None
+                and document.status == AIImportDocumentStatus.READY_TO_POST
+                and policy.may_post(document.processing_outcome)
+            ),
+        })
+
+    # Counts by action and by destination, so the header can say "3 will
+    # create a liability" without the operator counting rows themselves.
+    by_action: dict[str, int] = {}
+    by_destination: dict[str, int] = {}
+    for row in rows:
+        action = row["routing"]["action"] or "PENDING"
+        by_action[action] = by_action.get(action, 0) + 1
+        label = row["routing"]["destination_label"]
+        by_destination[label] = by_destination.get(label, 0) + 1
+
+    return ApiSuccess(data={
+        "batch": {
+            "id": str(batch.id),
+            "reference": batch.reference,
+            "status": batch.status.value,
+            "document_count": len(documents),
+        },
+        "rows": rows,
+        "summary": {
+            "by_action": by_action,
+            "by_destination": by_destination,
+            "payment_evidence_count": sum(
+                1 for r in rows if r["payment_evidence_detected"]
+            ),
+            "needs_review_count": by_action.get("REVIEW", 0),
+            "duplicate_count": by_action.get("SKIP_DUPLICATE", 0),
+        },
+    })
+
 
 @router.get("/documents", response_model=ApiSuccess[dict], dependencies=[IMPORT_VIEWERS])
 def list_documents(
@@ -895,6 +1007,13 @@ def get_service_status():
         "enabled": settings.AI_IMPORT_ENABLED,
         "extraction_available": extraction.ai_available(),
         "extraction_model": extraction.ai_model(),
+        # Whether a workspace id is configured, never which one. An
+        # organisation-scoped Anthropic key is refused with HTTP 400 "not
+        # scoped to a workspace" unless every request names one, and that
+        # refusal is indistinguishable, from the operator's side, from a
+        # document the model could not read. Without this flag the only way
+        # to tell them apart is to read the hosting dashboard.
+        "workspace_scoped": bool(extraction.workspace_headers()),
         "private_storage_configured": _supabase_enabled(),
         "auto_post_enabled": settings.AI_IMPORT_AUTO_POST_ENABLED,
         "worker_enabled": settings.AI_IMPORT_WORKER_ENABLED,

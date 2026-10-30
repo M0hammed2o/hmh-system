@@ -26,6 +26,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs } from "@/components/shared/Tabs";
 import { AIDocumentImportDetail } from "@/components/aiImport/AIDocumentImportDetail";
+import { BatchReviewPanel } from "@/components/aiImport/BatchReviewPanel";
 import { DocumentStatusBadge, OutcomeBadge } from "@/components/aiImport/AIImportBadges";
 import {
   aiImportApi,
@@ -826,7 +827,10 @@ export default function AIDocumentImportPage() {
   const [service, setService] = useState<ServiceStatus | null>(null);
 
   useEffect(() => {
-    void projectsApi.list(1, 200).then((r) => setProjects(r.items ?? [])).catch(() => setProjects([]));
+    // limit is capped at 100 by the API; 200 returns 422, which the catch
+    // below swallowed into an empty list — so the project selector on this
+    // page was always empty and no document could be assigned a project.
+    void projectsApi.list(1, 100).then((r) => setProjects(r.items ?? [])).catch(() => setProjects([]));
     void suppliersApi.list().then(setSuppliers).catch(() => setSuppliers([]));
     void companiesApi.list().then(setCompanies).catch(() => setCompanies([]));
     void aiImportApi.serviceStatus().then(setService).catch(() => setService(null));
@@ -874,6 +878,10 @@ export default function AIDocumentImportPage() {
       <Tabs
         tabs={[
           { key: "upload", label: "Import Documents" },
+          // Between upload and the per-document queue, because that is where
+          // it belongs in the work: see what the whole batch would do, fix
+          // what is wrong, then go document by document.
+          { key: "review", label: "Batch Review" },
           { key: "documents", label: "Documents" },
           { key: "dashboard", label: "Reconciliation" },
         ]}
@@ -885,7 +893,15 @@ export default function AIDocumentImportPage() {
         {tab === "upload" && (
           <UploadPanel
             projects={projects}
-            onUploaded={() => { bump(); setTab("documents"); }}
+            onUploaded={() => { bump(); setTab("review"); }}
+          />
+        )}
+        {tab === "review" && (
+          <BatchReviewPanel
+            projects={projects}
+            suppliers={suppliers}
+            refreshKey={refreshKey}
+            onOpenDocument={setOpenId}
           />
         )}
         {tab === "documents" && (

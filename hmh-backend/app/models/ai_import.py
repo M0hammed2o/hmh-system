@@ -162,6 +162,19 @@ class AIImportDocument(TimestampMixin, Base):
     failure_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
+    # ── Payment evidence ──────────────────────────────────────────────────────
+    # Documents arrive stamped PAID, or with a handwritten "paid cash" across
+    # the total. That is a claim made by whoever held the pen, not a
+    # settlement record, and it is never allowed to mark anything as paid:
+    # payment status is derived from Payment rows alone. The claim is
+    # recorded here so a person can verify it against the bank, and so the
+    # review screen can say "payment evidence detected — verification
+    # required" instead of silently discarding what the paper says.
+    payment_evidence_detected: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    payment_evidence_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
     # ── Review / authorisation ────────────────────────────────────────────────
     reviewed_by: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True

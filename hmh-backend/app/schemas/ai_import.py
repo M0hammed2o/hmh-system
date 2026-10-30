@@ -32,7 +32,7 @@ from app.models.enums import (
 )
 
 EXTRACTION_SCHEMA_VERSION = "1.0"
-PROMPT_VERSION = "1.0"
+PROMPT_VERSION = "1.1"   # quotation + pro-forma definitions and the tax-invoice rule
 
 
 # ── Field-level provenance ────────────────────────────────────────────────────
