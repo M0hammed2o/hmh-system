@@ -192,10 +192,42 @@ export interface RelatedDocument {
   shared_links: string[];
 }
 
+/**
+ * Where a document stands, end to end.
+ *
+ * The document's own status stops at POSTED, which is where the confusion
+ * starts: a delivery can be posted and still be sitting in the project
+ * warehouse, nowhere near a BOQ lot. The server continues the story.
+ */
+export type PipelineStage =
+  | "UPLOADED" | "QUEUED" | "PROCESSING"
+  | "AWAITING_REVIEW" | "AWAITING_AUTHORISATION" | "READY_TO_POST"
+  | "POSTED" | "IN_PROJECT_WAREHOUSE" | "PARTIALLY_ALLOCATED" | "ALLOCATED_TO_LOT"
+  | "FAILED" | "REJECTED" | "DUPLICATE" | "NOT_A_RECEIPT" | "NOT_POSTED";
+
+export interface ReceivingProgress {
+  stage: string;
+  label: string;
+  detail: string;
+  received_qty: number;
+  allocated_qty: number;
+  awaiting_allocation_qty: number;
+  next_action: string | null;
+}
+
+export interface DocumentPipeline {
+  stage: PipelineStage;
+  label: string;
+  detail: string;
+  next_action: string | null;
+  receiving: ReceivingProgress;
+}
+
 export interface ImportDocument {
   id: string;
   batch_id: string;
   batch_reference: string | null;
+  pipeline: DocumentPipeline;
   file_name: string;
   mime_type: string;
   file_size_bytes: number;

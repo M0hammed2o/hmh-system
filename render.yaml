@@ -61,8 +61,16 @@ services:
       - key: AI_IMPORT_SCAN_ENABLED
         value: "false"
       # Added by hand in the dashboard, never in this file:
-      #   ANTHROPIC_API_KEY  — enables extraction
+      #   ANTHROPIC_API_KEY       — enables extraction
+      #   ANTHROPIC_WORKSPACE_ID  — ONLY if the key is organisation-scoped.
+      #     Such a key is refused with HTTP 400 "not scoped to a workspace"
+      #     unless every request names the workspace. A key created inside a
+      #     workspace carries that itself and needs nothing here. The id
+      #     identifies a workspace and authorises nothing, but it lives in
+      #     the dashboard beside the key regardless.
       - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: ANTHROPIC_WORKSPACE_ID
         sync: false
 
   - type: web

@@ -415,9 +415,16 @@ def _local_copy(document: AIImportDocument) -> tuple[Optional[str], Optional[byt
     """
     Fetch the stored file.
 
-    Returns (local_path, bytes). The path is only present when the file is on
-    local disk; with Supabase storage the bytes are downloaded and the OCR and
-    regex strategies are skipped in favour of vision.
+    Returns (local_path, bytes). The path is always present when the bytes
+    could be fetched: a remote object is written to a private temporary file
+    so the OCR and deterministic strategies can read it.
+
+    That matters more than it sounds. In production every file lives in
+    Supabase, so without a path those two strategies could not run at all and
+    vision became a single point of failure — when the provider refused a
+    request, nothing was read from a document whose text was sitting right
+    there. The caller is responsible for removing any temporary file; see
+    `discard_local_copy`.
     """
     from app.core import storage
 
@@ -438,16 +445,95 @@ def _local_copy(document: AIImportDocument) -> tuple[Optional[str], Optional[byt
             except OSError as exc:
                 logger.warning("ai_import could not read %s: %s", candidate, exc)
 
-    # Remote object: download via a short-lived signed URL.
+    # Remote object: download via a short-lived signed URL, then stage it on
+    # disk so every strategy can read it, not just the one that takes bytes.
     try:
         import httpx
         url = storage.create_signed_url(path, expires_in=120)
         response = httpx.get(url, timeout=60.0, follow_redirects=True)
         response.raise_for_status()
-        return None, response.content
+        content = response.content
     except Exception as exc:                        # noqa: BLE001 - processing reports this
         logger.warning("ai_import could not download %s: %s", path, exc)
         return None, None
+
+    return _stage_temp_copy(content, document.file_name), content
+
+
+def _stage_temp_copy(content: bytes, file_name: Optional[str]) -> Optional[str]:
+    """
+    Write fetched bytes to a private temporary file.
+
+    Created with mkstemp, so it is owned by this process with no world
+    access and no predictable name — evidence can be commercially sensitive
+    and must not sit in a shared temp path anyone can read. The extension is
+    preserved because the OCR and parser strategies key off it.
+
+    Returns None rather than raising: a missing temporary file costs the
+    fallback strategies, not the whole document.
+    """
+    import tempfile
+
+    suffix = os.path.splitext(file_name or "")[1][:10] or ".bin"
+    try:
+        handle, temp_path = tempfile.mkstemp(prefix="hmh_ai_import_", suffix=suffix)
+        with os.fdopen(handle, "wb") as fh:
+            fh.write(content)
+        return temp_path
+    except OSError as exc:
+        logger.warning("ai_import could not stage a temporary copy: %s", exc)
+        return None
+
+
+def discard_local_copy(local_path: Optional[str]) -> None:
+    """
+    Remove a staged temporary file.
+
+    Only removes what this module staged — a file already on the upload disk
+    is the stored document itself and must survive.
+    """
+    if not local_path:
+        return
+    name = os.path.basename(local_path)
+    if not name.startswith("hmh_ai_import_"):
+        return
+    try:
+        os.remove(local_path)
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        logger.warning("ai_import could not remove the temporary copy %s: %s", local_path, exc)
+
+
+
+def _extraction_failure_reason(payload) -> str:
+    """
+    Say why nothing could be read, in the operator's terms.
+
+    The strategies record what each one hit. A provider rejecting the request
+    is a configuration problem somebody must fix; an unreadable scan is a
+    different job entirely. Telling them apart is the whole point, so the
+    provider's own words are kept rather than flattened into "extraction
+    failed".
+    """
+    warnings = [w for w in (payload.warnings or []) if w]
+    provider_trouble = next(
+        (w for w in warnings if w.startswith("vision failed") or w.startswith("vision unavailable")),
+        None,
+    )
+    if provider_trouble:
+        return (
+            "Nothing could be read from this document because the AI provider "
+            f"refused the request. {provider_trouble} "
+            "This needs a configuration fix, not a better scan."
+        )
+    if warnings:
+        return "Nothing could be read from this document. " + " ".join(warnings)
+    return (
+        "Nothing could be read from this document and no strategy reported why. "
+        "Capture the details by hand, or retry once storage and the AI provider "
+        "are known good."
+    )
 
 
 def process_document(db: Session, document: AIImportDocument) -> AIImportDocument:
@@ -471,12 +557,33 @@ def process_document(db: Session, document: AIImportDocument) -> AIImportDocumen
         return document
 
     # Raises on a transient provider failure; the worker turns that into a retry.
-    payload = extraction.analyse_document(
-        file_bytes=content,
-        mime_type=document.mime_type,
-        file_path=local_path,
-        file_name=document.file_name,
-    )
+    try:
+        payload = extraction.analyse_document(
+            file_bytes=content,
+            mime_type=document.mime_type,
+            file_path=local_path,
+            file_name=document.file_name,
+        )
+    finally:
+        # Evidence must not be left lying in a temp directory, whether the
+        # read succeeded, failed or raised.
+        discard_local_copy(local_path)
+
+    # Nothing was read by any strategy. That is a failure, and recording it as
+    # an ordinary "needs review" hides the cause: a provider that refused
+    # every request looks exactly like a blank page, and the operator is told
+    # to fix a scan that was never the problem.
+    if payload.extraction_mode == "none":
+        document.status = AIImportDocumentStatus.FAILED
+        document.failure_reason = _extraction_failure_reason(payload)
+        _store_extraction(db, document, payload)
+        db.commit()
+        db.refresh(document)
+        logger.error(
+            "ai_import extraction produced nothing for %s (%s): %s",
+            document.id, document.file_name, "; ".join(payload.warnings or []),
+        )
+        return document
 
     document.status = AIImportDocumentStatus.EXTRACTED
 
