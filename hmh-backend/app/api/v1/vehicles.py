@@ -182,6 +182,76 @@ def update_cost(cost_id: uuid.UUID, body: VehicleCostUpdate, db: DbSession, curr
     )
 
 
+@router.delete(
+    "/costs/{cost_id}",
+    response_model=ApiSuccess[dict],
+    dependencies=[OFFICE_AND_ABOVE],
+)
+def delete_cost(cost_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
+    """
+    Remove a cost that should never have been captured.
+
+    The case this exists for is the duplicate: the same slip entered twice,
+    or a line typed again because the first attempt looked like it had not
+    saved. Correcting such a row is not enough, because the second entry is
+    not wrong about anything — it simply should not be there, and left alone
+    it doubles that vehicle's spend.
+
+    A cost booked against a repair feeds what the mechanic is owed for it.
+    Deleting one therefore reduces the payable, and reducing it below what
+    the mechanic has already been paid would leave the books showing an
+    overpayment that never happened. That is refused here, naming the amount,
+    for the same reason update_cost refuses an edit that does it: see
+    vehicle_service.cost_payable_floor.
+
+    The row is removed outright. What it held is written to the audit log
+    first, so the deletion can be accounted for afterwards even though the
+    cost itself is gone.
+    """
+    from app.models.vehicle import VehicleCost
+
+    cost = db.get(VehicleCost, cost_id)
+    if not cost:
+        raise HTTPException(404, "Cost entry not found.")
+
+    # Deleting removes the row's whole contribution, so the question is
+    # simply whether what remains still covers what has been paid.
+    paid, from_other_costs, repair_title = vehicle_service.cost_payable_floor(db, cost)
+    if paid > 0 and from_other_costs < paid - 0.005:
+        raise HTTPException(
+            409,
+            f"{paid:.2f} has already been paid to the mechanic for "
+            f"\"{repair_title}\", and deleting this cost would leave only "
+            f"{from_other_costs:.2f} recorded against it. Reverse the payments "
+            f"that no longer apply first.",
+        )
+
+    # Captured before the row goes, because afterwards there is nothing to read.
+    removed = {
+        "vehicle_id": str(cost.vehicle_id),
+        "repair_job_id": str(cost.repair_job_id) if cost.repair_job_id else None,
+        "cost_type": cost.cost_type.value if hasattr(cost.cost_type, "value") else str(cost.cost_type),
+        "amount": float(cost.amount),
+        "description": cost.description,
+        "cost_date": cost.cost_date.isoformat() if cost.cost_date else None,
+        "project_id": str(cost.project_id) if cost.project_id else None,
+        "notes": cost.notes,
+    }
+    audit_service.write_event(
+        db, AuditAction.DELETE, "vehicle_cost", current_user.id, cost.id,
+        before_value=removed,
+        notes=f"Cost deleted: {removed['cost_type']} {removed['amount']:.2f} "
+              f"on {removed['cost_date']}.",
+    )
+
+    db.delete(cost)
+    db.commit()
+    return ApiSuccess(
+        data={"id": str(cost_id), "deleted": True},
+        message="Cost deleted.",
+    )
+
+
 @router.get(
     "/{vehicle_id}/costs",
     response_model=ApiSuccess[PaginatedResult[VehicleCostRead]],
