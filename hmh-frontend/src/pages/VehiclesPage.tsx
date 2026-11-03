@@ -791,6 +791,8 @@ export default function VehiclesPage() {
   const [showAdd, setShowAdd] = useState(false);
   const [logCostFor, setLogCostFor] = useState<Vehicle | null>(null);
   const [editCostFor, setEditCostFor] = useState<{ vehicle: Vehicle; cost: VehicleCost } | null>(null);
+  // Which cost row is mid-delete, so its button cannot be pressed twice.
+  const [deletingCostId, setDeletingCostId] = useState<string | null>(null);
   const [editVehicle, setEditVehicle] = useState<Vehicle | null>(null);
   const [assignFor, setAssignFor] = useState<Vehicle | null>(null);
   const [newRepairFor, setNewRepairFor] = useState<Vehicle | null>(null);
@@ -1136,6 +1138,55 @@ export default function VehiclesPage() {
                                 onClick={() => setEditCostFor({ vehicle: v, cost })}
                               >
                                 Edit
+                              </button>
+                              {/*
+                                For the duplicate: the same slip captured
+                                twice, or a line typed again because the
+                                first attempt looked like it had not saved.
+                                Correcting it is not enough — the second
+                                entry is not wrong about anything, it simply
+                                should not be there, and left alone it
+                                doubles the vehicle's spend.
+
+                                The confirmation names the amount and the
+                                description, because on a list of near
+                                identical rows "are you sure?" does not tell
+                                anybody which one they are about to remove.
+                              */}
+                              <button
+                                type="button"
+                                aria-label={`Delete cost ${cost.description ?? cost.cost_type}`}
+                                title="Delete this cost entry"
+                                disabled={deletingCostId === cost.id}
+                                className="text-xs text-muted-foreground hover:text-destructive hover:underline disabled:opacity-50"
+                                onClick={async () => {
+                                  const label = cost.description
+                                    ? `${costTypeLabels[cost.cost_type]} — ${cost.description}`
+                                    : costTypeLabels[cost.cost_type];
+                                  if (!window.confirm(
+                                    `Delete this cost?\n\n${label}\n` +
+                                    `R${cost.amount.toLocaleString()} on ${cost.cost_date}\n\n` +
+                                    `This cannot be undone.`
+                                  )) return;
+                                  setDeletingCostId(cost.id);
+                                  try {
+                                    await vehiclesApi.deleteCost(cost.id);
+                                    await loadCosts(v.id, { page: costs[v.id].page });
+                                  } catch (err: unknown) {
+                                    // The server refuses when the mechanic has
+                                    // already been paid for the repair this
+                                    // cost belongs to, and says by how much.
+                                    alert(
+                                      (err as { response?: { data?: { detail?: string } } })
+                                        ?.response?.data?.detail
+                                      ?? "Could not delete this cost."
+                                    );
+                                  } finally {
+                                    setDeletingCostId(null);
+                                  }
+                                }}
+                              >
+                                {deletingCostId === cost.id ? "Deleting…" : "Delete"}
                               </button>
                             </div>
                           </div>

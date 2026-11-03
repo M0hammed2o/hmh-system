@@ -263,6 +263,22 @@ export const vehiclesApi = {
     return res.data.data;
   },
 
+  /**
+   * Remove a cost that should never have been captured.
+   *
+   * For the duplicate: the same slip entered twice, or a line typed again
+   * because the first attempt looked like it had not saved. Correcting such
+   * a row is not enough, because the second entry is not wrong about
+   * anything — it simply should not be there.
+   *
+   * Refused with 409 when the cost belongs to a repair the mechanic has
+   * already been paid for, since removing it would leave the books showing
+   * an overpayment. The message names the amount and the repair.
+   */
+  deleteCost: async (costId: string): Promise<void> => {
+    await client.delete(`/vehicles/costs/${costId}`);
+  },
+
   listCosts: async (
     vehicleId: string,
     params: HistoryQuery = {},

@@ -764,3 +764,168 @@ def test_an_invoiced_repair_is_unaffected_by_a_cost_edit(db, client, world):
     _pay_mechanic(client, token, job.id, 4000)
 
     assert _patch_cost(client, token, cost.id, {"amount": 10}).status_code == 200
+
+
+# ── Deleting a cost entry ────────────────────────────────────────────────────
+#
+# The case this exists for is the duplicate: the same slip captured twice, or
+# a line typed again because the first attempt looked like it had not saved.
+# Correcting such a row is not enough — the second entry is not wrong about
+# anything, it simply should not be there, and left alone it doubles that
+# vehicle's spend.
+
+def _delete_cost(client, token, cost_id):
+    return client.delete(f"/api/v1/vehicles/costs/{cost_id}", headers=auth(token))
+
+
+def test_a_duplicated_cost_can_be_deleted(db, client, world):
+    from app.models.vehicle import VehicleCost
+
+    original = _cost(db, world["vehicle"], amount=138, description="GRILL LOCKS")
+    duplicate = _cost(db, world["vehicle"], amount=138, description="GRILL LOCKS")
+    db.commit()
+    token = _token(client, world)
+
+    r = _delete_cost(client, token, duplicate.id)
+    assert r.status_code == 200, r.text
+
+    db.expire_all()
+    assert db.get(VehicleCost, duplicate.id) is None
+    assert db.get(VehicleCost, original.id) is not None, "the wrong row was deleted"
+
+
+def test_deleting_a_cost_removes_it_from_the_vehicle_total(db, client, world):
+    """The point of the feature: a duplicate stops inflating the spend."""
+    _cost(db, world["vehicle"], amount=138)
+    duplicate = _cost(db, world["vehicle"], amount=138)
+    db.commit()
+    token = _token(client, world)
+
+    # _get already unwraps to the data envelope.
+    before = _get(client, token, f"/api/v1/vehicles/{world['vehicle'].id}/costs")
+    assert before["total"] == 2
+
+    _delete_cost(client, token, duplicate.id)
+
+    after = _get(client, token, f"/api/v1/vehicles/{world['vehicle'].id}/costs")
+    assert after["total"] == 1
+
+
+def test_what_the_deleted_cost_held_is_written_to_the_audit_log(db, client, world):
+    """
+    The row is gone afterwards, so if its contents were not recorded first
+    there would be no way to account for the deletion.
+    """
+    from app.models.audit import AuditEvent
+
+    cost = _cost(db, world["vehicle"], amount=2777.25,
+                 description="OIL, FUEL. INLINE, HYDRAULIC FILTERS")
+    db.commit()
+    cost_id = cost.id
+    token = _token(client, world)
+
+    _delete_cost(client, token, cost_id)
+
+    event = (
+        db.query(AuditEvent)
+        .filter(AuditEvent.entity_type == "vehicle_cost",
+                AuditEvent.entity_id == cost_id)
+        .order_by(AuditEvent.created_at.desc())
+        .first()
+    )
+    assert event is not None, "no audit event for the deletion"
+    assert float(event.before_value["amount"]) == 2777.25
+    assert "HYDRAULIC FILTERS" in event.before_value["description"]
+
+
+def test_deleting_an_unknown_cost_is_a_404(db, client, world):
+    token = _token(client, world)
+    assert _delete_cost(client, token, uuid.uuid4()).status_code == 404
+
+
+# ── The guard: money already paid out ────────────────────────────────────────
+
+def test_a_cost_cannot_be_deleted_below_what_the_mechanic_was_paid(db, client, world):
+    """
+    Deleting removes the row's whole contribution to the repair's payable.
+    Below what the mechanic has been paid, that invents an overpayment — the
+    same reason an edit down is refused.
+    """
+    from app.models.vehicle import VehicleCost
+
+    job = _repair(db, world["vehicle"])
+    cost = _cost(db, world["vehicle"], repair=job, amount=5000, cost_type="REPAIR")
+    db.commit()
+    token = _token(client, world)
+    assert _pay_mechanic(client, token, job.id, 4000).status_code == 201
+
+    r = _delete_cost(client, token, cost.id)
+    assert r.status_code == 409
+    assert "4000.00 has already been paid" in _msg(r)
+
+    db.expire_all()
+    assert db.get(VehicleCost, cost.id) is not None, "the cost was deleted anyway"
+
+
+def test_the_refusal_says_what_would_be_left(db, client, world):
+    """"Not allowed" on its own leaves nobody knowing what to do next."""
+    job = _repair(db, world["vehicle"], title="Gearbox overhaul")
+    cost = _cost(db, world["vehicle"], repair=job, amount=5000, cost_type="REPAIR")
+    db.commit()
+    token = _token(client, world)
+    _pay_mechanic(client, token, job.id, 4000)
+
+    message = _msg(_delete_cost(client, token, cost.id))
+    assert "Gearbox overhaul" in message
+    assert "0.00 recorded against it" in message
+    assert "Reverse the payments" in message
+
+
+def test_a_repair_cost_can_be_deleted_when_nothing_has_been_paid(db, client, world):
+    """The guard is about money paid out, not about being attached to a repair."""
+    from app.models.vehicle import VehicleCost
+
+    job = _repair(db, world["vehicle"])
+    cost = _cost(db, world["vehicle"], repair=job, amount=5000, cost_type="REPAIR")
+    db.commit()
+    token = _token(client, world)
+
+    assert _delete_cost(client, token, cost.id).status_code == 200
+    db.expire_all()
+    assert db.get(VehicleCost, cost.id) is None
+
+
+def test_a_duplicate_can_still_go_when_the_remaining_cost_covers_the_payment(db, client, world):
+    """
+    The real duplicate case on a paid repair: two identical labour rows, one
+    payment covered by either. Removing one still leaves enough recorded, so
+    it is allowed.
+    """
+    from app.models.vehicle import VehicleCost
+
+    job = _repair(db, world["vehicle"])
+    keep = _cost(db, world["vehicle"], repair=job, amount=5000, cost_type="REPAIR")
+    duplicate = _cost(db, world["vehicle"], repair=job, amount=5000, cost_type="REPAIR")
+    db.commit()
+    token = _token(client, world)
+    _pay_mechanic(client, token, job.id, 4000)
+
+    assert _delete_cost(client, token, duplicate.id).status_code == 200
+    db.expire_all()
+    assert db.get(VehicleCost, keep.id) is not None
+
+
+def test_a_non_labour_cost_on_a_paid_repair_is_not_blocked(db, client, world):
+    """Parts never fed the mechanic's payable, so removing them cannot undercut it."""
+    from app.models.vehicle import VehicleCost
+
+    job = _repair(db, world["vehicle"])
+    labour = _cost(db, world["vehicle"], repair=job, amount=5000, cost_type="REPAIR")
+    tyres = _cost(db, world["vehicle"], repair=job, amount=2000, cost_type="TYRE")
+    db.commit()
+    token = _token(client, world)
+    _pay_mechanic(client, token, job.id, 4000)
+
+    assert _delete_cost(client, token, tyres.id).status_code == 200
+    db.expire_all()
+    assert db.get(VehicleCost, labour.id) is not None
