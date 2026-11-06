@@ -27,6 +27,65 @@ class FuelStorageCreate(BaseModel):
     low_stock_threshold_litres: Optional[float] = Field(default=None, ge=0)
     notes: Optional[str] = None
     opening_stock_litres: float = Field(default=0, ge=0)
+    # What the opening litres cost, where that is known. Named for the opening
+    # balance rather than the tank, because it prices those litres once and is
+    # not a rate the tank carries: later deliveries bring their own price and
+    # the tank's cost is the weighted average of all of them.
+    opening_cost_per_litre: Optional[float] = Field(default=None, gt=0)
+
+    @model_validator(mode="after")
+    def opening_price_needs_opening_litres(self):
+        if self.opening_cost_per_litre is not None and not self.opening_stock_litres:
+            raise ValueError(
+                "A price per litre needs an opening stock quantity to price."
+            )
+        return self
+
+
+class FuelStorageUpdate(BaseModel):
+    """
+    Correct a storage location in place, instead of creating a second tank
+    beside the first because the first one's name was wrong.
+
+    Only the fields actually present in the request are applied, so an
+    omitted field is left alone and an explicit null clears a value. Four
+    things are deliberately absent, each for its own reason:
+
+      project_id      moving a tank between projects would leave every
+                      delivery, issue and adjustment pointing at the old one.
+      is_active       deactivating is a state change with its own
+                      preconditions and its own audit meaning. It belongs to
+                      the retire route, never to a generic field write.
+      opening_stock   the opening balance is an append-only adjustment row,
+                      not a property of the tank. Correcting it is a new
+                      adjustment, which is also how its price is corrected.
+      cutover_*       migration 0074 set the rule: confirmed by real
+                      evidence, never by a bare manual toggle.
+
+    site_id and fuel_type_id are accepted, but the service refuses them once
+    fuel has moved through the tank.
+    """
+
+    name: Optional[str] = Field(default=None, min_length=2, max_length=160)
+    location_type: Optional[str] = None
+    capacity_litres: Optional[float] = Field(default=None, gt=0)
+    low_stock_threshold_litres: Optional[float] = Field(default=None, ge=0)
+    notes: Optional[str] = None
+    site_id: Optional[uuid.UUID] = None
+    fuel_type_id: Optional[uuid.UUID] = None
+
+
+class FuelStorageRetire(BaseModel):
+    """
+    Why the fuel still in a tank is being written off as it is removed.
+
+    Required only when the tank still holds a balance. Removing it without
+    one would drop those litres out of every stock figure while the delivery
+    and issue rows that put them there survived, with nothing reconciling the
+    two.
+    """
+
+    write_off_reason: Optional[str] = Field(default=None, min_length=3, max_length=500)
 
 
 class FuelStorageRead(OrmModel):
@@ -41,6 +100,14 @@ class FuelStorageRead(OrmModel):
     is_active: bool
     notes: Optional[str]
     calculated_balance_litres: float = 0
+    # Whether any fuel record exists against this tank. Decides whether
+    # removing it deletes or deactivates, and whether its fuel type is still
+    # free to change, so the screen can say which before the user commits.
+    has_movements: bool = False
+    # The weighted average of every costed litre that has entered this tank.
+    # None when nothing priced has gone in. Without it somebody who enters a
+    # price has no way of seeing that it took.
+    average_cost_per_litre: Optional[float] = None
     cutover_confirmed_at: Optional[datetime] = None
     cutover_confirmed_by: Optional[uuid.UUID] = None
 
@@ -328,6 +395,9 @@ class FuelAdjustmentCreate(BaseModel):
     adjustment_type: str
     litres_delta: float
     reason: str = Field(min_length=3)
+    # Only meaningful on an adjustment that adds stock; the service refuses it
+    # on one that takes stock away.
+    cost_per_litre: Optional[float] = Field(default=None, gt=0)
     reference_reconciliation_id: Optional[uuid.UUID] = None
 
 
@@ -339,6 +409,7 @@ class FuelAdjustmentRead(OrmModel):
     fuel_type_id: uuid.UUID
     adjustment_type: str
     litres_delta: float
+    cost_per_litre: Optional[float] = None
     reason: str
     authorised_by: uuid.UUID
     created_at: datetime

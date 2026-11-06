@@ -725,6 +725,32 @@ def ensure_tables():
             END $$;
         """))
 
+    # migration 0082: cost per litre on a fuel stock adjustment.
+    # The column, because hmh_test persists between runs so create_all() sees an
+    # existing fuel_stock_adjustments and will not widen it. The CHECK, because
+    # it lives only in migration DDL (as do ck_fuel_adjustment_nonzero and
+    # ck_fuel_adjustment_type) and create_all() never emits it, which would
+    # otherwise leave the test database with weaker constraints than production.
+    with engine.begin() as conn:
+        conn.execute(_t("""
+            DO $$ BEGIN
+                IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                    WHERE table_name='fuel_stock_adjustments' AND column_name='cost_per_litre')
+                THEN ALTER TABLE fuel_stock_adjustments ADD COLUMN cost_per_litre NUMERIC(10, 4) NULL;
+                END IF;
+            END $$;
+        """))
+        conn.execute(_t("""
+            DO $$ BEGIN
+                IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                    WHERE conname = 'ck_fuel_adjustment_cost_positive')
+                THEN ALTER TABLE fuel_stock_adjustments
+                    ADD CONSTRAINT ck_fuel_adjustment_cost_positive
+                    CHECK (cost_per_litre IS NULL OR cost_per_litre > 0);
+                END IF;
+            END $$;
+        """))
+
     # migration 0076: partial unique index on live AI import jobs.
     # create_all() cannot express a WHERE-filtered unique index, so add it
     # here; without it the duplicate-concurrent-job guard is untested.
