@@ -469,10 +469,18 @@ def test_reports_and_legacy_delete_protection(client, db, fuel_ctx):
 
 def test_fuel_issue_computes_weighted_average_delivery_cost(client, db, fuel_ctx):
     """Phase 10: FuelIssue carries its own cost, derived from the real
-    delivery price (never fabricated) — fuel_ctx's opening 1000L balance has
-    no recorded cost (a plain OPENING adjustment), so only the costed
-    delivery below should feed the weighted average."""
+    delivery price (never fabricated) — fuel_ctx's opening 1000 L balance
+    recorded no price, so those litres are excluded from both sides of the
+    weighted average and only the costed delivery below feeds it.
+
+    The exclusion follows from the missing price, not from the adjustment's
+    OPENING type: since 0082 an opening balance can carry a price of its own.
+    The premise is asserted rather than assumed, because adding a price to the
+    fixture would blend the numbers and quietly destroy this guard."""
     c = fuel_ctx; oid = order_to_ordered(client, c, 500)
+    opening = db.query(FuelStockAdjustment).filter_by(
+        storage_location_id=uuid.UUID(c["storage_id"]), adjustment_type="OPENING").one()
+    assert opening.cost_per_litre is None
     body = {
         "delivered_at": datetime.now(timezone.utc).isoformat(), "delivered_litres": 500,
         "confirmed_litres": 500, "delivery_note_number": "DN-COST",
@@ -1313,3 +1321,414 @@ def test_delivery_item_not_from_fuel_material_request_is_rejected(client, fuel_c
     r = client.post(f"/api/v1/projects/{pid}/fuel-management/deliveries/from-procurement", json=body, headers=c["headers"]["admin"])
     assert r.status_code == 422, r.text
     assert "Fuel material request" in r.text
+
+
+# ───────────────────────────────────────────────────────────────────────────────
+# Phase: storage edit, removal, and price per litre (migration 0082)
+#
+# Before this, a storage location could only be created and listed: a wrong
+# name meant a second tank beside the first, a test tank stayed forever, and
+# nothing in the fuel UI could record what the fuel cost — so a tank stocked by
+# an opening balance produced NULL-cost issues and under-reported project spend
+# by exactly that fuel.
+# ───────────────────────────────────────────────────────────────────────────────
+
+
+def make_storage(client, c, *, name, headers="owner", **extra):
+    """A second storage location in the same project, for tests that must not
+    disturb fuel_ctx's main tank."""
+    body = {"site_id": c["site"]["id"], "fuel_type_id": c["diesel_id"], "name": name,
+            "capacity_litres": 5000, "low_stock_threshold_litres": 100}
+    body.update(extra)
+    r = client.post(f"/api/v1/projects/{c['project']['id']}/fuel-management/storage",
+                    json=body, headers=c["headers"][headers])
+    assert r.status_code == 201, r.text
+    return r.json()["data"]
+
+
+def patch_storage(client, c, storage_id, body, headers="owner"):
+    return client.patch(f"/api/v1/projects/{c['project']['id']}/fuel-management/storage/{storage_id}",
+                        json=body, headers=c["headers"][headers])
+
+
+def retire_storage(client, c, storage_id, body=None, headers="owner"):
+    return client.post(f"/api/v1/projects/{c['project']['id']}/fuel-management/storage/{storage_id}/retire",
+                       json=body if body is not None else {}, headers=c["headers"][headers])
+
+
+def list_storage(client, c, headers="owner", include_inactive=False):
+    r = client.get(f"/api/v1/projects/{c['project']['id']}/fuel-management/storage",
+                   params={"include_inactive": include_inactive}, headers=c["headers"][headers])
+    assert r.status_code == 200, r.text
+    return r.json()["data"]
+
+
+def adjust(client, c, storage_id, **body):
+    body.setdefault("storage_location_id", storage_id)
+    return client.post(f"/api/v1/projects/{c['project']['id']}/fuel-management/adjustments",
+                       json=body, headers=c["headers"]["owner"])
+
+
+# ── Edit ──────────────────────────────────────────────────────────────────────
+
+
+def test_storage_edit_updates_in_place_and_audits_only_changed_fields(client, db, fuel_ctx):
+    """A correction must change the tank that exists, not mint a second one,
+    and the audit row must say what actually moved — a snapshot of every field
+    makes a renamed tank indistinguishable from a re-capacitied one."""
+    c = fuel_ctx
+    before_count = len(list_storage(client, c))
+    r = patch_storage(client, c, c["storage_id"], {"name": "  Main Diesel Tank A  ",
+                                                   "low_stock_threshold_litres": 250})
+    assert r.status_code == 200, r.text
+    assert r.json()["data"]["name"] == "Main Diesel Tank A"  # stripped, as on create
+    assert r.json()["data"]["low_stock_threshold_litres"] == 250
+    assert r.json()["data"]["capacity_litres"] == 5000  # untouched field survives
+    assert len(list_storage(client, c)) == before_count
+
+    event = assert_audit(db, actor_id=c["owner"]["id"], entity_type="FUEL_STORAGE",
+                         entity_id=c["storage_id"], action="UPDATE")
+    assert set(event.before_value) == {"name", "low_stock_threshold_litres"}
+    assert event.before_value["name"] == "Main Diesel Tank"
+    # The trail records what was saved, not what was typed.
+    assert event.after_value["name"] == "Main Diesel Tank A"
+
+
+def test_storage_edit_requires_fuel_admin(client, db, fuel_ctx):
+    """SITE_STAFF can receive and issue fuel but must not be able to restate a
+    tank's capacity, which is what every variance is measured against."""
+    c = fuel_ctx
+    r = patch_storage(client, c, c["storage_id"], {"capacity_litres": 99000}, headers="site")
+    assert r.status_code == 403, r.text
+
+
+def test_storage_edit_rejects_empty_body_and_foreign_project(client, db, fuel_ctx):
+    c = fuel_ctx
+    assert patch_storage(client, c, c["storage_id"], {}).status_code == 422
+    r = client.patch(
+        f"/api/v1/projects/{c['other_project']['id']}/fuel-management/storage/{c['storage_id']}",
+        json={"name": "Stolen Tank"}, headers=c["headers"]["owner"])
+    assert r.status_code == 422, r.text
+    assert patch_storage(client, c, str(uuid.uuid4()), {"name": "Ghost Tank"}).status_code == 404
+
+
+def test_storage_edit_refuses_duplicate_name(client, db, fuel_ctx):
+    """Renaming onto an existing name must fail as a conflict, not blow up as a
+    500. The site_id is pinned deliberately: production's constraint is
+    UNIQUE NULLS NOT DISTINCT, but the test schema comes from create_all(), so
+    a NULL-site version of this test would pass here and fail in production."""
+    c = fuel_ctx
+    second = make_storage(client, c, name="Reserve Diesel Tank")
+    r = patch_storage(client, c, second["id"], {"name": "Main Diesel Tank"})
+    assert r.status_code == 409, r.text
+    # The failed flush must not have left the session poisoned.
+    assert patch_storage(client, c, second["id"], {"name": "Reserve Diesel Tank B"}).status_code == 200
+
+
+def test_storage_fuel_type_change_allowed_while_unused_and_locked_once_used(client, db, fuel_ctx):
+    """Diesel litres do not become petrol because somebody changed a dropdown.
+    The lock keys on movements, not on the balance: a tank drained back to zero
+    still has diesel history behind it."""
+    c = fuel_ctx
+    unused = make_storage(client, c, name="Spare Tank")
+    assert unused["has_movements"] is False
+    r = patch_storage(client, c, unused["id"], {"fuel_type_id": c["petrol_id"]})
+    assert r.status_code == 200, r.text
+    assert r.json()["data"]["fuel_type_id"] == c["petrol_id"]
+
+    # fuel_ctx's main tank has an OPENING adjustment, so it is spoken for.
+    used = next(s for s in list_storage(client, c) if s["id"] == c["storage_id"])
+    assert used["has_movements"] is True
+    r2 = patch_storage(client, c, c["storage_id"], {"fuel_type_id": c["petrol_id"]})
+    assert r2.status_code == 409, r2.text
+    assert "fuel type" in r2.json()["message"].lower()
+    # Sending the unchanged value is not a change, so it is not refused.
+    assert patch_storage(client, c, c["storage_id"], {"fuel_type_id": c["diesel_id"],
+                                                     "notes": "unchanged type"}).status_code == 200
+
+
+def test_storage_capacity_cannot_drop_below_current_balance(client, db, fuel_ctx):
+    """A capacity under the balance would make every later feasibility check
+    and variance read off a tank that cannot hold what it already holds."""
+    c = fuel_ctx  # opening balance is 1000 L
+    assert patch_storage(client, c, c["storage_id"], {"capacity_litres": 999}).status_code == 422
+    assert patch_storage(client, c, c["storage_id"], {"capacity_litres": 1000}).status_code == 200
+    assert patch_storage(client, c, c["storage_id"], {"capacity_litres": None}).status_code == 200
+
+
+def test_storage_edit_refused_once_deactivated(client, db, fuel_ctx):
+    c = fuel_ctx
+    tank = make_storage(client, c, name="Decommissioned Tank", opening_stock_litres=50)
+    assert retire_storage(client, c, tank["id"],
+                          {"write_off_reason": "Tank scrapped"}).json()["data"]["action"] == "DEACTIVATED"
+    r = patch_storage(client, c, tank["id"], {"name": "Back From The Dead"})
+    assert r.status_code == 422, r.text
+    assert "reactivate" in r.json()["message"].lower()
+
+
+# ── Remove ────────────────────────────────────────────────────────────────────
+
+
+def test_unused_storage_is_deleted_outright_and_the_audit_row_survives(client, db, fuel_ctx):
+    """A tank created by mistake should not have to be lived with. The audit
+    event has no FK to the row, so the trail outlives the delete."""
+    c = fuel_ctx
+    tank = make_storage(client, c, name="Typo Tank")
+    r = retire_storage(client, c, tank["id"])
+    assert r.status_code == 200, r.text
+    assert r.json()["data"] == {"storage_id": tank["id"], "name": "Typo Tank",
+                                "action": "DELETED", "blocked_by": [], "litres_written_off": 0.0}
+    db.expire_all()
+    assert db.query(FuelStorageLocation).filter_by(id=uuid.UUID(tank["id"])).first() is None
+    assert_audit(db, actor_id=c["owner"]["id"], entity_type="FUEL_STORAGE",
+                 entity_id=tank["id"], action="DELETE")
+
+
+def test_storage_with_history_is_deactivated_and_hidden_not_deleted(client, db, fuel_ctx):
+    """Its deliveries, issues and adjustments have to survive it, so the row
+    stays and is hidden instead. include_inactive is the only way back."""
+    c = fuel_ctx
+    r = retire_storage(client, c, c["storage_id"], {"write_off_reason": "Tank taken out of service"})
+    assert r.status_code == 200, r.text
+    assert r.json()["data"]["action"] == "DEACTIVATED"
+    assert "stock adjustments" in r.json()["data"]["blocked_by"]
+
+    assert [s["id"] for s in list_storage(client, c)] == []
+    hidden = list_storage(client, c, include_inactive=True)
+    assert [s["id"] for s in hidden] == [c["storage_id"]]
+    assert hidden[0]["is_active"] is False
+
+    assert retire_storage(client, c, c["storage_id"]).status_code == 409
+
+
+def test_removing_a_tank_holding_stock_demands_a_reason_then_writes_it_off(client, db, fuel_ctx):
+    """The reported case: a tank with fuel in it. Both the storage list and the
+    dashboard read active tanks only, so deactivating it would drop those
+    litres out of every stock figure while the deliveries and issues behind
+    them stayed on record. The write-off makes the disappearance an entry with
+    a reason on it rather than a silence."""
+    c = fuel_ctx
+    tank = make_storage(client, c, name="Test", capacity_litres=1000, opening_stock_litres=800)
+    before = next(s for s in list_storage(client, c) if s["id"] == tank["id"])
+    assert before["calculated_balance_litres"] == 800
+
+    refused = retire_storage(client, c, tank["id"])
+    assert refused.status_code == 422, refused.text
+    assert "800" in refused.json()["message"]
+    db.expire_all()
+    assert db.query(FuelStorageLocation).filter_by(id=uuid.UUID(tank["id"])).one().is_active is True
+
+    r = retire_storage(client, c, tank["id"], {"write_off_reason": "Tank removed from site"})
+    assert r.status_code == 200, r.text
+    assert r.json()["data"]["action"] == "DEACTIVATED"
+    assert r.json()["data"]["litres_written_off"] == 800.0
+
+    db.expire_all()
+    loss = db.query(FuelStockAdjustment).filter_by(
+        storage_location_id=uuid.UUID(tank["id"]), adjustment_type="LOSS").one()
+    assert float(loss.litres_delta) == -800.0
+    assert loss.reason == "Tank removed from site"
+    assert loss.cost_per_litre is None  # a price belongs on litres coming in
+    assert next(s for s in list_storage(client, c, include_inactive=True)
+                if s["id"] == tank["id"])["calculated_balance_litres"] == 0
+
+
+def test_storage_removal_requires_fuel_admin(client, db, fuel_ctx):
+    c = fuel_ctx
+    tank = make_storage(client, c, name="Not Yours Tank")
+    assert retire_storage(client, c, tank["id"], headers="site").status_code == 403
+    db.expire_all()
+    assert db.query(FuelStorageLocation).filter_by(id=uuid.UUID(tank["id"])).first() is not None
+
+
+def test_deactivated_storage_can_be_reactivated(client, db, fuel_ctx):
+    """Without this a mistaken removal is recoverable only by SQL, because the
+    list hides the row."""
+    c = fuel_ctx
+    assert retire_storage(client, c, c["storage_id"],
+                          {"write_off_reason": "Removed in error"}).status_code == 200
+    r = client.post(
+        f"/api/v1/projects/{c['project']['id']}/fuel-management/storage/{c['storage_id']}/reactivate",
+        headers=c["headers"]["owner"])
+    assert r.status_code == 200, r.text
+    assert r.json()["data"]["is_active"] is True
+    assert [s["id"] for s in list_storage(client, c)] == [c["storage_id"]]
+    # Already active: a second reactivate is a conflict, not a silent no-op.
+    assert client.post(
+        f"/api/v1/projects/{c['project']['id']}/fuel-management/storage/{c['storage_id']}/reactivate",
+        headers=c["headers"]["owner"]).status_code == 409
+
+
+def test_deactivated_storage_refuses_further_fuel_movements(client, db, fuel_ctx):
+    """Deactivation was cosmetic before this: nothing checked is_active on any
+    write path, so a hidden tank could still accumulate stock that neither the
+    storage list nor the dashboard could show."""
+    c = fuel_ctx
+    oid = order_to_ordered(client, c, 200)  # ordered while the tank is still live
+    assert retire_storage(client, c, c["storage_id"],
+                          {"write_off_reason": "Out of service"}).status_code == 200
+
+    issue_body = {"storage_location_id": c["storage_id"], "fuel_type_id": c["diesel_id"],
+                  "destination_type": "GENERATOR", "equipment_reference": "GEN-DEAD", "litres": 10}
+    assert issue_with_evidence(client, c, issue_body).status_code == 422
+
+    assert adjust(client, c, c["storage_id"], adjustment_type="GAIN", litres_delta=5,
+                  reason="Should be refused").status_code == 422
+
+    delivery_body = {"delivered_at": datetime.now(timezone.utc).isoformat(), "delivered_litres": 200,
+                     "confirmed_litres": 200, "delivery_note_number": "DN-DEAD",
+                     "storage_location_id": c["storage_id"]}
+    r = client.post(f"/api/v1/fuel-management/orders/{oid}/deliveries", json=delivery_body,
+                    headers=c["headers"]["site"])
+    assert r.status_code == 422, r.text
+
+    assert client.post(f"/api/v1/projects/{c['project']['id']}/fuel-management/reconciliations",
+                       json={"storage_location_id": c["storage_id"], "physical_balance_litres": 0,
+                             "explanation": "Should be refused",
+                             "reconciliation_date": datetime.now(timezone.utc).isoformat()},
+                       headers=c["headers"]["owner"]).status_code == 422
+
+
+# ── Price per litre ───────────────────────────────────────────────────────────
+
+
+def test_costed_opening_stock_prices_the_fuel_it_put_in(client, db, fuel_ctx):
+    """The gap this closes: a tank stocked by an opening balance had nowhere to
+    hold a price, so every issue off it carried a NULL cost forever and project
+    fuel spend under-reported by exactly that fuel."""
+    c = fuel_ctx
+    tank = make_storage(client, c, name="Priced Opening Tank",
+                        opening_stock_litres=1000, opening_cost_per_litre=18)
+    assert tank["average_cost_per_litre"] == 18.0
+    db.expire_all()
+    opening = db.query(FuelStockAdjustment).filter_by(
+        storage_location_id=uuid.UUID(tank["id"]), adjustment_type="OPENING").one()
+    assert float(opening.cost_per_litre) == 18.0
+
+    issue_body = {"storage_location_id": tank["id"], "fuel_type_id": c["diesel_id"],
+                  "destination_type": "GENERATOR", "equipment_reference": "GEN-OPEN", "litres": 100}
+    r = issue_with_evidence(client, c, issue_body)
+    assert r.status_code == 201, r.text
+    assert r.json()["data"]["unit_cost"] == 18.0
+    assert r.json()["data"]["total_cost"] == 1800.0
+
+
+def test_average_blends_costed_opening_stock_with_a_costed_gain(client, db, fuel_ctx):
+    """(1000 x 18 + 500 x 24) / 1500 = 20.00. Worth asserting, because an
+    average computed over litres on hand rather than litres that entered would
+    give a different answer the moment anything is issued."""
+    c = fuel_ctx
+    tank = make_storage(client, c, name="Blended Tank",
+                        opening_stock_litres=1000, opening_cost_per_litre=18)
+    r = adjust(client, c, tank["id"], adjustment_type="GAIN", litres_delta=500,
+               reason="Transferred in from the depot", cost_per_litre=24)
+    assert r.status_code == 201, r.text
+    assert r.json()["data"]["cost_per_litre"] == 24.0
+
+    fresh = next(s for s in list_storage(client, c) if s["id"] == tank["id"])
+    assert fresh["average_cost_per_litre"] == 20.0
+
+    issue_body = {"storage_location_id": tank["id"], "fuel_type_id": c["diesel_id"],
+                  "destination_type": "GENERATOR", "equipment_reference": "GEN-BLEND", "litres": 100}
+    r2 = issue_with_evidence(client, c, issue_body)
+    assert r2.status_code == 201, r2.text
+    assert r2.json()["data"]["unit_cost"] == 20.0
+    # The average is over litres that entered, so issuing does not restate it.
+    assert next(s for s in list_storage(client, c)
+                if s["id"] == tank["id"])["average_cost_per_litre"] == 20.0
+
+
+def test_uncosted_litres_are_excluded_from_the_average_not_valued_at_zero(client, db, fuel_ctx):
+    """The single most important case. 1000 uncosted litres plus 500 @ 24 is
+    24.00, not 8.00: litres with no recorded price are left out of BOTH the
+    numerator and the denominator. Counting them at zero would value real fuel
+    at nothing and drag every tank's average toward it."""
+    c = fuel_ctx
+    tank = make_storage(client, c, name="Partly Priced Tank", opening_stock_litres=1000)
+    assert tank["average_cost_per_litre"] is None  # never a fabricated number
+
+    assert adjust(client, c, tank["id"], adjustment_type="GAIN", litres_delta=500,
+                  reason="Transferred in at a known price", cost_per_litre=24).status_code == 201
+    fresh = next(s for s in list_storage(client, c) if s["id"] == tank["id"])
+    assert fresh["average_cost_per_litre"] == 24.0
+    assert fresh["average_cost_per_litre"] != 8.0
+
+    issue_body = {"storage_location_id": tank["id"], "fuel_type_id": c["diesel_id"],
+                  "destination_type": "GENERATOR", "equipment_reference": "GEN-PART", "litres": 100}
+    r = issue_with_evidence(client, c, issue_body)
+    assert r.status_code == 201, r.text
+    assert r.json()["data"]["unit_cost"] == 24.0
+
+
+def test_issue_cost_is_the_average_as_at_the_issue_date(client, db, fuel_ctx):
+    """unit_cost is frozen onto the issue row at issue time, so a price
+    recorded today must not retro-value yesterday's fuel."""
+    c = fuel_ctx
+    tank = make_storage(client, c, name="As At Tank",
+                        opening_stock_litres=1000, opening_cost_per_litre=18)
+    issue_body = {"storage_location_id": tank["id"], "fuel_type_id": c["diesel_id"],
+                  "destination_type": "GENERATOR", "equipment_reference": "GEN-ASAT", "litres": 100}
+    first = issue_with_evidence(client, c, issue_body)
+    assert first.status_code == 201, first.text
+    assert first.json()["data"]["unit_cost"] == 18.0
+
+    assert adjust(client, c, tank["id"], adjustment_type="GAIN", litres_delta=1000,
+                  reason="Later load at a higher price", cost_per_litre=30).status_code == 201
+    db.expire_all()
+    frozen = db.query(FuelIssue).filter_by(id=uuid.UUID(first.json()["data"]["id"])).one()
+    assert float(frozen.unit_cost) == 18.0
+
+    second = issue_with_evidence(client, c, issue_body)
+    assert second.status_code == 201, second.text
+    assert second.json()["data"]["unit_cost"] == 24.0  # (18000 + 30000) / 2000
+
+
+def test_price_is_refused_on_an_adjustment_that_takes_stock_away(client, db, fuel_ctx):
+    """A cost per litre prices the litres coming in. On a LOSS it would be
+    read into the weighted average as an inbound price it is not."""
+    c = fuel_ctx
+    r = adjust(client, c, c["storage_id"], adjustment_type="LOSS", litres_delta=-10,
+               reason="Spillage", cost_per_litre=20)
+    assert r.status_code == 422, r.text
+    assert "adds stock" in r.json()["message"]
+    assert adjust(client, c, c["storage_id"], adjustment_type="LOSS", litres_delta=-10,
+                  reason="Spillage").status_code == 201
+
+
+def test_non_positive_prices_are_rejected_by_the_schema(client, db, fuel_ctx):
+    """Zero is not a price, it is a missing one — and NULL, not 0, is how a
+    missing price is recorded, so the litres stay out of the average."""
+    c = fuel_ctx
+    for price in (0, -5):
+        assert adjust(client, c, c["storage_id"], adjustment_type="GAIN", litres_delta=10,
+                      reason="Bad price", cost_per_litre=price).status_code == 422
+        body = {"site_id": c["site"]["id"], "fuel_type_id": c["diesel_id"],
+                "name": f"Bad Price Tank {price}", "opening_stock_litres": 100,
+                "opening_cost_per_litre": price}
+        assert client.post(f"/api/v1/projects/{c['project']['id']}/fuel-management/storage",
+                           json=body, headers=c["headers"]["owner"]).status_code == 422
+
+
+def test_opening_price_without_opening_litres_is_rejected(client, db, fuel_ctx):
+    """A price with nothing to price would be accepted and then silently
+    dropped, leaving the user believing a rate had been recorded."""
+    c = fuel_ctx
+    body = {"site_id": c["site"]["id"], "fuel_type_id": c["diesel_id"],
+            "name": "Priceless Tank", "opening_cost_per_litre": 20}
+    r = client.post(f"/api/v1/projects/{c['project']['id']}/fuel-management/storage",
+                    json=body, headers=c["headers"]["owner"])
+    assert r.status_code == 422, r.text
+
+
+def test_storage_read_exposes_movement_and_cost_fields(client, db, fuel_ctx):
+    """The screen decides what the Delete button will do, and whether the fuel
+    type is still editable, from these two fields alone."""
+    c = fuel_ctx
+    unused = make_storage(client, c, name="Fields Tank")
+    assert unused["has_movements"] is False
+    assert unused["average_cost_per_litre"] is None
+    assert unused["is_active"] is True
+
+    rows = {s["id"]: s for s in list_storage(client, c)}
+    assert rows[c["storage_id"]]["has_movements"] is True
+    assert rows[unused["id"]]["has_movements"] is False

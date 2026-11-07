@@ -11,6 +11,10 @@ from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from decimal import Decimal
+
+from sqlalchemy.exc import IntegrityError
+
 from app.core.exceptions import ConflictError, InvalidStateError, NotFoundError, ValidationError
 from app.models.alert import SystemAlert
 from app.models.enums import AlertSeverity, AlertStatus, AlertType, AuditAction
@@ -129,20 +133,276 @@ def create_storage(db: Session, project_id: uuid.UUID, data: FuelStorageCreate, 
             project_id=project_id, site_id=data.site_id, storage_location_id=storage.id,
             fuel_type_id=data.fuel_type_id, adjustment_type="OPENING",
             litres_delta=data.opening_stock_litres, reason="Opening stock on storage creation",
+            cost_per_litre=data.opening_cost_per_litre,
             authorised_by=actor_id, created_at=_now(),
         ))
         _confirm_cutover_if_needed(db, storage, actor_id)
     _audit(db, actor_id, AuditAction.CREATE, "FUEL_STORAGE", storage.id,
-           after={"name": storage.name, "opening_stock_litres": data.opening_stock_litres})
+           after={"name": storage.name, "opening_stock_litres": data.opening_stock_litres,
+                  "opening_cost_per_litre": data.opening_cost_per_litre})
     db.commit(); db.refresh(storage)
     return storage
 
 
-def list_storage(db: Session, project_id: uuid.UUID):
-    return db.query(FuelStorageLocation).filter(
-        FuelStorageLocation.project_id == project_id,
-        FuelStorageLocation.is_active.is_(True),
-    ).order_by(FuelStorageLocation.name).all()
+def list_storage(db: Session, project_id: uuid.UUID, *, include_inactive: bool = False):
+    """
+    The project's storage locations, active ones only unless asked otherwise.
+
+    include_inactive is keyword-only and defaults to False so every existing
+    caller — the dashboard among them — keeps the behaviour it had. It exists
+    so a tank that was deactivated by mistake can be found again; without it
+    the only route back is SQL.
+    """
+    q = db.query(FuelStorageLocation).filter(FuelStorageLocation.project_id == project_id)
+    if not include_inactive:
+        q = q.filter(FuelStorageLocation.is_active.is_(True))
+    return q.order_by(FuelStorageLocation.name).all()
+
+
+# Every table that records fuel against a storage location, with the words to
+# describe it to somebody deciding whether to remove the tank.
+#
+# fuel_orders and fuel_deliveries are ON DELETE SET NULL rather than RESTRICT,
+# so unlike the other three they would not stop a hard delete — the delete
+# would succeed and quietly strip the destination off a historical, or still
+# in-flight, order, whose delivery then fails with "a destination fuel storage
+# location is required" and nothing to explain why. They belong on this list
+# for that reason, not because the database enforces it.
+_STORAGE_MOVEMENT_SOURCES = (
+    (FuelDelivery, FuelDelivery.storage_location_id, "deliveries"),
+    (FuelIssue, FuelIssue.storage_location_id, "fuel issues"),
+    (FuelStockAdjustment, FuelStockAdjustment.storage_location_id, "stock adjustments"),
+    (FuelReconciliation, FuelReconciliation.storage_location_id, "reconciliations"),
+    (FuelOrder, FuelOrder.storage_location_id, "fuel orders"),
+)
+
+
+def storage_movement_labels(db: Session, storage_id: uuid.UUID) -> list[str]:
+    """
+    Which kinds of fuel record exist against this storage location.
+
+    Empty means the tank has never been used and can be removed outright.
+    Anything here means its history has to survive it, so removing it
+    deactivates instead — and the words are what the screen tells the user
+    before they commit.
+    """
+    return [
+        label for model, column, label in _STORAGE_MOVEMENT_SOURCES
+        if db.query(model.id).filter(column == storage_id).first() is not None
+    ]
+
+
+def storage_ids_with_movements(db: Session, project_id: uuid.UUID) -> set[uuid.UUID]:
+    """
+    The same question for every tank in a project, in five queries rather than
+    five per tank. The storage list route calls this once instead of probing
+    each row.
+    """
+    ids: set[uuid.UUID] = set()
+    for model, column, _label in _STORAGE_MOVEMENT_SOURCES:
+        rows = db.query(column).filter(
+            model.project_id == project_id, column.isnot(None),
+        ).distinct().all()
+        ids.update(row[0] for row in rows if row[0])
+    return ids
+
+
+def update_storage(db: Session, project_id: uuid.UUID, storage_id: uuid.UUID,
+                   data, actor_id: uuid.UUID) -> FuelStorageLocation:
+    """
+    Correct a storage location in place.
+
+    Without this the only way to fix a wrong name or capacity was to create a
+    second tank beside the first, which is how a project ends up with three
+    tanks that are all the same tank.
+
+    Only the fields actually sent are touched, so an omitted field keeps its
+    value and an explicit null clears one.
+
+    Two of the fields are identity rather than configuration. Once fuel has
+    moved through the tank, site_id and fuel_type_id are refused: every issue
+    and adjustment snapshotted the fuel type from the tank, an in-flight order
+    requires the tank's fuel type to match its own, and diesel litres do not
+    become petrol because somebody changed a dropdown. The lock keys on
+    movements rather than on the balance, because a tank drained back to zero
+    still has diesel behind it.
+    """
+    storage = _get(db, FuelStorageLocation, storage_id, "Fuel storage")
+    if storage.project_id != project_id:
+        raise ValidationError("Fuel storage belongs to a different project.")
+    if not storage.is_active:
+        raise ValidationError(
+            f"{storage.name} is deactivated and cannot be edited. Reactivate it first."
+        )
+
+    fields = data.model_fields_set
+    if not fields:
+        raise ValidationError("No changes were supplied.")
+
+    identity_changes = [
+        f for f in ("site_id", "fuel_type_id")
+        if f in fields and getattr(data, f) != getattr(storage, f)
+    ]
+    if identity_changes:
+        labels = storage_movement_labels(db, storage.id)
+        if labels:
+            raise ConflictError(
+                f"{storage.name} has " + ", ".join(labels) + " recorded against it, so its "
+                "fuel type and site can no longer be changed. Create a separate storage "
+                "location instead."
+            )
+        if "site_id" in identity_changes:
+            _validate_scope(db, project_id, data.site_id)
+        if "fuel_type_id" in identity_changes:
+            fuel_type = _get(db, FuelTypeDefinition, data.fuel_type_id, "Fuel type")
+            if not fuel_type.is_active:
+                raise ValidationError("Fuel type is inactive.")
+
+    if "capacity_litres" in fields and data.capacity_litres is not None:
+        balance = stock_balance(db, storage.id)
+        if data.capacity_litres < balance:
+            raise ValidationError(
+                f"A capacity of {data.capacity_litres:.2f} L is below this tank's current "
+                f"balance of {balance:.2f} L."
+            )
+
+    def _snapshot() -> dict:
+        # Decimal from a Numeric column and UUID both break the JSON audit
+        # columns, so coerce on the way in. Only the fields actually sent are
+        # recorded: a snapshot of every column makes a renamed tank
+        # indistinguishable from a re-capacitied one in the trail.
+        out = {}
+        for field in fields:
+            current = getattr(storage, field)
+            if isinstance(current, uuid.UUID):
+                current = str(current)
+            elif isinstance(current, Decimal):
+                current = float(current)
+            out[field] = current
+        return out
+
+    before = _snapshot()
+
+    for field in fields:
+        value = getattr(data, field)
+        if field == "name" and value is not None:
+            # create_storage strips; without the same here an edit can mint a
+            # trailing-space twin that is a different tank and looks identical.
+            value = value.strip()
+        if field == "location_type" and value is not None:
+            value = value.upper()
+        setattr(storage, field, value)
+
+    try:
+        db.flush()
+    except IntegrityError:
+        db.rollback()
+        raise ConflictError(
+            f'A storage location named "{(data.name or "").strip()}" already exists for '
+            f"this project and site."
+        )
+
+    # Taken from the row, not from the request: the stored name is stripped,
+    # and the trail has to say what was actually saved.
+    _audit(db, actor_id, AuditAction.UPDATE, "FUEL_STORAGE", storage.id,
+           before=before, after=_snapshot())
+    db.commit(); db.refresh(storage)
+    return storage
+
+
+def retire_storage(db: Session, project_id: uuid.UUID, storage_id: uuid.UUID,
+                   write_off_reason: Optional[str], actor_id: uuid.UUID) -> dict:
+    """
+    Remove a storage location, and say which way it went.
+
+    A tank nothing has ever been recorded against is deleted outright, so a
+    tank created by mistake does not have to be lived with. One with any fuel
+    history is deactivated instead, because that history has to survive it.
+
+    Fuel still in the tank is written off first, with a reason. Both
+    list_storage() and the dashboard read active tanks only, so deactivating a
+    tank holding 800 L would drop 800 L out of every stock figure while the
+    deliveries and issues that put it there stayed exactly where they were,
+    and nothing anywhere would reconcile the two. The write-off makes the
+    disappearance an entry with a reason on it rather than a silence.
+    """
+    storage = _get(db, FuelStorageLocation, storage_id, "Fuel storage")
+    if storage.project_id != project_id:
+        raise ValidationError("Fuel storage belongs to a different project.")
+
+    name = storage.name
+    # Read before the write-off, so the reason for deactivating is the tank's
+    # real history rather than the adjustment this call is about to write.
+    labels = storage_movement_labels(db, storage.id)
+    balance = stock_balance(db, storage.id)
+    litres_written_off = 0.0
+
+    if abs(balance) > 0.001:
+        if not write_off_reason or not write_off_reason.strip():
+            raise ValidationError(
+                f"{name} still holds {balance:.2f} L. Removing it would take those litres "
+                f"out of the project's stock figures while the deliveries and issues "
+                f"behind them stayed on record. Give a reason and the balance will be "
+                f"written off as a stock adjustment."
+            )
+        db.add(FuelStockAdjustment(
+            project_id=project_id, site_id=storage.site_id, storage_location_id=storage.id,
+            fuel_type_id=storage.fuel_type_id, adjustment_type="LOSS",
+            litres_delta=-balance, reason=write_off_reason.strip(),
+            # No price: this is fuel leaving, and a price belongs on litres
+            # coming in. See create_adjustment.
+            cost_per_litre=None, authorised_by=actor_id, created_at=_now(),
+        ))
+        db.flush()
+        litres_written_off = round(balance, 2)
+        if "stock adjustments" not in labels:
+            labels.append("stock adjustments")
+
+    if not labels:
+        _audit(db, actor_id, AuditAction.DELETE, "FUEL_STORAGE", storage.id,
+               before={
+                   "name": name,
+                   "fuel_type_id": str(storage.fuel_type_id),
+                   "site_id": str(storage.site_id) if storage.site_id else None,
+                   "capacity_litres": float(storage.capacity_litres)
+                   if storage.capacity_litres is not None else None,
+                   "is_active": storage.is_active,
+               },
+               notes="No fuel was ever recorded against this storage location.")
+        # Audited before the delete, while the values can still be read.
+        # _audit does not commit, so one commit covers both.
+        db.delete(storage)
+        db.commit()
+        return {"storage_id": str(storage_id), "name": name, "action": "DELETED",
+                "blocked_by": [], "litres_written_off": 0.0}
+
+    if not storage.is_active:
+        raise ConflictError(f"{name} is already deactivated.")
+
+    storage.is_active = False
+    _audit(db, actor_id, AuditAction.UPDATE, "FUEL_STORAGE", storage.id,
+           before={"is_active": True},
+           after={"is_active": False, "blocked_by": labels,
+                  "litres_written_off": litres_written_off},
+           notes="Deactivated rather than deleted — " + ", ".join(labels) + " on record.")
+    db.commit()
+    return {"storage_id": str(storage_id), "name": name, "action": "DEACTIVATED",
+            "blocked_by": labels, "litres_written_off": litres_written_off}
+
+
+def reactivate_storage(db: Session, project_id: uuid.UUID, storage_id: uuid.UUID,
+                       actor_id: uuid.UUID) -> FuelStorageLocation:
+    """Put a tank deactivated by mistake back on the list."""
+    storage = _get(db, FuelStorageLocation, storage_id, "Fuel storage")
+    if storage.project_id != project_id:
+        raise ValidationError("Fuel storage belongs to a different project.")
+    if storage.is_active:
+        raise ConflictError(f"{storage.name} is already active.")
+    storage.is_active = True
+    _audit(db, actor_id, AuditAction.UPDATE, "FUEL_STORAGE", storage.id,
+           before={"is_active": False}, after={"is_active": True})
+    db.commit(); db.refresh(storage)
+    return storage
 
 
 def stock_balance(db: Session, storage_id: uuid.UUID, *, as_of: Optional[datetime] = None) -> float:
@@ -165,12 +425,42 @@ def stock_balance(db: Session, storage_id: uuid.UUID, *, as_of: Optional[datetim
     return round(float(delivered_q.scalar() or 0) - float(issued_q.scalar() or 0) + float(adjusted_q.scalar() or 0), 2)
 
 
+def storage_average_cost(db: Session, storage_id: uuid.UUID, *,
+                         as_of: Optional[datetime] = None) -> Optional[float]:
+    """
+    Public name for the tank's weighted-average cost, for callers outside this
+    module. The API layer reports it on every storage location so that somebody
+    who enters a price can see that it took.
+    """
+    return _weighted_avg_cost_per_litre(db, storage_id, as_of=as_of)
+
+
 def _weighted_avg_cost_per_litre(db: Session, storage_id: uuid.UUID, *, as_of: Optional[datetime] = None) -> Optional[float]:
-    """Moving weighted-average cost across this storage's VERIFIED deliveries
-    that actually recorded a cost_per_litre — standard weighted-average
-    inventory costing. Returns None (never a fabricated number) when no
-    delivery into this storage has a recorded cost."""
-    q = db.query(
+    """
+    Moving weighted-average cost across every costed litre that has entered
+    this storage location: VERIFIED deliveries that recorded a price, and
+    positive stock adjustments that recorded one — an opening balance taken
+    over at a known price, or a costed gain. Standard weighted-average
+    inventory costing.
+
+    Litres with no recorded price are left out of BOTH the numerator and the
+    denominator. An uncosted opening balance therefore neither dilutes the
+    average nor inflates it; it simply is not priced, and the fuel that was
+    priced keeps its own cost. Counting those litres at zero instead would
+    value real fuel at nothing. Returns None, never a fabricated number, when
+    nothing costed has entered.
+
+    The denominator is litres that ENTERED, not litres on hand: issues and
+    negative adjustments are not subtracted. That is what a moving average
+    price means, and it is how this has always behaved for deliveries —
+    subtracting them would silently restate every existing tank.
+
+    Two queries rather than one UNION, because the two sources use different
+    litre columns, different filters and different timestamps for `as_of`.
+    Summing them here keeps the "excluded from both" rule in one readable
+    place.
+    """
+    delivery_q = db.query(
         func.coalesce(func.sum(FuelDelivery.confirmed_litres * FuelDelivery.cost_per_litre), 0),
         func.coalesce(func.sum(FuelDelivery.confirmed_litres), 0),
     ).filter(
@@ -178,12 +468,25 @@ def _weighted_avg_cost_per_litre(db: Session, storage_id: uuid.UUID, *, as_of: O
         FuelDelivery.verification_status == "VERIFIED",
         FuelDelivery.cost_per_litre.isnot(None),
     )
+    adjustment_q = db.query(
+        func.coalesce(func.sum(FuelStockAdjustment.litres_delta * FuelStockAdjustment.cost_per_litre), 0),
+        func.coalesce(func.sum(FuelStockAdjustment.litres_delta), 0),
+    ).filter(
+        FuelStockAdjustment.storage_location_id == storage_id,
+        FuelStockAdjustment.cost_per_litre.isnot(None),
+        FuelStockAdjustment.litres_delta > 0,
+    )
     if as_of:
-        q = q.filter(FuelDelivery.delivered_at <= as_of)
-    cost_sum, litres_sum = q.one()
+        delivery_q = delivery_q.filter(FuelDelivery.delivered_at <= as_of)
+        adjustment_q = adjustment_q.filter(FuelStockAdjustment.created_at <= as_of)
+
+    delivered_cost, delivered_litres = delivery_q.one()
+    adjusted_cost, adjusted_litres = adjustment_q.one()
+    litres_sum = float(delivered_litres or 0) + float(adjusted_litres or 0)
     if not litres_sum:
         return None
-    return round(float(cost_sum) / float(litres_sum), 4)
+    cost_sum = float(delivered_cost or 0) + float(adjusted_cost or 0)
+    return round(cost_sum / litres_sum, 4)
 
 
 def _validate_order_links(db: Session, project_id: uuid.UUID, data):
@@ -199,6 +502,10 @@ def _validate_order_links(db: Session, project_id: uuid.UUID, data):
         storage = _get(db, FuelStorageLocation, data.storage_location_id, "Fuel storage")
         if storage.project_id != project_id or storage.fuel_type_id != data.fuel_type_id:
             raise ValidationError("Fuel storage does not match the project and fuel type.")
+        if not storage.is_active:
+            raise ValidationError(
+                f"{storage.name} is deactivated. Reactivate it before ordering fuel into it."
+            )
 
 
 def validate_request_destination(db: Session, project_id: uuid.UUID, data: FuelOrderCreate) -> None:
@@ -423,6 +730,10 @@ def record_delivery(db: Session, order_id: uuid.UUID, data: FuelDeliveryCreate,
     if not storage_id:
         raise ValidationError("A destination fuel storage location is required.")
     storage = _get(db, FuelStorageLocation, storage_id, "Fuel storage")
+    if not storage.is_active:
+        raise ValidationError(
+            f"{storage.name} is deactivated. Reactivate it before recording fuel against it."
+        )
     if storage.project_id != order.project_id or storage.fuel_type_id != order.fuel_type_id:
         raise ValidationError("Delivery fuel type or storage location does not match the order.")
     site_id = order.site_id or storage.site_id
@@ -518,6 +829,10 @@ def receive_delivery_from_procurement(
         raise ValidationError("This delivery item did not originate from a Fuel material request.")
 
     storage = _get(db, FuelStorageLocation, data.storage_location_id, "Fuel storage")
+    if not storage.is_active:
+        raise ValidationError(
+            f"{storage.name} is deactivated. Reactivate it before recording fuel against it."
+        )
     if storage.project_id != delivery.project_id:
         raise ValidationError("Storage location does not belong to the delivery's project.")
     ft = _get(db, FuelTypeDefinition, storage.fuel_type_id, "Fuel type")
@@ -609,6 +924,10 @@ def record_manual_emergency_delivery(
     _get(db, Project, project_id, "Project")
     if storage.project_id != project_id:
         raise ValidationError("Storage location does not belong to this project.")
+    if not storage.is_active:
+        raise ValidationError(
+            f"{storage.name} is deactivated. Reactivate it before recording fuel against it."
+        )
     site_id = storage.site_id
     if not site_id:
         raise ValidationError("The storage location must be associated with a site.")
@@ -754,6 +1073,10 @@ def create_issue(db: Session, project_id: uuid.UUID, data: FuelIssueCreate, acto
     storage = _get(db, FuelStorageLocation, data.storage_location_id, "Fuel storage")
     if storage.project_id != project_id or storage.fuel_type_id != data.fuel_type_id:
         raise ValidationError("Issue storage does not match the project and fuel type.")
+    if not storage.is_active:
+        raise ValidationError(
+            f"{storage.name} is deactivated. Reactivate it before recording fuel against it."
+        )
     if storage.cutover_confirmed_at is None:
         raise ValidationError(
             "This storage location has not completed Fuel stock cutover. "
@@ -949,11 +1272,22 @@ def create_adjustment(db: Session, project_id: uuid.UUID, data: FuelAdjustmentCr
         raise ValidationError("Invalid fuel adjustment type.")
     if not data.litres_delta:
         raise ValidationError("Fuel adjustment cannot be zero.")
+    if data.cost_per_litre is not None and data.litres_delta <= 0:
+        raise ValidationError(
+            "A cost per litre can only be recorded on an adjustment that adds stock, "
+            "such as an opening balance or a gain. It is the price of the litres "
+            "coming in."
+        )
+    if not storage.is_active:
+        raise ValidationError(
+            f"{storage.name} is deactivated. Reactivate it before recording fuel against it."
+        )
     balance_before = stock_balance(db, storage.id)
     adjustment = FuelStockAdjustment(
         project_id=project_id, site_id=storage.site_id, storage_location_id=storage.id,
         fuel_type_id=storage.fuel_type_id, adjustment_type=adjustment_type,
         litres_delta=data.litres_delta, reason=data.reason.strip(), authorised_by=actor_id,
+        cost_per_litre=data.cost_per_litre,
         reference_reconciliation_id=data.reference_reconciliation_id, created_at=_now(),
     )
     db.add(adjustment); db.flush()
@@ -962,7 +1296,10 @@ def create_adjustment(db: Session, project_id: uuid.UUID, data: FuelAdjustmentCr
     _audit(db, actor_id, AuditAction.UPDATE, "FUEL_ADJUSTMENT", adjustment.id,
            before={"calculated_balance_litres": balance_before},
            after={"calculated_balance_litres": round(balance_before + data.litres_delta, 2),
-                  "litres_delta": data.litres_delta, "type": adjustment_type}, notes=data.reason)
+                  "litres_delta": data.litres_delta, "type": adjustment_type,
+                  # data.*, not the ORM attribute: a Numeric column round-trips as
+                  # Decimal and the audit columns are JSON, which cannot serialise it.
+                  "cost_per_litre": data.cost_per_litre}, notes=data.reason)
     db.commit(); db.refresh(adjustment)
     return adjustment
 
@@ -971,6 +1308,10 @@ def reconcile(db: Session, project_id: uuid.UUID, data: FuelReconciliationCreate
     storage = _get(db, FuelStorageLocation, data.storage_location_id, "Fuel storage")
     if storage.project_id != project_id:
         raise ValidationError("Fuel storage belongs to a different project.")
+    if not storage.is_active:
+        raise ValidationError(
+            f"{storage.name} is deactivated. Reactivate it before recording fuel against it."
+        )
     calculated = stock_balance(db, storage.id, as_of=data.reconciliation_date)
     variance = round(data.physical_balance_litres - calculated, 2)
     variance_pct = round(variance / calculated * 100, 3) if calculated else None

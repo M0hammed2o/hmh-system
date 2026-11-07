@@ -24,6 +24,7 @@ from app.schemas.fuel_management import (
     FuelOrderCreate, FuelOrderHistoryRead, FuelOrderRead, FuelOrderUpdate,
     FuelPendingConfirmationRead,
     FuelReconciliationCreate, FuelReconciliationRead, FuelStorageCreate, FuelStorageRead,
+    FuelStorageRetire, FuelStorageUpdate,
     FuelTransition, FuelTypeRead,
 )
 from app.services import fuel_management_service as service
@@ -77,26 +78,98 @@ def dashboard(project_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
     return ApiSuccess(data=service.dashboard(db, project_id))
 
 
+def _storage_read(db, obj, *, movement_ids=None) -> FuelStorageRead:
+    """
+    One storage location with its derived figures.
+
+    Shared by the four routes that return a tank so they cannot drift into
+    disagreeing about its balance or its cost. `movement_ids` lets the list
+    route answer "has anything been recorded against this?" from one set
+    computed per project, instead of probing five tables per tank.
+    """
+    read = FuelStorageRead.model_validate(obj)
+    read.calculated_balance_litres = service.stock_balance(db, obj.id)
+    read.average_cost_per_litre = service.storage_average_cost(db, obj.id)
+    read.has_movements = (
+        obj.id in movement_ids if movement_ids is not None
+        else bool(service.storage_movement_labels(db, obj.id))
+    )
+    return read
+
+
 @project_router.post("/storage", response_model=ApiSuccess[FuelStorageRead], status_code=201,
                      dependencies=[require_fuel_permission("fuel.admin")])
 def create_storage(project_id: uuid.UUID, body: FuelStorageCreate, db: DbSession, current_user: CurrentUser):
     _access(db, current_user, project_id)
     obj = service.create_storage(db, project_id, body, current_user.id)
-    read = FuelStorageRead.model_validate(obj)
-    read.calculated_balance_litres = service.stock_balance(db, obj.id)
-    return ApiSuccess(data=read, message="Fuel storage location created.")
+    return ApiSuccess(data=_storage_read(db, obj), message="Fuel storage location created.")
 
 
 @project_router.get("/storage", response_model=ApiSuccess[list[FuelStorageRead]],
                     dependencies=[require_fuel_permission("fuel.view")])
-def list_storage(project_id: uuid.UUID, db: DbSession, current_user: CurrentUser):
+def list_storage(project_id: uuid.UUID, db: DbSession, current_user: CurrentUser,
+                 include_inactive: bool = Query(default=False)):
     _access(db, current_user, project_id)
-    result = []
-    for obj in service.list_storage(db, project_id):
-        read = FuelStorageRead.model_validate(obj)
-        read.calculated_balance_litres = service.stock_balance(db, obj.id)
-        result.append(read)
-    return ApiSuccess(data=result)
+    movement_ids = service.storage_ids_with_movements(db, project_id)
+    return ApiSuccess(data=[
+        _storage_read(db, obj, movement_ids=movement_ids)
+        for obj in service.list_storage(db, project_id, include_inactive=include_inactive)
+    ])
+
+
+@project_router.patch("/storage/{storage_id}", response_model=ApiSuccess[FuelStorageRead],
+                      dependencies=[require_fuel_permission("fuel.admin")])
+def update_storage(project_id: uuid.UUID, storage_id: uuid.UUID, body: FuelStorageUpdate,
+                   db: DbSession, current_user: CurrentUser):
+    """
+    Correct a storage location rather than creating a second one beside it.
+
+    PATCH rather than PUT: only the fields sent are touched, so a field the
+    form does not render — notes, say — cannot be blanked by its absence.
+    """
+    _access(db, current_user, project_id)
+    obj = service.update_storage(db, project_id, storage_id, body, current_user.id)
+    return ApiSuccess(data=_storage_read(db, obj), message="Fuel storage location updated.")
+
+
+@project_router.post("/storage/{storage_id}/retire", response_model=ApiSuccess[dict],
+                     dependencies=[require_fuel_permission("fuel.admin")])
+def retire_storage(project_id: uuid.UUID, storage_id: uuid.UUID,
+                   db: DbSession, current_user: CurrentUser,
+                   body: Optional[FuelStorageRetire] = None):
+    """
+    Remove a storage location, deleting it outright when nothing has ever been
+    recorded against it and deactivating it when something has.
+
+    Not a 204, and not DELETE: the caller has to learn which of the two
+    happened, and a tank still holding fuel has to send a reason for writing
+    that fuel off, which a DELETE cannot carry.
+    """
+    _access(db, current_user, project_id)
+    # The body is optional: a tank with no fuel in it needs no reason, and
+    # requiring an empty object just to delete an empty tank is noise.
+    result = service.retire_storage(db, project_id, storage_id,
+                                    body.write_off_reason if body else None,
+                                    current_user.id)
+    if result["action"] == "DELETED":
+        message = f"{result['name']} deleted — nothing had been recorded against it."
+    else:
+        message = (f"{result['name']} deactivated and hidden. It has "
+                   f"{', '.join(result['blocked_by'])} on record, so its history is kept.")
+        if result["litres_written_off"]:
+            message += f" {result['litres_written_off']:.2f} L were written off."
+    return ApiSuccess(data=result, message=message)
+
+
+@project_router.post("/storage/{storage_id}/reactivate", response_model=ApiSuccess[FuelStorageRead],
+                     dependencies=[require_fuel_permission("fuel.admin")])
+def reactivate_storage(project_id: uuid.UUID, storage_id: uuid.UUID,
+                       db: DbSession, current_user: CurrentUser):
+    """Put back a tank that was deactivated by mistake. Without this the only
+    way back is SQL, because the list hides it."""
+    _access(db, current_user, project_id)
+    obj = service.reactivate_storage(db, project_id, storage_id, current_user.id)
+    return ApiSuccess(data=_storage_read(db, obj), message="Fuel storage location reactivated.")
 
 
 @project_router.post("/orders", response_model=ApiSuccess[FuelOrderRead], status_code=201,

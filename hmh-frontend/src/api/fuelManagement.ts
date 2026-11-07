@@ -1,10 +1,13 @@
 import client from "./client";
 
 export interface FuelTypeDefinition { id: string; code: string; name: string; is_active: boolean }
-export interface FuelStorage { id: string; project_id: string; site_id: string | null; fuel_type_id: string; name: string; location_type: string; capacity_litres: number | null; low_stock_threshold_litres: number | null; calculated_balance_litres: number; notes: string | null }
+export interface FuelStorage { id: string; project_id: string; site_id: string | null; fuel_type_id: string; name: string; location_type: string; capacity_litres: number | null; low_stock_threshold_litres: number | null; calculated_balance_litres: number; notes: string | null; is_active: boolean; has_movements: boolean; average_cost_per_litre: number | null; cutover_confirmed_at: string | null }
+// What removing a storage location actually did. The message is the API's own
+// wording, so the screen does not keep a second copy of the same explanation.
+export interface FuelStorageRetireResult { storage_id: string; name: string; action: "DELETED" | "DEACTIVATED"; blocked_by: string[]; litres_written_off: number; message: string }
 export interface FuelEquipmentProfile { id: string; project_id: string; site_id: string | null; equipment_reference: string; destination_type: string; expected_litres_per_hour: number | null; tolerance_pct: number; is_active: boolean }
 export interface FuelOrder { id: string; order_number: string; project_id: string; site_id: string | null; fuel_type_id: string; supplier_id: string | null; storage_location_id: string | null; requested_by: string; requester_name?: string | null; request_date: string; requested_litres: number; expected_delivery_date: string | null; delivery_location: string; purpose: string | null; intended_use?: string | null; destination_type?: string | null; vehicle_id?: string | null; equipment_reference?: string | null; notes?: string | null; status: string; supplier_reference: string | null; purchase_order_reference: string | null; delivered_litres: number; submitted_at?: string | null; next_approver?: string | null; feasibility_status?: string; feasibility_message?: string | null; estimated_remaining_litres?: number | null; history?: Array<{ id: string; from_status: string | null; to_status: string; actor_name: string | null; reason: string | null; created_at: string }>; created_at: string }
-export interface FuelDelivery { id: string; order_id: string | null; procurement_delivery_item_id: string | null; project_id: string; site_id: string; storage_location_id: string | null; delivery_note_number: string | null; delivered_at: string | null; litres_delivered: number; confirmed_litres: number | null; variance_litres: number | null; supplier_variance_litres: number | null; meter_variance_litres: number | null; is_manual_emergency: boolean; emergency_reason: string | null; verification_status: string; excess_override: boolean; notes: string | null; created_at: string }
+export interface FuelDelivery { id: string; order_id: string | null; procurement_delivery_item_id: string | null; project_id: string; site_id: string; storage_location_id: string | null; delivery_note_number: string | null; delivered_at: string | null; litres_delivered: number; cost_per_litre: number | null; confirmed_litres: number | null; variance_litres: number | null; supplier_variance_litres: number | null; meter_variance_litres: number | null; is_manual_emergency: boolean; emergency_reason: string | null; verification_status: string; excess_override: boolean; notes: string | null; created_at: string }
 export interface FuelPendingConfirmation { delivery_item_id: string; description: string; quantity_received: number; unit: string | null; delivery_id: string; delivery_number: string | null; delivery_date: string; supplier_delivery_note_number: string | null; po_id: string; po_number: string; supplier_id: string }
 export interface FuelIssue { id: string; issue_number: string; project_id: string; storage_location_id: string; fuel_type_id: string; vehicle_id: string | null; vehicle_registration: string | null; destination_type: string; equipment_reference: string | null; issued_at: string; litres: number; odometer_reading: number | null; hour_meter_reading: number | null; litres_per_100km: number | null; litres_per_hour: number | null; anomaly_flag: boolean; anomaly_reason: string | null; feasibility_status: string; reading_source: string; received_by: string | null; issued_by_name: string | null; estimated_remaining_litres: number | null; evidence: Array<{ type: string; attachment_id: string }>; is_reversed: boolean; evidence_override_reason: string | null; feasibility_override_reason: string | null; unit_cost: number | null; total_cost: number | null }
 export interface FuelReconciliation { id: string; reconciliation_number: string; storage_location_id: string; reconciliation_date: string; calculated_balance_litres: number; physical_balance_litres: number; variance_litres: number; variance_pct: number | null; explanation: string; status: string; requires_approval: boolean }
@@ -15,9 +18,23 @@ const data = <T>(promise: Promise<{ data: { data: T } }>) => promise.then((r) =>
 export const fuelManagementApi = {
   fuelTypes: () => data<FuelTypeDefinition[]>(client.get("/fuel-management/fuel-types")),
   dashboard: (projectId: string) => data<FuelDashboard>(client.get(`/projects/${projectId}/fuel-management/dashboard`)),
-  storage: (projectId: string) => data<FuelStorage[]>(client.get(`/projects/${projectId}/fuel-management/storage`)),
+  storage: (projectId: string, includeInactive = false) =>
+    data<FuelStorage[]>(client.get(`/projects/${projectId}/fuel-management/storage`, { params: { include_inactive: includeInactive } })),
   equipmentProfiles: (projectId: string) => data<FuelEquipmentProfile[]>(client.get(`/projects/${projectId}/fuel-management/equipment-profiles`)),
   createStorage: (projectId: string, body: Record<string, unknown>) => data<FuelStorage>(client.post(`/projects/${projectId}/fuel-management/storage`, body)),
+  updateStorage: (projectId: string, storageId: string, body: Record<string, unknown>) =>
+    data<FuelStorage>(client.patch(`/projects/${projectId}/fuel-management/storage/${storageId}`, body)),
+  // Removing a tank either deletes or deactivates it, and the caller has to be
+  // told which, so this one keeps the envelope message instead of dropping it.
+  retireStorage: (projectId: string, storageId: string, writeOffReason?: string) =>
+    client
+      .post<{ data: FuelStorageRetireResult; message?: string }>(
+        `/projects/${projectId}/fuel-management/storage/${storageId}/retire`,
+        writeOffReason ? { write_off_reason: writeOffReason } : {},
+      )
+      .then((r) => ({ ...r.data.data, message: r.data.message ?? "" })),
+  reactivateStorage: (projectId: string, storageId: string) =>
+    data<FuelStorage>(client.post(`/projects/${projectId}/fuel-management/storage/${storageId}/reactivate`)),
   orders: (projectId: string, mine = false) => data<FuelOrder[]>(client.get(`/projects/${projectId}/fuel-management/orders`, { params: { mine } })),
   order: (orderId: string) => data<FuelOrder>(client.get(`/fuel-management/orders/${orderId}`)),
   createOrder: (projectId: string, body: Record<string, unknown>) => data<FuelOrder>(client.post(`/projects/${projectId}/fuel-management/orders`, body)),

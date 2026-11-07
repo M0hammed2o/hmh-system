@@ -199,6 +199,17 @@ class FuelStockAdjustment(Base):
     )
     adjustment_type: Mapped[str] = mapped_column(String(30), nullable=False)
     litres_delta: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
+    # Price of the litres this adjustment ADDS to stock: an opening balance
+    # taken over at a known price, or a costed GAIN/CORRECTION. NULL when the
+    # price is not known, and those litres are then left out of the weighted
+    # average entirely, numerator and denominator both, exactly as an uncosted
+    # delivery is. Never 0 as a stand-in for "unknown": that would price real
+    # fuel at nothing and drag the tank's average down.
+    #
+    # Written once at insert and never updated. This table is append-only (see
+    # test_adjustment_permissions_and_immutable_history); a mistyped price is
+    # corrected by a compensating pair of adjustments, not by an edit.
+    cost_per_litre: Mapped[Optional[float]] = mapped_column(Numeric(10, 4), nullable=True)
     reason: Mapped[str] = mapped_column(Text, nullable=False)
     authorised_by: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False

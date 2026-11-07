@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Children, cloneElement, isValidElement, useCallback, useEffect, useId, useMemo, useState } from "react";
 import { Link, NavLink, useSearchParams } from "react-router-dom";
-import { AlertTriangle, CheckCircle2, Download, Droplets, Gauge, Plus, RefreshCw, Truck } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Download, Droplets, Gauge, Pencil, Plus, RefreshCw, Trash2, Truck } from "lucide-react";
 
 import { projectsApi, type Project } from "@/api/projects";
 import { vehiclesApi, type Vehicle } from "@/api/vehicles";
@@ -173,12 +173,12 @@ function Orders({ orders, linkedOrderId, fuelName, run }: any) {
 }
 
 function Deliveries({ rows, pending, ordered, storage, showForm, setShowForm, projectId, run }: any) {
-  const [form, setForm] = useState({ order_id: "", storage_location_id: "", delivered_litres: "", delivery_note_number: "", opening_reading: "", closing_reading: "", tanker_registration: "", driver_details: "" });
+  const [form, setForm] = useState({ order_id: "", storage_location_id: "", delivered_litres: "", delivery_note_number: "", cost_per_litre: "", opening_reading: "", closing_reading: "", tanker_registration: "", driver_details: "" });
   const [confirming, setConfirming] = useState<FuelPendingConfirmation | null>(null);
-  const [confirmForm, setConfirmForm] = useState({ storage_location_id: "", confirmed_litres: "", opening_reading: "", closing_reading: "" });
+  const [confirmForm, setConfirmForm] = useState({ storage_location_id: "", confirmed_litres: "", cost_per_litre: "", opening_reading: "", closing_reading: "" });
   const openConfirm = (item: FuelPendingConfirmation) => {
     setConfirming(item);
-    setConfirmForm({ storage_location_id: "", confirmed_litres: String(item.quantity_received), opening_reading: "", closing_reading: "" });
+    setConfirmForm({ storage_location_id: "", confirmed_litres: String(item.quantity_received), cost_per_litre: "", opening_reading: "", closing_reading: "" });
   };
   return <Section title="Fuel Deliveries" action={<Button onClick={() => setShowForm(!showForm)}><Plus className="w-4 h-4" />Record legacy delivery</Button>}>
     {/* Phase 5/12: the real procurement hand-off — confirm a DeliveryItem from a
@@ -197,6 +197,7 @@ function Deliveries({ rows, pending, ordered, storage, showForm, setShowForm, pr
             <div className="grid sm:grid-cols-2 gap-3">
               <Field label="Destination tank"><select className="input" value={confirmForm.storage_location_id} onChange={(e) => setConfirmForm({ ...confirmForm, storage_location_id: e.target.value })}><option value="">Choose</option>{storage.map((x: FuelStorage) => <option key={x.id} value={x.id}>{x.name}</option>)}</select></Field>
               <Field label="Confirmed litres (physically verified)"><Input type="number" value={confirmForm.confirmed_litres} onChange={(e) => setConfirmForm({ ...confirmForm, confirmed_litres: e.target.value })} /></Field>
+              <Field label="Price per litre (R) — overrides the purchase-order rate"><Input type="number" step="0.01" value={confirmForm.cost_per_litre} onChange={(e) => setConfirmForm({ ...confirmForm, cost_per_litre: e.target.value })} /></Field>
               <Field label="Opening meter (optional)"><Input type="number" value={confirmForm.opening_reading} onChange={(e) => setConfirmForm({ ...confirmForm, opening_reading: e.target.value })} /></Field>
               <Field label="Closing meter (optional)"><Input type="number" value={confirmForm.closing_reading} onChange={(e) => setConfirmForm({ ...confirmForm, closing_reading: e.target.value })} /></Field>
             </div>
@@ -205,6 +206,9 @@ function Deliveries({ rows, pending, ordered, storage, showForm, setShowForm, pr
               <Button size="sm" disabled={!confirmForm.storage_location_id || !confirmForm.confirmed_litres} onClick={() => void run(() => fuelManagementApi.receiveFromProcurement(projectId, {
                 delivery_item_id: p.delivery_item_id, storage_location_id: confirmForm.storage_location_id,
                 confirmed_litres: Number(confirmForm.confirmed_litres),
+                // Omitted rather than sent as null when blank, so the
+                // purchase-order line rate is still used.
+                ...(confirmForm.cost_per_litre ? { cost_per_litre: Number(confirmForm.cost_per_litre) } : {}),
                 opening_reading: confirmForm.opening_reading ? Number(confirmForm.opening_reading) : null,
                 closing_reading: confirmForm.closing_reading ? Number(confirmForm.closing_reading) : null,
               })).then(() => setConfirming(null))}>Confirm and update stock</Button>
@@ -218,8 +222,21 @@ function Deliveries({ rows, pending, ordered, storage, showForm, setShowForm, pr
     {/* Legacy path: manual delivery recording against an old FuelOrder — kept for
         office-initiated/manual receiving, not the primary flow (see above). */}
     {showForm && <FormCard><div className="grid sm:grid-cols-2 gap-3"><Field label="Ordered request"><select className="input" value={form.order_id} onChange={(e) => { const order = ordered.find((x: FuelOrder) => x.id === e.target.value); setForm({ ...form, order_id: e.target.value, storage_location_id: order?.storage_location_id || "" }); }}><option value="">Choose</option>{ordered.map((x: FuelOrder) => <option key={x.id} value={x.id}>{x.order_number} · outstanding {fmt(x.requested_litres - x.delivered_litres)}</option>)}</select></Field>
-      <Field label="Destination tank"><select className="input" value={form.storage_location_id} onChange={(e) => setForm({ ...form, storage_location_id: e.target.value })}><option value="">Choose</option>{storage.map((x: FuelStorage) => <option key={x.id} value={x.id}>{x.name}</option>)}</select></Field><Field label="Delivered litres"><Input type="number" value={form.delivered_litres} onChange={(e) => setForm({ ...form, delivered_litres: e.target.value })} /></Field><Field label="Delivery note number"><Input value={form.delivery_note_number} onChange={(e) => setForm({ ...form, delivery_note_number: e.target.value })} /></Field><Field label="Opening meter"><Input type="number" value={form.opening_reading} onChange={(e) => setForm({ ...form, opening_reading: e.target.value })} /></Field><Field label="Closing meter"><Input type="number" value={form.closing_reading} onChange={(e) => setForm({ ...form, closing_reading: e.target.value })} /></Field><Field label="Tanker registration"><Input value={form.tanker_registration} onChange={(e) => setForm({ ...form, tanker_registration: e.target.value })} /></Field><Field label="Driver details"><Input value={form.driver_details} onChange={(e) => setForm({ ...form, driver_details: e.target.value })} /></Field></div>
-      <Button onClick={() => void run(() => fuelManagementApi.recordDelivery(form.order_id, { ...form, delivered_at: new Date().toISOString(), delivered_litres: Number(form.delivered_litres), storage_location_id: form.storage_location_id, opening_reading: form.opening_reading ? Number(form.opening_reading) : null, closing_reading: form.closing_reading ? Number(form.closing_reading) : null }))}>Record pending delivery</Button></FormCard>}
+      <Field label="Destination tank"><select className="input" value={form.storage_location_id} onChange={(e) => setForm({ ...form, storage_location_id: e.target.value })}><option value="">Choose</option>{storage.map((x: FuelStorage) => <option key={x.id} value={x.id}>{x.name}</option>)}</select></Field><Field label="Delivered litres"><Input type="number" value={form.delivered_litres} onChange={(e) => setForm({ ...form, delivered_litres: e.target.value })} /></Field><Field label="Delivery note number"><Input value={form.delivery_note_number} onChange={(e) => setForm({ ...form, delivery_note_number: e.target.value })} /></Field><Field label="Price per litre (R)"><Input type="number" step="0.01" value={form.cost_per_litre} onChange={(e) => setForm({ ...form, cost_per_litre: e.target.value })} /></Field><Field label="Opening meter"><Input type="number" value={form.opening_reading} onChange={(e) => setForm({ ...form, opening_reading: e.target.value })} /></Field><Field label="Closing meter"><Input type="number" value={form.closing_reading} onChange={(e) => setForm({ ...form, closing_reading: e.target.value })} /></Field><Field label="Tanker registration"><Input value={form.tanker_registration} onChange={(e) => setForm({ ...form, tanker_registration: e.target.value })} /></Field><Field label="Driver details"><Input value={form.driver_details} onChange={(e) => setForm({ ...form, driver_details: e.target.value })} /></Field></div>
+      {/* Built field by field, not spread from `form`: a spread would post
+          order_id and every blank text input as "", and cost_per_litre: ""
+          alone would reject a delivery that records fine today. */}
+      <Button onClick={() => void run(() => fuelManagementApi.recordDelivery(form.order_id, {
+        delivered_at: new Date().toISOString(),
+        delivered_litres: Number(form.delivered_litres),
+        delivery_note_number: form.delivery_note_number,
+        storage_location_id: form.storage_location_id || null,
+        ...(form.cost_per_litre ? { cost_per_litre: Number(form.cost_per_litre) } : {}),
+        tanker_registration: form.tanker_registration || null,
+        driver_details: form.driver_details || null,
+        opening_reading: form.opening_reading ? Number(form.opening_reading) : null,
+        closing_reading: form.closing_reading ? Number(form.closing_reading) : null,
+      }))}>Record pending delivery</Button></FormCard>}
     <CardList empty="No deliveries recorded.">{rows.map((d: FuelDelivery) => <article key={d.id} className="rounded-xl border p-4"><div className="flex flex-wrap justify-between gap-2"><div><p className="font-semibold">{d.delivery_note_number || "Delivery"}{d.is_manual_emergency && <Badge variant="outline" className="ml-2 text-[10px]">Emergency</Badge>}</p><p className="text-sm text-muted-foreground">{fmt(d.confirmed_litres || d.litres_delivered)} · {storage.find((s: FuelStorage) => s.id === d.storage_location_id)?.name || "Storage"} · supplier variance {fmt(d.supplier_variance_litres)}{d.meter_variance_litres != null && <> · meter variance {fmt(d.meter_variance_litres)}</>}</p></div><Badge className={statusClass(d.verification_status)}>{d.verification_status}</Badge></div>{d.verification_status === "PENDING" && <div className="flex gap-2 mt-3"><Button size="sm" onClick={() => void run(() => fuelManagementApi.verifyDelivery(d.id))}>Verify</Button><Button size="sm" variant="outline" onClick={() => void run(() => fuelManagementApi.verifyDelivery(d.id, false))}>Reject</Button></div>}</article>)}</CardList>
   </Section>;
 }
@@ -341,19 +358,143 @@ function CameraCapture({ label, file, onChange, required = false }: { label: str
   </div>;
 }
 
+// A fresh form, and the shape the storage form always holds. Kept outside the
+// component so "create" can reset to it without rebuilding the object inline.
+const emptyStore = { name: "", fuel_type_id: "", capacity_litres: "", low_stock_threshold_litres: "", opening_stock_litres: "", opening_cost_per_litre: "" };
+
 function Stock({ storage, fuelTypes, rows, showForm, setShowForm, projectId, run }: any) {
   const [mode, setMode] = useState<"reconcile" | "storage">("reconcile");
   const [rec, setRec] = useState({ storage_location_id: "", physical_balance_litres: "", explanation: "" });
-  const [store, setStore] = useState({ name: "", fuel_type_id: "", capacity_litres: "", low_stock_threshold_litres: "", opening_stock_litres: "" });
+  const [store, setStore] = useState(emptyStore);
+  // The tank being edited, or null while creating. The same form serves both,
+  // so a wrong name is corrected in place instead of becoming a second tank.
+  const [editing, setEditing] = useState<FuelStorage | null>(null);
+  const [removingId, setRemovingId] = useState("");
+  // Removing a tank takes its card off the screen either way, so without this
+  // strip the difference between "deleted" and "deactivated, history kept"
+  // would never reach the person who asked for it.
+  const [notice, setNotice] = useState("");
   useEffect(() => {
     if (!store.fuel_type_id && fuelTypes[0]) {
       setStore((current) => ({ ...current, fuel_type_id: fuelTypes[0].id }));
     }
   }, [fuelTypes, store.fuel_type_id]);
-  return <Section title="Fuel Stock & Reconciliation" action={<div className="flex gap-2"><Button variant="outline" onClick={() => { setMode("storage"); setShowForm(true); }}>New storage</Button><Button onClick={() => { setMode("reconcile"); setShowForm(true); }}>Reconcile</Button></div>}>
-    <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">{storage.map((s: FuelStorage) => <div key={s.id} className="rounded-xl border p-4"><p className="font-semibold">{s.name}</p><p className="text-3xl font-bold mt-3">{fmt(s.calculated_balance_litres)}</p><p className="text-xs text-muted-foreground mt-1">Capacity {s.capacity_litres ? fmt(s.capacity_litres) : "not set"}</p>{s.low_stock_threshold_litres != null && s.calculated_balance_litres <= s.low_stock_threshold_litres && <p className="text-sm text-amber-700 mt-2 flex gap-1"><AlertTriangle className="w-4 h-4" />Below threshold</p>}</div>)}</div>
+
+  const openCreate = () => {
+    // editing is cleared here rather than when a save succeeds: run() swallows
+    // the error, so clearing it there would throw away the user's typing on a
+    // save that failed.
+    setEditing(null);
+    setStore({ ...emptyStore, fuel_type_id: fuelTypes[0]?.id || "" });
+    setMode("storage"); setNotice(""); setShowForm(true);
+  };
+  const openEdit = (s: FuelStorage) => {
+    setEditing(s);
+    setStore({
+      name: s.name, fuel_type_id: s.fuel_type_id,
+      capacity_litres: s.capacity_litres != null ? String(s.capacity_litres) : "",
+      low_stock_threshold_litres: s.low_stock_threshold_litres != null ? String(s.low_stock_threshold_litres) : "",
+      // Not editable: the opening balance is an adjustment row, not a property
+      // of the tank, so the form does not render it when editing.
+      opening_stock_litres: "", opening_cost_per_litre: "",
+    });
+    setMode("storage"); setNotice(""); setShowForm(true);
+  };
+
+  const saveStorage = () => {
+    // Built field by field on purpose. Spreading `store` would post
+    // capacity_litres: "" on an untouched field and 422 the request, and would
+    // post opening_cost_per_litre on an edit, where the schema drops unknown
+    // keys in silence and the price would simply vanish.
+    const body: Record<string, unknown> = {
+      name: store.name.trim(),
+      capacity_litres: store.capacity_litres ? Number(store.capacity_litres) : null,
+      low_stock_threshold_litres: store.low_stock_threshold_litres ? Number(store.low_stock_threshold_litres) : null,
+    };
+    if (editing) {
+      // Sent only when the tank can still accept it; the API refuses a fuel
+      // type change once fuel has moved through, and sending the unchanged
+      // value would be refused just the same.
+      if (!editing.has_movements) body.fuel_type_id = store.fuel_type_id;
+      return run(() => fuelManagementApi.updateStorage(projectId, editing.id, body));
+    }
+    body.fuel_type_id = store.fuel_type_id;
+    body.opening_stock_litres = Number(store.opening_stock_litres || 0);
+    if (store.opening_cost_per_litre) body.opening_cost_per_litre = Number(store.opening_cost_per_litre);
+    return run(() => fuelManagementApi.createStorage(projectId, body));
+  };
+
+  const removeStorage = (s: FuelStorage) => {
+    // The two outcomes are not the same thing, and which one happens is
+    // decided by history the user cannot see, so say it before they commit.
+    const fate = s.has_movements
+      ? `"${s.name}" has fuel records against it, so it will be DEACTIVATED and hidden from this screen. Its deliveries, issues and adjustments stay on record.`
+      : `"${s.name}" has no fuel recorded against it and will be permanently deleted.`;
+    let reason: string | undefined;
+    if (s.calculated_balance_litres > 0) {
+      // window.prompt is this page's idiom for capturing a reason. Removing a
+      // tank that still holds fuel takes those litres out of every stock
+      // figure, so they are written off as a loss with a reason attached
+      // rather than quietly disappearing.
+      const answer = window.prompt(
+        `${fate}\n\nIt still holds ${fmt(s.calculated_balance_litres)}, which will be written off as a stock loss. Why is it being written off?`,
+      );
+      if (!answer || !answer.trim()) return;
+      reason = answer.trim();
+    } else if (!window.confirm(fate)) return;
+    setNotice(""); setRemovingId(s.id);
+    void run(async () => {
+      const result = await fuelManagementApi.retireStorage(projectId, s.id, reason);
+      setNotice(result.message);
+    }).finally(() => setRemovingId(""));
+  };
+
+  const fuelTypeLocked = Boolean(editing?.has_movements);
+  return <Section title="Fuel Stock & Reconciliation" action={<div className="flex gap-2"><Button variant="outline" onClick={openCreate}>New storage</Button><Button onClick={() => { setMode("reconcile"); setShowForm(true); }}>Reconcile</Button></div>}>
+    {notice && <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800">{notice}</div>}
+    {/* flex-col with the action row pushed down: a "Below threshold" warning on
+        one card must not leave its buttons sitting lower than its neighbours'. */}
+    <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">{storage.map((s: FuelStorage) => <div key={s.id} className="rounded-xl border p-4 flex flex-col">
+      <p className="font-semibold break-words">{s.name}</p>
+      <p className="text-3xl font-bold mt-3">{fmt(s.calculated_balance_litres)}</p>
+      <p className="text-xs text-muted-foreground mt-1">Capacity {s.capacity_litres ? fmt(s.capacity_litres) : "not set"}</p>
+      {/* Shown even when there is no price, so somebody who has just entered one
+          can see whether it took. */}
+      <p className="text-xs text-muted-foreground mt-1">{s.average_cost_per_litre != null ? `Average cost R${s.average_cost_per_litre.toFixed(2)}/L` : "No price recorded"}</p>
+      {s.low_stock_threshold_litres != null && s.calculated_balance_litres <= s.low_stock_threshold_litres && <p className="text-sm text-amber-700 mt-2 flex gap-1"><AlertTriangle className="w-4 h-4" />Below threshold</p>}
+      {/* The labels name the tank: with several cards on screen a bare "Delete"
+          does not say which one, on screen or to a test. */}
+      <div className="flex flex-wrap gap-2 mt-auto pt-3 border-t">
+        <Button size="sm" variant="outline" aria-label={`Edit storage ${s.name}`} onClick={() => openEdit(s)}><Pencil className="w-4 h-4" />Edit</Button>
+        <Button size="sm" variant="outline" aria-label={`Delete storage ${s.name}`} disabled={removingId === s.id} className="text-destructive hover:text-destructive" onClick={() => removeStorage(s)}><Trash2 className="w-4 h-4" />Delete</Button>
+      </div>
+    </div>)}</div>
     {showForm && mode === "reconcile" && <FormCard><div className="grid sm:grid-cols-2 gap-3"><Field label="Storage location"><select className="input" value={rec.storage_location_id} onChange={(e) => setRec({ ...rec, storage_location_id: e.target.value })}><option value="">Choose</option>{storage.map((x: FuelStorage) => <option key={x.id} value={x.id}>{x.name} · calculated {fmt(x.calculated_balance_litres)}</option>)}</select></Field><Field label="Physical reading (litres)"><Input type="number" value={rec.physical_balance_litres} onChange={(e) => setRec({ ...rec, physical_balance_litres: e.target.value })} /></Field><Field label="Explanation"><Input value={rec.explanation} onChange={(e) => setRec({ ...rec, explanation: e.target.value })} /></Field></div><Button onClick={() => void run(() => fuelManagementApi.reconcile(projectId, { ...rec, physical_balance_litres: Number(rec.physical_balance_litres), reconciliation_date: new Date().toISOString() }))}>Complete reconciliation</Button></FormCard>}
-    {showForm && mode === "storage" && <FormCard><div className="grid sm:grid-cols-2 gap-3"><Field label="Storage name"><Input value={store.name} onChange={(e) => setStore({ ...store, name: e.target.value })} /></Field><Field label="Fuel type"><select className="input" value={store.fuel_type_id} onChange={(e) => setStore({ ...store, fuel_type_id: e.target.value })}><option value="">Choose</option>{fuelTypes.map((x: FuelTypeDefinition) => <option key={x.id} value={x.id}>{x.name}</option>)}</select></Field><Field label="Capacity (litres)"><Input type="number" value={store.capacity_litres} onChange={(e) => setStore({ ...store, capacity_litres: e.target.value })} /></Field><Field label="Low-stock threshold"><Input type="number" value={store.low_stock_threshold_litres} onChange={(e) => setStore({ ...store, low_stock_threshold_litres: e.target.value })} /></Field><Field label="Opening stock"><Input type="number" value={store.opening_stock_litres} onChange={(e) => setStore({ ...store, opening_stock_litres: e.target.value })} /></Field></div><Button onClick={() => void run(() => fuelManagementApi.createStorage(projectId, { ...store, capacity_litres: store.capacity_litres ? Number(store.capacity_litres) : null, low_stock_threshold_litres: store.low_stock_threshold_litres ? Number(store.low_stock_threshold_litres) : null, opening_stock_litres: Number(store.opening_stock_litres || 0) }))}>Create storage</Button></FormCard>}
+    {showForm && mode === "storage" && <FormCard>
+      <div className="grid sm:grid-cols-2 gap-3">
+        <Field label="Storage name"><Input value={store.name} onChange={(e) => setStore({ ...store, name: e.target.value })} /></Field>
+        <Field label="Fuel type">
+          <select className="input" value={store.fuel_type_id} disabled={fuelTypeLocked} onChange={(e) => setStore({ ...store, fuel_type_id: e.target.value })}><option value="">Choose</option>{fuelTypes.map((x: FuelTypeDefinition) => <option key={x.id} value={x.id}>{x.name}</option>)}</select>
+          {fuelTypeLocked && <p className="text-xs text-muted-foreground mt-1">Fuel already moved through this tank, so its fuel type is fixed — every issue and adjustment recorded against it took its fuel type from here. Create a separate storage location for another fuel.</p>}
+        </Field>
+        <Field label="Capacity (litres)"><Input type="number" value={store.capacity_litres} onChange={(e) => setStore({ ...store, capacity_litres: e.target.value })} /></Field>
+        <Field label="Low-stock threshold"><Input type="number" value={store.low_stock_threshold_litres} onChange={(e) => setStore({ ...store, low_stock_threshold_litres: e.target.value })} /></Field>
+        {/* Opening stock and its price exist only at creation: afterwards the
+            opening balance is a recorded adjustment, and correcting it is a new
+            adjustment rather than an edit of the tank. */}
+        {!editing && <>
+          <Field label="Opening stock"><Input type="number" value={store.opening_stock_litres} onChange={(e) => setStore({ ...store, opening_stock_litres: e.target.value })} /></Field>
+          <Field label="Price per litre (R)">
+            <Input type="number" step="0.01" value={store.opening_cost_per_litre} onChange={(e) => setStore({ ...store, opening_cost_per_litre: e.target.value })} />
+            <p className="text-xs text-muted-foreground mt-1">Optional. What the opening litres cost. Litres with no recorded price are left out of the tank's average rather than counted as free.</p>
+          </Field>
+        </>}
+      </div>
+      <div className="flex gap-2">
+        <Button disabled={!store.name.trim() || (!editing && !store.fuel_type_id)} onClick={() => void saveStorage()}>{editing ? "Save changes" : "Create storage"}</Button>
+        {editing && <Button variant="outline" onClick={() => { setShowForm(false); setEditing(null); }}>Cancel</Button>}
+      </div>
+    </FormCard>}
     <CardList empty="No reconciliations recorded.">{rows.map((r: FuelReconciliation) => <article key={r.id} className="rounded-xl border p-4"><div className="flex flex-wrap justify-between gap-2"><div><p className="font-semibold">{r.reconciliation_number}</p><p className="text-sm text-muted-foreground">Calculated {fmt(r.calculated_balance_litres)} · physical {fmt(r.physical_balance_litres)} · variance {fmt(r.variance_litres)}</p><p className="text-sm mt-1">{r.explanation}</p></div><Badge className={statusClass(r.status)}>{r.status.replaceAll("_", " ")}</Badge></div></article>)}</CardList>
   </Section>;
 }
@@ -365,6 +506,19 @@ function Reports({ projectId, run }: any) {
 function Report({ title, text, onClick }: { title: string; text: string; onClick: () => void }) { return <div className="rounded-xl border p-5"><Download className="w-6 h-6 text-blue-600" /><h3 className="font-semibold mt-3">{title}</h3><p className="text-sm text-muted-foreground mt-1 mb-4">{text}</p><Button variant="outline" onClick={onClick}><Download className="w-4 h-4" />Download CSV</Button></div>; }
 function Section({ title, action, children }: { title: string; action?: React.ReactNode; children: React.ReactNode }) { return <section className="space-y-4"><div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2"><h2 className="text-xl font-semibold">{title}</h2>{action}</div>{children}</section>; }
 function FormCard({ children }: { children: React.ReactNode }) { return <div className="rounded-xl border bg-muted/20 p-4 space-y-4">{children}</div>; }
-function Field({ label, children }: { label: string; children: React.ReactNode }) { return <div className="min-w-0"><Label className="mb-1 block">{label}</Label>{children}</div>; }
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  // The label used to sit beside the control with no htmlFor, which made it
+  // decorative: every input and select on this page was nameless to a screen
+  // reader and to anything driving the page by label. The generated id is
+  // pushed onto the first element child so the association is real, and any
+  // further children — helper text — stay outside the label so they do not
+  // become part of the control's name.
+  const id = useId();
+  const [control, ...rest] = Children.toArray(children);
+  const named = isValidElement<{ id?: string }>(control) && control.props.id === undefined
+    ? cloneElement(control, { id })
+    : control;
+  return <div className="min-w-0"><Label htmlFor={id} className="mb-1 block">{label}</Label>{named}{rest}</div>;
+}
 function CardList({ empty, children }: { empty: string; children: React.ReactNode }) { return <div className="grid gap-3">{Array.isArray(children) && children.length === 0 ? <Empty text={empty} /> : children}</div>; }
 function Empty({ text }: { text: string }) { return <div className="rounded-xl border border-dashed p-8 text-center text-sm text-muted-foreground">{text}</div>; }
